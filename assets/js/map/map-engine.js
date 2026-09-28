@@ -4,7 +4,7 @@
      { title, intro, width, height,
        groups: [{ id, label, x, y, w, h }],
        nodes:  [{ id, layer, label, sub, x, y, w?, h?, info: { resp, api, data, fail, nums } }]   (x, y = centro)
-       edges:  [{ id, from, to, label?, async?, bend? }],
+       edges:  [{ id, from, to, label?, async?, bend?, labelAt? }],   (labelAt: 0–1, dónde va la etiqueta; 0.5 por defecto)
        scenarios: [...] (ver flow-sim.js) }
    Deep link: #node=<id>&scenario=<id>&step=<n> */
 (function () {
@@ -208,7 +208,7 @@
     (def.edges || []).forEach(function (e) {
       var a = self.nodes[e.from], b = self.nodes[e.to];
       if (!a || !b) { console.warn('[SD mapa] arista con nodo inexistente:', e); return; }
-      var d = self.edgePath(a.def, b.def, e.bend || 0);
+      var d = self.edgePath(a.def, b.def, e.bend || 0, e.labelAt);
       var path = s('path', { d: d.d, 'marker-end': e.oneway === false ? null : 'url(#' + self.id + '-ah)' });
       if (e.both) path.setAttribute('marker-start', 'url(#' + self.id + '-ah)');
       var g = s('g', { class: 'sdm-edge' + (e.async ? ' is-async' : ''), 'data-id': e.id }, [path]);
@@ -242,8 +242,9 @@
     return [n.x + dx * sc, n.y + dy * sc];
   }
 
-  MapView.prototype.edgePath = function (a, b, bend) {
+  MapView.prototype.edgePath = function (a, b, bend, t) {
     var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    if (t == null) t = 0.5;
     if (bend) {
       var dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
       cx += -dy / len * bend; cy += dx / len * bend;
@@ -253,9 +254,10 @@
     var d = bend
       ? 'M' + p1[0] + ' ' + p1[1] + ' Q' + cx + ' ' + cy + ' ' + p2[0] + ' ' + p2[1]
       : 'M' + p1[0] + ' ' + p1[1] + ' L' + p2[0] + ' ' + p2[1];
-    /* punto medio real (para curvas cuadráticas, t = 0.5) */
-    var mx = bend ? 0.25 * p1[0] + 0.5 * cx + 0.25 * p2[0] : (p1[0] + p2[0]) / 2;
-    var my = bend ? 0.25 * p1[1] + 0.5 * cy + 0.25 * p2[1] : (p1[1] + p2[1]) / 2;
+    /* punto de la etiqueta sobre la arista (en la curva cuadrática, su punto en t) */
+    var u = 1 - t;
+    var mx = bend ? u * u * p1[0] + 2 * u * t * cx + t * t * p2[0] : p1[0] + t * (p2[0] - p1[0]);
+    var my = bend ? u * u * p1[1] + 2 * u * t * cy + t * t * p2[1] : p1[1] + t * (p2[1] - p1[1]);
     return { d: d, mx: mx, my: my };
   };
 

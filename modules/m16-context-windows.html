@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M16. Context windows</title>
+<meta name="description" content="Qué limita la ventana de contexto (entrenamiento, memoria y el costo cuadrático de la atención), cuánto cuesta una conversación larga, truncar, ventana deslizante, resúmenes y recuperación, RAG o contexto largo, RoPE y cómo se extiende una ventana, y prompt caching.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m16">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Context windows</h1>
+        <p class="lead">Un modelo con ventana de 128 000 tokens no significa que convenga llenarla. Cada token de contexto se paga en memoria, en tiempo y en dinero, en cada turno de la conversación, y el modelo no presta la misma atención a todo lo que ve. Este módulo trata de qué poner en la ventana y qué dejar afuera.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M16</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>50 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12, M15</dd></div>
+          <div><dt>Estado</dt><dd data-status="m16">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar los tres límites de la ventana de contexto: entrenamiento, memoria y cómputo.</li>
+          <li>Calcular cuánto cuesta una conversación larga y por qué crece con el cuadrado de los turnos.</li>
+          <li>Elegir entre truncar, ventana deslizante, resumen y recuperación según lo que no se puede perder.</li>
+          <li>Decidir entre RAG y contexto largo para un caso concreto.</li>
+          <li>Ordenar un prompt para que el prompt caching funcione.</li>
+        </ul>
+      </section>
+
+      <h2 id="limites"><span class="sec-num">16.1</span>Qué limita el contexto</h2>
+
+      <p>La <dfn data-term="context-window">ventana de contexto</dfn> es la cantidad máxima de tokens que el modelo procesa en una request, sumando la entrada y la respuesta. Tres cosas la limitan, y solo la primera es un número fijo:</p>
+      <ul>
+        <li><b>El entrenamiento.</b> Un modelo funciona bien hasta el largo con el que se entrenó o se extendió (16.5). Llama 3.1 llega a 128 000 tokens. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>La memoria.</b> El KV cache crece en línea recta con el contexto: una conversación de 128 000 tokens del 70B ocupa 42.9 GB, más que la mitad de una H100 para un solo usuario (M12).</li>
+        <li><b>El cómputo.</b> En el prefill, cada token se compara con todos los anteriores, así que el trabajo de la atención crece con el cuadrado del largo. Con prompts cortos no se nota; con prompts largos domina:</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f161t f161d">
+<title id="f161t">Tiempo de prefill según el largo del prompt</title>
+<desc id="f161d">Llama 3.1 70B en FP8 sobre 4 H100 al 40 % del pico. Con 4096 tokens, el prefill tarda 0.19 s y la atención es el 4 % del cómputo. Con 16 384, 0.84 s y 13 %. Con 65 536, 4.7 s y 38 %. Con 131 072, 13 s y 55 %: la atención crece con el cuadrado del largo y termina dominando.</desc>
+<text class="sim-label" x="78" y="60" text-anchor="end">4k tokens</text>
+<rect x="90" y="46" width="7.6" height="22" fill="var(--l-gpu)"/>
+<rect x="98.6" y="46" width="1.5" height="22" fill="var(--l-cache)"/>
+<text class="sim-val" x="105.9" y="62">0.19 s, atención 4 %</text>
+<text class="sim-label" x="78" y="102" text-anchor="end">16k tokens</text>
+<rect x="90" y="88" width="30.3" height="22" fill="var(--l-gpu)"/>
+<rect x="121.3" y="88" width="3.6" height="22" fill="var(--l-cache)"/>
+<text class="sim-val" x="132.9" y="104">0.84 s, atención 13 %</text>
+<text class="sim-label" x="78" y="144" text-anchor="end">64k tokens</text>
+<rect x="90" y="130" width="121.2" height="22" fill="var(--l-gpu)"/>
+<rect x="212.2" y="130" width="72.7" height="22" fill="var(--l-cache)"/>
+<text class="sim-val" x="293.0" y="146">4.70 s, atención 38 %</text>
+<text class="sim-label" x="78" y="186" text-anchor="end">128k tokens</text>
+<rect x="90" y="172" width="242.5" height="22" fill="var(--l-gpu)"/>
+<rect x="333.5" y="172" width="294.0" height="22" fill="var(--l-cache)"/>
+<text class="sim-val" x="635.5" y="188">12.96 s, atención 55 %</text>
+<rect x="90" y="10" width="12" height="12" rx="2" fill="var(--l-gpu)"/><text class="sim-axis" x="108" y="20">capas lineales: crecen con el largo</text>
+<rect x="350" y="10" width="12" height="12" rx="2" fill="var(--l-cache)"/><text class="sim-axis" x="368" y="20">atención: crece con el cuadrado del largo</text>
+<text class="sim-axis" x="90" y="222">Llama 3.1 70B en FP8, 4 H100 al 40 % del pico de FLOPS</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.1.</b> Duplicar el prompt de 64k a 128k tokens casi triplica el prefill: la parte lineal se duplica y la atención se cuadruplica. Un TTFT de 13 s no es aceptable en un chat, y ese es el límite práctico antes que el teórico.</figcaption>
+      </figure>
+
+      <p>Hay un cuarto límite, más sutil: que el modelo acepte 128 000 tokens no significa que los use todos igual de bien. El estudio "Lost in the Middle" (2023) mostró que los modelos encuentran mejor la información al principio y al final del contexto que en el medio, y el benchmark RULER (2024) encontró que el largo efectivo de muchos modelos es bastante menor que el anunciado. <span class="badge badge--doc">Documentado</span> Meter todo "por las dudas" empeora las respuestas además de encarecerlas.</p>
+
+      <h2 id="costo"><span class="sec-num">16.2</span>El costo de una conversación larga</h2>
+
+      <p>El modelo no guarda estado entre requests (M12): cada turno reenvía el prompt de sistema y toda la conversación anterior. Si cada turno agrega T tokens, el turno i envía unos i × T, y la suma de toda la conversación crece con el cuadrado de la cantidad de turnos:</p>
+
+<pre><code>tokens de entrada totales ≈ N × (sistema + usuario) + (usuario + respuesta) × N(N − 1)/2
+
+20 turnos, sistema de 1500, usuario de 150 y respuesta de 350 por turno:
+20 × 1650 + 500 × 190 = 128 000 tokens de entrada, para 11 500 tokens de contenido real</code></pre>
+
+      <p>Con los precios de ejemplo de la calculadora, esa conversación cuesta 0.39 USD, y 0.11 USD si el proveedor cobra con descuento los tokens que ya estaban en caché del turno anterior (16.6). Cambia los números:</p>
+
+      <div data-calc="convcost"></div>
+
+      <h2 id="estrategias"><span class="sec-num">16.3</span>Qué hacer cuando no entra</h2>
+
+      <p>Tarde o temprano una conversación, un documento pegado o el resultado de una herramienta no entran en la ventana, y el producto tiene que decidir qué enviar. Las estrategias, de la más simple a la más elaborada:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Qué hace</th><th>Qué se pierde</th></tr></thead>
+          <tbody>
+            <tr><td><b>Truncar</b></td><td>Borra los mensajes más viejos hasta que entre, conservando el prompt de sistema</td><td>Lo más viejo, que suele ser lo más importante: el documento o la tarea original</td></tr>
+            <tr><td><b>Ventana deslizante</b></td><td>Envía solo los últimos N mensajes</td><td>Todo lo anterior, de forma predecible</td></tr>
+            <tr><td><b>Resumir</b></td><td>Reemplaza lo viejo por un resumen hecho por un modelo más barato, que se actualiza cada tantos turnos</td><td>Los detalles literales: cifras, citas, cláusulas</td></tr>
+            <tr><td><b>Recuperar</b></td><td>Indexa lo viejo con embeddings y agrega solo los fragmentos parecidos a la pregunta actual</td><td>Lo que no se parece a la pregunta; depende de que la búsqueda acierte</td></tr>
+            <tr><td><b>Memoria</b></td><td>Extrae hechos estables ("prefiere respuestas cortas", "trabaja con Python") y los agrega en cada conversación</td><td>Lo que el extractor no consideró importante</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Mira qué conserva cada una en una conversación cuya última pregunta depende de un detalle del principio:</p>
+
+      <div data-sim="context"></div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los productos combinan estrategias: prompt de sistema y memoria siempre; los últimos mensajes completos; lo intermedio resumido; los documentos, indexados y recuperados según la pregunta; y los resultados enormes de herramientas, recortados antes de entrar al historial (los primeros y últimos cientos de líneas de un log, no el log entero). Las respuestas se guardan completas en la base de datos (M20): lo que se recorta es lo que se envía al modelo, nunca lo que se guarda.</p>
+      </aside>
+
+      <h2 id="rag"><span class="sec-num">16.4</span>RAG o contexto largo</h2>
+
+      <p>Con ventanas de cientos de miles de tokens, la pregunta ya no es solo "qué entra" sino "qué conviene". <dfn data-term="rag">RAG</dfn> (Retrieval-Augmented Generation) busca en un índice los fragmentos relevantes y los agrega al prompt; el contexto largo mete los documentos completos.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>RAG</th><th>Contexto largo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Tamaño del corpus</b></td><td>Ilimitado: millones de documentos</td><td>Lo que entre en la ventana</td></tr>
+            <tr><td><b>Costo por pregunta</b></td><td>Bajo: unos miles de tokens</td><td>Alto: todos los tokens en cada pregunta (mitigado con prompt caching)</td></tr>
+            <tr><td><b>Latencia</b></td><td>Búsqueda más un prefill chico</td><td>Prefill largo: segundos</td></tr>
+            <tr><td><b>Qué puede fallar</b></td><td>Que la búsqueda no traiga el fragmento correcto</td><td>Que el modelo no preste atención al detalle que importa</td></tr>
+            <tr><td><b>Preguntas globales</b> ("¿se contradicen las secciones 2 y 9?")</td><td>Difíciles: ve fragmentos sueltos</td><td>Posibles: ve el documento entero</td></tr>
+            <tr><td><b>Infraestructura</b></td><td>Pipeline de ingesta, embeddings y base vectorial (M20)</td><td>Ninguna extra</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La respuesta habitual es combinar: RAG para elegir qué documentos o secciones importan, y contexto generoso para que el modelo los vea completos, no en fragmentos de 300 tokens. Para un documento que el usuario acaba de subir y sobre el que va a preguntar varias veces, meterlo entero con prompt caching suele ser más simple y mejor que indexarlo.</p>
+
+      <h2 id="rope"><span class="sec-num">16.5</span>Cómo se extiende una ventana</h2>
+
+      <p>El modelo sabe en qué posición está cada token gracias a la codificación posicional. La mayoría de los modelos abiertos usa <dfn data-term="rope">RoPE</dfn>, que rota los vectores de consulta y clave según la posición. Un modelo entrenado con 8000 tokens nunca vio rotaciones de la posición 100 000, y ahí falla. Las técnicas de extensión (Position Interpolation, escalado NTK, YaRN) estiran las rotaciones para que las posiciones nuevas caigan en rangos conocidos, y se completan con un entrenamiento corto con textos largos: así se llevó Llama 3.1 a 128 000 tokens. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Otra familia reduce el costo en lugar de estirar la ventana. La atención de ventana deslizante hace que cada token mire solo los últimos miles (Mistral 7B usa 4096), y modelos como Gemma alternan capas locales, de ventana corta, con capas globales que ven todo. <span class="badge badge--doc">Documentado</span> Para el serving importa porque las capas locales guardan un KV cache acotado: la memoria por conversación crece mucho menos.</p>
+
+      <h2 id="prompt-caching"><span class="sec-num">16.6</span>Prompt caching</h2>
+
+      <p>El <dfn data-term="prompt-caching">prompt caching</dfn> es el prefix caching del M15 visto desde la factura: si el comienzo de tu prompt coincide exactamente con uno reciente, el proveedor reutiliza su KV cache y cobra esos tokens con descuento. OpenAI lo aplica solo a partir de 1024 tokens; Anthropic lo activa con marcas explícitas en el prompt, cobra algo más por escribir en el caché y mucho menos por leerlo, con una vida de 5 minutos o de 1 hora. <span class="badge badge--doc">Documentado</span> Los porcentajes cambian con los modelos: revisa los de tu proveedor.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 170" role="img" aria-labelledby="f162t f162d">
+<title id="f162t">Cómo ordenar un prompt para aprovechar el caché</title>
+<desc id="f162d">El prompt va de lo más estable a lo que cambia en cada turno: prompt de sistema, definiciones de herramientas, documentos, historial y, al final, el mensaje nuevo. El caché reutiliza el prefijo más largo que coincide exactamente, así que cualquier cambio al principio, como una fecha, invalida todo lo que viene después.</desc>
+<rect x="20.0" y="46" width="126.6" height="44" rx="6" fill="color-mix(in srgb, var(--label-3) 30%, var(--bg))" stroke="var(--label-3)" stroke-width="1.5"/>
+<text class="dg-label" x="84.8" y="66" text-anchor="middle" style="font-size:12.5px">Sistema</text>
+<text class="dg-tiny" x="84.8" y="82" text-anchor="middle">1 500 tokens</text>
+<rect x="149.6" y="46" width="100.7" height="44" rx="6" fill="color-mix(in srgb, var(--l-external) 30%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-label" x="201.4" y="66" text-anchor="middle" style="font-size:12.5px">Herramientas</text>
+<text class="dg-tiny" x="201.4" y="82" text-anchor="middle">1 200 tokens</text>
+<rect x="253.3" y="46" width="256.2" height="44" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-label" x="382.8" y="66" text-anchor="middle" style="font-size:12.5px">Documentos</text>
+<text class="dg-tiny" x="382.8" y="82" text-anchor="middle">3 000 tokens</text>
+<rect x="512.4" y="46" width="221.6" height="44" rx="6" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="624.7" y="66" text-anchor="middle" style="font-size:12.5px">Historial</text>
+<text class="dg-tiny" x="624.7" y="82" text-anchor="middle">2 600 tokens</text>
+<rect x="737.0" y="46" width="10.0" height="44" rx="6" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-label" x="743.5" y="66" text-anchor="middle" style="font-size:12.5px">Mensaje nuevo</text>
+<text class="dg-tiny" x="743.5" y="82" text-anchor="middle">150 tokens</text>
+<line x1="735.5" x2="735.5" y1="36" y2="100" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5 4"/>
+<text class="dg-small" x="729.0" y="118" text-anchor="end">prefijo en caché: se cobra con descuento y no se recalcula</text>
+<text class="dg-small" x="741.0" y="118">nuevo</text>
+<text class="dg-small" x="20" y="24">más estable</text><text class="dg-small" x="750" y="24" text-anchor="end">cambia en cada turno</text>
+<text class="dg-small" x="20" y="150">Una fecha o un ID al principio del prompt cambian el primer bloque y el caché no sirve para nada.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.2.</b> El caché reutiliza el prefijo idéntico más largo. Lo estable va primero y lo que cambia, al final.</figcaption>
+      </figure>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Los errores típicos que anulan el caché sin que nadie se entere: la fecha y hora al principio del prompt de sistema, las herramientas en un orden distinto en cada request, un ID de request en el primer mensaje, o el historial reescrito (recortado o resumido) en cada turno, que cambia el prefijo. El síntoma es una tasa de tokens en caché baja en la respuesta de la API; hay que medirla como cualquier otra métrica de costo.</p>
+      </aside>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m16"></div>
+
+      <section class="exercise" aria-labelledby="ej-m16">
+        <p class="exercise-title" id="ej-m16">Ejercicio de diseño: un asistente sobre manuales técnicos</p>
+        <p>Una empresa quiere un asistente que responda preguntas sobre sus 2000 manuales técnicos (unos 80 millones de tokens en total) y sobre el documento que el usuario suba en la conversación, de hasta 100 páginas. Las conversaciones duran hasta 50 turnos. El modelo tiene una ventana de 128 000 tokens.</p>
+        <p>Diseña qué se envía al modelo en cada turno y cómo se ordena el prompt.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Manuales:</b> 80 millones de tokens no entran en ninguna ventana: RAG con los manuales indexados por sección, recuperando las 5 a 10 secciones más relevantes para la pregunta, completas y no en fragmentos chicos.</li>
+            <li><b>Documento del usuario:</b> 100 páginas son unos 50 000 tokens. Entra en la ventana y el usuario va a preguntar varias veces: se envía entero, en una posición estable del prompt, para aprovechar el prompt caching.</li>
+            <li><b>Historial:</b> los últimos 10 turnos completos y un resumen de los anteriores, regenerado cada 10 turnos (no en cada turno, para no romper el caché más de lo necesario).</li>
+            <li><b>Orden del prompt:</b> sistema y herramientas; documento del usuario; resumen del historial; turnos recientes; las secciones de manuales recuperadas para esta pregunta; y la pregunta nueva. Lo recuperado va al final porque cambia en cada turno.</li>
+            <li><b>Presupuesto:</b> fijar un máximo de, por ejemplo, 90 000 tokens de entrada, con prioridades claras de qué se recorta primero (secciones recuperadas menos relevantes, después el resumen), y medir TTFT, costo por turno y tasa de caché.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m16"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m16.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-context.js"></script>
+</body>
+</html>

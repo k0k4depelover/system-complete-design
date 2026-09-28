@@ -3,8 +3,10 @@
 > Archivo de continuidad. Se actualiza al terminar cada módulo. Si la sesión se corta, una sesión nueva puede
 > retomar leyendo este archivo, `PLAN.md` (currículo completo) y una página ya hecha como plantilla (`modules/m00-metodo.html`).
 
-**Última actualización:** 2026-09-27, empezando la Parte II (CP4 a CP6).
-**Pedido vigente del usuario (2026-09-27):** "Implementa CP-B": toda la Parte II (M12–M26), el mapa gigante de ChatGPT y el Checkpoint B, **de corrido**, sin parar en CP4 ni CP5. Detenerse al terminar el CP-B, o antes si el uso se acerca al 95 % (dejar este archivo al día).
+**Última actualización:** 2026-09-28. M16 terminado, M27 y M28 publicados. Parte II en pausa desde el M17; el trabajo está detenido esperando la revisión del usuario.
+**Pedido vigente del usuario (2026-09-28):** terminar lo que hubiera quedado a medias (era el M16) y, en lugar de seguir la Parte II, **implementar los casos de estudio M27 (pagos tipo Stripe) y M28 (Cloudflare)**. El resto de la Parte II (M17–M26, el mapa de ChatGPT y el Checkpoint B) queda **en pausa** hasta nuevo aviso.
+
+**Pedido anterior (2026-09-27, en pausa):** "Implementa CP-B": toda la Parte II de corrido.
 
 **Decisiones de la entrevista de la Parte II:**
 - Profundidad: "sistemas con números". Fórmulas de memoria, FLOPs y ancho de banda con ejemplos resueltos y calculadoras; el transformer como caja, sin su álgebra.
@@ -20,7 +22,9 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 ## Dónde quedó el trabajo
 
 - **CP3 completo:** M06 a M11 y el Checkpoint A publicados, más el rediseño Apple y los enlaces automáticos a términos.
-- **En curso:** Parte II, empezando por M12. Ver la lista "Parte II" más abajo.
+- **Parte II:** M12 a M16 publicados; M17 a M26, el mapa y el CP-B en pausa.
+- **Casos de estudio:** M27 y M28 publicados. Falta el Checkpoint C, que no se pidió todavía.
+- **Siguiente:** esperar indicaciones del usuario (retomar la Parte II en el M17, o el Checkpoint C).
 
 ---
 
@@ -76,12 +80,12 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 
 ## Pendiente
 
-### Parte II (en curso, de corrido hasta el CP-B)
+### Parte II (M12–M16 hechos; el resto en pausa desde el 2026-09-28)
 - [x] M12, un LLM visto por un ingeniero de sistemas: tokenizer didáctico con fallback a bytes y simulación de generación con KV cache (`widgets/sim-llm.js`), datos compartidos de modelos y GPUs en `data/llm.data.js`, resaltado de Python en `sd.js`.
 - [x] M13, hardware GPU: calculadora de sizing con TPOT y costo, y roofline interactivo (`widgets/sim-gpu.js`); tabla de GPUs A100, H100, H200, B200 y MI300X.
 - [x] M14, cuantización: simulador que cuantiza 64 pesos a INT8, INT4, FP8 o FP4 por tensor o por grupo (`widgets/sim-quant.js`); tabla de impacto para el 70B.
 - [x] M15, motores de inferencia: simulador de static contra continuous batching y calculadora de speculative decoding (`widgets/sim-engine.js`); PagedAttention, prefix caching, chunked prefill, desagregación, paralelismo y configuración de vLLM.
-- [ ] M16, context windows
+- [x] M16, context windows: estrategias de contexto sobre una conversación que no entra y calculadora del costo de una conversación con y sin prompt caching (`widgets/sim-context.js`).
 - [ ] M17, API del LLM y streaming SSE (visor de stream)
 - [ ] M18, rate limiting y cuotas por tokens (simulador TPM)
 - [ ] M19, router y flota GPU
@@ -96,8 +100,13 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - [ ] Checkpoint B (`modules/checkpoint-b.html`)
 - [ ] Pasada final de la Parte II
 
-### Después del CP-B (según PLAN.md)
-- CP4: M12–M16 más calculadoras de IA (KV cache, sizing de GPU, cuantización). Al publicar M12 en adelante, poner `deep` a los términos de IA que hoy no lo tienen (`token`, `ttft`, `itl`, `kv-cache`, `hbm`, `tensor-parallelism`) y a `ledger`, `anycast`, `cdn` y `pop` cuando existan M23 y M24.
+### Casos de estudio (M27 y M28 hechos el 2026-09-28)
+- [x] M27, pagos tipo Stripe: módulo de 12 secciones y mapa embebido `data/maps/m27-pagos.data.js` (16 nodos con sus 5 pestañas, 6 escenarios: pago, doble clic, timeout después de la aprobación, webhook duplicado y desordenado, emisor caído, reembolso parcial). Idempotency keys de referencia en Python, ledger con asientos verificados, webhooks, sagas, conciliación y PCI DSS; 13 términos nuevos en el glosario.
+- [x] M28, Cloudflare: módulo de 10 secciones y mapa embebido `data/maps/m28-cloudflare.data.js` (18 nodos con sus 5 pestañas, 6 escenarios: cache hit, miss con nivel superior, SYN flood, un PoP que cae, cambio de configuración global, Worker con Durable Object). Anycast y BGP, DDoS por capa, caché por niveles, isolates, KV contra Durable Objects contra R2 con PACELC, Quicksilver y Zero Trust; 11 términos nuevos y `deep` actualizado para `anycast`, `pop` y `cdn`.
+
+### Después (según PLAN.md)
+- Al retomar la Parte II: poner `deep` a los términos que se expliquen a fondo en M17–M26. (Los `deep` de `ledger`, `anycast`, `cdn` y `pop` ya apuntan a M27 y M28.)
+- Checkpoint C: examen de la Fase 1 y diseño de la plataforma de pagos por uso del producto de IA (usa M21, que está en pausa).
 - CP5: M17–M22.
 - CP6: mapa gigante de ChatGPT (`maps/chatgpt.html`, 7 escenarios) y Checkpoint B.
 - CP7: Stripe. CP8: Cloudflare y Checkpoint C. CP9: pulido (búsqueda global, glosario, accesibilidad).

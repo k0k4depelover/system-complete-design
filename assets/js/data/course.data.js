@@ -79,9 +79,9 @@ window.SD.course = {
       id: 'p3', label: 'Parte III', title: 'Casos de estudio', line: '--line-p3',
       intro: 'Dos sistemas reales de punta a punta: dinero que no se puede duplicar y una red que atiende a medio internet.',
       items: [
-        { id: 'm27', num: 'M27', title: 'Pagos tipo Stripe', short: 'Pagos (Stripe)', mins: 120, href: 'modules/m27-pagos-stripe.html', status: 'soon',
+        { id: 'm27', num: 'M27', title: 'Pagos tipo Stripe', short: 'Pagos (Stripe)', mins: 120, href: 'modules/m27-pagos-stripe.html', status: 'ready',
           summary: 'Idempotency keys de principio a fin, ledger de doble entrada, webhooks, sagas y reconciliación.' },
-        { id: 'm28', num: 'M28', title: 'Cloudflare', short: 'Cloudflare', mins: 100, href: 'modules/m28-cloudflare.html', status: 'soon',
+        { id: 'm28', num: 'M28', title: 'Cloudflare', short: 'Cloudflare', mins: 100, href: 'modules/m28-cloudflare.html', status: 'ready',
           summary: 'Anycast, DDoS, tiered cache, Workers, Durable Objects y propagación global de configuración.' },
         { id: 'cpc', num: 'CP-C', kind: 'checkpoint', title: 'Checkpoint C: diseño final', short: 'Checkpoint C', mins: 90, href: 'modules/checkpoint-c.html', status: 'soon',
           summary: 'Diseña la plataforma de pagos por uso para el producto de IA de la Parte II.' }

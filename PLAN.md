@@ -161,7 +161,7 @@ Los datos van en archivos `.js` que se registran en `window.SD`. No uso JSON con
 
 En cada checkpoint **me detengo** para que abras el sitio en el navegador y lo revises. Solo continúo cuando lo apruebas.
 
-**Estado (2026-09-27):** CP0 a CP3 terminados, con el rediseño de estilo Apple y los enlaces automáticos a términos. En curso: CP4 a CP6 de corrido, hasta el Checkpoint B (pedido del usuario). El detalle está en `PROGRESO.md`. Para verlo, abre `index.html` con doble clic.
+**Estado (2026-09-28):** CP0 a CP3 terminados; de la Parte II, M12 a M16 publicados y el resto en pausa; los casos de estudio M27 (Stripe) y M28 (Cloudflare) publicados, con sus mapas embebidos en el módulo en lugar de páginas aparte. El detalle está en `PROGRESO.md`. Para verlo, abre `index.html` con doble clic.
 
 | CP | Entregable | Cómo lo verificas |
 |---|---|---|

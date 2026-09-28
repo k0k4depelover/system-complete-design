@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M28. Cloudflare</title>
+<meta name="description" content="Caso de estudio de una red de borde: anycast y BGP, el camino de una request dentro de un PoP, mitigación de DDoS en L3, L4 y L7, caché por niveles, Workers en isolates de V8, estado en el borde con KV, Durable Objects y R2, propagación global de configuración y Zero Trust, con un mapa explorable de seis escenarios.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m28">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Cloudflare</h1>
+        <p class="lead">Una parte enorme del tráfico web pasa por una misma red antes de llegar a su destino. Este caso de estudio la recorre desde el primer paquete: cómo llega cada usuario al edificio más cercano sin que nadie elija por él, cómo se absorbe un ataque de terabits, cómo corre código de miles de clientes en el mismo servidor y cómo se cambia la configuración de todo el mundo en segundos sin romperlo.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M28</dd></div>
+          <div><dt>Parte</dt><dd>III. Casos de estudio</dd></div>
+          <div><dt>Duración</dt><dd>100 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M03, M04, M06, M08</dd></div>
+          <div><dt>Estado</dt><dd data-status="m28">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar cómo anycast y BGP llevan a cada usuario a un PoP cercano y cómo se sale de un PoP que falla.</li>
+          <li>Recorrer una request dentro de un PoP, del filtro de paquetes a la caché.</li>
+          <li>Diseñar la defensa contra ataques de denegación de servicio en cada capa.</li>
+          <li>Usar caché por niveles, Workers, KV, Durable Objects y R2 según lo que cada uno garantiza.</li>
+          <li>Propagar configuración a todo el mundo sin que un error llegue a todos a la vez.</li>
+        </ul>
+      </section>
+
+      <h2 id="panorama"><span class="sec-num">28.1</span>Una red, no un servidor</h2>
+
+      <p>Cloudflare se pone delante de los sitios y APIs de sus clientes: el DNS apunta a su red, los usuarios se conectan a ella, y ella decide qué responde desde la caché, qué bloquea y qué reenvía al origen. Su red está en más de 330 ciudades. <span class="badge badge--doc">Documentado</span> Tres decisiones de arquitectura explican casi todo lo demás:</p>
+      <ul>
+        <li><b>Anycast:</b> las mismas direcciones IP se anuncian desde todas las ciudades, y la red de internet lleva a cada usuario a la más cercana.</li>
+        <li><b>Cada servidor corre todos los servicios:</b> DNS, filtro de paquetes, TLS, WAF, caché y Workers en la misma máquina, en lugar de capas de máquinas especializadas. Cualquier servidor sano atiende cualquier request, y la capacidad de cada ciudad es la suma de sus servidores. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>El plano de datos no consulta al plano de control:</b> cada servidor tiene una copia local de toda la configuración, así una request nunca espera a un servicio central.</li>
+      </ul>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Qué es documentado y qué no</p>
+        <p>Cloudflare publica mucho sobre su arquitectura en su blog técnico y su documentación, y lo marcamos como <span class="badge badge--doc">Documentado</span>. Los detalles que completan el recorrido (tiempos exactos, orden de algunos pasos) son un <span class="badge badge--ref">Diseño de referencia</span> coherente con lo publicado.</p>
+      </aside>
+
+      <h2 id="mapa"><span class="sec-num">28.2</span>El mapa completo</h2>
+
+      <p>Un usuario de Lisboa visita una tienda cuyo origen está en Virginia. Explora cada pieza y reproduce los seis escenarios, incluidos el ataque y la caída de un PoP.</p>
+
+      <div data-map="m28-cloudflare"></div>
+
+      <h2 id="anycast"><span class="sec-num">28.3</span>Anycast y BGP</h2>
+
+      <p>En internet, las redes se cuentan entre sí qué rangos de direcciones pueden alcanzar con <dfn data-term="bgp">BGP</dfn>. Con <dfn data-term="anycast">anycast</dfn>, Cloudflare anuncia el mismo rango desde todas sus ciudades, y cada red elige la ruta que considera más corta. El resultado es que un usuario de Lisboa llega al PoP de Lisboa y uno de Nueva York al de Nueva York, con la misma IP y sin que ningún sistema haya elegido por ellos.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f281t f281d">
+<title id="f281t">Anycast: la misma IP en todos los PoPs</title>
+<desc id="f281d">Cuatro PoPs, Lisboa, Madrid, Fráncfort y Ashburn, anuncian el mismo prefijo 104.16.0.0/13. Cada usuario llega al PoP más cercano según las rutas de internet. Cuando Lisboa retira su anuncio, sus usuarios pasan a Madrid, el siguiente más cercano, sin cambiar la IP.</desc>
+<defs><marker id="f281a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-bad" x="80" y="124" width="140" height="52" rx="12"/>
+<text class="dg-label" x="150" y="146" text-anchor="middle">PoP Lisboa</text>
+<text class="dg-tiny" x="150" y="163" text-anchor="middle">retiró el anuncio</text>
+<rect class="dg-ok" x="260" y="124" width="140" height="52" rx="12"/>
+<text class="dg-label" x="330" y="146" text-anchor="middle">PoP Madrid</text>
+<text class="dg-tiny" x="330" y="163" text-anchor="middle">anuncia 104.16.0.0/13</text>
+<rect class="dg-ok" x="440" y="124" width="140" height="52" rx="12"/>
+<text class="dg-label" x="510" y="146" text-anchor="middle">PoP Fráncfort</text>
+<text class="dg-tiny" x="510" y="163" text-anchor="middle">anuncia 104.16.0.0/13</text>
+<rect class="dg-ok" x="620" y="124" width="140" height="52" rx="12"/>
+<text class="dg-label" x="690" y="146" text-anchor="middle">PoP Ashburn</text>
+<text class="dg-tiny" x="690" y="163" text-anchor="middle">anuncia 104.16.0.0/13</text>
+<circle cx="110" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="110" y="282" text-anchor="middle">Lisboa</text>
+<circle cx="190" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="190" y="282" text-anchor="middle">Oporto</text>
+<circle cx="330" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="330" y="282" text-anchor="middle">Madrid</text>
+<circle cx="510" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="510" y="282" text-anchor="middle">Berlín</text>
+<circle cx="690" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="690" y="282" text-anchor="middle">Nueva York</text>
+<path class="dg-edge" d="M330 252 V180" marker-end="url(#f281a)"/>
+<path class="dg-edge" d="M510 252 V180" marker-end="url(#f281a)"/>
+<path class="dg-edge" d="M690 252 V180" marker-end="url(#f281a)"/>
+<path class="dg-feedback" d="M110 252 V180" style="stroke: var(--fail)"/>
+<text class="dg-tiny dg-fail-text" x="110" y="222" text-anchor="middle">✕</text>
+<path class="dg-edge" d="M116 254 C 170 220, 260 210, 300 178" marker-end="url(#f281a)" style="stroke: var(--l-service)"/>
+<path class="dg-feedback" d="M190 252 V180" style="stroke: var(--fail)"/>
+<text class="dg-tiny dg-fail-text" x="190" y="222" text-anchor="middle">✕</text>
+<path class="dg-edge" d="M196 254 C 250 220, 260 210, 300 178" marker-end="url(#f281a)" style="stroke: var(--l-service)"/>
+<text class="dg-small" x="385" y="40" text-anchor="middle">Mismo prefijo en todos los PoPs: cada red lleva el paquete por su ruta más corta.</text>
+<text class="dg-small" x="385" y="60" text-anchor="middle">Si un PoP retira su anuncio, sus usuarios pasan al siguiente más cercano sin cambiar la IP.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.1.</b> Salir de un <dfn data-term="pop">PoP</dfn> es dejar de anunciar su ruta. No hay que cambiar registros DNS ni esperar a que venzan sus TTL.</figcaption>
+      </figure>
+
+      <p>Anycast tiene consecuencias que el diseño asume:</p>
+      <ul>
+        <li><b>"Más cercano" es según BGP, no según el mapa.</b> La ruta más corta para una red puede cruzar un océano si esa red no tiene mejores acuerdos de intercambio. Por eso Cloudflare conecta directamente con miles de redes: cuantas más, más cerca queda cada usuario.</li>
+        <li><b>Las rutas cambian mientras hay conexiones abiertas.</b> Si una conexión TCP empieza en Lisboa y a mitad de camino sus paquetes llegan a Madrid, Madrid no conoce esa conexión y la corta. Es raro, y los clientes se reconectan; las conexiones de larga duración (WebSockets) lo sienten más.</li>
+        <li><b>Los ataques se reparten solos.</b> Una botnet repartida por el mundo termina enviando cada parte de su tráfico al PoP de su región: ningún PoP recibe el ataque entero (28.5).</li>
+      </ul>
+
+      <h2 id="camino"><span class="sec-num">28.4</span>El camino de una request dentro de un PoP</h2>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f282t f282d">
+<title id="f282t">El camino de una request dentro de un PoP</title>
+<desc id="f282d">El paquete entra por el router, pasa por el filtro XDP y el balanceo L4, que descarta el ataque y elige un servidor. En el servidor, el proxy termina TLS, aplica WAF y bots, las reglas del cliente, el Worker si hay uno y la caché. Si no está en caché, va al nivel superior y, si tampoco está, al origen. Todos los pasos corren en el mismo servidor.</desc>
+<defs><marker id="f282a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="66" y="106" text-anchor="middle" style="font-size:13px">Router</text>
+<text class="dg-tiny" x="66" y="124" text-anchor="middle">BGP, ECMP</text>
+<path class="dg-edge" d="M123 110 H135" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="138" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="194" y="106" text-anchor="middle" style="font-size:13px">XDP y L4</text>
+<text class="dg-tiny" x="194" y="124" text-anchor="middle">descarta y reparte</text>
+<path class="dg-edge" d="M251 110 H263" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="266" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="322" y="106" text-anchor="middle" style="font-size:13px">TLS</text>
+<text class="dg-tiny" x="322" y="124" text-anchor="middle">certificado del cliente</text>
+<path class="dg-edge" d="M379 110 H391" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="394" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="450" y="106" text-anchor="middle" style="font-size:13px">WAF y bots</text>
+<text class="dg-tiny" x="450" y="124" text-anchor="middle">reglas, desafíos</text>
+<path class="dg-edge" d="M507 110 H519" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="522" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="578" y="106" text-anchor="middle" style="font-size:13px">Worker</text>
+<text class="dg-tiny" x="578" y="124" text-anchor="middle">código del cliente</text>
+<path class="dg-edge" d="M635 110 H647" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="650" y="80" width="112" height="60" rx="10"/>
+<text class="dg-label" x="706" y="106" text-anchor="middle" style="font-size:13px">Caché</text>
+<text class="dg-tiny" x="706" y="124" text-anchor="middle">HIT: responde</text>
+<rect class="dg-frame" x="130" y="64" width="640" height="94" rx="12"/>
+<text class="dg-group" x="440" y="56">Un mismo servidor del PoP, elegido por el balanceo L4</text>
+<path class="dg-edge" d="M706 142 V190 H600" marker-end="url(#f282a)"/>
+<text class="dg-small" x="712" y="174">MISS</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="430" y="172" width="166" height="44" rx="10"/>
+<text class="dg-label" x="513" y="199" text-anchor="middle" style="font-size:13px">Nivel superior</text>
+<path class="dg-edge" d="M428 194 H366" marker-end="url(#f282a)"/>
+<rect class="dg-layer" style="--c: var(--l-external)" x="250" y="172" width="112" height="44" rx="10"/>
+<text class="dg-label" x="306" y="199" text-anchor="middle" style="font-size:13px">Origen</text>
+<text class="dg-small" x="10" y="236">Cada servidor corre todos los servicios: no hay una capa de caché ni de WAF aparte, y cualquier servidor sano puede atender cualquier request.</text>
+<text class="dg-small" x="196" y="28" text-anchor="middle">los ataques de red se descartan acá</text>
+<path class="dg-feedback" d="M196 36 V78"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.2.</b> Los paquetes de ataque se descartan en el primer paso, antes de que cuesten memoria o CPU. Todo lo demás corre en un mismo servidor.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">Router y balanceo L4</span>El router reparte los paquetes entre los servidores del PoP. En cada servidor, un programa XDP (eBPF que corre en el driver de red) descarta lo que coincide con una huella de ataque y, para el resto, elige qué servidor atiende la conexión con hashing consistente: el balanceador L4 de Cloudflare, Unimog, funciona así. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">TLS</span>El proxy termina TLS con el certificado del sitio. Con el handshake contra un PoP a 8 ms en lugar del origen a 80, la primera conexión cuesta una fracción (M01). Quien no quiere entregar su clave privada puede usar Keyless SSL: la operación de firma se delega a un servidor del cliente. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">WAF, bots y reglas</span>El <dfn data-term="waf">WAF</dfn> evalúa la request contra reglas administradas y del cliente, y un modelo asigna un puntaje de bot. La acción puede ser dejar pasar, bloquear, desafiar o limitar la tasa.</li>
+        <li><span class="step-title">Worker</span>Si la ruta tiene un Worker, su código corre acá y puede responder, reescribir la request o consultar estado en el borde (28.7).</li>
+        <li><span class="step-title">Caché, nivel superior y origen</span>Si la respuesta es cacheable y está, sale del PoP; si no, se pide al nivel superior y, en último caso, al origen (28.6).</li>
+      </ol>
+
+      <p>El proxy que hace todo esto es un programa propio: Cloudflare reemplazó su proxy basado en NGINX por Pingora, un framework escrito en Rust que publicó como código abierto. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="ddos"><span class="sec-num">28.5</span>Mitigación de DDoS en L3, L4 y L7</h2>
+
+      <p>Un ataque de <dfn data-term="ddos">DDoS</dfn> busca agotar un recurso del destino: el ancho de banda de sus enlaces, sus tablas de conexiones o su CPU. Cada capa se defiende distinto:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Capa</th><th>Ataque típico</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td><b>L3</b></td><td>Inundación de paquetes o amplificación (respuestas grandes de servidores DNS o NTP mal configurados dirigidas a la víctima)</td><td>Anycast reparte el volumen entre todos los PoPs; reglas en XDP descartan por protocolo, puerto y tamaño</td></tr>
+            <tr><td><b>L4</b></td><td>SYN flood: millones de conexiones que nunca se completan</td><td><dfn data-term="syn-cookies">SYN cookies</dfn>, que no guardan estado hasta que el cliente completa el handshake, y huellas descartadas en XDP</td></tr>
+            <tr><td><b>L7</b></td><td>Requests HTTP que parecen legítimas, desde miles de IPs reales</td><td>Puntaje de bots, desafíos, rate limiting por huella de cliente y reglas del WAF</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La detección es automática. Un sistema que corre en cada servidor muestrea los paquetes, encuentra los rasgos que comparten los del ataque (flags, puertos, rangos de TTL, tamaños) y genera una regla de descarte en <dfn data-term="xdp">XDP</dfn>, en segundos y sin intervención humana; una vista global coordina los ataques que golpean muchos PoPs. <span class="badge badge--doc">Documentado</span> Descartar en el driver es la clave: cada paquete de ataque cuesta casi nada, así que el mismo servidor sigue atendiendo a los usuarios legítimos. Cloudflare ha reportado haber absorbido ataques récord de más de 7 Tbps. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>En L7, los desafíos (un JavaScript que el navegador resuelve sin que el usuario lo note) frenan a los bots simples, pero una API no tiene navegador que los resuelva: un cliente legítimo de la API vería errores. Para APIs, la defensa pasa por identificar al cliente (API keys, mTLS), limitar por clave y validar el esquema de las requests, no por desafíos.</p>
+      </aside>
+
+      <h2 id="cache"><span class="sec-num">28.6</span>Caché por niveles y purgas</h2>
+
+      <p>Con cientos de PoPs, un objeto poco pedido tiene poca chance de estar en la caché de cada uno, y cada PoP que no lo tiene lo pediría al origen. La <dfn data-term="tiered-cache">caché por niveles</dfn> interpone un nivel superior: los PoPs le piden a unos pocos PoPs elegidos cerca del origen, que concentran las copias. La tasa de aciertos global sube y el origen recibe una fracción de las requests. <span class="badge badge--doc">Documentado</span></p>
+
+      <ul>
+        <li><b>La clave de caché</b> decide qué cuenta como el mismo objeto: host y ruta, y solo los parámetros que importan. Un parámetro de tracking en la clave multiplica las copias y hunde la tasa de aciertos (M04).</li>
+        <li><b>Coalescing:</b> si mil usuarios piden a la vez un objeto que no está, sale un solo pedido hacia arriba y los demás esperan su respuesta. Sin eso, un lanzamiento sería una estampida contra el origen.</li>
+        <li><b>Purgas:</b> borrar un objeto de todos los PoPs tarda segundos. Se purga por URL o por etiqueta; purgar todo el sitio manda todo el tráfico al origen a la vez.</li>
+        <li><b>Contenido vencido ante errores:</b> con <code>stale-if-error</code> y <code>stale-while-revalidate</code>, un origen caído o lento no se nota para lo cacheable.</li>
+      </ul>
+
+      <h2 id="workers"><span class="sec-num">28.7</span>Workers: código en el borde</h2>
+
+      <p>Los Workers ejecutan código de los clientes en cada servidor de cada PoP. Correr código de millones de clientes distintos en la misma máquina, en milisegundos, descarta los contenedores: cada Worker corre en un <dfn data-term="isolates">isolate de V8</dfn>, el mecanismo que aísla las pestañas de Chrome. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f283t f283d">
+<title id="f283t">Isolates de V8 contra contenedores</title>
+<desc id="f283d">A la izquierda, un proceso del runtime con cientos de isolates de V8, uno por Worker, que comparten el motor y arrancan en milisegundos con pocos megabytes cada uno. A la derecha, un contenedor por función, cada uno con su sistema operativo mínimo y su runtime, que tarda cientos de milisegundos o segundos en arrancar en frío y ocupa decenas o cientos de megabytes.</desc>
+<rect class="dg-frame" x="10" y="30" width="360" height="190" rx="12"/>
+<text class="dg-group" x="24" y="52">Un proceso del runtime</text>
+<rect x="26" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="66" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="88" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="110" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="132" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="154" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="68" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="110" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="152" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="194" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="236" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="278" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="320" y="176" width="36" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="26" y="200" width="330" height="12" rx="3" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="191" y="210" text-anchor="middle">motor V8 compartido</text>
+<text class="dg-small" x="10" y="244">Un isolate por Worker: arranca en milisegundos, ocupa pocos MB.</text>
+<rect class="dg-frame" x="400" y="30" width="360" height="190" rx="12"/>
+<text class="dg-group" x="414" y="52">Contenedores o microVMs</text>
+<rect x="416" y="66" width="104" height="140" rx="8" fill="var(--bg)" stroke="var(--separator-strong)"/>
+<rect x="424" y="76" width="88" height="28" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<text class="dg-tiny" x="468" y="94" text-anchor="middle">función</text>
+<rect x="424" y="110" width="88" height="40" rx="4" fill="var(--fill)"/>
+<text class="dg-tiny" x="468" y="134" text-anchor="middle">runtime</text>
+<rect x="424" y="156" width="88" height="42" rx="4" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="468" y="181" text-anchor="middle">SO mínimo</text>
+<rect x="530" y="66" width="104" height="140" rx="8" fill="var(--bg)" stroke="var(--separator-strong)"/>
+<rect x="538" y="76" width="88" height="28" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<text class="dg-tiny" x="582" y="94" text-anchor="middle">función</text>
+<rect x="538" y="110" width="88" height="40" rx="4" fill="var(--fill)"/>
+<text class="dg-tiny" x="582" y="134" text-anchor="middle">runtime</text>
+<rect x="538" y="156" width="88" height="42" rx="4" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="582" y="181" text-anchor="middle">SO mínimo</text>
+<rect x="644" y="66" width="104" height="140" rx="8" fill="var(--bg)" stroke="var(--separator-strong)"/>
+<rect x="652" y="76" width="88" height="28" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<text class="dg-tiny" x="696" y="94" text-anchor="middle">función</text>
+<rect x="652" y="110" width="88" height="40" rx="4" fill="var(--fill)"/>
+<text class="dg-tiny" x="696" y="134" text-anchor="middle">runtime</text>
+<rect x="652" y="156" width="88" height="42" rx="4" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="696" y="181" text-anchor="middle">SO mínimo</text>
+<text class="dg-small" x="400" y="244">Uno por función: cientos de ms en frío, decenas de MB o más.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.3.</b> Un isolate comparte el motor con los demás y no trae un sistema operativo propio: por eso arranca en milisegundos y caben miles por máquina. El precio es que el código tiene que correr en ese entorno (JavaScript o WebAssembly), con límites de CPU y memoria por request.</figcaption>
+      </figure>
+
+      <p>El aislamiento entre clientes se refuerza por capas: el sandbox de V8, procesos separados según la confianza, y mitigaciones contra ataques de canal lateral como Spectre, como la eliminación de temporizadores de alta precisión. <span class="badge badge--doc">Documentado</span> Para que el arranque en frío no se note, el isolate se prepara mientras se completa el handshake TLS, antes de que llegue la request. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="estado"><span class="sec-num">28.8</span>Estado en el borde: KV, Durable Objects y R2</h2>
+
+      <p>Un Worker no guarda nada entre requests. Para el estado hay tres servicios con garantías distintas, y elegir mal es el error más común:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th><dfn data-term="workers-kv">Workers KV</dfn></th><th><dfn data-term="durable-objects">Durable Objects</dfn></th><th>R2</th></tr></thead>
+          <tbody>
+            <tr><td><b>Qué es</b></td><td>Clave-valor global, lecturas desde el PoP</td><td>Un objeto con estado por ID, único en el mundo</td><td>Almacenamiento de objetos compatible con S3</td></tr>
+            <tr><td><b>Consistencia</b></td><td>Eventual: un cambio tarda un minuto o más en verse en todos lados</td><td>Fuerte: un solo hilo por objeto y almacenamiento transaccional</td><td>Fuerte por objeto</td></tr>
+            <tr><td><b>En PACELC (M06)</b></td><td>PA/EL: rápido y disponible</td><td>PC/EC: correcto, a costa de latencia para quien está lejos</td><td>PC/EC</td></tr>
+            <tr><td><b>Sirve para</b></td><td>Configuración, feature flags, redirecciones</td><td>Contadores, salas de chat, colaboración, rate limiting exacto</td><td>Archivos, backups, origen de medios</td></tr>
+            <tr><td><b>No sirve para</b></td><td>Contadores o saldos: se pierden escrituras concurrentes</td><td>Un único objeto global muy cargado: se vuelve un cuello de botella</td><td>Datos que se modifican con frecuencia en partes chicas</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Garantías según la documentación de Cloudflare. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Un Durable Object vive en un lugar concreto, en general cerca de donde se creó, y todas sus requests viajan hasta ahí: es el mismo compromiso que el líder de un grupo de Raft (M06), pero con un líder por objeto en lugar de uno por base. El diseño correcto usa muchos objetos chicos, uno por sala, por documento o por usuario, para que la carga se reparta. <a href="#scenario=worker-do">Escenario "Worker y Durable Object"</a>.</p>
+
+      <h2 id="config"><span class="sec-num">28.9</span>Propagar configuración a todo el mundo</h2>
+
+      <p>Cada cambio de un cliente (un registro DNS, una regla del WAF, una ruta de un Worker) tiene que llegar a todos los servidores de todos los PoPs, porque cada servidor atiende sin consultar a nadie. Cloudflare usa para eso <dfn data-term="quicksilver">Quicksilver</dfn>, un almacén clave-valor replicado en cada servidor que recibe los cambios en segundos. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Esa velocidad es también el mayor riesgo del sistema. El 2 de julio de 2019, una regla nueva del WAF con una expresión regular de backtracking catastrófico llegó así a todos los servidores del mundo y llevó su CPU al 100&#8239;% durante 27 minutos. <span class="badge badge--doc">Documentado</span> Las defensas que se desprenden son las del M11, aplicadas a la configuración:</p>
+      <ul>
+        <li><b>Validar antes de publicar:</b> no solo la sintaxis, también el costo (motores de expresiones regulares con límites, pruebas contra tráfico de muestra).</li>
+        <li><b>Desplegar por etapas:</b> primero unos pocos servidores o PoPs, con la CPU y los errores vigilados, y rollback automático si empeoran.</li>
+        <li><b>Interruptores para apagar una función al instante</b>, que viajan por el mismo sistema pero no pasan por las etapas.</li>
+        <li><b>Decidir cómo falla cada componente:</b> si un módulo nuevo no puede leer su configuración, ¿deja pasar el tráfico (fail-open) o lo corta (fail-closed)? Para la mayoría de las funciones de un proxy, dejar pasar es el error menos caro (M00).</li>
+      </ul>
+
+      <h2 id="zero-trust"><span class="sec-num">28.10</span>Enrutamiento inteligente y Zero Trust</h2>
+
+      <p>Dos productos usan la misma red para otra cosa que servir sitios:</p>
+      <ul>
+        <li><b>Argo Smart Routing</b> mide continuamente la latencia y las pérdidas entre PoPs y manda el tráfico hacia el origen por el camino más rápido de ese momento, que no siempre es el que elegiría BGP. <span class="badge badge--doc">Documentado</span></li>
+        <li><b><dfn data-term="zero-trust">Zero Trust</dfn></b> invierte el modelo de la VPN: en lugar de dar acceso a una red interna, cada request a una aplicación interna pasa por la red de Cloudflare, que verifica la identidad del usuario (OIDC, M10) y el estado de su dispositivo antes de dejarla pasar. Con Cloudflare Tunnel, el servidor interno abre una conexión saliente hacia la red y no necesita ninguna IP pública ni puertos abiertos. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m28"></div>
+
+      <section class="exercise" aria-labelledby="ej-m28">
+        <p class="exercise-title" id="ej-m28">Ejercicio de diseño: poner la API de un producto de IA detrás de una red de borde</p>
+        <p>Tu producto de IA tiene una web, una API pública con API keys y respuestas en streaming SSE (Parte II), y un origen en una sola región. Sufriste un ataque de requests HTTP a la API que agotó tus GPUs, y los usuarios de Asia se quejan de la latencia del primer byte.</p>
+        <p>Diseña qué pasa por la red de borde, qué se cachea, cómo se protege la API y cómo se conecta el origen.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Todo pasa por la red:</b> DNS apuntando a la red, TLS terminado en el PoP (los usuarios de Asia hacen el handshake a pocos milisegundos) y el origen conectado con un túnel saliente, sin IP pública que atacar directo.</li>
+            <li><b>Qué se cachea:</b> los archivos estáticos de la web, con caché por niveles, y respuestas públicas y estables como la lista de modelos. Nada de las respuestas del chat: son únicas y privadas.</li>
+            <li><b>Streaming:</b> las respuestas SSE pasan sin buffering, con timeouts de inactividad más largos que los de una request normal y keep-alive periódico (M17).</li>
+            <li><b>Protección de la API:</b> sin desafíos de navegador. Validación de la API key en un Worker contra KV (la revocación tarda hasta un minuto: aceptable, o se usa un Durable Object para las revocaciones urgentes), rate limiting por clave en el borde, límites de tamaño del cuerpo y validación del esquema. El ataque se corta en el PoP antes de gastar una sola GPU.</li>
+            <li><b>La web:</b> WAF administrado, puntaje de bots y desafíos en login y registro.</li>
+            <li><b>Operación:</b> los cambios de reglas por etapas y con rollback, y métricas del borde (tasa de bloqueos, aciertos de caché, errores del origen) en los mismos dashboards que el resto del servicio (M11).</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m28"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m28.data.js"></script>
+<script src="../assets/js/data/maps/m28-cloudflare.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+</body>
+</html>
