@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M03. Balanceadores, gateways y proxies</title>
+<meta name="description" content="L4 vs L7, algoritmos de balanceo con simulador, health checks, API gateway, BFF, service mesh y los fallos típicos de la capa de entrada.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m03">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Balanceadores, gateways y proxies</h1>
+        <p class="lead">Entre internet y tu código hay varias capas que deciden a qué instancia va cada request, quién puede pasar y qué hacer cuando algo falla. Elegir mal el algoritmo de balanceo puede multiplicar por mil tu p99 con un solo servidor lento; aquí lo vas a comprobar con un simulador.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M03</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01</dd></div>
+          <div><dt>Estado</dt><dd data-status="m03">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Distinguir proxy, balanceador L4, balanceador L7, API gateway y sidecar, y ubicarlos en una arquitectura.</li>
+          <li>Elegir un algoritmo de balanceo según el tipo de carga y explicar por qué.</li>
+          <li>Diseñar health checks que no conviertan una falla parcial en una caída total.</li>
+          <li>Definir qué va en un API gateway, qué va en un BFF y qué no va en ninguno.</li>
+          <li>Decidir cuándo vale la pena un service mesh.</li>
+        </ul>
+      </section>
+
+      <h2 id="capas"><span class="sec-num">3.1</span>Las capas de entrada</h2>
+
+      <p>Todo lo que está entre el usuario y tu servicio es, de una forma u otra, un <dfn data-term="reverse-proxy">proxy inverso</dfn>: recibe la request en nombre de tus servidores y la reenvía. Lo que cambia entre capas es cuánto entiende de la request y, por lo tanto, qué decisiones puede tomar.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 210" role="img" aria-labelledby="f31t f31d">
+<title id="f31t">Capas entre el usuario y tu servicio</title>
+<desc id="f31d">Usuarios, DNS con anycast, balanceador L4, proxy L7, API gateway y servicios. Cada capa ve más información de la request que la anterior.</desc>
+<defs><marker id="f31a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="6.0" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="62.0" y="66" text-anchor="middle" style="font-size:14px">Usuarios</text>
+<text class="dg-tiny" x="62.0" y="86" text-anchor="middle">navegadores, apps</text>
+<text class="dg-small" x="62.0" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="62.0" y="152" text-anchor="middle">IP de origen</text>
+<path class="dg-edge" d="M120.0 72 H134.6" marker-end="url(#f31a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="137.6" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="193.6" y="66" text-anchor="middle" style="font-size:14px">DNS + anycast</text>
+<text class="dg-tiny" x="193.6" y="86" text-anchor="middle">elige la región y el PoP</text>
+<text class="dg-small" x="193.6" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="193.6" y="152" text-anchor="middle">un nombre</text>
+<path class="dg-edge" d="M251.6 72 H266.2" marker-end="url(#f31a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="269.2" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="325.2" y="66" text-anchor="middle" style="font-size:14px">Balanceador L4</text>
+<text class="dg-tiny" x="325.2" y="86" text-anchor="middle">NLB, Maglev, ECMP</text>
+<text class="dg-small" x="325.2" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="325.2" y="152" text-anchor="middle">IP, puerto, TCP/UDP</text>
+<path class="dg-edge" d="M383.2 72 H397.8" marker-end="url(#f31a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="400.79999999999995" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="456.79999999999995" y="66" text-anchor="middle" style="font-size:14px">Proxy L7</text>
+<text class="dg-tiny" x="456.79999999999995" y="86" text-anchor="middle">Envoy, ALB, nginx</text>
+<text class="dg-small" x="456.79999999999995" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="456.79999999999995" y="152" text-anchor="middle">HTTP completo, TLS</text>
+<path class="dg-edge" d="M514.8 72 H529.4" marker-end="url(#f31a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="532.4" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="588.4" y="66" text-anchor="middle" style="font-size:14px">API gateway</text>
+<text class="dg-tiny" x="588.4" y="86" text-anchor="middle">auth, cuotas, rutas</text>
+<text class="dg-small" x="588.4" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="588.4" y="152" text-anchor="middle">identidad y plan</text>
+<path class="dg-edge" d="M646.4 72 H661.0" marker-end="url(#f31a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="664.0" y="40" width="112" height="64" rx="5"/>
+<text class="dg-label" x="720.0" y="66" text-anchor="middle" style="font-size:14px">Servicios</text>
+<text class="dg-tiny" x="720.0" y="86" text-anchor="middle">con sidecar opcional</text>
+<text class="dg-small" x="720.0" y="134" text-anchor="middle">ve:</text>
+<text class="dg-tiny dg-in" x="720.0" y="152" text-anchor="middle">la lógica de negocio</text>
+<path class="dg-frame" d="M137 184 H770"/>
+<text class="dg-small" x="140" y="202">más a la derecha: más contexto de la request, más CPU por request y más cerca de tu código</text>
+<text class="dg-group" x="6" y="22">De internet a tu servicio</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.1.</b> Cada capa ve más de la request que la anterior. Las primeras son baratas y tontas; las últimas, caras e inteligentes.</figcaption>
+      </figure>
+
+      <h2 id="l4-l7"><span class="sec-num">3.2</span>L4 contra L7</h2>
+
+      <p>La diferencia del <dfn data-term="l4-l7">balanceo L4 y L7</dfn> es qué unidad reparten:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>L4 (transporte)</th><th>L7 (aplicación)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Unidad que reparte</b></td><td>Conexiones TCP o flujos UDP</td><td>Requests HTTP individuales</td></tr>
+            <tr><td><b>Ve</b></td><td>IPs y puertos</td><td>Path, headers, cookies, cuerpo</td></tr>
+            <tr><td><b>TLS</b></td><td>Lo deja pasar tal cual</td><td>Lo termina (y puede volver a cifrar)</td></tr>
+            <tr><td><b>Costo por request</b></td><td>Muy bajo; millones de paquetes por segundo por nodo</td><td>Mayor: parsea HTTP, descifra, reescribe headers</td></tr>
+            <tr><td><b>Puede</b></td><td>Repartir conexiones, sobrevivir a la caída de un nodo del balanceador</td><td>Enrutar por path, reintentar, aplicar límites, registrar cada request</td></tr>
+            <tr><td><b>Ejemplos</b></td><td>AWS NLB, Maglev de Google, IPVS</td><td>Envoy, nginx, HAProxy, AWS ALB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En sistemas grandes se combinan: un L4 muy rápido y sin estado reparte conexiones entre una flota de proxies L7, que hacen el trabajo caro. Google describió Maglev, su balanceador L4 por software, que usa hashing consistente para que cualquier nodo de Maglev envíe los paquetes de una misma conexión al mismo backend, sin compartir estado entre nodos. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa con conexiones largas detrás de un L4</p>
+        <p>Un cliente gRPC abre una conexión HTTP/2 y la usa durante horas para miles de requests. Un L4 decide una vez, al abrirse la conexión, así que todas esas requests caen en la misma instancia. Con pocos clientes grandes, unas instancias se saturan y otras no hacen nada; y al agregar instancias nuevas, no reciben tráfico hasta que se abran conexiones nuevas.</p>
+        <p><b>Mitigación:</b> un balanceador L7 que entienda HTTP/2 y reparta cada stream, balanceo del lado del cliente (el cliente conoce todas las instancias) o conexiones con duración máxima que obliguen a reconectar.</p>
+      </aside>
+
+      <h2 id="algoritmos"><span class="sec-num">3.3</span>Algoritmos de balanceo</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Algoritmo</th><th>Cómo decide</th><th>Bueno para</th><th>Falla cuando</th></tr></thead>
+          <tbody>
+            <tr><td><b>Round robin</b> (y ponderado)</td><td>En turno, uno tras otro</td><td>Backends idénticos y requests homogéneas</td><td>Un backend está lento o las requests cuestan muy distinto</td></tr>
+            <tr><td><b>Aleatorio</b></td><td>Al azar</td><td>Simplicidad sin estado</td><td>Igual que round robin, y con más varianza</td></tr>
+            <tr><td><b><dfn data-term="least-conn">Menos conexiones</dfn></b></td><td>Al que tenga menos trabajo en curso</td><td>Requests de duración variable</td><td>Hay muchos balanceadores sin estado compartido, o llega una instancia nueva (todo va hacia ella)</td></tr>
+            <tr><td><b><dfn data-term="p2c">Power of two choices</dfn></b></td><td>Elige 2 al azar y usa el menos cargado</td><td>Flotas grandes con muchos balanceadores independientes</td><td>Casi nunca; es la opción por defecto razonable</td></tr>
+            <tr><td><b>Latencia (EWMA)</b></td><td>Al que viene respondiendo más rápido, con promedio móvil</td><td>Backends heterogéneos</td><td>Se oscila si reacciona demasiado rápido</td></tr>
+            <tr><td><b><dfn data-term="consistent-hashing">Hash consistente</dfn></b></td><td>Por una clave (usuario, documento)</td><td>Backends con caché o estado por clave</td><td>Claves muy populares; servidores lentos (no los esquiva)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La diferencia entre estos algoritmos casi no se nota cuando todo está sano. Se nota el día que un servidor se pone lento sin caerse (una pausa larga de GC, un disco degradado, un vecino ruidoso en la misma máquina), que es precisamente la falla más común. Pruébalo: pon el servidor 1 seis veces más lento y compara.</p>
+
+      <div data-sim="lb"></div>
+
+      <p>Con round robin, aleatorio o hash, el servidor lento sigue recibiendo su 20&#8239;% del tráfico aunque solo pueda atender una fracción: su cola crece sin límite durante toda la simulación, y el p99 del sistema se va a minutos. Menos conexiones y P2C ven la cola y le mandan menos trabajo; el p99 queda en cientos de milisegundos. Las ideas de fondo:</p>
+      <ul>
+        <li><b>Mirar el trabajo en curso es una forma de detectar salud</b> sin health checks: un servidor lento acumula requests y deja de ser elegido.</li>
+        <li><b>P2C logra casi lo mismo que mirar todos los servidores</b> consultando solo dos, lo que importa cuando hay cientos de balanceadores y ninguno ve la carga global. Es el resultado clásico de Mitzenmacher sobre "el poder de dos opciones".</li>
+        <li><b>Por encima del 80&#8239;% de carga, todo empeora rápido</b>: sube la carga del simulador y mira el p50. Es la teoría de colas en acción (M08).</li>
+      </ul>
+
+      <h2 id="health"><span class="sec-num">3.4</span>Health checks, drenaje y slow start</h2>
+
+      <p>El balanceador solo es tan bueno como su información sobre qué backends están sanos. Hay dos fuentes:</p>
+      <ul>
+        <li><b>Activa:</b> el <dfn data-term="health-check">health check</dfn> periódico (<code>GET /readyz</code> cada 5 s). Detecta instancias muertas, pero tarda: intervalo × umbral de fallos.</li>
+        <li><b>Pasiva:</b> la <dfn data-term="outlier-detection">detección de outliers</dfn> sobre el tráfico real. Si una instancia devuelve 5 errores seguidos, sale de rotación 30 s. Reacciona en segundos y ve fallas que el health check no ve.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Endpoint</th><th>Pregunta que responde</th><th>Si falla</th><th>No debe</th></tr></thead>
+          <tbody>
+            <tr><td><code>/healthz</code> (liveness)</td><td>¿El proceso sigue vivo y no está trabado?</td><td>El orquestador reinicia la instancia</td><td>Depender de la base de datos: reiniciar no arregla la base</td></tr>
+            <tr><td><code>/readyz</code> (readiness)</td><td>¿Puede recibir tráfico ahora?</td><td>El balanceador deja de enviarle requests</td><td>Fallar en todas las instancias a la vez por una dependencia compartida</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Dos mecanismos completan el ciclo de vida de una instancia. Al retirarla (un deploy, un escalado hacia abajo), el <dfn data-term="draining">connection draining</dfn> deja de mandarle requests nuevas y espera a que terminen las que tiene. Al agregarla, el <em>slow start</em> le sube el tráfico gradualmente durante 30 a 60 s, para que no reciba todo de golpe con cachés frías.</p>
+
+      <h2 id="gateway"><span class="sec-num">3.5</span>API gateway y BFF</h2>
+
+      <p>Cuando tienes decenas de servicios, cada uno necesitaría resolver lo mismo: validar tokens, aplicar límites por cliente, registrar requests. Un <dfn data-term="api-gateway">API gateway</dfn> lo centraliza en la entrada, como un pipeline donde cada etapa puede cortar la request con su propio código de error:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f32t f32d">
+<title id="f32t">El pipeline de un API gateway y dónde nace cada código de error</title>
+<desc id="f32d">Seis etapas en orden: TLS, WAF, autenticación, rate limit, enrutamiento y llamada al upstream. Cada una puede cortar la request con su código: 403, 401, 429, 404, y 502 o 504. Al final, logs y métricas registran todo.</desc>
+<defs><marker id="f32a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f32f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-frame" x="2" y="26" width="766" height="150" rx="10"/>
+<text class="dg-group" x="14" y="46">API gateway</text>
+<rect class="dg-box" x="14" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="24" y="78">1</text>
+<text class="dg-label" x="24" y="97" style="font-size:14px">TLS</text>
+<text class="dg-tiny" x="24" y="112">termina el cifrado</text>
+<path class="dg-edge" d="M127 89 H142" marker-end="url(#f32a)"/>
+<rect class="dg-box" x="144" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="154" y="78">2</text>
+<text class="dg-label" x="154" y="97" style="font-size:14px">WAF</text>
+<text class="dg-tiny" x="154" y="112">bloquea ataques conocidos</text>
+<path class="dg-edge" d="M257 89 H272" marker-end="url(#f32a)"/>
+<path d="M200.0 119 V148" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f32f)"/>
+<text class="dg-small" x="200.0" y="166" text-anchor="middle" style="fill:var(--fail)">403</text>
+<rect class="dg-box" x="274" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="284" y="78">3</text>
+<text class="dg-label" x="284" y="97" style="font-size:14px">Autenticación</text>
+<text class="dg-tiny" x="284" y="112">token o API key</text>
+<path class="dg-edge" d="M387 89 H402" marker-end="url(#f32a)"/>
+<path d="M330.0 119 V148" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f32f)"/>
+<text class="dg-small" x="330.0" y="166" text-anchor="middle" style="fill:var(--fail)">401</text>
+<rect class="dg-box" x="404" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="414" y="78">4</text>
+<text class="dg-label" x="414" y="97" style="font-size:14px">Rate limit</text>
+<text class="dg-tiny" x="414" y="112">cuota por cliente</text>
+<path class="dg-edge" d="M517 89 H532" marker-end="url(#f32a)"/>
+<path d="M460.0 119 V148" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f32f)"/>
+<text class="dg-small" x="460.0" y="166" text-anchor="middle" style="fill:var(--fail)">429</text>
+<rect class="dg-box" x="534" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="544" y="78">5</text>
+<text class="dg-label" x="544" y="97" style="font-size:14px">Enrutamiento</text>
+<text class="dg-tiny" x="544" y="112">path, versión, header</text>
+<path class="dg-edge" d="M647 89 H662" marker-end="url(#f32a)"/>
+<path d="M590.0 119 V148" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f32f)"/>
+<text class="dg-small" x="590.0" y="166" text-anchor="middle" style="fill:var(--fail)">404</text>
+<rect class="dg-box" x="664" y="60" width="112" height="58" rx="5"/>
+<text class="dg-num" x="674" y="78">6</text>
+<text class="dg-label" x="674" y="97" style="font-size:14px">Upstream</text>
+<text class="dg-tiny" x="674" y="112">timeout, reintento</text>
+<path d="M720.0 119 V148" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f32f)"/>
+<text class="dg-small" x="720.0" y="166" text-anchor="middle" style="fill:var(--fail)">502 / 504</text>
+<path class="dg-frame" d="M14 196 H756"/>
+<text class="dg-small" x="14" y="216">en todas las etapas: request_id, logs de acceso, métricas por ruta y cliente, trace (M11)</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.2.</b> El orden importa: autenticar antes de aplicar la cuota permite limitar por cliente y no por IP, y el WAF va antes que todo para no gastar CPU en tráfico malicioso.</figcaption>
+      </figure>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: cuánta lógica poner en el gateway</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>Gateway delgado</h4><p><b>Ganas:</b> una pieza crítica, simple y estable, que cambia poco.</p><p><b>Pagas:</b> cada servicio repite algo de lógica de adaptación.</p></div>
+          <div class="to-col"><h4>Gateway con lógica</h4><p><b>Ganas:</b> menos código repetido en los servicios.</p><p><b>Pagas:</b> cada cambio de negocio exige desplegar la pieza por la que pasa todo el tráfico, y el gateway termina siendo un monolito que nadie se atreve a tocar.</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> el gateway resuelve solo lo transversal (identidad, cuotas, rutas, observabilidad). La agregación de datos para una pantalla va en un BFF; la lógica de negocio, en los servicios.</p>
+      </aside>
+
+      <p>El <dfn data-term="bff">BFF</dfn> (backend for frontend) resuelve otro problema: la app de iOS, la web y la TV necesitan los mismos datos con formas distintas. En lugar de que cada cliente haga cinco llamadas y combine resultados (con cinco idas y vueltas por redes móviles, M01), un BFF por tipo de cliente hace esas llamadas dentro del datacenter, en paralelo, y devuelve una respuesta a la medida de la pantalla. Lo mantiene el equipo del frontend.</p>
+
+      <h3 id="sticky">El estado en la instancia</h3>
+      <p>Las <dfn data-term="sticky-session">sticky sessions</dfn> parecen resolver el problema de guardar la sesión en memoria del servidor: el balanceador manda siempre al mismo usuario a la misma instancia. En realidad lo esconden. Si esa instancia se cae, sus usuarios pierden la sesión; si un usuario pesado cae en una instancia, no hay forma de redistribuirlo; y los deploys obligan a esperar a que las sesiones expiren. La solución es la de siempre: el estado vive afuera (Redis, la base o un token firmado) y cualquier instancia atiende cualquier request.</p>
+
+      <h2 id="mesh"><span class="sec-num">3.6</span>Service mesh y sidecars</h2>
+
+      <p>El gateway protege la entrada, pero la mayor parte del tráfico de un sistema grande va de servicio a servicio (tráfico este-oeste). Un <dfn data-term="service-mesh">service mesh</dfn> lleva las funciones del gateway a cada salto interno, con un <dfn data-term="sidecar">sidecar</dfn> (normalmente Envoy) junto a cada instancia que intercepta su tráfico:</p>
+      <ul>
+        <li><b>Plano de datos:</b> los sidecars. Hacen mTLS entre servicios, reintentos, timeouts, balanceo, circuit breaking y emiten métricas y traces uniformes.</li>
+        <li><b>Plano de control:</b> distribuye configuración y certificados a todos los sidecars (Istio, Linkerd, Consul).</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Un mesh cuesta: cada llamada atraviesa dos proxies más (uno en cada extremo), cada instancia carga un proceso extra con su memoria, y el plano de control se vuelve infraestructura crítica. Por eso existen variantes sin sidecar (proxies por nodo, o balanceo dentro del cliente con librerías como gRPC xDS). La pregunta que decide es organizacional: con muchos equipos y lenguajes, uniformar seguridad y observabilidad sin tocar código vale el costo; con pocos servicios, una buena librería cliente suele alcanzar.</p>
+      </aside>
+
+      <h2 id="fallos"><span class="sec-num">3.7</span>Fallos típicos de la capa de entrada</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Mecanismo</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>El balanceador es un SPOF</td><td>Una sola máquina en la entrada</td><td>Balanceadores distribuidos (anycast, ECMP, servicios administrados multi-zona)</td></tr>
+            <tr><td>Amplificación de reintentos</td><td>Cada capa reintenta: 3 × 3 × 3 = 27 requests por request</td><td>Reintentar en una sola capa, con presupuesto de reintentos (M08)</td></tr>
+            <tr><td>Health check en cascada</td><td>El readiness depende de la base; la base se pone lenta; todas las instancias salen de rotación</td><td>Readiness solo de la instancia; límite de cuántas instancias se pueden expulsar (panic threshold)</td></tr>
+            <tr><td>Estampida hacia la instancia nueva</td><td>Menos conexiones ve una instancia vacía y le manda todo</td><td>Slow start</td></tr>
+            <tr><td>Timeouts desalineados</td><td>El balanceador corta a los 30 s pero el backend sigue trabajando 60 s</td><td>Deadlines propagados; timeouts decrecientes hacia adentro</td></tr>
+            <tr><td>Conexiones largas desbalanceadas</td><td>L4 con HTTP/2 o WebSockets</td><td>L7, duración máxima de conexión, balanceo en el cliente</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m03"></div>
+
+      <section class="exercise" aria-labelledby="ej-m03">
+        <p class="exercise-title" id="ej-m03">Ejercicio de diseño: la entrada de una API de inferencia</p>
+        <p>Diseñas la entrada de una API que sirve un modelo de lenguaje. Las requests duran entre 200 ms y 60 s (según cuántos tokens se generen), las respuestas van en streaming SSE y hay 40 servidores de GPU con capacidad para ~16 requests concurrentes cada uno. Cada cliente tiene una cuota de tokens por minuto.</p>
+        <p>Elige capas, algoritmo de balanceo, health checks y dónde aplicar la cuota. Justifica cada decisión.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Capas:</b> L4 o anycast hacia una flota de gateways L7. El gateway termina TLS, autentica la API key y aplica la cuota. El streaming exige L7 con buffering desactivado y timeouts de inactividad por encima de la duración máxima de una respuesta.</li>
+            <li><b>Algoritmo:</b> menos requests en curso (o P2C sobre requests en curso), nunca round robin. Las requests duran de 200 ms a 60 s: contarlas es la única forma de saber qué GPU está libre. En M19 se refina con el uso de memoria de KV cache, que es el recurso real.</li>
+            <li><b>Límite por servidor:</b> 16 requests concurrentes como máximo. Si todos están llenos, el gateway encola un tiempo corto y después responde 503 con <code>Retry-After</code>, en lugar de sobrecargar las GPUs (admission control, M18).</li>
+            <li><b>Health checks:</b> readiness que falla mientras el modelo se carga en la GPU (puede tardar minutos) y detección de outliers para GPUs que devuelven errores.</li>
+            <li><b>Cuota:</b> en el gateway, contando tokens estimados al entrar y corrigiendo con los reales al terminar (M18). Nunca reintentar en el gateway una generación que ya empezó a transmitirse: el cliente ya recibió parte de la respuesta.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m03"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m03.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-lb.js"></script>
+</body>
+</html>

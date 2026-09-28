@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M04. Caché</title>
+<meta name="description" content="Niveles de caché, cache-aside y write-through, invalidación y sus carreras, cache stampede, claves calientes, evicción, Redis Cluster y qué hacer cuando la caché entera cae.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m04">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Caché</h1>
+        <p class="lead">La caché es la optimización más rentable de un sistema y también una de las fuentes más comunes de incidentes: datos viejos que no se van, estampidas que tumban la base y, el día que la caché cae, una base que nunca estuvo dimensionada para vivir sin ella.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M04</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M03</dd></div>
+          <div><dt>Estado</dt><dd data-status="m04">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir en qué nivel cachear y con qué patrón (cache-aside, write-through, write-behind).</li>
+          <li>Invalidar sin dejar datos viejos por carreras, usando TTL, versiones, leases y CDC.</li>
+          <li>Prevenir estampidas con single-flight, leases, stale-while-revalidate y expiración anticipada.</li>
+          <li>Resolver claves calientes y elegir una política de evicción.</li>
+          <li>Diseñar el sistema para sobrevivir a la caída completa de la caché.</li>
+        </ul>
+      </section>
+
+      <h2 id="niveles"><span class="sec-num">4.1</span>Dónde cachear</h2>
+
+      <p>Una caché guarda el resultado de algo caro para no repetirlo. En una request típica hay seis lugares posibles, y cuanto más cerca del usuario, más barata la lectura y más difícil invalidarla:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Nivel</th><th>Latencia de un acierto</th><th>Compartida entre</th><th>Se invalida con</th></tr></thead>
+          <tbody>
+            <tr><td>Navegador o app</td><td>0 (sin red)</td><td>Un usuario</td><td>Solo con TTL o ETag: no le puedes ordenar que borre</td></tr>
+            <tr><td>CDN</td><td>Una ida y vuelta al PoP</td><td>Todos los usuarios de un PoP</td><td>TTL y purgas por API (M28)</td></tr>
+            <tr><td>Proxy inverso</td><td>&lt; 1 ms dentro de la región</td><td>Todos</td><td>TTL, purgas</td></tr>
+            <tr><td>Memoria del proceso (L1)</td><td>~100 ns</td><td>Una instancia</td><td>TTL corto, mensajes de invalidación</td></tr>
+            <tr><td>Caché distribuida (Redis, Memcached)</td><td>~0.5 ms</td><td>Todas las instancias</td><td>DEL explícito, TTL, eventos</td></tr>
+            <tr><td>Buffer de la base de datos</td><td>Microsegundos dentro de la base</td><td>Todas las consultas</td><td>Automático</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La métrica que manda es la <dfn data-term="hit-ratio">tasa de acierto</dfn>, y su efecto no es lineal: con 99&#8239;% de acierto, a la base llega el 1&#8239;% del tráfico; con 95&#8239;%, el 5&#8239;%, es decir, cinco veces más. Por eso un cambio inocente (una clave nueva que incluye un timestamp, un parámetro que fragmenta la caché) puede tumbar la base sin que nadie toque la base.</p>
+
+      <h2 id="patrones"><span class="sec-num">4.2</span>Patrones de lectura y escritura</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Patrón</th><th>Lectura</th><th>Escritura</th><th>Ganas</th><th>Pagas</th></tr></thead>
+          <tbody>
+            <tr><td><b><dfn data-term="cache-aside">Cache-aside</dfn></b></td><td>La app busca en caché; si falta, lee la base y llena la caché</td><td>La app escribe en la base y borra la clave</td><td>Simple; la caché puede caer sin perder datos</td><td>El primer lector paga el miss; carreras de invalidación</td></tr>
+            <tr><td><b>Read-through</b></td><td>La caché misma va a la base si falta</td><td>Igual que cache-aside</td><td>Código de la app más simple</td><td>La caché necesita saber leer la base</td></tr>
+            <tr><td><b><dfn data-term="write-through">Write-through</dfn></b></td><td>Siempre de la caché</td><td>A caché y base juntas</td><td>La caché siempre está al día</td><td>Escrituras más lentas; se cachea también lo que nadie lee</td></tr>
+            <tr><td><b><dfn data-term="write-behind">Write-behind</dfn></b></td><td>De la caché</td><td>A la caché; a la base después, en lote</td><td>Escrituras rapidísimas, agrupadas</td><td>Pérdida de datos si la caché muere antes de volcar</td></tr>
+            <tr><td><b>Refresh-ahead</b></td><td>De la caché</td><td>—</td><td>Las claves populares se renuevan antes de vencer</td><td>Recalcula cosas que quizá nadie vuelva a pedir</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cache-aside es el punto de partida razonable en casi todos los casos. El mapa de abajo es un servicio de catálogo real con dos niveles de caché (L1 en proceso y Redis compartido) e invalidación por eventos. Recorre los escenarios en orden.</p>
+
+      <div data-map="m04-cache"></div>
+
+      <h2 id="invalidacion"><span class="sec-num">4.3</span>Invalidación</h2>
+
+      <p>Hay una frase famosa de Phil Karlton: en computación hay dos cosas difíciles, invalidar cachés y ponerle nombre a las cosas. La dificultad es que la caché y la base son dos sistemas distintos sin transacción común, así que siempre hay una ventana en la que discrepan. Las herramientas, de la más simple a la más robusta:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">TTL</span>Todo vence tarde o temprano. Es la red de seguridad: por mal que salga todo lo demás, el error dura como mucho un TTL. Nunca guardes algo sin TTL.</li>
+        <li><span class="step-title">Borrar al escribir</span>Quien actualiza la base hace <code>DEL</code> de la clave. Borrar es mejor que escribir el valor nuevo: dos escrituras desordenadas podrían dejar el valor viejo, mientras que un borrado siempre obliga a releer la fuente.</li>
+        <li><span class="step-title">Claves versionadas</span>Poner la versión en la clave (<code>prod:4471:v13</code>) hace que el valor nuevo sea otra clave: no hay nada que invalidar, lo viejo simplemente deja de pedirse y vence.</li>
+        <li><span class="step-title">Invalidación por eventos (<dfn data-term="cdc">CDC</dfn>)</span>Un proceso lee el log de cambios de la base y borra las claves afectadas. Captura cualquier escritura, incluso las de otros servicios o las manuales.</li>
+      </ol>
+
+      <p>Aun con todo eso, cache-aside tiene una carrera clásica que deja un valor viejo en la caché:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 376" role="img" aria-labelledby="f41t f41d">
+<title id="f41t">La carrera que deja un valor viejo en la caché</title>
+<desc id="f41d">Un lector tiene un miss y lee el precio viejo de la base; mientras tanto un escritor actualiza la base y borra la caché; después el lector escribe en la caché el valor viejo, que queda ahí hasta que vence el TTL.</desc>
+<defs><marker id="f41-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f41-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f41-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f41-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Lector (app)</text>
+<path class="dg-frame" d="M70.0 40 V366"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Redis</text>
+<path class="dg-frame" d="M280.0 40 V366"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">PostgreSQL</text>
+<path class="dg-frame" d="M490.0 40 V366"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Escritor (app)</text>
+<path class="dg-frame" d="M700.0 40 V366"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f41-a)"/>
+<rect x="93.10000000000001" y="55" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">GET prod:1 → nil (miss)</text>
+<path class="dg-edge" d="M73.0 106 L485.0 106" marker-end="url(#f41-a)"/>
+<rect x="211.3" y="89" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="100" text-anchor="middle">SELECT precio → 100</text>
+<rect x="80.0" y="126" width="265" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="142">el lector se demora (GC, red lenta)</text>
+<path class="dg-edge" d="M697.0 174 L495.0 174" marker-end="url(#f41-a)"/>
+<rect x="526.3" y="157" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="168" text-anchor="middle">UPDATE precio = 120</text>
+<path class="dg-edge" d="M697.0 208 L285.0 208" marker-end="url(#f41-a)"/>
+<rect x="451.0" y="191" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="202" text-anchor="middle">DEL prod:1</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 242 L275.0 242" marker-end="url(#f41-f)"/>
+<rect x="60.10000000000001" y="225" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="236" text-anchor="middle">SET prod:1 = 100  (¡valor viejo!)</text>
+<rect x="290.0" y="262" width="360" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="300.0" y="278">la caché dice 100 y la base dice 120 hasta que venza el TTL</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">soluciones: lease que el DEL invalida, versión en el valor, TTL corto como red de seguridad</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 4.1.</b> El lector escribe en la caché un valor que leyó antes de la actualización, pero después del borrado.</figcaption>
+      </figure>
+
+      <p>Facebook documentó esta carrera en su paper sobre memcache y la resolvió con <dfn data-term="lease">leases</dfn>: al fallar un GET, la caché entrega un token al lector; un DEL posterior invalida ese token, y el SET con un token inválido se rechaza. <span class="badge badge--doc">Documentado</span> Sin leases, las mitigaciones son guardar la versión junto al valor (y no sobrescribir una versión mayor con una menor) o aceptar el error acotado por un TTL corto.</p>
+
+      <h2 id="stampede"><span class="sec-num">4.4</span>Cache stampede</h2>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term"><dfn data-term="cache-stampede">Cache stampede</dfn> <span class="def-en">thundering herd, dog-piling</span></p>
+        <p class="def-one">Cuando una clave muy leída vence, todas las requests que llegan mientras se recalcula la encuentran vacía y van a la vez a la fuente de verdad.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Se abre la puerta de una tienda en rebajas: todos entran al mismo tiempo por la misma puerta.</dd>
+          <dt>Ejemplo</dt>
+          <dd>10&#8239;000 lecturas por segundo y 100 ms para recalcular: durante esa ventana llegan 1&#8239;000 requests, que lanzan 1&#8239;000 consultas idénticas. La base se pone lenta, la ventana se alarga, llegan más requests.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Es un ciclo que se realimenta: cada consulta extra vuelve más lentas a todas, y la base puede no recuperarse nunca aunque el tráfico sea el de siempre.</dd>
+        </dl>
+      </aside>
+
+      <p>El simulador reproduce ese ciclo con una base que se vuelve más lenta cuanto más consultas tiene en paralelo. Empieza por "Sin protección" y ve bajando por las estrategias:</p>
+
+      <div data-sim="stampede"></div>
+
+      <ul>
+        <li><b><dfn data-term="single-flight">Single-flight</dfn></b> reduce las consultas a una por instancia. Con 20 instancias, 20 consultas: suele alcanzar.</li>
+        <li><b>Un lease distribuido</b> (<code>SET lock:clave NX PX 2000</code>) deja una sola consulta en todo el sistema; los demás esperan o reintentan la lectura.</li>
+        <li><b><dfn data-term="swr">Stale-while-revalidate</dfn></b>: si guardas el valor con un margen extra más allá de su vencimiento lógico, puedes servir el viejo mientras uno solo recalcula. Nadie espera.</li>
+        <li><b><dfn data-term="xfetch">Expiración anticipada probabilística</dfn></b> (el algoritmo XFetch de Vattani y otros): cada lectura cercana al vencimiento recalcula con una probabilidad que crece a medida que se acerca, ponderada por lo que cuesta recalcular. En la práctica, alguna request la renueva justo antes de vencer y la estampida no ocurre nunca.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>La estampida no solo pasa cuando vence una clave. También ocurre al reiniciar el clúster de caché (todo frío), al desplegar un cambio que modifica el formato de las claves (todas "nuevas" a la vez) y al purgar una CDN. Por eso los cambios de esquema de claves se despliegan de a poco, y las purgas masivas se hacen por partes.</p>
+      </aside>
+
+      <h2 id="hot-keys"><span class="sec-num">4.5</span>Claves calientes y claves grandes</h2>
+
+      <p>En una caché distribuida cada clave vive en un solo shard. Si una <dfn data-term="hot-key">clave caliente</dfn> recibe 300&#8239;000 lecturas por segundo, su shard se satura aunque los demás estén ociosos, y agregar shards no ayuda. Las soluciones reparten esa clave:</p>
+      <ul>
+        <li><b>Caché local en proceso</b> con TTL de unos segundos: la clave se sirve desde la memoria de cada instancia. Es la defensa más efectiva y la que usa el mapa de arriba.</li>
+        <li><b>Replicar la clave</b> con sufijos (<code>trending:1</code> … <code>trending:8</code>) en shards distintos, leyendo una al azar y escribiendo todas.</li>
+        <li><b>Réplicas de lectura</b> del shard.</li>
+      </ul>
+      <p>Las claves grandes (un valor de 5 MB) son el problema simétrico: bloquean el hilo de Redis mientras se serializan y saturan la red. Se parten en varias claves o se guardan en almacenamiento de objetos con solo la referencia en caché.</p>
+
+      <h2 id="eviccion"><span class="sec-num">4.6</span>Evicción y tamaño</h2>
+
+      <p>Una caché tiene memoria finita, y cuando se llena alguien tiene que salir. La <dfn data-term="eviction">política de evicción</dfn> decide quién:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Política</th><th>Expulsa</th><th>Buena para</th><th>Mala para</th></tr></thead>
+          <tbody>
+            <tr><td>LRU</td><td>Lo que hace más tiempo que no se usa</td><td>Accesos con localidad temporal</td><td>Un escaneo único que expulsa todo lo valioso</td></tr>
+            <tr><td>LFU</td><td>Lo que se usa con menos frecuencia</td><td>Popularidad estable (Zipf)</td><td>Lo que fue popular y ya no lo es</td></tr>
+            <tr><td>TTL más próximo</td><td>Lo que vence antes</td><td>Cuando el TTL refleja el valor</td><td>Casi todo lo demás</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Redis implementa LRU y LFU aproximados: en lugar de mantener una lista ordenada de todas las claves, toma una pequeña muestra al azar y expulsa la peor de la muestra. <span class="badge badge--doc">Documentado</span> Sobre el tamaño: la tasa de acierto crece rápido con la memoria al principio y cada vez más despacio después, porque la cola larga de claves raras casi nunca se repite. Mide la curva con tu tráfico antes de duplicar la memoria.</p>
+
+      <h2 id="redis"><span class="sec-num">4.7</span>Redis en clúster</h2>
+      <ul>
+        <li><b>Particionado:</b> 16&#8239;384 hash slots repartidos entre los shards; la clave se asigna por CRC16. Las operaciones de varias claves (<code>MGET</code>, transacciones) solo funcionan si todas caen en el mismo slot, lo que se fuerza con hash tags: <code>{user:77}:cart</code> y <code>{user:77}:prefs</code>.</li>
+        <li><b>Replicación asíncrona:</b> cada primario tiene réplicas; si el primario cae, se promueve una réplica en segundos, y las escrituras que no alcanzaron a replicarse se pierden. Para una caché es aceptable; por eso Redis no debería ser la única copia de nada importante.</li>
+        <li><b>Redirecciones:</b> si un cliente pregunta al shard equivocado, recibe <code>MOVED</code> con el correcto. Los clientes inteligentes guardan el mapa de slots y van directo.</li>
+      </ul>
+
+      <h2 id="caida"><span class="sec-num">4.8</span>Cuando la caché entera cae</h2>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si cae toda la caché</p>
+        <p>Si la base está dimensionada para el 1&#8239;% de misses, recibe de golpe 100 veces su carga normal. Sus conexiones se agotan, las consultas se encolan, la aplicación acumula requests en espera (Ley de Little, M00) y el sistema entero cae, aunque la base estaba perfectamente sana. La caché dejó de ser una optimización: se volvió una dependencia de disponibilidad.</p>
+        <p><b>Defensas, en orden:</b></p>
+        <ul>
+          <li><b>Timeouts cortos y circuit breaker</b> hacia la caché, para fallar rápido y no colgar hilos.</li>
+          <li><b>Load shedding</b>: un límite de consultas concurrentes a la base; lo que excede se rechaza de inmediato con 503. Mejor atender bien al 20&#8239;% que mal al 100&#8239;%.</li>
+          <li><b>Caché local</b> como segunda línea para lo más caliente.</li>
+          <li><b>Réplicas de la caché en varias zonas</b>, para que la caída total sea rara.</li>
+          <li><b>Calentamiento gradual</b> al volver: reabrir el tráfico por partes para no provocar una estampida global.</li>
+        </ul>
+      </aside>
+
+      <p>El último escenario del mapa, "Cae el shard de Redis", muestra ese orden de defensas en acción. <a href="#scenario=redis-cae">Abrirlo en el mapa</a>.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m04"></div>
+
+      <section class="exercise" aria-labelledby="ej-m04">
+        <p class="exercise-title" id="ej-m04">Ejercicio de diseño: el perfil de usuario de una red social</p>
+        <p>La página de perfil muestra nombre, foto, biografía, contador de seguidores y los últimos 20 posts. Recibe 200&#8239;000 lecturas por segundo; algunos perfiles de celebridades reciben el 5&#8239;% de todo ese tráfico cada uno. El contador de seguidores cambia miles de veces por minuto en esos perfiles. Los cambios de biografía deben verse en menos de 10 s.</p>
+        <p>Diseña la estrategia de caché: qué se cachea junto y qué por separado, en qué niveles, con qué TTL, cómo se invalida y cómo proteges a la base de estampidas y claves calientes.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Separar por ritmo de cambio.</b> Datos estables (nombre, foto, biografía) en una clave; contador de seguidores en otra; lista de posts en otra. Si van juntos, cada nuevo seguidor invalida todo el perfil.</li>
+            <li><b>Datos estables:</b> Redis con TTL de 10 min más jitter, invalidados por CDC al cambiar la biografía (visible en ~1 s), y L1 en proceso con TTL de 5 s: el requisito de 10 s se cumple incluso si se pierde el evento de invalidación.</li>
+            <li><b>Contador:</b> no se recalcula con <code>COUNT(*)</code>: se mantiene con <code>INCR</code> en Redis y se vuelca a la base cada pocos segundos (write-behind). Para celebridades, mostrar "1.2 M" permite cachear el valor redondeado varios segundos sin que nadie note la diferencia.</li>
+            <li><b>Claves calientes:</b> los perfiles de celebridades son hot keys de manual: L1 en cada instancia y réplicas de la clave en Redis con sufijos.</li>
+            <li><b>Estampidas:</b> single-flight en cada instancia, stale-while-revalidate para los perfiles, y expiración anticipada para los más vistos.</li>
+            <li><b>CDN:</b> la parte pública del perfil puede cachearse unos segundos en el edge si no depende del usuario que mira; lo personalizado ("lo sigues") se pide aparte.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m04"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m04.data.js"></script>
+<script src="../assets/js/data/maps/m04-cache.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-cache.js"></script>
+</body>
+</html>

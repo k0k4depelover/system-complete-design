@@ -1,0 +1,207 @@
+/* ==========================================================================
+   Tokens del curso (estilo Apple, según las Human Interface Guidelines)
+   - Apariencia clara u oscura según el sistema; sin selector propio (dark-mode.md › Best practices).
+   - Tipografía del sistema: SF en Apple, Segoe UI Variable en Windows (typography.md).
+   - Colores semánticos con contraste verificado (≥ 4.5:1 para texto en superficies principales).
+   - Paleta de capas validada con el validador de dataviz (CVD, contraste, todos los pares) en ambos modos.
+   Los nombres antiguos (--paper, --ink…) se mantienen como alias de los semánticos.
+   ========================================================================== */
+
+:root {
+  color-scheme: light dark;
+
+  /* Superficies (claro) */
+  --bg: #ffffff;            /* systemBackground: contenido */
+  --bg-2: #f5f5f7;          /* agrupado: tarjetas, código, sidebar */
+  --bg-3: #e8e8ed;          /* hover, presionado, cabeceras */
+  --bg-elev: #ffffff;       /* popovers y tooltips (con sombra) */
+  --fill: rgba(120, 120, 128, 0.12);     /* relleno de controles */
+  --fill-2: rgba(120, 120, 128, 0.2);    /* relleno presionado */
+
+  /* Texto */
+  --label: #1d1d1f;         /* 16.8:1 sobre blanco */
+  --label-2: #424245;       /* 10.0:1 */
+  --label-3: #6e6e73;       /* 5.1:1 sobre blanco, 4.7:1 sobre --bg-2 */
+
+  /* Separadores y bordes */
+  --separator: #d2d2d7;
+  --separator-strong: #86868b;   /* bordes de campos: 3.6:1 */
+
+  /* Acento: solo para lo interactivo (color.md › Best practices) */
+  --accent: #0066cc;        /* enlaces: 5.6:1 */
+  --accent-fill: #0071e3;   /* botón destacado con texto blanco: 4.7:1 */
+  --accent-tint: rgba(0, 113, 227, 0.1);
+  --focus-ring: rgba(0, 113, 227, 0.5);
+
+  /* Estados: siempre con icono o texto además del color */
+  --ok: #1f7a34;
+  --warn: #b25000;
+  --fail: #d70015;
+  --ok-tint: rgba(52, 199, 89, 0.12);
+  --warn-tint: rgba(255, 149, 0, 0.13);
+  --fail-tint: rgba(255, 59, 48, 0.1);
+
+  /* Capas de infraestructura (claro, sobre blanco) */
+  --l-client: #424245;
+  --l-edge: #d08402;
+  --l-service: #0c59fb;
+  --l-queue: #9322b0;
+  --l-cache: #f50d7b;
+  --l-db: #0ca2c2;
+  --l-gpu: #3b7326;
+  --l-external: #8e8e93;
+
+  /* Sintaxis (inspirada en los temas por defecto de Xcode) */
+  --syn-key: #0f54d6;
+  --syn-str: #c41a16;
+  --syn-num: #1c00cf;
+  --syn-kw: #ad3da4;
+  --syn-com: #6e6e73;
+  --syn-hdr: #6c36a9;
+
+  /* Materiales de la capa funcional (barra superior y sidebar) */
+  --glass-bar: rgba(251, 251, 253, 0.78);
+  --glass-side: rgba(245, 245, 247, 0.86);
+  --glass-blur: saturate(180%) blur(20px);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* Tipografía del sistema */
+  --f-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-head: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Code", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* Escala (cuerpo 17 px, como el Body de iOS) */
+  --fs-xs: 0.75rem;      /* 12: caption */
+  --fs-sm: 0.8125rem;    /* 13: footnote */
+  --fs-sub: 0.9375rem;   /* 15: subhead */
+  --fs-md: 1.0625rem;    /* 17: body */
+  --fs-lg: 1.25rem;      /* 20: title 3 */
+  --fs-xl: 1.5rem;       /* 24: title 2 */
+  --fs-2xl: 2rem;        /* 32: title 1 */
+  --fs-3xl: 2.75rem;     /* 44: large title */
+  --fs-hero: clamp(2.5rem, 5.4vw, 4rem);
+  --lh-body: 1.55;
+  --lh-tight: 1.12;
+
+  /* Espacio */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px;
+  --s-6: 32px; --s-7: 48px; --s-8: 64px; --s-9: 88px;
+
+  --measure: 70ch;
+  --content-w: 800px;
+  --topbar-h: 52px;
+  --radius-s: 8px;
+  --radius-m: 14px;
+  --radius-l: 20px;
+  --radius-pill: 980px;
+
+  /* Líneas de la ruta del curso: cada parte hereda el color de su capa dominante */
+  --line-p1: var(--l-service);
+  --line-p2: var(--l-gpu);
+  --line-p3: var(--l-edge);
+  --line-f2: var(--l-queue);
+
+  /* Métodos HTTP (texto sobre relleno tenue) */
+  --m-get: #0066cc;
+  --m-post: #1f7a34;
+  --m-put: #b25000;
+  --m-delete: #d70015;
+
+  /* Alias de los nombres anteriores */
+  --paper: var(--bg);
+  --paper-2: var(--bg-2);
+  --paper-3: var(--bg-3);
+  --paper-sunk: var(--bg-2);
+  --ink: var(--label);
+  --ink-2: var(--label-2);
+  --ink-3: var(--label-3);
+  --rule: var(--separator);
+  --rule-strong: var(--separator-strong);
+  --link: var(--accent);
+  --focus: var(--accent-fill);
+  --fail-text: var(--fail);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --bg-2: #1c1c1e;
+    --bg-3: #2c2c2e;
+    --bg-elev: #2c2c2e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-2: rgba(120, 120, 128, 0.36);
+
+    --label: #f5f5f7;       /* 19.3:1 sobre negro, 15.6:1 sobre #1c1c1e */
+    --label-2: #d1d1d6;
+    --label-3: #a1a1a6;     /* 8.2:1 sobre negro, 6.6:1 sobre #1c1c1e */
+
+    --separator: #38383a;
+    --separator-strong: #6e6e73;
+
+    --accent: #2997ff;      /* 7.0:1 sobre negro */
+    --accent-fill: #0071e3;
+    --accent-tint: rgba(41, 151, 255, 0.16);
+    --focus-ring: rgba(41, 151, 255, 0.55);
+
+    --ok: #30d158;
+    --warn: #ff9f0a;
+    --fail: #ff6961;
+    --ok-tint: rgba(48, 209, 88, 0.14);
+    --warn-tint: rgba(255, 159, 10, 0.15);
+    --fail-tint: rgba(255, 105, 97, 0.14);
+
+    --l-client: #d1d1d6;
+    --l-edge: #ac6541;
+    --l-service: #146efe;
+    --l-queue: #a054bd;
+    --l-cache: #fe3a8a;
+    --l-db: #31a3bd;
+    --l-gpu: #59ab03;
+    --l-external: #8e8e93;
+
+    --syn-key: #6bdfff;
+    --syn-str: #ff8170;
+    --syn-num: #d9c97c;
+    --syn-kw: #ff7ab2;
+    --syn-com: #8f9ba6;
+    --syn-hdr: #dabaff;
+
+    --glass-bar: rgba(22, 22, 23, 0.74);
+    --glass-side: rgba(28, 28, 30, 0.86);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+
+    --m-get: #2997ff;
+    --m-post: #30d158;
+    --m-put: #ff9f0a;
+    --m-delete: #ff6961;
+  }
+}
+
+/* Aumentar contraste: separadores y textos secundarios más fuertes */
+@media (prefers-contrast: more) {
+  :root {
+    --separator: #86868b;
+    --label-2: #1d1d1f;
+    --label-3: #424245;
+    --glass-bar: rgb(251, 251, 253);
+    --glass-side: rgb(245, 245, 247);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --separator: #8e8e93;
+    --label-2: #f5f5f7;
+    --label-3: #d1d1d6;
+    --glass-bar: rgb(22, 22, 23);
+    --glass-side: rgb(28, 28, 30);
+  }
+}
+
+/* Reducir transparencia: la capa funcional pasa a ser opaca */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass-bar: var(--bg-2); --glass-side: var(--bg-2); --glass-blur: none; }
+}

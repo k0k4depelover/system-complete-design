@@ -1,0 +1,673 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M00. El método: cómo se diseña un sistema real</title>
+<meta name="description" content="Requisitos medibles, estimaciones back-of-envelope, SLO y error budgets, disponibilidad compuesta, análisis de fallos y design docs.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m00">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>El método: cómo se diseña un sistema real</h1>
+        <p class="lead">Antes de dibujar una sola caja hay que saber qué problema resuelves, con qué números y qué pasa cuando algo se rompe. Este módulo es el procedimiento que aplica el resto del curso a cada sistema, de un acortador de URLs a ChatGPT.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M00</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>50 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>Ninguno</dd></div>
+          <div><dt>Estado</dt><dd data-status="m00">Sin empezar</dd></div>
+        </dl>
+      </header>
+
+      <section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Convertir una idea vaga en requisitos funcionales y no funcionales con números.</li>
+          <li>Estimar en minutos QPS, almacenamiento, ancho de banda y concurrencia, con el orden de magnitud correcto.</li>
+          <li>Definir SLI, SLO y SLA, y usar un error budget para decidir cuándo arriesgar.</li>
+          <li>Calcular la disponibilidad de un sistema a partir de la de sus dependencias.</li>
+          <li>Analizar modos de fallo y escribir un design doc y un ADR que otra persona pueda revisar.</li>
+          <li>Leer los bloques de endpoint, tablas de esquema y colores de capa que usa todo el curso.</li>
+        </ul>
+      </section>
+
+      <!-- ============================================================ 0.1 -->
+      <h2 id="proceso"><span class="sec-num">0.1</span>El proceso de diseño</h2>
+
+      <p>En una entrevista, el diseño dura 45 minutos y termina en un pizarrón. En una empresa, un diseño es un documento que se escribe, se revisa, se discute y se corrige durante días o semanas, y que después alguien tiene que operar a las tres de la mañana. Lo que cambia no es la teoría sino el nivel de detalle: cada flecha del diagrama tiene que decir qué protocolo usa, qué pasa si tarda y qué pasa si falla.</p>
+
+      <p>Todos los sistemas del curso se diseñan con los mismos nueve pasos:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Problema y usuarios</span>Quién lo usa, qué intenta lograr y qué pasa hoy sin el sistema. Aquí también se escriben los <em>no objetivos</em>: lo que explícitamente no vas a resolver.</li>
+        <li><span class="step-title">Requisitos funcionales</span>Qué hace, en verbos: enviar un mensaje, regenerar una respuesta, reembolsar un pago.</li>
+        <li><span class="step-title">Requisitos no funcionales</span>Qué tan bien lo hace, en números: latencia, disponibilidad, durabilidad, consistencia, costo.</li>
+        <li><span class="step-title">Estimaciones</span>Cuánto: requests por segundo, bytes por día, conexiones abiertas, GPUs, dinero.</li>
+        <li><span class="step-title">Contratos</span>La API pública, las APIs internas y los eventos que se emiten.</li>
+        <li><span class="step-title">Modelo de datos</span>Entidades, patrones de acceso, esquema, índices y cómo se particiona.</li>
+        <li><span class="step-title">Arquitectura y flujos</span>Componentes y el recorrido de cada request importante, paso a paso.</li>
+        <li><span class="step-title">Modos de fallo</span>Qué se rompe, cómo se detecta, cómo se degrada y qué ve el usuario.</li>
+        <li><span class="step-title">Evolución</span>Qué cambia a 10 veces la carga y qué deuda técnica aceptas hoy a sabiendas.</li>
+      </ol>
+
+      <p>El orden importa, pero no es una línea recta. Los números de las estimaciones suelen obligar a reescribir requisitos, y el análisis de fallos casi siempre cambia la arquitectura. Un diseño maduro ha dado varias vueltas por estos bucles.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+          <svg viewBox="0 0 760 360" role="img" aria-labelledby="fig01t fig01d">
+            <title id="fig01t">Los nueve pasos del método y sus bucles de retroalimentación</title>
+            <desc id="fig01d">Primera fila, entender: problema, requisitos funcionales, requisitos no funcionales y estimaciones. Una flecha baja a la segunda fila, diseñar: contratos, modelo de datos, arquitectura, modos de fallo y evolución. Dos flechas punteadas vuelven atrás: de estimaciones a requisitos no funcionales, y de modos de fallo a arquitectura.</desc>
+            <defs>
+              <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker>
+              <marker id="ahs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow--soft"/></marker>
+            </defs>
+
+            <text class="dg-group" x="10" y="50">Entender</text>
+            <!-- bucle: estimaciones cambian requisitos -->
+            <path class="dg-feedback" d="M690 60 C690 24, 530 24, 530 57" marker-end="url(#ahs)"/>
+            <text class="dg-small" x="610" y="20" text-anchor="middle">los números cambian los requisitos</text>
+
+            <rect class="dg-box" x="10" y="60" width="160" height="64" rx="4"/>
+            <text class="dg-num" x="22" y="82">1</text>
+            <text class="dg-label" x="22" y="104">Problema y usuarios</text>
+
+            <rect class="dg-box" x="206" y="60" width="160" height="64" rx="4"/>
+            <text class="dg-num" x="218" y="82">2</text>
+            <text class="dg-label" x="218" y="104">Requisitos funcionales</text>
+
+            <rect class="dg-box" x="402" y="60" width="160" height="64" rx="4"/>
+            <text class="dg-num" x="414" y="80">3</text>
+            <text class="dg-label" x="414" y="99">Requisitos</text>
+            <text class="dg-label" x="414" y="116">no funcionales</text>
+
+            <rect class="dg-box dg-box--em" x="598" y="60" width="160" height="64" rx="4"/>
+            <text class="dg-num" x="610" y="82">4</text>
+            <text class="dg-label" x="610" y="104">Estimaciones</text>
+
+            <path class="dg-edge" d="M170 92 H204" marker-end="url(#ah)"/>
+            <path class="dg-edge" d="M366 92 H400" marker-end="url(#ah)"/>
+            <path class="dg-edge" d="M562 92 H596" marker-end="url(#ah)"/>
+
+            <!-- transición a diseñar -->
+            <path class="dg-edge" d="M678 124 V166 H74 V222" marker-end="url(#ah)"/>
+            <text class="dg-small" x="376" y="160" text-anchor="middle">con los números en la mano</text>
+            <text class="dg-group" x="90" y="212">Diseñar</text>
+
+            <rect class="dg-box" x="10" y="224" width="128" height="64" rx="4"/>
+            <text class="dg-num" x="22" y="246">5</text>
+            <text class="dg-label" x="22" y="268">Contratos</text>
+
+            <rect class="dg-box" x="165" y="224" width="128" height="64" rx="4"/>
+            <text class="dg-num" x="177" y="246">6</text>
+            <text class="dg-label" x="177" y="268">Modelo de datos</text>
+
+            <rect class="dg-box dg-box--em" x="320" y="224" width="128" height="64" rx="4"/>
+            <text class="dg-num" x="332" y="246">7</text>
+            <text class="dg-label" x="332" y="268">Arquitectura</text>
+
+            <rect class="dg-box" x="475" y="224" width="128" height="64" rx="4"/>
+            <text class="dg-num" x="487" y="246">8</text>
+            <text class="dg-label" x="487" y="268">Modos de fallo</text>
+
+            <rect class="dg-box" x="630" y="224" width="128" height="64" rx="4"/>
+            <text class="dg-num" x="642" y="246">9</text>
+            <text class="dg-label" x="642" y="268">Evolución a 10×</text>
+
+            <path class="dg-edge" d="M138 256 H163" marker-end="url(#ah)"/>
+            <path class="dg-edge" d="M293 256 H318" marker-end="url(#ah)"/>
+            <path class="dg-edge" d="M448 256 H473" marker-end="url(#ah)"/>
+            <path class="dg-edge" d="M603 256 H628" marker-end="url(#ah)"/>
+
+            <!-- bucle: fallos cambian arquitectura -->
+            <path class="dg-feedback" d="M539 288 C539 326, 400 326, 400 291" marker-end="url(#ahs)"/>
+            <text class="dg-small" x="470" y="346" text-anchor="middle">cada modo de fallo cambia la arquitectura</text>
+          </svg>
+        </div>
+        <figcaption><b>Figura 0.1.</b> El método en dos fases. Las flechas punteadas son los bucles que casi siempre ocurren: un número que invalida un requisito, o una falla que obliga a rediseñar.</figcaption>
+      </figure>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="9" width="12" height="4.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="5" cy="4.75" r="1" fill="currentColor"/><circle cx="5" cy="11.25" r="1" fill="currentColor"/></svg>En producción real</p>
+        <p>En empresas como Google o Stripe los design docs se revisan antes de escribir código, y la sección que más se discute suele ser la de <em>alternativas consideradas</em>: explicar por qué descartaste las otras opciones demuestra que entendiste el problema. Un diseño sin alternativas descartadas casi siempre es un diseño que no se pensó lo suficiente. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <!-- ============================================================ 0.2 -->
+      <h2 id="requisitos"><span class="sec-num">0.2</span>Requisitos: qué hace y qué tan bien</h2>
+
+      <p>Un <dfn data-term="requisito-funcional">requisito funcional</dfn> describe una capacidad: "el usuario puede regenerar la última respuesta". Un <dfn data-term="requisito-no-funcional">requisito no funcional</dfn> describe una cualidad y siempre lleva un número: "el primer token llega en menos de 1.5 s para el 95&#8239;% de los mensajes". Los funcionales deciden las pantallas; los no funcionales deciden la arquitectura. Dos sistemas con los mismos requisitos funcionales pueden necesitar diseños opuestos si uno sirve a mil usuarios y el otro a cien millones.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Atributo</th><th>La pregunta</th><th>Cómo se mide</th><th>Ejemplo en un chat con LLM</th></tr></thead>
+          <tbody>
+            <tr><td><b>Latencia</b></td><td>¿Cuánto espera el usuario?</td><td>Percentiles (p50, p95, p99)</td><td><span data-term="ttft">TTFT</span> p95 &lt; 1.5 s; tiempo entre tokens p95 &lt; 100 ms</td></tr>
+            <tr><td><b>Throughput</b></td><td>¿Cuánto trabajo por segundo?</td><td>Requests/s, tokens/s</td><td>7&#8239;000 mensajes/s y 2 millones de tokens/s en pico</td></tr>
+            <tr><td><b>Disponibilidad</b></td><td>¿Qué fracción del tiempo funciona?</td><td>Requests exitosas ÷ totales</td><td>99.9&#8239;% mensual</td></tr>
+            <tr><td><b>Durabilidad</b></td><td>¿Se puede perder algo confirmado?</td><td>Probabilidad de pérdida por año</td><td>Ningún mensaje confirmado se pierde, ni aunque caiga una zona</td></tr>
+            <tr><td><b>Consistencia</b></td><td>¿Qué ve cada lector tras una escritura?</td><td>Modelo de consistencia</td><td>Cada usuario ve sus propios mensajes al instante; otros dispositivos, en segundos</td></tr>
+            <tr><td><b>Escalabilidad</b></td><td>¿Qué pasa a 10 veces la carga?</td><td>Costo marginal por usuario</td><td>Crecer agregando nodos, sin rediseñar</td></tr>
+            <tr><td><b>Costo</b></td><td>¿Cuánto cuesta cada unidad?</td><td>$ por request, por millón de tokens</td><td>Costo de GPU por millón de tokens bajo un tope</td></tr>
+            <tr><td><b>Seguridad y cumplimiento</b></td><td>¿Quién puede ver qué?</td><td>Controles y auditorías</td><td>Cifrado en reposo, borrado a pedido, retención de 30 días</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="percentiles">Por qué se mide con percentiles</h3>
+
+      <p>El promedio es la peor forma de describir la <dfn data-term="latencia">latencia</dfn>, porque la distribución casi nunca es simétrica: la mayoría de las requests son rápidas y unas pocas son muy lentas. El promedio mezcla las dos poblaciones y no describe a ninguna.</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 2H3v12h2.5M10.5 2H13v12h-2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Definición</p>
+        <p class="def-term"><dfn data-term="percentil">Percentil</dfn> y <dfn data-term="tail-latency">latencia de cola</dfn> <span class="def-en">percentile, tail latency</span></p>
+        <p class="def-one">El p99 es el valor por debajo del cual queda el 99&#8239;% de las mediciones; la latencia de cola son esos percentiles altos, donde viven las requests lentas.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Si ordenas 100 requests de la más rápida a la más lenta, el p50 es la número 50 y el p99 es la número 99. El p99 te dice cómo le va a tu peor usuario habitual, no a un caso rarísimo.</dd>
+          <dt>Ejemplo</dt>
+          <dd>98 requests tardan 50 ms y 2 tardan 5 s. El promedio es (98 × 50 + 2 × 5&#8239;000) ÷ 100 = <b>149 ms</b>, que parece aceptable. El p99 es <b>5 s</b>, que es lo que sufren esos usuarios.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Con <dfn data-term="fan-out">fan-out</dfn>, la cola se vuelve la experiencia normal. Si una página espera a 100 servicios y cada uno supera su p99 el 1&#8239;% de las veces, la probabilidad de que al menos uno sea lento es 1 − 0.99<sup>100</sup> ≈ <b>63&#8239;%</b>. Este es el argumento central de "The Tail at Scale" (Dean y Barroso, Google, 2013).</dd>
+        </dl>
+      </aside>
+
+      <p>Pruébalo: cambia el fan-out y la probabilidad de que una llamada individual sea lenta, y simula requests. Con 100 llamadas en paralelo, la mayoría de las requests termina esperando a alguna lenta.</p>
+
+      <div data-calc="tail"></div>
+
+      <!-- ============================================================ 0.3 -->
+      <h2 id="numeros"><span class="sec-num">0.3</span>Números que conviene tener en la cabeza</h2>
+
+      <p>Las estimaciones solo funcionan si conoces los órdenes de magnitud. No hace falta memorizar decimales: hace falta saber que la RAM es mil veces más rápida que un SSD para lecturas pequeñas, y que cruzar un océano cuesta más que casi cualquier cómputo que hagas en el servidor. Los valores son aproximados y dependen del hardware; lo que importa es la escala relativa.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Operación</th><th class="r">Tiempo aprox.</th><th style="width:34%">Escala logarítmica (1 ns a 250 ms)</th></tr></thead>
+          <tbody>
+            <tr><td>Leer de la caché L1 de la CPU</td><td class="r">1 ns</td><td><div class="logbar"><span style="width:1%"></span></div></td></tr>
+            <tr><td>Leer de la memoria RAM</td><td class="r">100 ns</td><td><div class="logbar"><span style="width:24%"></span></div></td></tr>
+            <tr><td>Leer 1 MB secuencial de RAM</td><td class="r">~50 µs</td><td><div class="logbar"><span style="width:56%"></span></div></td></tr>
+            <tr><td>Lectura aleatoria de 4 kB en un SSD NVMe</td><td class="r">~100 µs</td><td><div class="logbar"><span style="width:60%"></span></div></td></tr>
+            <tr><td>Ida y vuelta de red dentro de una misma zona</td><td class="r">~0.2 ms</td><td><div class="logbar"><span style="width:63%"></span></div></td></tr>
+            <tr><td>Leer 1 MB secuencial de un SSD NVMe</td><td class="r">~0.3 ms</td><td><div class="logbar"><span style="width:65%"></span></div></td></tr>
+            <tr><td>Ida y vuelta entre zonas de una misma región</td><td class="r">~1 ms</td><td><div class="logbar"><span style="width:71%"></span></div></td></tr>
+            <tr><td>Un paso de decode de un modelo de 70B en FP16 repartido en 8 GPUs H100 (leer 140 GB de pesos a ~27 TB/s)</td><td class="r">≥ 5 ms</td><td><div class="logbar"><span style="width:80%"></span></div></td></tr>
+            <tr><td>Posicionar la cabeza y leer 1 MB de un disco duro</td><td class="r">~10 ms</td><td><div class="logbar"><span style="width:83%"></span></div></td></tr>
+            <tr><td>Ida y vuelta Virginia ↔ Irlanda</td><td class="r">~75 ms</td><td><div class="logbar"><span style="width:94%"></span></div></td></tr>
+            <tr><td>Ida y vuelta São Paulo ↔ Virginia</td><td class="r">~120 ms</td><td><div class="logbar"><span style="width:96%"></span></div></td></tr>
+            <tr><td>Primera request HTTPS a un servidor a 80 ms de ida y vuelta (TCP + TLS 1.3 + la request)</td><td class="r">~240 ms</td><td><div class="logbar"><span style="width:100%"></span></div></td></tr>
+          </tbody>
+          <caption>Cada 12&#8239;% del ancho de la barra equivale a multiplicar el tiempo por 10. Valores típicos de hardware de los últimos años; mide siempre tu caso.</caption>
+        </table>
+      </div>
+
+      <p>Dos filas merecen atención porque reaparecen en todo el curso. La primera request HTTPS paga tres viajes de ida y vuelta antes de recibir un byte (TCP, TLS y la request misma), y por eso existen las CDNs, que acercan ese handshake al usuario (M01 y M28). Y el paso de decode de un LLM está limitado por cuántos bytes por segundo puede leer la GPU desde su <dfn data-term="hbm">HBM</dfn>: para generar <em>cada</em> token hay que leer todos los pesos del modelo, lo que pone un piso de ~5 ms por token a un modelo de 70B aunque la GPU tenga cómputo de sobra (M12 y M13).</p>
+
+      <h3 id="capacidad-nodo">Capacidad de un solo nodo</h3>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Componente</th><th>Orden de magnitud</th></tr></thead>
+          <tbody>
+            <tr><td>Redis, operaciones simples, un proceso</td><td>~100&#8239;000 operaciones/s; bastante más con pipelining</td></tr>
+            <tr><td>PostgreSQL en un servidor grande, lecturas por índice</td><td>Decenas de miles de consultas/s</td></tr>
+            <tr><td>PostgreSQL, escrituras transaccionales durables</td><td>Miles a unas decenas de miles por segundo, según el disco y el agrupamiento de commits</td></tr>
+            <tr><td>Servidor de aplicación con un endpoint JSON simple</td><td>Miles a decenas de miles de requests/s por instancia</td></tr>
+            <tr><td>Broker de Kafka</td><td>Cientos de MB/s</td></tr>
+            <tr><td>Conexiones persistentes (WebSocket, SSE) por servidor</td><td>Cientos de miles. WhatsApp reportó más de 2 millones de conexiones TCP en un solo servidor en 2012. <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td>GPU NVIDIA H100 SXM</td><td>80 GB de HBM3 a ~3.35 TB/s; ~990 TFLOPS en BF16 denso. <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td>NVLink de 4.ª generación (entre GPUs de un mismo nodo)</td><td>900 GB/s por GPU <span class="badge badge--doc">Documentado</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="conversiones">Conversiones para calcular de cabeza</h3>
+      <ul>
+        <li>Un día tiene 86&#8239;400 s. Para calcular de cabeza usa 10<sup>5</sup> (te equivocas un 16&#8239;%, y siempre hacia el lado seguro).</li>
+        <li>1 millón de eventos al día ≈ 12 por segundo. 1&#8239;000 millones al día ≈ 12&#8239;000 por segundo.</li>
+        <li>Un mes ≈ 2.6 millones de segundos. Un año ≈ 31.5 millones (≈ π × 10<sup>7</sup>).</li>
+        <li>2<sup>10</sup> ≈ 10<sup>3</sup>, 2<sup>20</sup> ≈ 10<sup>6</sup>, 2<sup>30</sup> ≈ 10<sup>9</sup>, 2<sup>40</sup> ≈ 10<sup>12</sup>.</li>
+        <li>1 Gbps = 125 MB/s. Una red de 10 Gbps mueve ~1.25 GB/s.</li>
+        <li>Un carácter ASCII ocupa 1 byte; en UTF-8 una letra acentuada o la ñ ocupan 2, y un emoji 4.</li>
+        <li>Un <dfn data-term="token">token</dfn> son ~4 caracteres de texto en inglés (unos ¾ de palabra). En español suelen hacer falta algo más de tokens por palabra; depende del tokenizer.</li>
+      </ul>
+
+      <!-- ============================================================ 0.4 -->
+      <h2 id="estimaciones"><span class="sec-num">0.4</span>Estimaciones back-of-envelope</h2>
+
+      <p>Una <dfn data-term="back-of-envelope">estimación back-of-envelope</dfn> no busca exactitud sino descartar lo imposible. Si el cálculo dice que necesitas 3 servidores, no diseñes sharding; si dice 3&#8239;000, no diseñes un monolito sobre una sola base de datos. Todas siguen el mismo esqueleto:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Tráfico promedio</span><dfn data-term="dau">DAU</dfn> × acciones por usuario al día ÷ 86&#8239;400 s = requests por segundo (<dfn data-term="qps">QPS</dfn>) promedio.</li>
+        <li><span class="step-title">Tráfico en pico</span>Promedio × <dfn data-term="factor-pico">factor de pico</dfn>. Se dimensiona para el pico, no para el promedio.</li>
+        <li><span class="step-title">Lecturas</span>Escrituras × proporción de lecturas por escritura. En una red social puede ser 100 a 1; en un chat, cercana a 1.</li>
+        <li><span class="step-title">Almacenamiento</span>Escrituras por día × tamaño × retención × copias.</li>
+        <li><span class="step-title">Red</span>QPS en pico × tamaño de cada request o respuesta.</li>
+        <li><span class="step-title">Concurrencia</span>QPS × duración de cada request, con la Ley de Little.</li>
+      </ol>
+
+      <aside class="callout callout--def">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 2H3v12h2.5M10.5 2H13v12h-2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Definición</p>
+        <p class="def-term"><dfn data-term="ley-little">Ley de Little</dfn> <span class="def-en">Little's Law</span></p>
+        <p class="def-one">En un sistema estable, la cantidad de elementos dentro (L) es la tasa de llegada (λ) por el tiempo que cada uno permanece (W): <b>L = λ × W</b>.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Si a un supermercado entran 2 personas por minuto y cada una se queda 15 minutos, adentro hay en promedio 30 personas. No importa cómo sea el supermercado por dentro.</dd>
+          <dt>Ejemplo</dt>
+          <dd>Un chat recibe 7&#8239;000 mensajes por segundo en pico y cada respuesta se transmite durante 6 s: hay 42&#8239;000 streams abiertos a la vez. Ese número dimensiona los servidores de conexiones, los timeouts de los balanceadores y los "slots" de las GPUs.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Si una dependencia se pone lenta, W crece y L crece con ella aunque el tráfico no cambie. Con W diez veces mayor necesitas diez veces más conexiones, hilos o memoria; cuando se agotan, la falla de una dependencia lenta se convierte en una caída en cascada (M08).</dd>
+        </dl>
+      </aside>
+
+      <h3 id="ejemplo-chat">Ejemplo resuelto: un chat con LLM para 10 millones de usuarios diarios</h3>
+
+      <p>Supuestos, cada uno discutible y por eso escrito: 20 mensajes por usuario al día; pico de 3 veces el promedio; respuestas de 300 tokens generadas a ~50 tokens/s por conversación (6 s de stream); un contexto promedio de 2&#8239;000 tokens por request (system prompt + historial + mensaje nuevo); 2 kB guardados por intercambio; 3 réplicas.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Mensajes por día</td><td>10 M × 20</td><td class="r">200 millones</td></tr>
+            <tr><td>Mensajes por segundo, promedio</td><td>2 × 10<sup>8</sup> ÷ 86&#8239;400</td><td class="r">≈ 2&#8239;300/s</td></tr>
+            <tr><td>Mensajes por segundo, pico</td><td>2&#8239;315 × 3</td><td class="r">≈ 7&#8239;000/s</td></tr>
+            <tr><td>Tokens generados por segundo, pico</td><td>6&#8239;944 × 300</td><td class="r">≈ 2.1 millones/s</td></tr>
+            <tr><td>Tokens de entrada procesados por segundo, pico</td><td>6&#8239;944 × 2&#8239;000</td><td class="r">≈ 13.9 millones/s</td></tr>
+            <tr><td>Streams abiertos a la vez, pico</td><td>6&#8239;944/s × 6 s (Little)</td><td class="r">≈ 42&#8239;000</td></tr>
+            <tr><td>Almacenamiento nuevo por día</td><td>2 × 10<sup>8</sup> × 2 kB</td><td class="r">400 GB</td></tr>
+            <tr><td>Almacenamiento por año, con réplicas</td><td>400 GB × 365 × 3</td><td class="r">≈ 438 TB</td></tr>
+            <tr><td>Tráfico de streaming, pico</td><td>2.1 M eventos/s × ~150 B por evento</td><td class="r">≈ 2.5 Gbps</td></tr>
+            <tr><td>Nodos de 8 GPUs, pico</td><td>2.08 M ÷ 10&#8239;000 tokens/s por nodo × 1.25 de margen</td><td class="r">≈ 260 (≈ 2&#8239;100 GPUs)</td></tr>
+          </tbody>
+          <caption>Los 10&#8239;000 tokens/s por nodo son un supuesto didáctico; en M13–M15 aprenderás a calcularlo para un modelo y un hardware concretos.</caption>
+        </table>
+      </div>
+
+      <p>Cuatro conclusiones salen de esta tabla y guían el resto de la Parte II:</p>
+      <ul>
+        <li><b>La entrada pesa más que la salida.</b> Se procesan ~7 veces más tokens de entrada que de salida, porque el historial se reenvía en cada turno. Por eso existen el prompt caching y el prefix caching (M15, M16).</li>
+        <li><b>El sobre pesa más que la carta.</b> Un token son ~4 bytes de texto, pero el evento SSE que lo transporta ronda los 150 bytes. El envoltorio multiplica el tráfico por ~35, y agrupar varios tokens por evento lo reduce (M17).</li>
+        <li><b>42&#8239;000 conexiones abiertas</b> no es un problema de cómputo sino de memoria por conexión, timeouts de los balanceadores y reconexiones (M03).</li>
+        <li><b>El almacenamiento es barato; la GPU no.</b> 438 TB al año es poco al lado de 2&#8239;100 GPUs. Casi todas las decisiones de la Parte II buscan exprimir más tokens por GPU.</li>
+      </ul>
+
+      <p>Ahora hazlo tú. La calculadora trae precargado este ejemplo y otros dos; cambia cualquier número y mira qué se mueve.</p>
+
+      <div data-calc="envelope"></div>
+
+      <!-- ============================================================ 0.5 -->
+      <h2 id="slo"><span class="sec-num">0.5</span>SLI, SLO, SLA y error budget</h2>
+
+      <p>"Tiene que estar siempre arriba" no es un requisito. La confiabilidad se negocia con tres conceptos que conviene no confundir:</p>
+      <ul>
+        <li>Un <dfn data-term="sli">SLI</dfn> es la medición: la proporción de requests exitosas que respondieron en menos de 300 ms, medida en el balanceador.</li>
+        <li>Un <dfn data-term="slo">SLO</dfn> es el objetivo interno sobre ese SLI: 99.9&#8239;% en una ventana móvil de 30 días.</li>
+        <li>Un <dfn data-term="sla">SLA</dfn> es el contrato con clientes, con compensaciones si se incumple. Se fija por debajo del SLO (por ejemplo, 99.5&#8239;%) para tener margen antes de pagar.</li>
+      </ul>
+
+      <aside class="callout callout--def">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 2H3v12h2.5M10.5 2H13v12h-2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Definición</p>
+        <p class="def-term"><dfn data-term="error-budget">Error budget</dfn> <span class="def-en">presupuesto de errores</span></p>
+        <p class="def-one">Es la cantidad de falla que el SLO permite: con un SLO de 99.9&#8239;%, el presupuesto es el 0.1&#8239;% restante.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Es dinero para gastar en riesgo. Cada deploy, migración o experimento consume un poco. Mientras quede saldo, se lanza rápido; cuando se acaba, se frena.</dd>
+          <dt>Ejemplo</dt>
+          <dd>99.9&#8239;% en 30 días son 43.2 minutos de falla permitida. Si un deploy defectuoso consumió 30 minutos el día 5, quedan 13 minutos para el resto del mes: se congelan los lanzamientos riesgosos hasta que la ventana se recupere.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Convierte la discusión "velocidad contra estabilidad" en una regla objetiva que producto e ingeniería aceptan de antemano. Es la práctica central del libro de SRE de Google.</dd>
+        </dl>
+      </aside>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Disponibilidad</th><th class="r">Caída permitida al año</th><th class="r">Al mes (30 días)</th><th class="r">A la semana</th></tr></thead>
+          <tbody>
+            <tr><td>99&#8239;%</td><td class="r">3.65 días</td><td class="r">7.2 h</td><td class="r">1.68 h</td></tr>
+            <tr><td>99.9&#8239;%</td><td class="r">8.76 h</td><td class="r">43.2 min</td><td class="r">10.1 min</td></tr>
+            <tr><td>99.95&#8239;%</td><td class="r">4.38 h</td><td class="r">21.6 min</td><td class="r">5.04 min</td></tr>
+            <tr><td>99.99&#8239;%</td><td class="r">52.6 min</td><td class="r">4.32 min</td><td class="r">1.01 min</td></tr>
+            <tr><td>99.999&#8239;%</td><td class="r">5.26 min</td><td class="r">25.9 s</td><td class="r">6.05 s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cada nueve adicional divide el presupuesto por diez y suele multiplicar el costo. Con 99.999&#8239;% no hay tiempo para que una persona se despierte, abra la laptop y entienda qué pasó: la recuperación tiene que ser automática.</p>
+
+      <h3 id="disponibilidad-compuesta">Disponibilidad compuesta</h3>
+
+      <p>La <dfn data-term="disponibilidad">disponibilidad</dfn> de un sistema se calcula a partir de la de sus dependencias, con dos reglas:</p>
+      <ul>
+        <li><b>En serie se multiplica.</b> Si una request necesita que funcionen A <em>y</em> B, la disponibilidad es A × B. Cuatro dependencias de 99.9&#8239;% dan 0.999<sup>4</sup> ≈ 99.6&#8239;%: la cadena es peor que cualquiera de sus eslabones.</li>
+        <li><b>La redundancia suma nueves.</b> Si alcanza con que funcione una de n copias independientes, la disponibilidad es 1 − (1 − a)<sup>n</sup>. Dos copias de 99.9&#8239;% dan 99.9999&#8239;%.</li>
+      </ul>
+      <p>No confundas disponibilidad con <dfn data-term="durabilidad">durabilidad</dfn>: un sistema puede estar caído una hora sin perder un solo dato, y otro puede responder siempre pero haber perdido mensajes en silencio. Se diseñan con mecanismos distintos.</p>
+
+      <div data-calc="availability"></div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 L14.8 13.8 H1.2 Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6v3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="11.6" r="0.9" fill="currentColor"/></svg>Qué pasa si falla la suposición de independencia</p>
+        <p>La fórmula de la redundancia supone que las copias fallan de forma independiente, y casi nunca es así. Un deploy con un bug llega a todas las réplicas a la vez; una región caída se lleva todo lo que vive en ella; un certificado vencido rompe todas las instancias el mismo segundo. Dos réplicas de 99.9&#8239;% en la misma zona, con el mismo binario, se parecen más a una sola réplica de 99.9&#8239;% que a una de 99.9999&#8239;%.</p>
+        <p><b>Mitigación:</b> desplegar de forma escalonada (canary, M11), repartir réplicas entre zonas y regiones, y buscar los <dfn data-term="spof">SPOFs</dfn> ocultos que comparten todas las copias: el DNS, los certificados, el servicio de configuración o de feature flags.</p>
+      </aside>
+
+      <!-- ============================================================ 0.6 -->
+      <h2 id="convenciones"><span class="sec-num">0.6</span>Contratos y datos: cómo se documentan en este curso</h2>
+
+      <p>Los pasos 5 y 6 del método producen dos artefactos que verás en cada módulo: bloques de endpoint y tablas de esquema. Aquí está el primero de cada uno, del producto de chat que el curso construye en la Parte II.</p>
+
+      <h3 id="bloque-endpoint">Bloque de endpoint</h3>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/v1/conversations/<span class="ep-param">{conversation_id}</span>/messages</code>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </div>
+        <p class="ep-desc">Agrega el mensaje del usuario a una conversación y devuelve la respuesta del modelo como un stream de eventos.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/conversations/conv_01J9Z3K4M8/messages HTTP/1.1
+Authorization: Bearer &lt;token de sesión&gt;
+Content-Type: application/json
+Accept: text/event-stream
+Idempotency-Key: 5f1c9a2e-0d4b-4c1e-9d7a-2b8e6f3a1c90
+
+{
+  "parent_message_id": "msg_01J9Z3M2QX",   // de qué mensaje cuelga: permite ramas
+  "content": "¿Cómo funciona el KV cache?",
+  "model": "chat-large",
+  "attachments": []
+}</code></pre>
+          <p class="ep-sec">Respuesta 200 (stream SSE)</p>
+<pre data-lang="sse"><code>event: message.created
+data: {"message_id": "msg_01J9Z3P7RT", "role": "assistant"}
+
+event: delta
+data: {"text": "El KV cache guarda"}
+
+event: delta
+data: {"text": " las claves y los valores"}
+
+event: message.completed
+data: {"finish_reason": "stop", "usage": {"input_tokens": 1840, "output_tokens": 312}}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>Stream de eventos. El último evento es <code>message.completed</code> o <code>error</code>.</span></li>
+            <li><span class="st st--4xx">400</span><span>Cuerpo inválido: <code>content</code> vacío, o un <code>parent_message_id</code> de otra conversación.</span></li>
+            <li><span class="st st--4xx">401</span><span>Token ausente o vencido.</span></li>
+            <li><span class="st st--4xx">404</span><span>La conversación no existe o no es del usuario. Se responde 404 y no 403 para no revelar que existe.</span></li>
+            <li><span class="st st--4xx">409</span><span>Una request con la misma <code>Idempotency-Key</code> todavía se está procesando.</span></li>
+            <li><span class="st st--4xx">422</span><span>La <code>Idempotency-Key</code> ya se usó con un cuerpo distinto.</span></li>
+            <li><span class="st st--4xx">429</span><span>Se superó el límite de mensajes o de tokens. Incluye <code>Retry-After</code>.</span></li>
+            <li><span class="st st--5xx">503</span><span>No hay capacidad de inferencia. El cliente reintenta con backoff y la <em>misma</em> <code>Idempotency-Key</code>.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <p>Fíjate en el header <code>Idempotency-Key</code>. Si la red se corta justo después de enviar el mensaje, el cliente no sabe si el servidor lo recibió, así que lo reenvía. Con la misma clave, el servidor reconoce el reintento y no crea un mensaje duplicado. Esa propiedad se llama <dfn data-term="idempotencia">idempotencia</dfn>, y la <dfn data-term="idempotency-key">idempotency key</dfn> es la técnica para lograrla en operaciones que por naturaleza no lo son; se implementa de principio a fin en el caso de pagos (M27). La respuesta viaja como <dfn data-term="sse">SSE</dfn>, un formato de streaming sobre HTTP que se estudia a fondo en M17.</p>
+
+      <h3 id="tabla-esquema">Tabla de esquema</h3>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">messages</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Partición: <b>conversation_id</b></span>
+          <span class="schema-chip">~1 kB por fila</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Columna</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td><code>uuid</code></td><td>Generado en el servidor</td><td><dfn data-term="uuidv7">UUIDv7</dfn>: ordenable por tiempo, no fragmenta el índice</td></tr>
+              <tr><td><code>conversation_id</code><span class="key key--fk">FK</span></td><td><code>uuid</code></td><td><code>NOT NULL</code></td><td>Toda consulta filtra por aquí; es también la partition key</td></tr>
+              <tr><td><code>parent_id</code><span class="key key--fk">FK</span></td><td><code>uuid</code></td><td>Nulo solo en el primer mensaje</td><td>Forma un árbol: regenerar o editar crea un hermano, no pisa el original</td></tr>
+              <tr><td><code>role</code></td><td><code>text</code></td><td><code>user</code>, <code>assistant</code>, <code>system</code> o <code>tool</code></td><td>Quién escribió el mensaje</td></tr>
+              <tr><td><code>content</code></td><td><code>text</code></td><td><code>NOT NULL</code></td><td>El texto; los adjuntos viven en otra tabla</td></tr>
+              <tr><td><code>model</code></td><td><code>text</code></td><td>Nulo en mensajes del usuario</td><td>Qué modelo generó la respuesta</td></tr>
+              <tr><td><code>status</code></td><td><code>text</code></td><td><code>streaming</code>, <code>completed</code>, <code>failed</code> o <code>cancelled</code></td><td>Estado de una respuesta en curso; permite reanudar o limpiar</td></tr>
+              <tr><td><code>input_tokens</code>, <code>output_tokens</code></td><td><code>integer</code></td><td>≥ 0</td><td>Facturación, cuotas y analítica</td></tr>
+              <tr><td><code>created_at</code></td><td><code>timestamptz</code></td><td><code>NOT NULL DEFAULT now()</code></td><td>Orden del historial</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="schema-foot">
+          <p><b>Índices:</b> <code>(conversation_id, created_at)</code> para cargar el historial en orden; <code>(parent_id)</code> para recorrer las ramas.</p>
+          <p><b>Por qué esta <dfn data-term="partition-key">partition key</dfn>:</b> todos los accesos van "por conversación", así que cada historial vive entero en una partición y nunca hace falta consultar varias. Es una <dfn data-term="one-way-door">decisión de una vía</dfn>: cambiarla con miles de millones de filas es una migración de meses.</p>
+        </div>
+      </figure>
+
+      <details class="exercise-sql">
+        <summary>Ver la misma tabla como SQL</summary>
+<pre data-lang="sql"><code>CREATE TABLE messages (
+  id               uuid PRIMARY KEY,               -- UUIDv7 generado por la aplicación
+  conversation_id  uuid NOT NULL REFERENCES conversations (id),
+  parent_id        uuid REFERENCES messages (id),
+  role             text NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+  content          text NOT NULL,
+  model            text,
+  status           text NOT NULL DEFAULT 'completed'
+                   CHECK (status IN ('streaming', 'completed', 'failed', 'cancelled')),
+  input_tokens     integer CHECK (input_tokens &gt;= 0),
+  output_tokens    integer CHECK (output_tokens &gt;= 0),
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX messages_by_conversation ON messages (conversation_id, created_at);
+CREATE INDEX messages_by_parent ON messages (parent_id);</code></pre>
+      </details>
+
+      <h3 id="fuentes">Documentado y diseño de referencia</h3>
+
+      <p>OpenAI, Stripe y Cloudflare publican mucho sobre su infraestructura, pero no todo. El curso separa siempre lo que viene de fuentes públicas de lo que es una reconstrucción razonada, con la misma convención de los planos técnicos: la línea continua es lo que existe y la línea punteada, lo proyectado.</p>
+      <ul>
+        <li><span class="badge badge--doc">Documentado</span> viene de fuentes públicas: blogs de ingeniería, papers, documentación oficial o presentaciones.</li>
+        <li><span class="badge badge--ref">Diseño de referencia</span> es cómo lo construiríamos nosotros con lo que sabemos. Es un diseño válido y operable, pero no afirma que la empresa lo haga así.</li>
+      </ul>
+
+      <h3 id="capas">Colores de capa</h3>
+
+      <p>En los diagramas y en los mapas explorables, cada componente tiene el color de su capa y una forma propia, para que se distingan también sin color. Los nombres de los nodos siempre van escritos.</p>
+
+      <ul class="layer-legend">
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="6" width="22" height="15" rx="2" fill="none" stroke="var(--l-client)" stroke-width="2"/><path d="M11 25h8M15 21v4" stroke="var(--l-client)" stroke-width="2"/></svg><b>Cliente</b><span>Navegador, app móvil, SDK de otra empresa</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path d="M15 3 L26 9.5 V20.5 L15 27 L4 20.5 V9.5 Z" fill="none" stroke="var(--l-edge)" stroke-width="2.2"/></svg><b>Entrada</b><span>DNS, CDN, WAF, balanceadores, API gateway</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="6" width="22" height="18" rx="3" fill="none" stroke="var(--l-service)" stroke-width="2.2"/><path d="M9 12h12M9 17h8" stroke="var(--l-service)" stroke-width="2"/></svg><b>Servicios</b><span>Lógica de negocio, APIs internas, workers</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect x="3" y="10" width="24" height="10" rx="5" fill="none" stroke="var(--l-queue)" stroke-width="2.2"/><path d="M10 10v10M15 10v10M20 10v10" stroke="var(--l-queue)" stroke-width="1.8"/></svg><b>Colas y streams</b><span>Kafka, SQS, pub/sub, event bus</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path d="M17 3 L7 17 H14 L12 27 L23 12 H16 Z" fill="none" stroke="var(--l-cache)" stroke-width="2.2" stroke-linejoin="round"/></svg><b>Caché</b><span>Redis, Memcached, caché en memoria</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><ellipse cx="15" cy="7.5" rx="10" ry="3.5" fill="none" stroke="var(--l-db)" stroke-width="2.2"/><path d="M5 7.5v15c0 1.9 4.5 3.5 10 3.5s10-1.6 10-3.5v-15" fill="none" stroke="var(--l-db)" stroke-width="2.2"/></svg><b>Bases de datos</b><span>Relacionales, KV, documentos, vectores, objetos</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect x="8" y="8" width="14" height="14" rx="1.5" fill="none" stroke="var(--l-gpu)" stroke-width="2.2"/><path d="M11 4v4M15 4v4M19 4v4M11 22v4M15 22v4M19 22v4M4 11h4M4 15h4M4 19h4M22 11h4M22 15h4M22 19h4" stroke="var(--l-gpu)" stroke-width="1.8"/></svg><b>GPU e inferencia</b><span>Motores de inferencia, flota de GPUs, routers</span></li>
+        <li><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect x="4" y="6" width="22" height="18" rx="3" fill="none" stroke="var(--l-external)" stroke-width="2" stroke-dasharray="4 3"/></svg><b>Externos</b><span>Redes de tarjetas, proveedores, APIs de terceros</span></li>
+      </ul>
+
+      <!-- ============================================================ 0.7 -->
+      <h2 id="fallos"><span class="sec-num">0.7</span>Modos de fallo: lo que separa un diagrama de un diseño</h2>
+
+      <p>Un diagrama muestra el camino feliz. Un diseño dice qué pasa cuando cada caja falla, y una caja falla de muchas más formas que "se cae": puede estar lenta, responder mal, responder a medias o responder dos veces. La herramienta clásica para recorrerlas es el <dfn data-term="fmea">FMEA</dfn>: para cada componente, cómo falla, qué efecto tiene, cómo te enteras y qué haces.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Componente</th><th>Modo de fallo</th><th>Efecto para el usuario</th><th>Detección</th><th>Mitigación</th></tr></thead>
+          <tbody>
+            <tr><td>Base de datos primaria</td><td>Se cae</td><td>No se guardan mensajes nuevos</td><td>Health checks, errores de escritura</td><td>Failover a una réplica síncrona; sin pérdida si la réplica confirmó</td></tr>
+            <tr><td>Redis del <span data-term="rate-limiting">rate limiter</span></td><td>Se cae o se pone lento</td><td>Sin límites, o sin servicio, según la política</td><td>Latencia y errores de Redis en el gateway</td><td>Fail-open con un límite local aproximado por instancia</td></tr>
+            <tr><td>Nodo de GPU</td><td>Muere a mitad de una respuesta</td><td>El stream se corta</td><td>Error en la conexión con el motor, heartbeats</td><td>Reintentar en otro nodo (repite el prefill); evento <code>error</code> recuperable en el cliente</td></tr>
+            <tr><td>Cliente</td><td>Cierra la pestaña a mitad del stream</td><td>Ninguno, pero la GPU sigue generando para nadie</td><td>La escritura en la conexión falla</td><td>Propagar la cancelación hasta el motor de inferencia</td></tr>
+            <tr><td>Servicio de moderación</td><td>Se vuelve lento</td><td>Todos los mensajes tardan más</td><td>p99 de la llamada</td><td>Timeout corto y una política por defecto definida de antemano</td></tr>
+            <tr><td>Región completa</td><td>Se cae</td><td>Nada funciona para quienes estaban en esa región</td><td>Health checks globales</td><td>Failover a otra región con capacidad de GPU reservada</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cada fila de esa tabla se convierte en un escenario animado del mapa de ChatGPT (Parte II). La segunda fila esconde una de las decisiones más frecuentes del curso: qué hace un control cuando su propia dependencia falla.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M4 14h8M2.5 5h11" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.5 5 L0.8 9.5 H4.2 Z M13.5 5 L11.8 9.5 H15.2 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Trade-off: <dfn data-term="fail-open">fail-open o fail-closed</dfn></p>
+        <div class="to-grid">
+          <div class="to-col">
+            <h4>Fail-open: dejar pasar</h4>
+            <p><b>Ganas:</b> el producto sigue funcionando aunque el control esté caído.</p>
+            <p><b>Pagas:</b> durante la falla no hay protección: abuso, costos descontrolados o una dependencia saturada aguas abajo.</p>
+          </div>
+          <div class="to-col">
+            <h4>Fail-closed: bloquear</h4>
+            <p><b>Ganas:</b> nunca se viola la regla que el control protege.</p>
+            <p><b>Pagas:</b> la caída del control se convierte en la caída del producto.</p>
+          </div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> los controles de capacidad (rate limiting) suelen fallar abiertos, porque hay otras defensas aguas abajo; los de seguridad y dinero (autorización, límites de gasto) fallan cerrados, porque un error ahí no se puede deshacer.</p>
+      </aside>
+
+      <!-- ============================================================ 0.8 -->
+      <h2 id="design-doc"><span class="sec-num">0.8</span>Design docs y ADRs</h2>
+
+      <p>Todo lo anterior termina en un <dfn data-term="design-doc">design doc</dfn>. No hay un formato universal, pero los buenos comparten estas secciones, en este orden:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Contexto</span>El problema y por qué resolverlo ahora. Alguien que no estuvo en las reuniones debe entenderlo.</li>
+        <li><span class="step-title">Objetivos y no objetivos</span>Qué se va a lograr, medible, y qué queda afuera a propósito.</li>
+        <li><span class="step-title">Requisitos y estimaciones</span>Funcionales, no funcionales y los números que los respaldan.</li>
+        <li><span class="step-title">Propuesta</span>API, modelo de datos, arquitectura y los flujos principales paso a paso.</li>
+        <li><span class="step-title">Alternativas consideradas</span>Qué otras opciones había y por qué se descartaron.</li>
+        <li><span class="step-title">Modos de fallo</span>La tabla FMEA y cómo se degrada el sistema.</li>
+        <li><span class="step-title">Seguridad, privacidad y observabilidad</span>Qué datos se tocan, quién accede y cómo se sabrá que funciona.</li>
+        <li><span class="step-title">Plan de despliegue y rollback</span>Cómo se lanza de forma gradual y cómo se vuelve atrás.</li>
+        <li><span class="step-title">Preguntas abiertas</span>Lo que todavía no se sabe, dicho explícitamente.</li>
+      </ol>
+
+      <p>Las decisiones individuales que salen del diseño se registran como <dfn data-term="adr">ADRs</dfn> (Architecture Decision Records, un formato propuesto por Michael Nygard en 2011): notas cortas que no se editan. Si una decisión cambia, se escribe un ADR nuevo que reemplaza al anterior, y así el repositorio conserva la historia de por qué el sistema es como es.</p>
+
+      <div class="adr">
+        <div class="adr-head">
+          <span class="adr-id">ADR-007. Streaming de respuestas con SSE en lugar de WebSockets</span>
+          <span class="adr-state">Aceptado</span>
+        </div>
+        <div class="adr-body">
+          <h4>Contexto</h4>
+          <p>Las respuestas del modelo se envían token a token del servidor al cliente; el cliente solo envía un mensaje por turno. El canal tiene que atravesar CDNs, proxies corporativos y balanceadores L7 sin configuración especial, y reutilizar la autenticación, los límites y los logs HTTP que ya existen.</p>
+          <h4>Decisión</h4>
+          <p>Usar SSE sobre HTTP/2: el <code>POST</code> del mensaje responde con <code>text/event-stream</code>. El cliente web lee el stream con <code>fetch()</code> y <code>ReadableStream</code>, porque la API <code>EventSource</code> del navegador solo hace <code>GET</code> y no permite headers propios.</p>
+          <h4>Consecuencias</h4>
+          <ul class="pm-list">
+            <li class="plus">Es HTTP normal: funciona con el gateway, la autenticación, los límites y los logs actuales.</li>
+            <li class="plus">HTTP/2 multiplexa varios streams en una sola conexión.</li>
+            <li class="minus">La cancelación viaja por otro canal: cerrar la conexión o llamar a un endpoint de cancelación.</li>
+            <li class="minus">Hay que desactivar el buffering en los proxies (por ejemplo, el header <code>X-Accel-Buffering: no</code> en nginx) y ajustar los timeouts de inactividad de los balanceadores.</li>
+            <li class="minus">Si más adelante hace falta un canal bidireccional en tiempo real (voz), se evaluará WebSocket o WebRTC en un ADR nuevo.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ============================================================ 0.9 -->
+      <h2 id="tradeoffs"><span class="sec-num">0.9</span>Trade-offs y antipatrones</h2>
+
+      <p>Casi toda decisión de diseño es una de estas tensiones. Nombrarla es la mitad de resolverla, porque obliga a preguntar qué vale más en este caso concreto.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Tensión</th><th>Ejemplo</th><th>La pregunta que decide</th></tr></thead>
+          <tbody>
+            <tr><td><b>Latencia vs consistencia</b></td><td>Leer de una réplica cercana (rápido, quizá desactualizado) o del líder (lento, siempre fresco)</td><td>¿Qué pasa si el usuario ve un dato de hace 2 segundos?</td></tr>
+            <tr><td><b>Disponibilidad vs consistencia</b></td><td>Durante una partición de red, aceptar escrituras que después habrá que reconciliar</td><td>¿Qué es peor aquí: un error o un conflicto?</td></tr>
+            <tr><td><b>Throughput vs latencia</b></td><td>Agrupar requests en la GPU: más tokens por segundo en total, más espera por request</td><td>¿Cuál es el SLO de tiempo al primer token?</td></tr>
+            <tr><td><b>Costo vs redundancia</b></td><td>Capacidad de reserva en otra región, ociosa el 99&#8239;% del tiempo</td><td>¿Cuánto cuesta una hora caído?</td></tr>
+            <tr><td><b>Simplicidad vs flexibilidad</b></td><td>Monolito modular o microservicios</td><td>¿Cuántos equipos necesitan desplegar por separado?</td></tr>
+            <tr><td><b>Síncrono vs asíncrono</b></td><td>Llamar a facturación dentro de la request o emitir un evento</td><td>¿El usuario necesita el resultado ya?</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las dos primeras filas tienen nombre propio. El <dfn data-term="cap">teorema CAP</dfn> dice que durante una partición de red hay que elegir entre consistencia y disponibilidad, y <dfn data-term="pacelc">PACELC</dfn> agrega que, incluso sin particiones, se elige entre latencia y consistencia en cada lectura. Se estudian a fondo en M06, con las bases de datos reales ubicadas en cada cuadrante.</p>
+
+      <h3 id="antipatrones">Antipatrones que el curso te va a enseñar a evitar</h3>
+      <ul>
+        <li><b>Diseñar sin números.</b> La arquitectura correcta para 10 requests por segundo es incorrecta para 10&#8239;000, y al revés.</li>
+        <li><b>Dimensionar para el promedio.</b> El sistema se cae en el pico, que es justo cuando más usuarios hay mirando.</li>
+        <li><b>Microservicios desde el primer día.</b> Un "monolito distribuido" suma el acoplamiento de un monolito y la fragilidad de la red.</li>
+        <li><b>Una base de datos compartida por todos los servicios.</b> Nadie puede cambiar el esquema sin coordinar con todos los demás.</li>
+        <li><b>Reintentos sin límite ni jitter.</b> Convierten una falla parcial en una caída total: cada cliente reintenta a la vez y multiplica la carga (M08).</li>
+        <li><b>Confiar en la red.</b> Suponer latencia cero, ancho de banda infinito y una red que nunca falla: las "falacias de la computación distribuida", formuladas en Sun Microsystems en los años 90 y todavía vigentes.</li>
+      </ul>
+
+      <!-- ============================================================ cierre -->
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m00"></div>
+
+      <section class="exercise" aria-labelledby="ej-m00">
+        <p class="exercise-title" id="ej-m00">Ejercicio de diseño: notas de voz</p>
+        <p>Una app de mensajería quiere agregar notas de voz. Tiene 30 millones de usuarios diarios; cada uno envía en promedio 8 notas al día, de 20 s, codificadas en Opus a 16 kbps. Cada nota se escucha 3 veces en promedio. El pico es 4 veces el promedio, las notas se guardan un año y el almacenamiento usa 3 réplicas. Cada descarga tarda 0.5 s.</p>
+        <p>Calcula: notas por segundo (promedio y pico), almacenamiento por día y por año, ancho de banda de descarga en pico y descargas simultáneas en pico. Después responde: ¿qué componente de arquitectura te obligan a agregar estos números?</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <div class="table-wrap">
+            <table class="t">
+              <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+              <tbody>
+                <tr><td>Tamaño de una nota</td><td>16 kbps = 2 kB/s × 20 s</td><td class="r">40 kB</td></tr>
+                <tr><td>Notas por día</td><td>30 M × 8</td><td class="r">240 millones</td></tr>
+                <tr><td>Notas por segundo, promedio</td><td>2.4 × 10<sup>8</sup> ÷ 86&#8239;400</td><td class="r">≈ 2&#8239;800/s</td></tr>
+                <tr><td>Notas por segundo, pico</td><td>2&#8239;778 × 4</td><td class="r">≈ 11&#8239;000/s</td></tr>
+                <tr><td>Almacenamiento por día</td><td>2.4 × 10<sup>8</sup> × 40 kB</td><td class="r">9.6 TB</td></tr>
+                <tr><td>Almacenamiento por año, con réplicas</td><td>9.6 TB × 365 × 3</td><td class="r">≈ 10.5 PB</td></tr>
+                <tr><td>Descargas por segundo, pico</td><td>11&#8239;111 × 3</td><td class="r">≈ 33&#8239;000/s</td></tr>
+                <tr><td>Ancho de banda de descarga, pico</td><td>33&#8239;333 × 40 kB</td><td class="r">≈ 1.3 GB/s ≈ 10.7 Gbps</td></tr>
+                <tr><td>Descargas simultáneas, pico</td><td>33&#8239;333/s × 0.5 s (Little)</td><td class="r">≈ 16&#8239;700</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><b>Qué obligan a agregar:</b> almacenamiento de objetos con <span data-term="signed-url">signed URLs</span> y una CDN delante. Servir 10.7 Gbps desde tus propios servidores de aplicación sería caro y frágil; con URLs firmadas, el cliente sube y descarga directo del almacenamiento o de la CDN, y tu backend solo maneja metadatos (M09).</p>
+          <p><b>Y un ahorro:</b> 10.5 PB con 3 réplicas se reducen a ~5 PB con <dfn data-term="erasure-coding">erasure coding</dfn> (~1.5× en lugar de 3×), que es lo que usan internamente los almacenamientos de objetos grandes.</p>
+        </details>
+      </section>
+
+      <div data-checkpoint="m00"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m00.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/calculators.js"></script>
+</body>
+</html>

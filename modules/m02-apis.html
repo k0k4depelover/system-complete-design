@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M02. Protocolos y diseño de APIs</title>
+<meta name="description" content="REST, gRPC, GraphQL, WebSockets, SSE y webhooks; métodos, códigos de estado, paginación por cursor, versionado, errores e idempotencia.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m02">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Protocolos y diseño de APIs</h1>
+        <p class="lead">Una API es un contrato que otros van a usar durante años, con reintentos, redes que se cortan y versiones viejas del cliente. Este módulo compara los protocolos de comunicación y baja al detalle que separa una API que aguanta producción de una que no: semántica de métodos, errores, paginación, versionado e idempotencia.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M02</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01</dd></div>
+          <div><dt>Estado</dt><dd data-status="m02">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir entre REST, gRPC, GraphQL, SSE, WebSockets y webhooks según el problema.</li>
+          <li>Usar los métodos y códigos de estado HTTP por lo que garantizan, no por costumbre.</li>
+          <li>Paginar con cursores, versionar sin romper clientes y devolver errores útiles.</li>
+          <li>Implementar idempotency keys con una tabla y control de concurrencia optimista con ETags.</li>
+          <li>Diseñar el envío y la recepción de webhooks que sobreviven a reintentos y desorden.</li>
+        </ul>
+      </section>
+
+      <h2 id="estilos"><span class="sec-num">2.1</span>Estilos de comunicación</h2>
+
+      <p>Antes de elegir un protocolo hay que responder tres preguntas: <b>¿quién inicia?</b> (el cliente pide, o el servidor avisa), <b>¿el que pide espera la respuesta?</b> (síncrono o asíncrono) y <b>¿quién consume?</b> (un navegador, otro servicio tuyo o el sistema de un cliente). La tabla cubre los protocolos que verás en todo el curso:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Protocolo</th><th>Dirección</th><th>Formato</th><th>Úsalo para</th><th>Cuidado con</th></tr></thead>
+          <tbody>
+            <tr><td><dfn data-term="rest">REST</dfn> sobre HTTP</td><td>Cliente pide</td><td>JSON</td><td>APIs públicas, CRUD, todo lo cacheable</td><td>Muchas idas y vueltas para pantallas complejas</td></tr>
+            <tr><td><dfn data-term="grpc">gRPC</dfn></td><td>Cliente pide; streaming en ambos sentidos</td><td>Protobuf (binario)</td><td>Tráfico entre servicios internos</td><td>No es nativo en navegadores; cachés HTTP no lo entienden</td></tr>
+            <tr><td><dfn data-term="graphql">GraphQL</dfn></td><td>Cliente pide</td><td>JSON</td><td>Frontends que combinan muchos recursos</td><td>Costo de queries arbitrarias, caché difícil, N+1</td></tr>
+            <tr><td>SSE</td><td>Servidor empuja</td><td>Texto (eventos)</td><td>Notificaciones, tokens de un LLM, precios</td><td>Solo servidor → cliente</td></tr>
+            <tr><td><dfn data-term="websocket">WebSocket</dfn></td><td>Ambos, en cualquier momento</td><td>Mensajes (texto o binario)</td><td>Chat, colaboración, juegos</td><td>Conexiones con estado: escalar y balancear es más difícil</td></tr>
+            <tr><td><dfn data-term="long-polling">Long polling</dfn></td><td>Servidor responde cuando hay algo</td><td>JSON</td><td>Entornos donde nada más funciona</td><td>Una request por mensaje; latencia de reconexión</td></tr>
+            <tr><td><dfn data-term="webhook">Webhooks</dfn></td><td>Tu sistema llama al de otro</td><td>JSON firmado</td><td>Avisar eventos a sistemas de clientes</td><td>Entrega al menos una vez, desorden, receptores caídos</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El mismo caso de uso, "enviar un mensaje a un chat y recibir la respuesta", se ve así en cada estilo:</p>
+
+      <div class="tabs" data-tabs="Comparación de protocolos">
+        <section data-tab="REST">
+          <p>Un recurso, un método, un código de estado. Simple, cacheable y fácil de depurar con curl.</p>
+<pre data-lang="http"><code>POST /v1/conversations/conv_42/messages HTTP/1.1
+Content-Type: application/json
+Idempotency-Key: 3c9e0a7f-1b2d-4c55-9e8a-51f0c2d7a6b4
+
+{"content": "Hola", "parent_message_id": "msg_17"}
+
+HTTP/1.1 201 Created
+Location: /v1/conversations/conv_42/messages/msg_18
+
+{"id": "msg_18", "role": "user", "content": "Hola", "created_at": "2026-09-27T14:03:11Z"}</code></pre>
+        </section>
+        <section data-tab="gRPC">
+          <p>El contrato vive en un archivo <code>.proto</code> del que se genera código tipado para cliente y servidor. Aquí la respuesta llega como stream del servidor.</p>
+<pre><code>syntax = "proto3";
+package chat.v1;
+
+service ChatService {
+  rpc SendMessage(SendMessageRequest) returns (stream MessageDelta);
+}
+
+message SendMessageRequest {
+  string conversation_id = 1;
+  string parent_message_id = 2;
+  string content = 3;
+  string idempotency_key = 4;
+}
+
+message MessageDelta {
+  string message_id = 1;
+  string text = 2;        // fragmento de texto
+  bool done = 3;
+}</code></pre>
+          <p>Los números de campo (<code>= 1</code>, <code>= 2</code>) son el contrato real en el cable: puedes renombrar campos, pero nunca reutilizar un número.</p>
+        </section>
+        <section data-tab="GraphQL">
+          <p>Una mutación que devuelve exactamente los campos que la pantalla necesita, incluidos datos relacionados, en una sola request.</p>
+<pre data-lang="json"><code>// POST /graphql
+{
+  "query": "mutation Send($input: SendInput!) { sendMessage(input: $input) { id content conversation { title unreadCount } } }",
+  "variables": { "input": { "conversationId": "conv_42", "content": "Hola" } }
+}
+
+// 200 OK (incluso si hubo errores parciales)
+{ "data": { "sendMessage": { "id": "msg_18", "content": "Hola", "conversation": { "title": "Viaje", "unreadCount": 0 } } } }</code></pre>
+        </section>
+        <section data-tab="SSE">
+          <p>La request es un POST normal; la respuesta queda abierta y trae eventos a medida que ocurren. Es el formato de los LLMs (M17).</p>
+<pre data-lang="sse"><code>event: message.created
+id: 1
+data: {"message_id": "msg_19", "role": "assistant"}
+
+event: delta
+id: 2
+data: {"text": "¡Hola! "}
+
+event: delta
+id: 3
+data: {"text": "¿En qué te ayudo?"}
+
+event: message.completed
+id: 4
+data: {"finish_reason": "stop"}</code></pre>
+          <p>Si la conexión se corta, el cliente reconecta enviando <code>Last-Event-ID: 3</code> y el servidor puede continuar desde ahí.</p>
+        </section>
+        <section data-tab="WebSocket">
+          <p>Tras un <code>GET</code> con <code>Upgrade: websocket</code>, la conexión queda como un canal de mensajes en ambos sentidos. El protocolo de mensajes lo defines tú.</p>
+<pre data-lang="json"><code>// cliente → servidor
+{"type": "message.send", "request_id": "r-5510", "conversation_id": "conv_42", "content": "Hola"}
+
+// servidor → cliente (confirma)
+{"type": "message.ack", "request_id": "r-5510", "message_id": "msg_18"}
+
+// servidor → cliente (otro usuario escribió en la misma conversación)
+{"type": "message.new", "conversation_id": "conv_42", "message_id": "msg_20", "from": "u_77"}
+
+// cada 25 s, en ambos sentidos
+{"type": "ping"}</code></pre>
+          <p>Como no hay semántica HTTP por mensaje, tienes que reinventar lo que HTTP te daba: correlación (<code>request_id</code>), errores, reintentos e idempotencia.</p>
+        </section>
+      </div>
+
+      <h2 id="rest"><span class="sec-num">2.2</span>REST bien hecho: métodos y códigos de estado</h2>
+
+      <p>Los métodos HTTP no son sinónimos con distinto nombre: cada uno promete propiedades que la infraestructura aprovecha. Un proxy puede reintentar un GET porque es <dfn data-term="metodo-seguro">seguro e idempotente</dfn>; una CDN puede cachearlo; un navegador puede precargarlo. Si usas GET para algo que modifica datos, tarde o temprano alguien lo va a repetir por ti.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Método</th><th>Seguro</th><th>Idempotente</th><th>Cacheable</th><th>Uso típico</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET</code></td><td>Sí</td><td>Sí</td><td>Sí</td><td>Leer un recurso o una colección</td></tr>
+            <tr><td><code>HEAD</code></td><td>Sí</td><td>Sí</td><td>Sí</td><td>Solo headers (¿existe?, ¿cambió?)</td></tr>
+            <tr><td><code>PUT</code></td><td>No</td><td>Sí</td><td>No</td><td>Reemplazar un recurso completo en una URL conocida</td></tr>
+            <tr><td><code>DELETE</code></td><td>No</td><td>Sí</td><td>No</td><td>Borrar</td></tr>
+            <tr><td><code>POST</code></td><td>No</td><td>No</td><td>Casi nunca</td><td>Crear, ejecutar acciones</td></tr>
+            <tr><td><code>PATCH</code></td><td>No</td><td>Depende</td><td>No</td><td>Modificar parte de un recurso</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los códigos de estado son para las máquinas: clientes, proxies, balanceadores y SDKs toman decisiones con ellos (reintentar, cachear, pedir credenciales). Los que más importan:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Código</th><th>Significa</th><th>El cliente debería</th></tr></thead>
+          <tbody>
+            <tr><td><code>200</code> / <code>201</code> / <code>202</code> / <code>204</code></td><td>OK / creado (con <code>Location</code>) / aceptado para procesar después / sin cuerpo</td><td>Seguir; con 202, consultar el estado más tarde</td></tr>
+            <tr><td><code>304</code></td><td>No cambió desde tu versión (<code>If-None-Match</code>)</td><td>Usar su copia en caché</td></tr>
+            <tr><td><code>400</code> / <code>422</code></td><td>Request mal formada / bien formada pero inválida</td><td>Corregir; no reintentar igual</td></tr>
+            <tr><td><code>401</code> / <code>403</code></td><td>Sin credenciales válidas / credenciales válidas pero sin permiso</td><td>Reautenticarse / no reintentar</td></tr>
+            <tr><td><code>404</code></td><td>No existe (o no lo puedes ver)</td><td>No reintentar</td></tr>
+            <tr><td><code>409</code> / <code>412</code></td><td>Conflicto con el estado actual / falló la precondición (<code>If-Match</code>)</td><td>Releer y decidir</td></tr>
+            <tr><td><code>429</code></td><td>Demasiadas requests</td><td>Esperar lo que diga <code>Retry-After</code></td></tr>
+            <tr><td><code>500</code></td><td>Error inesperado del servidor</td><td>Reintentar con backoff solo si la operación es idempotente</td></tr>
+            <tr><td><code>502</code> / <code>503</code> / <code>504</code></td><td>Error del upstream / sobrecarga o mantenimiento / timeout del upstream</td><td>Reintentar con backoff y jitter</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="errores">Errores que ayudan</h3>
+      <p>Un error útil dice qué pasó, qué campo falló y cómo arreglarlo, en un formato que las máquinas pueden leer. El estándar es <dfn data-term="problem-json">Problem Details</dfn> (RFC 9457):</p>
+<pre data-lang="http"><code>HTTP/1.1 422 Unprocessable Content
+Content-Type: application/problem+json
+
+{
+  "type": "https://api.ejemplo.com/errores/monto-invalido",
+  "title": "El monto no es válido",
+  "status": 422,
+  "detail": "amount debe ser un entero positivo en la unidad mínima de la moneda (centavos).",
+  "instance": "/v1/pagos",
+  "request_id": "req_01J9ZC4Q8T",
+  "errors": [{ "field": "amount", "code": "must_be_positive_integer" }]
+}</code></pre>
+      <p>El <code>request_id</code> no es decorativo: es lo que el cliente te manda en el ticket de soporte, y con él encuentras la request exacta en tus logs y traces (M11).</p>
+
+      <h2 id="paginacion"><span class="sec-num">2.3</span>Paginación: offset o cursor</h2>
+
+      <p>La paginación por offset es la primera que todos escriben y la primera que falla en producción, por dos razones. El costo: <code>OFFSET 100000</code> obliga a la base a leer y descartar 100&#8239;000 filas. Y la consistencia: si se insertan o borran filas entre página y página, los elementos se repiten o se pierden.</p>
+
+      <p>La <dfn data-term="cursor-pagination">paginación por cursor</dfn> (o keyset) pide "los siguientes después de este", usando un índice:</p>
+
+<pre data-lang="sql"><code>-- Página siguiente: posts anteriores al último que vio el cliente
+SELECT id, author_id, body, created_at
+FROM posts
+WHERE feed_id = $1
+  AND (created_at, id) &lt; ($2, $3)      -- el cursor: (created_at, id) del último elemento
+ORDER BY created_at DESC, id DESC
+LIMIT 21;                                -- uno de más para saber si hay otra página
+
+-- Índice que hace esto barato a cualquier profundidad
+CREATE INDEX posts_feed_cursor ON posts (feed_id, created_at DESC, id DESC);</code></pre>
+
+      <div class="endpoint">
+        <div class="ep-head"><span class="ep-method" data-m="GET">GET</span><code class="ep-path">/v1/feeds/<span class="ep-param">{feed_id}</span>/posts?limit=20&amp;cursor=<span class="ep-param">{cursor}</span></code><span class="badge badge--ref">Diseño de referencia</span></div>
+        <p class="ep-desc">El cursor es opaco para el cliente: un base64 de <code>(created_at, id)</code>, firmado si no quieres que lo manipulen.</p>
+        <div class="ep-body">
+<pre data-lang="json"><code>{
+  "data": [ { "id": "post_981", "body": "…", "created_at": "2026-09-27T13:59:02Z" } ],
+  "next_cursor": "eyJ0IjoiMjAyNi0wOS0yN1QxMzo1OTowMloiLCJpZCI6InBvc3RfOTgxIn0",
+  "has_more": true
+}</code></pre>
+        </div>
+      </div>
+
+      <p>El id va en el cursor como desempate: dos filas pueden tener el mismo <code>created_at</code> y, sin desempate, una de ellas se perdería entre páginas. Lo que el cursor no permite es "saltar a la página 37". Casi nunca hace falta; cuando sí (paneles de administración), se acepta el offset con un límite máximo de profundidad.</p>
+
+      <h2 id="versionado"><span class="sec-num">2.4</span>Versionado y evolución sin romper clientes</h2>
+
+      <p>Una API pública tiene clientes que no controlas y que no se actualizan: apps móviles de hace dos años, integraciones que nadie mantiene. La regla es separar cambios <b>compatibles</b> de cambios que <b>rompen</b>:</p>
+      <ul>
+        <li><b>Compatibles:</b> agregar endpoints, agregar campos opcionales a la respuesta, aceptar parámetros opcionales nuevos, agregar valores a un enum (si los clientes toleran valores desconocidos).</li>
+        <li><b>Rompen:</b> quitar o renombrar campos, cambiar tipos o formatos, volver obligatorio algo opcional, cambiar el significado de un código de estado.</li>
+      </ul>
+      <p>Los cambios compatibles solo funcionan si los clientes son <em>tolerant readers</em>: ignoran campos que no conocen. Los que rompen necesitan una versión nueva. Hay tres formas comunes de expresarla:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Ejemplo</th><th>Ventaja</th><th>Costo</th></tr></thead>
+          <tbody>
+            <tr><td>En la URL</td><td><code>/v1/pagos</code>, <code>/v2/pagos</code></td><td>Visible, fácil de enrutar y cachear</td><td>Versiones gruesas: todo cambia de golpe</td></tr>
+            <tr><td>En un header</td><td><code>Accept: application/vnd.ejemplo.v2+json</code></td><td>URLs estables</td><td>Invisible en logs y difícil de probar a mano</td></tr>
+            <tr><td>Por fecha, fijada por cuenta</td><td><code>Stripe-Version: 2024-06-20</code></td><td>Cada cliente queda fijo en la versión con la que se integró; los cambios se aplican con capas de compatibilidad</td><td>Exige mantener transformaciones entre versiones durante años</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Stripe usa la tercera: cada cuenta queda fijada en la versión del día en que se integró, y el servidor transforma las respuestas hacia atrás versión por versión. <span class="badge badge--doc">Documentado</span> Para retirar algo, anuncia la fecha con los headers <code>Deprecation</code> y <code>Sunset</code> (RFC 8594) y mide quién sigue usándolo antes de apagarlo.</p>
+
+      <h2 id="idempotencia"><span class="sec-num">2.5</span>Idempotencia en la API</h2>
+
+      <p>En M00 viste el problema: si la respuesta se pierde, el cliente no sabe si su operación se ejecutó. Con GET, PUT y DELETE puede reintentar tranquilo. Con un POST que cobra dinero, no. La solución estándar es una <dfn data-term="idempotency-key">idempotency key</dfn> que el cliente genera una vez por operación lógica y reenvía en cada reintento:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 546" role="img" aria-labelledby="f21t f21d">
+<title id="f21t">Reintento seguro con Idempotency-Key</title>
+<desc id="f21d">El cliente envía un pago con una clave; la red se corta antes de recibir la respuesta; al reintentar con la misma clave, el servidor devuelve la respuesta guardada sin cobrar de nuevo.</desc>
+<defs><marker id="f21-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f21-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f21-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f21-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App del cliente</text>
+<path class="dg-frame" d="M70.0 40 V536"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">API</text>
+<path class="dg-frame" d="M280.0 40 V536"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">idempotency_keys</text>
+<path class="dg-frame" d="M490.0 40 V536"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Procesador de pagos</text>
+<path class="dg-frame" d="M700.0 40 V536"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f21-a)"/>
+<rect x="40.30000000000001" y="55" width="269.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">POST /v1/pagos  Idempotency-Key: k-81f3</text>
+<path class="dg-edge" d="M283.0 106 L485.0 106" marker-end="url(#f21-a)"/>
+<rect x="266.8" y="89" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">INSERT (k-81f3, hash, in_progress)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 140 L285.0 140" marker-end="url(#f21-r)"/>
+<rect x="309.7" y="123" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">OK: la clave es nueva</text>
+<path class="dg-edge" d="M283.0 174 L695.0 174" marker-end="url(#f21-a)"/>
+<rect x="431.2" y="157" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="168" text-anchor="middle">cobrar 25.00 USD</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 208 L285.0 208" marker-end="url(#f21-r)"/>
+<rect x="434.5" y="191" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="202" text-anchor="middle">aprobado ch_993</text>
+<path class="dg-edge" d="M283.0 242 L485.0 242" marker-end="url(#f21-a)"/>
+<rect x="256.9" y="225" width="256.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">UPDATE k-81f3: completed, 201, cuerpo</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M277.0 276 L75.0 276" marker-end="url(#f21-f)"/>
+<rect x="132.7" y="259" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="270" text-anchor="middle">201 Created</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">la respuesta se pierde: el cliente no sabe si se cobró</text>
+<path class="dg-edge" d="M73.0 344 L275.0 344" marker-end="url(#f21-a)"/>
+<rect x="0.700000000000017" y="327" width="348.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="338" text-anchor="middle">POST /v1/pagos  Idempotency-Key: k-81f3 (reintento)</text>
+<path class="dg-edge" d="M283.0 378 L485.0 378" marker-end="url(#f21-a)"/>
+<rect x="336.1" y="361" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">SELECT k-81f3</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 412 L285.0 412" marker-end="url(#f21-r)"/>
+<rect x="263.5" y="395" width="243.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="406" text-anchor="middle">completed, mismo hash, 201 guardado</text>
+<rect x="290.0" y="432" width="167" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="300.0" y="448">no se vuelve a cobrar</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 480 L75.0 480" marker-end="url(#f21-r)"/>
+<rect x="63.400000000000006" y="463" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="474" text-anchor="middle">201 Created (la misma respuesta)</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.1.</b> El reintento encuentra la clave ya completada y recibe la misma respuesta. El procesador de pagos nunca ve la segunda request.</figcaption>
+      </figure>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">idempotency_keys</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">TTL: <b>24 h</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Columna</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>account_id</code><span class="key">PK</span></td><td><code>uuid</code></td><td>Parte de la PK</td><td>La clave es única por cuenta, no global</td></tr>
+              <tr><td><code>key</code><span class="key">PK</span></td><td><code>text</code></td><td>Máx. 255 caracteres</td><td>Generada por el cliente (UUIDv4)</td></tr>
+              <tr><td><code>request_hash</code></td><td><code>bytea</code></td><td><code>NOT NULL</code></td><td>SHA-256 de método + path + cuerpo: detecta la misma clave con otra request</td></tr>
+              <tr><td><code>status</code></td><td><code>text</code></td><td><code>in_progress</code> o <code>completed</code></td><td>Distingue un reintento de una request que sigue en curso</td></tr>
+              <tr><td><code>response_code</code>, <code>response_body</code></td><td><code>int</code>, <code>jsonb</code></td><td>Nulos mientras está en curso</td><td>La respuesta exacta que se devuelve en los reintentos</td></tr>
+              <tr><td><code>locked_until</code></td><td><code>timestamptz</code></td><td></td><td>Si el proceso que la tomó murió, otro puede retomarla después</td></tr>
+              <tr><td><code>created_at</code></td><td><code>timestamptz</code></td><td><code>NOT NULL</code></td><td>Para purgar claves de más de 24 h</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>El algoritmo, en orden:</p>
+      <ol class="steps">
+        <li><span class="step-title">Reservar la clave</span><code>INSERT … ON CONFLICT DO NOTHING</code>. Si insertó una fila, esta request es la primera: sigue.</li>
+        <li><span class="step-title">Si ya existía, comparar</span>Si el hash difiere, responde 422: la clave se reutilizó con otra request. Si está <code>completed</code>, devuelve la respuesta guardada. Si está <code>in_progress</code>, responde 409: la primera request todavía se está procesando.</li>
+        <li><span class="step-title">Ejecutar la operación</span>Y en la misma transacción que sus efectos locales (crear el pago en tu base), guardar la respuesta y marcar la clave como <code>completed</code>.</li>
+        <li><span class="step-title">Purgar</span>Un job borra claves de más de 24 h. Un reintento después de eso se trata como una request nueva.</li>
+      </ol>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si el proceso muere a mitad de la operación</p>
+        <p>La clave queda en <code>in_progress</code> para siempre y los reintentos reciben 409 eternamente. Por eso existe <code>locked_until</code>: vencido el lock, otro proceso puede retomar la clave. Pero retomar exige saber si el efecto externo (el cobro) llegó a ocurrir: se consulta al procesador de pagos con la misma clave, que también debe ser idempotente de su lado. Este es el caso más difícil del sistema de pagos y se resuelve por completo en M27.</p>
+      </aside>
+
+      <h3 id="etag">Concurrencia optimista con ETag</h3>
+      <p>Otro problema de las APIs con escrituras: dos clientes leen el mismo recurso, lo modifican y guardan; el segundo pisa al primero sin enterarse (<em>lost update</em>). Un <dfn data-term="etag">ETag</dfn> resuelve el caso sin bloquear a nadie:</p>
+<pre data-lang="http"><code>GET /v1/documentos/doc_9           →  200 OK   ETag: "v17"
+
+PUT /v1/documentos/doc_9
+If-Match: "v17"
+{ …cambios… }                       →  200 OK   ETag: "v18"     (nadie lo había cambiado)
+                                    →  412 Precondition Failed  (otro guardó v18 antes: recarga y decide)</code></pre>
+      <p>Del lado de la base es un <code>UPDATE … SET version = version + 1 WHERE id = $1 AND version = $2</code>: si actualizó 0 filas, alguien ganó la carrera.</p>
+
+      <h2 id="grpc"><span class="sec-num">2.6</span>gRPC entre servicios</h2>
+      <p>Dentro de tu sistema, los servicios se llaman millones de veces por segundo y los contratos cambian a menudo. gRPC aporta lo que ahí importa:</p>
+      <ul>
+        <li><b>Contratos tipados</b> en <dfn data-term="protobuf">Protocol Buffers</dfn>, con código generado para cada lenguaje: un cambio incompatible falla al compilar, no en producción.</li>
+        <li><b>Binario y compacto</b> sobre HTTP/2 con conexiones persistentes y multiplexadas.</li>
+        <li><b>Cuatro modos</b>: unario, streaming del servidor, del cliente y bidireccional.</li>
+        <li><b><dfn data-term="deadline">Deadlines</dfn></b> que se propagan: si el usuario tiene 2 s de presupuesto y ya se gastaron 1.5 s, el servicio de más abajo recibe 0.5 s y no trabaja en vano.</li>
+      </ul>
+      <p>Lo que cuesta: no es legible con curl, los navegadores necesitan gRPC-Web con un proxy, y el balanceo necesita un balanceador L7 que entienda HTTP/2 (con uno L4, todas las requests de una conexión larga caen en la misma instancia, M03).</p>
+
+      <h2 id="graphql"><span class="sec-num">2.7</span>GraphQL: flexibilidad con costo</h2>
+      <p>GraphQL resuelve un problema real de los frontends: una pantalla necesita datos de cinco recursos y con REST eso son cinco requests, o un endpoint a medida. Con GraphQL el cliente pide exactamente el árbol de datos que necesita. A cambio, el servidor acepta consultas arbitrarias, y eso trae tres problemas que hay que diseñar desde el principio:</p>
+      <ul>
+        <li><b>El <dfn data-term="n-mas-1">problema N+1</dfn>.</b> Cada campo se resuelve por separado; una lista de 50 posts con su autor dispara 51 consultas. Se agrupan con DataLoader.</li>
+        <li><b>Consultas carísimas.</b> Nada impide pedir amigos de amigos de amigos. Se limita profundidad y costo calculado de cada consulta, y en APIs propias se aceptan solo <em>persisted queries</em> (consultas registradas de antemano, identificadas por hash).</li>
+        <li><b>Caché HTTP inútil.</b> Todo es <code>POST /graphql</code>. Las persisted queries por GET recuperan la caché de CDN; si no, se cachea por entidad en el servidor.</li>
+      </ul>
+
+      <h2 id="tiempo-real"><span class="sec-num">2.8</span>Tiempo real: polling, SSE y WebSockets</h2>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Polling</th><th>Long polling</th><th>SSE</th><th>WebSocket</th></tr></thead>
+          <tbody>
+            <tr><td><b>Latencia de un evento</b></td><td>Hasta el intervalo de polling</td><td>Casi inmediata</td><td>Inmediata</td><td>Inmediata</td></tr>
+            <tr><td><b>Costo sin eventos</b></td><td>Una request por intervalo y cliente</td><td>Una request por timeout</td><td>Una conexión abierta</td><td>Una conexión abierta</td></tr>
+            <tr><td><b>Dirección</b></td><td>Cliente pregunta</td><td>Cliente pregunta</td><td>Servidor → cliente</td><td>Ambas</td></tr>
+            <tr><td><b>Reconexión</b></td><td>No aplica</td><td>Manual</td><td>Automática, con <code>Last-Event-ID</code></td><td>Manual</td></tr>
+            <tr><td><b>Infraestructura</b></td><td>HTTP normal</td><td>HTTP con timeouts largos</td><td>HTTP normal; desactivar buffering</td><td>Balanceadores con soporte de Upgrade y conexiones largas</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Las conexiones persistentes cambian la escala del problema: ya no importan tanto las requests por segundo como las <b>conexiones abiertas</b> y la memoria que ocupa cada una. Y aparecen problemas nuevos: un deploy que reinicia servidores desconecta a cientos de miles de clientes a la vez, que reconectan todos juntos (se mitiga con reconexión con jitter y drenaje gradual), y enviar un mensaje a un usuario exige saber en qué servidor está su conexión (un registro de presencia o pub/sub, que verás en WhatsApp, M29).</p>
+
+      <h2 id="webhooks"><span class="sec-num">2.9</span>Webhooks: tu sistema llamando al de otros</h2>
+      <p>Un webhook invierte la dirección: cuando pasa algo (un pago se confirma), tu sistema envía un POST a la URL que registró el cliente. Eso significa depender de un servidor ajeno, que puede estar caído, lento o mal programado. Las reglas, de los dos lados:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 444" role="img" aria-labelledby="f22t f22d">
+<title id="f22t">Entrega de un webhook con reintentos</title>
+<desc id="f22d">El proveedor firma el evento y lo envía; el receptor falla con 500; el proveedor reintenta con backoff; el receptor verifica la firma, deduplica por id de evento, responde 200 rápido y procesa en segundo plano.</desc>
+<defs><marker id="f22-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f22-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f22-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f22-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Proveedor</text>
+<path class="dg-frame" d="M70.0 40 V434"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Tu endpoint</text>
+<path class="dg-frame" d="M280.0 40 V434"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">processed_events</text>
+<path class="dg-frame" d="M490.0 40 V434"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Cola interna</text>
+<path class="dg-frame" d="M700.0 40 V434"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f22-a)"/>
+<rect x="70.0" y="55" width="210.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">POST /webhooks  evt_77 + firma</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M277.0 106 L75.0 106" marker-end="url(#f22-f)"/>
+<rect x="56.80000000000001" y="89" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="100" text-anchor="middle">500 (tu deploy estaba reiniciando)</text>
+<rect x="80.0" y="126" width="328" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="142">reintento con backoff: 1 min, 5 min, 30 min…</text>
+<path class="dg-edge" d="M73.0 174 L275.0 174" marker-end="url(#f22-a)"/>
+<rect x="30.400000000000006" y="157" width="289.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="168" text-anchor="middle">POST /webhooks  evt_77 + firma (intento 2)</text>
+<path class="dg-edge" d="M280.0 200 h40 v14 h-38" marker-end="url(#f22-a)"/>
+<text class="dg-tiny" x="326.0" y="211">verificar HMAC y timestamp</text>
+<path class="dg-edge" d="M283.0 242 L485.0 242" marker-end="url(#f22-a)"/>
+<rect x="260.2" y="225" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">INSERT evt_77 ON CONFLICT DO NOTHING</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 276 L285.0 276" marker-end="url(#f22-r)"/>
+<rect x="296.5" y="259" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="270" text-anchor="middle">1 fila: es la primera vez</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M283.0 310 L695.0 310" marker-end="url(#f22-q)"/>
+<rect x="437.8" y="293" width="104.39999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="304" text-anchor="middle">encolar evt_77</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 344 L75.0 344" marker-end="url(#f22-r)"/>
+<rect x="106.30000000000001" y="327" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="338" text-anchor="middle">200 en menos de 1 s</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M700.0 370 h40 v14 h-38" marker-end="url(#f22-q)"/>
+<text class="dg-tiny" x="746.0" y="381">procesar: actualizar pedido</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.2.</b> El primer intento falla, el segundo llega. El receptor verifica, deduplica, encola y responde enseguida.</figcaption>
+      </figure>
+
+      <div class="to-grid">
+        <div class="to-col">
+          <h4>Si envías webhooks</h4>
+          <p>Firma cada envío con <dfn data-term="hmac">HMAC</dfn> y un secreto por cliente, incluyendo un timestamp.</p>
+          <p>Reintenta con backoff exponencial durante horas o días, y desactiva el endpoint si falla siempre.</p>
+          <p>Envía desde una cola, nunca dentro de la transacción del evento.</p>
+          <p>Da una forma de consultar el estado actual (<code>GET /eventos</code>), porque algún webhook se va a perder.</p>
+        </div>
+        <div class="to-col">
+          <h4>Si los recibes</h4>
+          <p>Verifica la firma y rechaza timestamps de más de 5 minutos (evita que reenvíen un evento viejo capturado).</p>
+          <p>Deduplica por id de evento: la entrega es al menos una vez.</p>
+          <p>Responde 2xx en menos de un par de segundos y procesa en segundo plano.</p>
+          <p>No confíes en el orden: si llega <code>pago.reembolsado</code> antes que <code>pago.aprobado</code>, consulta el estado actual al proveedor.</p>
+        </div>
+      </div>
+
+      <p>La verificación de la firma, del lado del receptor (el esquema que usa Stripe es de este tipo: timestamp + cuerpo firmados con HMAC-SHA256):</p>
+<pre><code>// Header recibido:  Firma: t=1790546400,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+function verificar(cuerpoCrudo, header, secreto, ahora) {
+  const { t, v1 } = parsear(header);
+  if (Math.abs(ahora - t) &gt; 300) throw new Error('timestamp fuera de ventana');   // anti-replay
+  const esperado = hmacSha256(secreto, `${t}.${cuerpoCrudo}`);                    // cuerpo SIN parsear
+  if (!compararEnTiempoConstante(esperado, v1)) throw new Error('firma inválida');
+}</code></pre>
+      <p>Dos detalles que causan bugs reales: la firma se calcula sobre el cuerpo <em>crudo</em> (si tu framework lo parsea y lo vuelve a serializar, cambia un espacio y la firma no coincide), y la comparación debe ser en tiempo constante para no filtrar información por el tiempo de respuesta.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m02"></div>
+
+      <section class="exercise" aria-labelledby="ej-m02">
+        <p class="exercise-title" id="ej-m02">Ejercicio de diseño: API de reservas de salas</p>
+        <p>Diseña la API de un sistema para reservar salas de reunión: listar salas con disponibilidad, crear una reserva, cancelarla y listar "mis reservas". Las apps móviles tienen mala conectividad y reintentan. Dos personas pueden intentar reservar la misma sala al mismo tiempo. Un calendario externo debe enterarse de cada reserva.</p>
+        <p>Define endpoints con método, códigos de respuesta, paginación, cómo evitas reservas duplicadas por reintentos, cómo resuelves la carrera por la misma sala y cómo avisas al calendario.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <div class="table-wrap">
+            <table class="t">
+              <thead><tr><th>Endpoint</th><th>Detalles clave</th></tr></thead>
+              <tbody>
+                <tr><td><code>GET /v1/salas?desde=…&amp;hasta=…&amp;cursor=…</code></td><td>Paginación por cursor; cacheable unos segundos (<code>max-age=5</code>).</td></tr>
+                <tr><td><code>POST /v1/reservas</code> + <code>Idempotency-Key</code></td><td>201 con <code>Location</code>. Reintento con la misma clave: la misma respuesta. Sala ocupada: 409 con Problem Details.</td></tr>
+                <tr><td><code>DELETE /v1/reservas/{id}</code></td><td>Idempotente por naturaleza: borrar una reserva ya cancelada devuelve 204 (o 404, pero sin efecto).</td></tr>
+                <tr><td><code>GET /v1/me/reservas?cursor=…</code></td><td>Cursor sobre <code>(inicio, id)</code>.</td></tr>
+                <tr><td>Webhook <code>reserva.creada</code> / <code>reserva.cancelada</code></td><td>Firmado con HMAC, con id de evento, enviado desde una cola con reintentos. El calendario deduplica.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><b>La carrera por la sala</b> no se resuelve en la API sino en la base: una restricción que impida reservas superpuestas. En PostgreSQL, una restricción de exclusión sobre el rango de tiempo por sala (<code>EXCLUDE USING gist (sala_id WITH =, periodo WITH &amp;&amp;)</code>). La segunda inserción falla y la API la traduce a 409. Cualquier chequeo previo del tipo "¿está libre?" seguido de un insert tiene una ventana de carrera (M05).</p>
+          <p><b>El webhook</b> se publica con el patrón outbox: el evento se guarda en la misma transacción que la reserva y un proceso aparte lo envía (M07). Así no hay reservas sin evento ni eventos sin reserva.</p>
+        </details>
+      </section>
+
+      <div data-checkpoint="m02"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m02.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+</body>
+</html>

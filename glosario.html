@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glosario: diseño de sistemas reales</title>
+<meta name="description" content="Definiciones de los términos del curso de diseño de sistemas: PACELC, idempotencia, KV cache, error budget y más.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+</head>
+<body data-root="">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="index.html">Curso</a>
+    <a href="glosario.html" aria-current="page">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+      <header class="title-block">
+        <h1>Glosario</h1>
+        <p class="lead">Cada término del curso con una definición corta. Crece con cada módulo; en las páginas, los términos subrayados con puntos muestran esta misma definición al pasar el cursor.</p>
+      </header>
+
+      <div class="gl-tools">
+        <label class="visually-hidden" for="gl-q">Buscar en el glosario</label>
+        <input id="gl-q" class="gl-search" type="search" placeholder="Buscar: idempotencia, p99, KV cache…" autocomplete="off" data-glossary-filter>
+        <div class="gl-cats" role="group" aria-label="Filtrar por categoría" data-glossary-cats></div>
+        <p class="gl-count" aria-live="polite" data-glossary-count></p>
+      </div>
+
+      <div data-glossary-index></div>
+    </article>
+  </main>
+</div>
+
+<script src="assets/js/core/sd.js"></script>
+<script src="assets/js/data/course.data.js"></script>
+<script src="assets/js/data/glossary.data.js"></script>
+<script src="assets/js/core/progress.js"></script>
+<script src="assets/js/core/nav.js"></script>
+<script src="assets/js/core/glossary.js"></script>
+</body>
+</html>

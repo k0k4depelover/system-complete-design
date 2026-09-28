@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M15. Motores de inferencia</title>
+<meta name="description" content="Cómo funciona un motor como vLLM o SGLang: scheduler por iteración, continuous batching, PagedAttention, prefix caching, chunked prefill, prefill y decode desagregados, speculative decoding, FlashAttention y paralelismo tensor, pipeline, de expertos y de datos.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m15">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Motores de inferencia</h1>
+        <p class="lead">Con el mismo modelo y las mismas GPUs, un motor de inferencia bueno atiende varias veces más usuarios que uno ingenuo. La diferencia no está en el modelo sino en cómo se arma cada batch, cómo se administra el KV cache y cómo se reparte el trabajo entre GPUs. Este módulo abre el motor por dentro.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M15</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12, M13</dd></div>
+          <div><dt>Estado</dt><dd data-status="m15">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Describir las partes de un motor de inferencia y qué decide el scheduler en cada iteración.</li>
+          <li>Explicar por qué continuous batching y PagedAttention multiplican el throughput.</li>
+          <li>Usar prefix caching, chunked prefill y la desagregación de prefill y decode según el SLO que te falte cumplir.</li>
+          <li>Calcular cuándo conviene el speculative decoding.</li>
+          <li>Elegir entre paralelismo tensor, pipeline, de expertos y de datos, y configurar un motor real.</li>
+        </ul>
+      </section>
+
+      <h2 id="motor"><span class="sec-num">15.1</span>Qué hace un motor de inferencia</h2>
+
+      <p>Un motor de inferencia (vLLM, SGLang, TensorRT-LLM, TGI) toma un modelo y lo sirve a muchos usuarios a la vez. Por fuera expone una API, casi siempre compatible con la de OpenAI; por dentro es un bucle que corre decenas de veces por segundo:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f151t f151d">
+<title id="f151t">Las partes de un motor de inferencia</title>
+<desc id="f151d">Las requests llegan al servidor de API y esperan en una cola. En cada iteración, el scheduler decide qué requests avanzan: cuáles hacen prefill, cuáles un paso de decode y cuáles esperan. El gestor del KV cache asigna y libera bloques de memoria. El ejecutor corre el modelo en las GPUs y devuelve un token por request, que sale en streaming. El ciclo se repite decenas de veces por segundo.</desc>
+<defs><marker id="f151a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="40" width="140" height="64" rx="10"/>
+<text class="dg-label" x="80.0" y="66" text-anchor="middle">Servidor de API</text>
+<text class="dg-tiny" x="80.0" y="83" text-anchor="middle">compatible con OpenAI</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="180" y="40" width="120" height="64" rx="10"/>
+<text class="dg-label" x="240.0" y="66" text-anchor="middle">Cola</text>
+<text class="dg-tiny" x="240.0" y="83" text-anchor="middle">requests esperando</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="330" y="40" width="170" height="64" rx="10"/>
+<text class="dg-label" x="415.0" y="66" text-anchor="middle">Scheduler</text>
+<text class="dg-tiny" x="415.0" y="83" text-anchor="middle">decide cada iteración</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="530" y="40" width="230" height="64" rx="10"/>
+<text class="dg-label" x="645.0" y="59" text-anchor="middle">Ejecutor del modelo</text>
+<text class="dg-tiny" x="645.0" y="76" text-anchor="middle">kernels, CUDA graphs</text>
+<text class="dg-tiny" x="645.0" y="91" text-anchor="middle">en 1 a 8 GPUs</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="330" y="180" width="170" height="64" rx="10"/>
+<text class="dg-label" x="415.0" y="206" text-anchor="middle">Gestor del KV cache</text>
+<text class="dg-tiny" x="415.0" y="223" text-anchor="middle">bloques de 16 tokens</text>
+<path class="dg-edge" d="M152 72 H177" marker-end="url(#f151a)"/>
+<path class="dg-edge" d="M302 72 H327" marker-end="url(#f151a)"/>
+<path class="dg-edge" d="M502 72 H527" marker-end="url(#f151a)"/>
+<path class="dg-edge" d="M395 106 V176" marker-end="url(#f151a)"/><path class="dg-edge" d="M435 178 V108" marker-end="url(#f151a)"/>
+<text class="dg-tiny" x="442" y="146">¿hay bloques?</text>
+<path class="dg-edge" d="M645 106 V212 H504" marker-end="url(#f151a)"/>
+<text class="dg-tiny" x="652" y="160">escribe K y V</text><text class="dg-tiny" x="652" y="175">de cada token</text>
+<path class="dg-edge" d="M645 38 V18 H415 V36" marker-end="url(#f151a)"/>
+<text class="dg-tiny" x="530" y="13" text-anchor="middle">un token por request; las terminadas liberan su lugar y sus bloques</text>
+<path class="dg-edge" d="M760 104 C 766 150, 766 250, 700 264" marker-end="url(#f151a)"/>
+<text class="dg-small" x="690" y="280" text-anchor="end">stream de tokens al cliente</text>
+<text class="dg-small" x="10" y="150">El scheduler es el corazón del motor:</text>
+<text class="dg-small" x="10" y="167">en cada iteración arma un batch nuevo</text>
+<text class="dg-small" x="10" y="184">con prefills y pasos de decode, dentro</text>
+<text class="dg-small" x="10" y="201">de un presupuesto de tokens y de memoria.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 15.1.</b> En cada iteración el scheduler elige qué requests avanzan y el ejecutor corre una pasada del modelo para todas ellas. Lo que distingue a un motor de otro está casi todo en esas dos cajas.</figcaption>
+      </figure>
+
+      <p>Cada iteración, el scheduler responde tres preguntas: qué requests en espera pueden entrar (si hay memoria para su KV cache), cuántos tokens de prefill caben junto a los pasos de decode sin pasarse del presupuesto de la iteración, y a quién sacar si la memoria se llena. Todo lo que sigue en este módulo son respuestas cada vez mejores a esas preguntas.</p>
+
+      <h2 id="batching"><span class="sec-num">15.2</span>De static batching a continuous batching</h2>
+
+      <p>La forma ingenua de juntar requests es el static batching: se arma un batch, se generan todas sus respuestas y recién cuando termina la más larga entra el siguiente grupo. Una respuesta de 10 tokens ocupa su lugar tanto tiempo como una de 240, y las requests nuevas esperan afuera aunque haya lugares vacíos.</p>
+
+      <p>El <dfn data-term="continuous-batching">continuous batching</dfn>, o scheduling por iteración, lo resuelve decidiendo el batch en cada paso de decode: la request que terminó sale y una que esperaba entra en ese mismo paso. La idea se publicó como Orca (OSDI 2022) y hoy la usan todos los motores. <span class="badge badge--doc">Documentado</span> Compara los dos con las mismas llegadas:</p>
+
+      <div data-sim="batching"></div>
+
+      <p>Con respuestas de largo parecido, la diferencia es chica; con largos muy variables, que es lo normal en un chat, el static batching deja la mayor parte de la GPU esperando a la respuesta más larga de cada grupo, y la cola crece aunque la GPU esté medio vacía.</p>
+
+      <h2 id="paged"><span class="sec-num">15.3</span>PagedAttention: el KV cache como memoria virtual</h2>
+
+      <p>Continuous batching necesita memoria para el KV cache de cada request que entra. Los primeros sistemas reservaban de una vez el espacio para el contexto máximo, contiguo: una request que termina usando 2000 tokens de una reserva de 32 768 desperdicia el 94&#8239;% de su espacio. El paper de vLLM midió que los sistemas de entonces desperdiciaban entre el 60 y el 80&#8239;% de la memoria del KV cache. <span class="badge badge--doc">Documentado</span></p>
+
+      <p><dfn data-term="pagedattention">PagedAttention</dfn> aplica la idea de la memoria virtual de un sistema operativo: el cache se divide en bloques de pocos tokens (16, por ejemplo), cada request tiene una tabla que traduce sus bloques lógicos a bloques físicos cualquiera, y un bloque nuevo se pide solo cuando el anterior se llena.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f152t f152d">
+<title id="f152t">PagedAttention: tablas de bloques como memoria virtual</title>
+<desc id="f152d">Cada request ve su KV cache como una secuencia de bloques lógicos de 16 tokens. Una tabla de bloques traduce cada bloque lógico a un bloque físico de la memoria de la GPU, que no tiene por qué ser contiguo. Las dos requests comparten el bloque del prompt de sistema, con un contador de referencias en 2, y un bloque nuevo se pide solo cuando el anterior se llena.</desc>
+<defs><marker id="f152a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="22">Bloques lógicos</text>
+<text class="dg-group" x="300" y="22">Tablas de bloques</text>
+<text class="dg-group" x="520" y="22">Memoria física de la GPU</text>
+<text class="dg-label" x="10" y="44">Request A</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="10" y="54" width="190" height="28" rx="6"/>
+<text class="dg-tiny" x="105" y="72" text-anchor="middle">bloque 0: sistema</text>
+<path class="dg-edge" d="M202 68 H296" marker-end="url(#f152a)"/>
+<rect class="dg-box" x="300" y="56" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="375" y="72" text-anchor="middle">0 → físico 0</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="88" width="190" height="28" rx="6"/>
+<text class="dg-tiny" x="105" y="106" text-anchor="middle">bloque 1: tokens 16–31</text>
+<path class="dg-edge" d="M202 102 H296" marker-end="url(#f152a)"/>
+<rect class="dg-box" x="300" y="90" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="375" y="106" text-anchor="middle">1 → físico 7</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="122" width="190" height="28" rx="6"/>
+<text class="dg-tiny" x="105" y="140" text-anchor="middle">bloque 2: 32–37 (6 de 16)</text>
+<path class="dg-edge" d="M202 136 H296" marker-end="url(#f152a)"/>
+<rect class="dg-box" x="300" y="124" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="375" y="140" text-anchor="middle">2 → físico 3</text>
+<text class="dg-label" x="10" y="170">Request B</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="10" y="180" width="190" height="28" rx="6"/>
+<text class="dg-tiny" x="105" y="198" text-anchor="middle">bloque 0: sistema</text>
+<path class="dg-edge" d="M202 194 H296" marker-end="url(#f152a)"/>
+<rect class="dg-box" x="300" y="182" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="375" y="198" text-anchor="middle">0 → físico 0</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="10" y="214" width="190" height="28" rx="6"/>
+<text class="dg-tiny" x="105" y="232" text-anchor="middle">bloque 1: tokens 16–27 (12)</text>
+<path class="dg-edge" d="M202 228 H296" marker-end="url(#f152a)"/>
+<rect class="dg-box" x="300" y="216" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="375" y="232" text-anchor="middle">1 → físico 5</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="520" y="40" width="54" height="40" rx="6"/>
+<text class="dg-tiny" x="547.0" y="57" text-anchor="middle">0: sistema</text>
+<text class="dg-tiny" x="547.0" y="71" text-anchor="middle">refs = 2</text>
+<rect x="580" y="40" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="607.0" y="64" text-anchor="middle">1: libre</text>
+<rect x="640" y="40" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="667.0" y="64" text-anchor="middle">2: libre</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="700" y="40" width="54" height="40" rx="6"/>
+<text class="dg-tiny" x="727.0" y="57" text-anchor="middle">3: A</text>
+<rect x="520" y="88" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="547.0" y="112" text-anchor="middle">4: libre</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="580" y="88" width="54" height="40" rx="6"/>
+<text class="dg-tiny" x="607.0" y="105" text-anchor="middle">5: B</text>
+<rect x="640" y="88" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="667.0" y="112" text-anchor="middle">6: libre</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="700" y="88" width="54" height="40" rx="6"/>
+<text class="dg-tiny" x="727.0" y="105" text-anchor="middle">7: A</text>
+<rect x="520" y="136" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="547.0" y="160" text-anchor="middle">8: libre</text>
+<rect x="580" y="136" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="607.0" y="160" text-anchor="middle">9: libre</text>
+<rect x="640" y="136" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="667.0" y="160" text-anchor="middle">10: libre</text>
+<rect x="700" y="136" width="54" height="40" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="727.0" y="160" text-anchor="middle">11: libre</text>
+<text class="dg-small" x="520" y="200">Sin reservar el contexto máximo:</text>
+<text class="dg-small" x="520" y="217">cada request desperdicia, como mucho,</text>
+<text class="dg-small" x="520" y="234">lo que falta para llenar su último bloque.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 15.2.</b> El desperdicio queda limitado al último bloque de cada request, y un bloque se puede compartir entre requests con un contador de referencias, como las páginas de un proceso después de un fork.</figcaption>
+      </figure>
+
+      <p>Con el desperdicio por debajo del 4&#8239;%, caben muchas más requests en el mismo batch, y el throughput del paper de vLLM fue de 2 a 4 veces el de los sistemas anteriores con la misma latencia. Compartir bloques permite además generar varias respuestas para el mismo prompt (el botón de regenerar, o <code>n &gt; 1</code> en la API) sin copiar el cache del prompt: se copia un bloque solo cuando una de las respuestas lo modifica (copy-on-write).</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Si la memoria se llena en mitad de las generaciones, el scheduler tiene que sacar a alguien del batch (preemption): libera sus bloques y, cuando haya lugar, rehace su prefill o recupera el cache copiado a la RAM del host. Las respuestas no se pierden, pero esas requests se vuelven lentas de golpe. Un servicio que hace preemption todo el tiempo está sobrecargado: la métrica a vigilar es la tasa de preemptions, no solo la ocupación del cache.</p>
+      </aside>
+
+      <h2 id="prefix"><span class="sec-num">15.4</span>Prefix caching</h2>
+
+      <p>Muchas requests empiezan igual: el mismo prompt de sistema de miles de tokens, los mismos ejemplos, o toda la conversación anterior cuando el usuario manda un mensaje nuevo. El <dfn data-term="prefix-caching">prefix caching</dfn> guarda el KV cache de esos prefijos y lo reutiliza: si los primeros 3000 tokens de una request coinciden con algo que ya está en memoria, su prefill empieza en el token 3001.</p>
+
+      <p>El motor identifica cada bloque por un hash de sus tokens y de todos los anteriores, así dos requests comparten un bloque solo si todo lo previo es idéntico. SGLang organiza estos prefijos en un árbol (RadixAttention) y vLLM, en una tabla de hashes; en los dos casos los bloques sin uso se desalojan por LRU cuando falta memoria. El efecto es enorme en un chat: cada mensaje nuevo de una conversación reutiliza el prefill de todos los anteriores, siempre que la request caiga en la réplica que tiene ese cache. Esa condición la resuelve el router con routing consciente del prefijo (M19), y el mismo mecanismo es lo que las APIs cobran más barato como prompt caching (M16).</p>
+
+      <h2 id="chunked"><span class="sec-num">15.5</span>Chunked prefill: mezclar las dos fases</h2>
+
+      <p>Un prefill de 30 000 tokens puede ocupar la GPU medio segundo. Si el scheduler lo mete entero en una iteración, todos los usuarios que están en decode ven un salto de medio segundo entre dos tokens: el TPOT de todos empeora por culpa de una sola request. El <dfn data-term="chunked-prefill">chunked prefill</dfn> parte el prompt en trozos de, por ejemplo, 2048 tokens y en cada iteración mezcla un trozo con los pasos de decode de los demás, sin pasar de un presupuesto de tokens por iteración. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>El tamaño del trozo reparte el dolor. Trozos grandes terminan antes el prefill (mejor TTFT para quien acaba de llegar) y meten saltos más grandes en el decode de los demás (peor TPOT). Trozos chicos, al revés. En vLLM es el parámetro <code>--max-num-batched-tokens</code>.</p>
+      </aside>
+
+      <h2 id="desagregado"><span class="sec-num">15.6</span>Prefill y decode en máquinas distintas</h2>
+
+      <p>El chunked prefill convive con un problema de fondo: las dos fases compiten por las mismas GPUs y tienen cuellos de botella opuestos. La <dfn data-term="desagregacion">desagregación</dfn> las separa en dos grupos de GPUs, cada uno dimensionado para lo suyo, y mueve el KV cache del uno al otro:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="f153t f153d">
+<title id="f153t">Prefill y decode desagregados</title>
+<desc id="f153d">Un grupo de GPUs hace solo prefills, limitado por cómputo, y otro hace solo decode, limitado por memoria. Al terminar el prefill, el KV cache de la request viaja por la red rápida al grupo de decode: 2.7 GB para 8192 tokens de un 70B, unos 54 ms a 50 GB/s.</desc>
+<defs><marker id="f153a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="60" width="120" height="64" rx="10"/>
+<text class="dg-label" x="70.0" y="86" text-anchor="middle">Router</text>
+<text class="dg-tiny" x="70.0" y="103" text-anchor="middle">elige un par</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="170" y="30" width="190" height="124" rx="10"/>
+<text class="dg-label" x="265.0" y="79" text-anchor="middle">Pool de prefill</text>
+<text class="dg-tiny" x="265.0" y="96" text-anchor="middle">limitado por cómputo</text>
+<text class="dg-tiny" x="265.0" y="111" text-anchor="middle">batches de miles de tokens</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="30" width="200" height="124" rx="10"/>
+<text class="dg-label" x="660.0" y="79" text-anchor="middle">Pool de decode</text>
+<text class="dg-tiny" x="660.0" y="96" text-anchor="middle">limitado por memoria</text>
+<text class="dg-tiny" x="660.0" y="111" text-anchor="middle">batches de cientos de usuarios</text>
+<path class="dg-edge" d="M132 92 H166" marker-end="url(#f153a)"/>
+<path class="dg-edge" d="M362 92 H556" marker-end="url(#f153a)" style="stroke: var(--l-cache); stroke-width: 2.5"/>
+<text class="dg-label" x="459" y="80" text-anchor="middle" style="font-size:13px">KV cache por RDMA</text>
+<text class="dg-tiny" x="459" y="112" text-anchor="middle">70B, 8192 tokens: 2.7 GB,</text>
+<text class="dg-tiny" x="459" y="127" text-anchor="middle">unos 54 ms a 50 GB/s</text>
+<text class="dg-small" x="385" y="186" text-anchor="middle">Cada pool se dimensiona para su SLO: el de prefill para el TTFT, el de decode para el TPOT.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 15.3.</b> La desagregación cambia interferencia entre fases por transferencia de datos: cada request mueve su KV cache una vez, así que hace falta una red muy rápida entre los dos grupos.</figcaption>
+      </figure>
+
+      <p>La propusieron DistServe y Splitwise en 2024; Mooncake, el sistema de serving de Kimi, la usa en producción, y NVIDIA Dynamo y llm-d la ofrecen como opción de despliegue. <span class="badge badge--doc">Documentado</span> Conviene cuando los prompts son largos y los SLOs de TTFT y de TPOT son exigentes a la vez; con prompts cortos, el costo de mover el cache y de operar dos grupos no se paga.</p>
+
+      <h2 id="speculative"><span class="sec-num">15.7</span>Speculative decoding</h2>
+
+      <p>En el decode con pocos usuarios, la GPU tiene cómputo de sobra. El <dfn data-term="speculative-decoding">speculative decoding</dfn> lo aprovecha: un modelo chico y rápido (el draft) propone los próximos k tokens, y el modelo grande los verifica todos en una sola pasada, como si fuera un pequeño prefill. Los tokens se aceptan mientras coincidan con lo que el modelo grande habría elegido; en el primer desacuerdo se corrige y se sigue. El resultado sale con la misma distribución que el modelo grande solo, no es una aproximación. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Si cada token propuesto se acepta con probabilidad α, cada pasada del modelo grande produce en promedio (1 − α<sup>k+1</sup>) ÷ (1 − α) tokens: con α = 0.7 y k = 4, unos 2.8 tokens en lugar de 1. Hay variantes sin modelo aparte: cabezas extra entrenadas sobre el propio modelo (Medusa, EAGLE) o la búsqueda de n-gramas en el prompt, que funciona muy bien cuando la respuesta copia partes de la entrada, como al editar código.</p>
+
+      <div data-calc="speculative"></div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>El speculative decoding gasta cómputo para ganar latencia. Con batches grandes, el cómputo ya no sobra y cada token rechazado es trabajo perdido que frena a todos: la ganancia se achica o se vuelve pérdida. Por eso muchos motores lo activan solo cuando la carga es baja o para los clientes que pagan por baja latencia.</p>
+      </aside>
+
+      <h2 id="paralelismo"><span class="sec-num">15.8</span>Paralelismo: tensor, pipeline, expertos y datos</h2>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f154t f154d">
+<title id="f154t">Cuatro formas de repartir un modelo entre GPUs</title>
+<desc id="f154d">Tensor parallelism: cada capa se parte entre las GPUs, que se sincronizan dos veces por capa. Pipeline: cada GPU o servidor tiene un tramo de capas y los datos pasan de uno a otro. Expertos: en un MoE, cada GPU tiene algunos expertos y los tokens viajan a la GPU del experto que les tocó. Datos: réplicas completas e independientes, cada una con sus requests.</desc>
+<rect class="dg-frame" x="10" y="10" width="180" height="230" rx="12"/>
+<text class="dg-label" x="100" y="34" text-anchor="middle">Tensor (TP)</text>
+<text class="dg-tiny" x="100" y="214" text-anchor="middle">cada capa partida en 4</text>
+<text class="dg-tiny" x="100" y="229" text-anchor="middle">sincroniza 2 veces por capa: NVLink</text>
+<rect class="dg-frame" x="200" y="10" width="180" height="230" rx="12"/>
+<text class="dg-label" x="290" y="34" text-anchor="middle">Pipeline (PP)</text>
+<text class="dg-tiny" x="290" y="214" text-anchor="middle">capas 1–40 | 41–80</text>
+<text class="dg-tiny" x="290" y="229" text-anchor="middle">pasa activaciones entre tramos</text>
+<rect class="dg-frame" x="390" y="10" width="180" height="230" rx="12"/>
+<text class="dg-label" x="480" y="34" text-anchor="middle">Expertos (EP)</text>
+<text class="dg-tiny" x="480" y="214" text-anchor="middle">expertos repartidos</text>
+<text class="dg-tiny" x="480" y="229" text-anchor="middle">los tokens viajan al experto</text>
+<rect class="dg-frame" x="580" y="10" width="180" height="230" rx="12"/>
+<text class="dg-label" x="670" y="34" text-anchor="middle">Datos (DP)</text>
+<text class="dg-tiny" x="670" y="214" text-anchor="middle">réplicas completas</text>
+<text class="dg-tiny" x="670" y="229" text-anchor="middle">no se comunican: escala lineal</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="30" y="60" width="30" height="120" rx="4"/>
+<text class="dg-tiny" x="45" y="124" text-anchor="middle">G0</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="66" y="60" width="30" height="120" rx="4"/>
+<text class="dg-tiny" x="81" y="124" text-anchor="middle">G1</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="102" y="60" width="30" height="120" rx="4"/>
+<text class="dg-tiny" x="117" y="124" text-anchor="middle">G2</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="138" y="60" width="30" height="120" rx="4"/>
+<text class="dg-tiny" x="153" y="124" text-anchor="middle">G3</text>
+<path d="M30 190 H168" stroke="var(--l-gpu)" stroke-width="2.5"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="240" y="56" width="120" height="54" rx="6"/><text class="dg-tiny" x="300" y="87" text-anchor="middle">servidor 1: capas 1–40</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="240" y="136" width="120" height="54" rx="6"/><text class="dg-tiny" x="300" y="167" text-anchor="middle">servidor 2: 41–80</text>
+<path class="dg-edge" d="M300 112 V132" style="stroke-width:2"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="424" y="56" width="66" height="56" rx="6"/>
+<text class="dg-tiny" x="457" y="80" text-anchor="middle">GPU 0</text>
+<text class="dg-tiny" x="457" y="96" text-anchor="middle">E0, E1</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="504" y="56" width="66" height="56" rx="6"/>
+<text class="dg-tiny" x="537" y="80" text-anchor="middle">GPU 1</text>
+<text class="dg-tiny" x="537" y="96" text-anchor="middle">E2, E3</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="424" y="132" width="66" height="56" rx="6"/>
+<text class="dg-tiny" x="457" y="156" text-anchor="middle">GPU 2</text>
+<text class="dg-tiny" x="457" y="172" text-anchor="middle">E4, E5</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="504" y="132" width="66" height="56" rx="6"/>
+<text class="dg-tiny" x="537" y="156" text-anchor="middle">GPU 3</text>
+<text class="dg-tiny" x="537" y="172" text-anchor="middle">E6, E7</text>
+<path d="M490 112 L504 132 M504 112 L490 132" stroke="var(--l-queue)" stroke-width="2"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="620" y="52" width="140" height="40" rx="6"/>
+<text class="dg-tiny" x="690" y="76" text-anchor="middle">réplica 1: el modelo entero</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="620" y="102" width="140" height="40" rx="6"/>
+<text class="dg-tiny" x="690" y="126" text-anchor="middle">réplica 2: el modelo entero</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="620" y="152" width="140" height="40" rx="6"/>
+<text class="dg-tiny" x="690" y="176" text-anchor="middle">réplica 3: el modelo entero</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 15.4.</b> Las cuatro formas se combinan: un despliegue típico usa tensor parallelism dentro de cada servidor, pipeline o expertos entre servidores, y muchas réplicas de datos para escalar.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Forma</th><th>Qué reparte</th><th>Comunicación</th><th>Cuándo</th></tr></thead>
+          <tbody>
+            <tr><td><b><dfn data-term="tensor-parallelism">Tensor</dfn></b></td><td>Cada matriz de cada capa</td><td>Dos sincronizaciones por capa: necesita NVLink</td><td>El modelo no entra en una GPU, o se quiere menos TPOT: dentro de un servidor, de 2 a 8 GPUs</td></tr>
+            <tr><td><b><dfn data-term="pipeline-parallelism">Pipeline</dfn></b></td><td>Tramos de capas</td><td>Las activaciones pasan de un tramo al siguiente</td><td>El modelo no entra en un servidor. Suma latencia por tramo y deja burbujas si no hay suficientes requests para llenar todos los tramos</td></tr>
+            <tr><td><b><dfn data-term="expert-parallelism">Expertos</dfn></b></td><td>Los expertos de un MoE</td><td>Cada token viaja a la GPU de sus expertos y vuelve (all-to-all)</td><td>Modelos MoE grandes: DeepSeek publicó que su decode reparte los expertos de V3 entre 144 GPUs <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td><b>Datos</b></td><td>Nada: réplicas completas</td><td>Ninguna entre réplicas</td><td>Siempre, para escalar la capacidad: cada réplica atiende sus propias requests</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Por debajo de todo esto hay trabajo a nivel de kernel que también es parte del motor. FlashAttention calcula la atención por bloques que caben en la SRAM del chip, sin escribir en la HBM la matriz de atención completa: el mismo resultado exacto con mucho menos tráfico de memoria (M13). Los CUDA graphs graban la secuencia de kernels de un paso de decode y la relanzan de una vez, porque con batches chicos el tiempo de lanzar cientos de kernels uno por uno llega a pesar tanto como el cómputo.</p>
+
+      <h2 id="elegir"><span class="sec-num">15.9</span>Elegir y configurar un motor</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Motor</th><th>Fuerte en</th><th>Tener en cuenta</th></tr></thead>
+          <tbody>
+            <tr><td><b>vLLM</b></td><td>El más adoptado: soporta casi todos los modelos, PagedAttention, prefix caching, cuantizaciones y speculative decoding</td><td>Muchas opciones; el rendimiento depende de configurarlas bien</td></tr>
+            <tr><td><b>SGLang</b></td><td>RadixAttention para reutilizar prefijos, muy bueno en cargas con prompts compartidos, agentes y salidas estructuradas</td><td>Ecosistema más chico que el de vLLM</td></tr>
+            <tr><td><b>TensorRT-LLM</b></td><td>Kernels de NVIDIA muy optimizados, en especial en FP8 y FP4</td><td>Compila el modelo para una GPU concreta; solo NVIDIA</td></tr>
+            <tr><td><b>TGI</b></td><td>El servidor de Hugging Face, simple de desplegar</td><td>Menos opciones de optimización que vLLM y SGLang</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un despliegue del 70B del M13 con vLLM, con las perillas que vimos en este módulo:</p>
+
+<pre><code>vllm serve meta-llama/Llama-3.1-70B-Instruct   --tensor-parallel-size 4   --quantization fp8   --kv-cache-dtype fp8   --max-model-len 32768   --max-num-seqs 128   --max-num-batched-tokens 8192   --enable-prefix-caching   --gpu-memory-utilization 0.90</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Opción</th><th>Qué controla</th></tr></thead>
+          <tbody>
+            <tr><td><code>--tensor-parallel-size 4</code></td><td>Tensor parallelism en las 4 GPUs de la réplica (15.8)</td></tr>
+            <tr><td><code>--quantization fp8</code>, <code>--kv-cache-dtype fp8</code></td><td>Pesos, activaciones y KV cache en FP8 (M14): el doble de usuarios por réplica</td></tr>
+            <tr><td><code>--max-model-len 32768</code></td><td>El contexto más largo que se acepta; por encima, error 400</td></tr>
+            <tr><td><code>--max-num-seqs 128</code></td><td>Techo de requests en el batch: sube el throughput y el TPOT</td></tr>
+            <tr><td><code>--max-num-batched-tokens 8192</code></td><td>Presupuesto de tokens por iteración: el tamaño de los trozos del chunked prefill (15.5)</td></tr>
+            <tr><td><code>--enable-prefix-caching</code></td><td>Reutilizar el KV cache de prefijos comunes (15.4)</td></tr>
+            <tr><td><code>--gpu-memory-utilization 0.90</code></td><td>Qué fracción de la memoria usa el motor para pesos y KV cache; el resto queda de reserva</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Y el cliente, con la librería oficial de OpenAI apuntando al servidor local:</p>
+
+<pre data-lang="python"><code>from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="local")
+stream = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-70B-Instruct",
+    messages=[{"role": "user", "content": "¿Qué es PagedAttention?"}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)</code></pre>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Se prueba con carga, no con un prompt: una herramienta de benchmark que reproduzca la distribución real de largos de prompt y de respuesta, y que mida TTFT, TPOT y goodput por percentil a distintas tasas de requests. Las perillas interactúan (más secuencias por batch suben el throughput y el TPOT; un presupuesto de tokens mayor mejora el TTFT y empeora el TPOT), y la configuración buena para prompts de 500 tokens no es la buena para prompts de 20 000.</p>
+      </aside>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m15"></div>
+
+      <section class="exercise" aria-labelledby="ej-m15">
+        <p class="exercise-title" id="ej-m15">Ejercicio de diseño: el TPOT se dispara cuando llegan documentos largos</p>
+        <p>Un asistente sirve Llama 3.1 70B en réplicas de 4 H100 con vLLM. El 90&#8239;% de las requests son preguntas cortas con un prompt de sistema de 1500 tokens, igual para todos. El 10&#8239;% son resúmenes de documentos de 40 000 tokens. Cuando llega un documento, el TPOT de todos los usuarios de esa réplica salta a más de 400 ms, y el TTFT de las preguntas cortas es de 600 ms aunque la GPU no esté llena.</p>
+        <p>Diagnostica las dos causas y propón cambios de configuración y de arquitectura.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>El salto de TPOT</b> es el prefill de 40 000 tokens ocupando iteraciones enteras. Se activa chunked prefill con un presupuesto de, por ejemplo, 4096 tokens por iteración: el documento tarda algo más en su primer token, y el resto sigue generando sin saltos.</li>
+            <li><b>El TTFT de 600 ms</b> es el prefill del prompt de sistema de 1500 tokens repetido en cada request. Con prefix caching se calcula una vez y se reutiliza: el prefill de cada pregunta se reduce a sus propios tokens. Hace falta que el router mande esas requests a réplicas que ya tengan el prefijo (M19).</li>
+            <li><b>Arquitectura:</b> separar los resúmenes en su propio grupo de réplicas, o desagregar prefill y decode, para que los documentos largos no compartan GPUs con el chat. Con el tráfico de resúmenes en su propio grupo, cada SLO se ajusta por separado.</li>
+            <li><b>Medir antes y después:</b> TTFT y TPOT por tipo de request en p50 y p99, tasa de aciertos del prefix cache y tasa de preemptions.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m15"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m15.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-engine.js"></script>
+</body>
+</html>

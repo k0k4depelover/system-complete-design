@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M13. Hardware GPU</title>
+<meta name="description" content="La GPU vista desde el serving: jerarquía de memoria, HBM, FLOPS densos, intensidad aritmética y modelo roofline, NVLink e InfiniBand, cuántas GPUs necesita un modelo de 8B, 70B o 405B, energía y fallas.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m13">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Hardware GPU</h1>
+        <p class="lead">Casi todas las decisiones de serving terminan en una pregunta de hardware: cuántas GPUs, de qué tipo y conectadas cómo. Este módulo da las cifras y el método para contestarla, y explica por qué un modelo que cabe de sobra en memoria puede igual ser lento.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M13</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12</dd></div>
+          <div><dt>Estado</dt><dd data-status="m13">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Leer la hoja de especificaciones de una GPU y quedarte con las cuatro cifras que importan para servir modelos.</li>
+          <li>Usar la intensidad aritmética y el modelo roofline para saber si una carga está limitada por memoria o por cómputo.</li>
+          <li>Explicar por qué el tensor parallelism se queda dentro de un servidor.</li>
+          <li>Calcular cuántas GPUs necesita un modelo para una cantidad de usuarios y un contexto dados, con su TPOT y su costo.</li>
+          <li>Anticipar los límites físicos: energía, fallas de hardware y disponibilidad de GPUs.</li>
+        </ul>
+      </section>
+
+      <h2 id="anatomia"><span class="sec-num">13.1</span>Qué hay dentro de una GPU</h2>
+
+      <p>Una GPU de datacenter es, para quien la usa desde afuera, dos cosas: mucho cómputo y una memoria rápida pegada a él. El cómputo está repartido en unidades llamadas SMs (la H100 tiene 132), cada una con <dfn data-term="tensor-core">tensor cores</dfn>, circuitos que solo multiplican matrices pero lo hacen muy rápido. La memoria principal es <dfn data-term="hbm">HBM</dfn>: pilas de chips de memoria montadas junto al procesador. En la H100 son 80 GB, que se leen a 3.35 TB/s.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f131t f131d">
+<title id="f131t">La jerarquía de memoria de una H100</title>
+<desc id="f131d">De lo más rápido y chico a lo más grande y lento: registros y SRAM dentro de cada SM, unos 60 MB a decenas de TB/s; la caché L2 de 50 MB; la HBM3 de 80 GB a 3.35 TB/s, donde viven los pesos y el KV cache; otra GPU por NVLink a 450 GB/s por sentido; la RAM del host por PCIe 5 a 64 GB/s por sentido; y otro servidor por InfiniBand a 50 GB/s por sentido.</desc>
+<defs><marker id="f131a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="310" y="20" width="150" height="40" rx="8" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1"/>
+<text class="dg-label" x="385" y="37" text-anchor="middle" style="font-size:13px">Registros y SRAM</text>
+<text class="dg-tiny" x="385" y="52" text-anchor="middle">unos 60 MB en total, decenas de TB/s</text>
+<text class="dg-small" x="470" y="45">dentro de cada SM</text>
+<rect x="280" y="70" width="210" height="40" rx="8" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1"/>
+<text class="dg-label" x="385" y="87" text-anchor="middle" style="font-size:13px">Caché L2</text>
+<text class="dg-tiny" x="385" y="102" text-anchor="middle">50 MB, más rápida que la HBM</text>
+<text class="dg-small" x="500" y="95">compartida por los SMs</text>
+<rect x="235" y="120" width="300" height="40" rx="8" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="2"/>
+<text class="dg-label" x="385" y="137" text-anchor="middle" style="font-size:13px">HBM3</text>
+<text class="dg-tiny" x="385" y="152" text-anchor="middle">80 GB, 3.35 TB/s</text>
+<text class="dg-small" x="545" y="145">los pesos y el KV cache</text>
+<rect x="190" y="170" width="390" height="40" rx="8" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1"/>
+<text class="dg-label" x="385" y="187" text-anchor="middle" style="font-size:13px">Otra GPU (NVLink)</text>
+<text class="dg-tiny" x="385" y="202" text-anchor="middle">80 GB más, 450 GB/s por sentido</text>
+<text class="dg-small" x="590" y="195">dentro del servidor</text>
+<rect x="145" y="220" width="480" height="40" rx="8" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1"/>
+<text class="dg-label" x="385" y="237" text-anchor="middle" style="font-size:13px">RAM del host (PCIe 5)</text>
+<text class="dg-tiny" x="385" y="252" text-anchor="middle">1–2 TB, 64 GB/s por sentido</text>
+<text class="dg-small" x="635" y="245">cargar pesos, offload</text>
+<rect x="100" y="270" width="570" height="40" rx="8" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1"/>
+<text class="dg-label" x="385" y="287" text-anchor="middle" style="font-size:13px">Otro servidor (InfiniBand)</text>
+<text class="dg-tiny" x="385" y="302" text-anchor="middle">ilimitada, 50 GB/s por sentido</text>
+<text class="dg-small" x="680" y="295">por cada GPU</text>
+<text class="dg-small" x="20" y="44">más rápida</text><text class="dg-small" x="20" y="312">más grande</text>
+<path class="dg-edge" d="M50 54 V296" marker-end="url(#f131a)"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 13.1.</b> Cada nivel es más grande y más lento que el anterior. Los pesos y el KV cache viven en la HBM; mover datos a otro nivel, sobre todo fuera del servidor, cuesta órdenes de magnitud de ancho de banda.</figcaption>
+      </figure>
+
+      <p>La jerarquía explica dos cosas que verás en el M15. La primera: los kernels más rápidos, como FlashAttention, ganan tiempo haciendo más cuentas en la SRAM del chip y menos viajes a la HBM, sin cambiar el resultado. La segunda: bajar el KV cache a la RAM del host para liberar la GPU es posible, pero traerlo de vuelta por PCIe es unas 50 veces más lento que leerlo de la HBM.</p>
+
+      <h2 id="cifras"><span class="sec-num">13.2</span>Las cifras que importan</h2>
+
+      <p>De una hoja de especificaciones de varias páginas, para servir modelos importan cuatro números: la memoria (cuánto cabe), el ancho de banda de esa memoria (a qué velocidad va el decode), los <dfn data-term="flops">FLOPS</dfn> en la precisión que uses (a qué velocidad va el prefill) y la interconexión entre GPUs (qué tan bien se reparte un modelo en varias).</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>GPU</th><th class="r">Memoria</th><th class="r">Ancho de banda</th><th class="r">BF16 denso</th><th class="r">FP8 denso</th><th class="r">Entre GPUs</th><th class="r">Consumo</th></tr></thead>
+          <tbody>
+            <tr><td>NVIDIA A100 SXM</td><td class="r">80 GB</td><td class="r">2.0 TB/s</td><td class="r">312 TFLOPS</td><td class="r">no tiene</td><td class="r">600 GB/s</td><td class="r">400 W</td></tr>
+            <tr><td>NVIDIA H100 SXM</td><td class="r">80 GB</td><td class="r">3.35 TB/s</td><td class="r">989 TFLOPS</td><td class="r">1979 TFLOPS</td><td class="r">900 GB/s</td><td class="r">700 W</td></tr>
+            <tr><td>NVIDIA H200 SXM</td><td class="r">141 GB</td><td class="r">4.8 TB/s</td><td class="r">989 TFLOPS</td><td class="r">1979 TFLOPS</td><td class="r">900 GB/s</td><td class="r">700 W</td></tr>
+            <tr><td>NVIDIA B200</td><td class="r">180 GB</td><td class="r">8 TB/s</td><td class="r">~2250 TFLOPS</td><td class="r">~4500 TFLOPS</td><td class="r">1.8 TB/s</td><td class="r">1000 W</td></tr>
+            <tr><td>AMD MI300X</td><td class="r">192 GB</td><td class="r">5.3 TB/s</td><td class="r">1307 TFLOPS</td><td class="r">2615 TFLOPS</td><td class="r">896 GB/s</td><td class="r">750 W</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Especificaciones del fabricante. El ancho de banda entre GPUs suma ambos sentidos. La B200 agrega FP4 a unos 9000 TFLOPS densos. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si te equivocas</p>
+        <p>Las cifras de marketing suelen venir "con sparsity": el doble de las densas, para un modo que exige que la mitad de los pesos de cada grupo de cuatro sea cero y que casi ningún LLM usa. Las 3958 TFLOPS FP8 de la H100 son en realidad 1979 para tu carga. Y ninguna carga llega al pico: un buen entrenamiento aprovecha entre un 35 y un 45&#8239;% (el <dfn data-term="mfu">MFU</dfn>), y el decode, mucho menos.</p>
+      </aside>
+
+      <p>La tabla ya dice algo importante: la H200 tiene exactamente el mismo cómputo que la H100, pero 76&#8239;% más de memoria y 43&#8239;% más de ancho de banda. Para el prefill es la misma GPU; para el decode, que vive del ancho de banda, es otra.</p>
+
+      <h2 id="roofline"><span class="sec-num">13.3</span>Intensidad aritmética y el modelo roofline</h2>
+
+      <p>Para saber qué recurso limita una carga hay una sola cuenta: la <dfn data-term="intensidad-aritmetica">intensidad aritmética</dfn>, las operaciones que hace por cada byte que lee de memoria. Si es baja, la GPU espera datos; si es alta, espera al cómputo. El punto de quiebre es el cociente entre el pico de FLOPS y el ancho de banda: en la H100, en FP8, 1979 ÷ 3.35 ≈ <b>590 operaciones por byte</b>. El <dfn data-term="roofline">modelo roofline</dfn> lo dibuja: la velocidad alcanzable es el mínimo entre el pico de cómputo y la intensidad por el ancho de banda.</p>
+
+      <ul>
+        <li><b>Prefill de 2000 tokens:</b> lee los pesos una vez y hace 2 operaciones por parámetro para cada token. Con pesos de 1 byte, son 4000 operaciones por byte: muy por encima del quiebre, limitado por cómputo.</li>
+        <li><b>Decode con 1 usuario:</b> 2 operaciones por byte. Llega a usar un 0.3&#8239;% del cómputo.</li>
+        <li><b>Decode con 64 usuarios y 4000 tokens de contexto cada uno:</b> los pesos se comparten, pero cada usuario suma su KV cache a los bytes leídos. La intensidad sube a unas 58 operaciones por byte: todavía diez veces por debajo del quiebre.</li>
+      </ul>
+
+      <p>Esa última cuenta es la conclusión del módulo: con contextos largos, el decode de un modelo denso queda limitado por memoria aunque juntes cientos de usuarios, porque el KV cache crece con ellos. Por eso la memoria y su ancho de banda, y no los FLOPS, deciden la velocidad y el costo del serving. Prueba con otras GPUs y contextos:</p>
+
+      <div data-sim="roofline"></div>
+
+      <h2 id="multi-gpu"><span class="sec-num">13.4</span>Cuando no entra en una GPU: NVLink e InfiniBand</h2>
+
+      <p>Llama 3.1 70B en BF16 ocupa 141 GB: no entra en una GPU de 80 GB, y aunque entrara en una de 141, no quedaría lugar para el KV cache. Hay que repartirlo, y cómo se reparte depende de qué tan rápido se hablan las GPUs:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f132t f132d">
+<title id="f132t">Un servidor de 8 GPUs y su conexión al clúster</title>
+<desc id="f132d">Dentro del servidor, las 8 GPUs se conectan todas con todas a través de los NVSwitch, a 900 GB/s por GPU sumando ambos sentidos. Cada GPU tiene además su propia tarjeta de red de 400 Gb/s hacia el clúster, 50 GB/s por sentido: nueve veces menos que NVLink. Por eso el tensor parallelism se queda dentro de un servidor.</desc>
+<defs><marker id="f132a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="10" y="10" width="560" height="306" rx="14"/>
+<text class="dg-group" x="26" y="32">Servidor HGX H100</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="30" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="58" y="80" text-anchor="middle" style="font-size:12.5px">GPU 0</text>
+<text class="dg-tiny" x="58" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M58 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M58 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="36" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="58" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M58 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="96" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="124" y="80" text-anchor="middle" style="font-size:12.5px">GPU 1</text>
+<text class="dg-tiny" x="124" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M124 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M124 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="102" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="124" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M124 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="162" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="190" y="80" text-anchor="middle" style="font-size:12.5px">GPU 2</text>
+<text class="dg-tiny" x="190" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M190 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M190 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="168" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="190" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M190 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="228" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="256" y="80" text-anchor="middle" style="font-size:12.5px">GPU 3</text>
+<text class="dg-tiny" x="256" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M256 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M256 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="234" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="256" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M256 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="294" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="322" y="80" text-anchor="middle" style="font-size:12.5px">GPU 4</text>
+<text class="dg-tiny" x="322" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M322 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M322 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="300" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="322" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M322 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="360" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="388" y="80" text-anchor="middle" style="font-size:12.5px">GPU 5</text>
+<text class="dg-tiny" x="388" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M388 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M388 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="366" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="388" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M388 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="426" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="454" y="80" text-anchor="middle" style="font-size:12.5px">GPU 6</text>
+<text class="dg-tiny" x="454" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M454 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M454 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="432" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="454" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M454 246 V284" style="stroke-dasharray: 5 4"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="492" y="56" width="56" height="54" rx="8"/>
+<text class="dg-label" x="520" y="80" text-anchor="middle" style="font-size:12.5px">GPU 7</text>
+<text class="dg-tiny" x="520" y="97" text-anchor="middle">80 GB</text>
+<path class="dg-edge" d="M520 112 V146" style="stroke: var(--l-gpu); stroke-width: 2.5"/>
+<path class="dg-edge" d="M520 176 V214" style="stroke-dasharray: 5 4"/>
+<rect class="dg-box" x="498" y="216" width="44" height="28" rx="6"/>
+<text class="dg-tiny" x="520" y="234" text-anchor="middle">NIC</text>
+<path class="dg-edge" d="M520 246 V284" style="stroke-dasharray: 5 4"/>
+<rect x="30" y="148" width="518" height="26" rx="6" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="289" y="166" text-anchor="middle" style="font-size:12.5px">NVSwitch: todas con todas, 900 GB/s por GPU</text>
+<text class="dg-tiny" x="289" y="200" text-anchor="middle" style="paint-order: stroke; stroke: var(--bg-2); stroke-width: 5px; stroke-linejoin: round">400 Gb/s por GPU hacia la red: 50 GB/s por sentido</text>
+<rect x="30" y="286" width="518" height="22" rx="6" fill="var(--fill)"/>
+<text class="dg-tiny" x="289" y="301" text-anchor="middle">red del clúster: InfiniBand o RoCE, un riel por posición de GPU</text>
+<rect class="dg-frame" x="596" y="10" width="164" height="306" rx="14"/>
+<text class="dg-group" x="610" y="32">Otros servidores</text>
+<rect class="dg-box" x="612" y="56" width="132" height="50" rx="8"/>
+<text class="dg-tiny" x="678" y="85" text-anchor="middle">8 GPUs + 8 NIC</text>
+<rect class="dg-box" x="612" y="126" width="132" height="50" rx="8"/>
+<text class="dg-tiny" x="678" y="155" text-anchor="middle">8 GPUs + 8 NIC</text>
+<rect class="dg-box" x="612" y="196" width="132" height="50" rx="8"/>
+<text class="dg-tiny" x="678" y="225" text-anchor="middle">8 GPUs + 8 NIC</text>
+<path class="dg-edge" d="M550 297 H606" marker-start="url(#f132a)" marker-end="url(#f132a)"/>
+<text class="dg-small" x="678" y="290" text-anchor="middle">9 veces más lento</text>
+<text class="dg-small" x="678" y="306" text-anchor="middle">que NVLink</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 13.2.</b> Dentro de un servidor, <dfn data-term="nvlink">NVLink</dfn> conecta las 8 GPUs todas con todas. Entre servidores, cada GPU tiene su propia tarjeta de red de <dfn data-term="infiniband">InfiniBand</dfn> o Ethernet con RoCE, nueve veces más lenta por sentido.</figcaption>
+      </figure>
+
+      <p>El tensor parallelism reparte cada capa entre varias GPUs y exige sincronizarlas dos veces por capa: 160 veces por token en un modelo de 80 capas. Solo es viable con NVLink, así que se queda dentro de un servidor, en grupos de 2, 4 u 8 GPUs. Entre servidores se usan formas de paralelismo que se comunican menos: pipeline (cada servidor tiene un tramo de capas) o réplicas independientes (M15). Los sistemas a escala de rack amplían ese dominio: un GB200 NVL72 conecta 72 GPUs con NVLink, y un modelo gigante entra en un solo dominio de alta velocidad. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Una GPU de consumo o una tarjeta PCIe sin NVLink puede tener la memoria justa para un modelo, y aun así servirlo mal repartido entre varias: por PCIe 5 se mueven unos 64 GB/s por sentido, siete veces menos que por NVLink. Al alquilar GPUs para servir un modelo que no entra en una sola, la pregunta no es solo cuánta memoria, sino si vienen en un servidor con NVLink.</p>
+      </aside>
+
+      <h2 id="sizing"><span class="sec-num">13.5</span>Cuántas GPUs necesita un modelo</h2>
+
+      <p>El método tiene cinco pasos y todos salen del M12:</p>
+      <ol class="steps">
+        <li><span class="step-title">Pesos</span>Parámetros por bytes por parámetro: 70 600 millones en FP8 son 70.6 GB.</li>
+        <li><span class="step-title">KV cache del pico</span>Usuarios simultáneos por contexto por KV por token: 32 conversaciones de 8192 tokens en el 70B son 86 GB.</li>
+        <li><span class="step-title">Reserva</span>Activaciones, CUDA graphs y fragmentación: unos 5 GB por GPU, o entre un 5 y un 10&#8239;% de la memoria.</li>
+        <li><span class="step-title">Redondear</span>La menor cantidad de GPUs en la que cabe todo, en potencias de 2 hasta 8 (lo que admite el tensor parallelism), y múltiplos de 8 por encima.</li>
+        <li><span class="step-title">Verificar la velocidad</span>TPOT ≈ bytes leídos por paso ÷ ancho de banda total. Si no cumple el SLO, se agregan GPUs o se sacan usuarios por réplica, aunque la memoria alcance.</li>
+      </ol>
+
+      <p>Para 32 usuarios con 8192 tokens de contexto cada uno:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modelo y pesos</th><th>H100 (80 GB)</th><th>H200 (141 GB)</th><th>B200 (180 GB)</th></tr></thead>
+          <tbody>
+            <tr><td>Llama 3.1 8B, BF16</td><td>1 GPU, TPOT 15 ms</td><td>1 GPU, 10.5 ms</td><td>1 GPU, 6.3 ms</td></tr>
+            <tr><td>Llama 3.1 70B, FP8</td><td>4 GPUs, 11.7 ms</td><td>2 GPUs, 16.3 ms</td><td>1 GPU, 19.6 ms</td></tr>
+            <tr><td>Llama 3.1 405B, FP8</td><td>8 GPUs, 20.2 ms</td><td>4 GPUs, 28.1 ms</td><td>4 GPUs, 16.9 ms</td></tr>
+            <tr><td>Llama 3.1 405B, BF16</td><td>16 GPUs (2 servidores), 17.6 ms</td><td>8 GPUs, 24.6 ms</td><td>8 GPUs, 14.8 ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Menos GPUs más grandes necesitan menos placas, pero cada paso tiene menos ancho de banda total para leer lo mismo: el 70B en una sola B200 cabe, pero da 51 tokens por segundo por usuario, contra 86 en cuatro H100. Cuál conviene depende del precio por hora de cada opción y del SLO. Haz la cuenta con tus propios números:</p>
+
+      <div data-calc="gpusizing"></div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Dimensionar al mínimo de memoria deja cada réplica sin margen: un pico de conversaciones largas llena el KV y el motor empieza a rechazar o a sacar requests del batch. Dimensionar con holgura cuesta GPUs ociosas en las horas tranquilas. La salida habitual es dimensionar cada réplica para su SLO y escalar la cantidad de réplicas con la demanda (M19).</p>
+      </aside>
+
+      <h2 id="operacion"><span class="sec-num">13.6</span>Energía, fallas y disponibilidad</h2>
+
+      <p>Tres límites físicos que el diseño tiene que asumir:</p>
+      <ul>
+        <li><b>Energía.</b> Un servidor de 8 H100 consume hasta unos 10 kW; uno de 8 B200, unos 14 kW; un rack GB200 NVL72, del orden de 120 kW, con refrigeración líquida. En muchos datacenters el límite no es el dinero para GPUs sino la potencia eléctrica disponible, y eso decide en qué región hay capacidad.</li>
+        <li><b>Fallas.</b> Las GPUs fallan bastante más que las CPUs: errores de memoria HBM, errores de NVLink, GPUs que caen del bus. En el entrenamiento de Llama 3 sobre 16 384 H100 hubo 419 interrupciones inesperadas en 54 días, una cada 3 horas, y cerca del 78&#8239;% fueron de hardware, con las GPUs y su HBM a la cabeza. <span class="badge badge--doc">Documentado</span> En serving, una GPU que falla se lleva a toda su réplica de tensor parallelism: se detecta con los health checks de GPU (DCGM, errores Xid), se drena la réplica y se reemplaza el servidor (M19).</li>
+        <li><b>Disponibilidad.</b> No siempre hay GPUs para alquilar en la región que quieres, y las de última generación se reservan con meses de anticipación. Los diseños serios admiten varios tipos de GPU y varias regiones, con el modelo cuantizado para cada una.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Cargar los pesos también cuesta: 141 GB desde un disco NVMe local a unos 5 GB/s tardan casi 30 s, y desde almacenamiento de objetos puede ser varias veces más. Por eso escalar una réplica nueva de un modelo grande tarda minutos, no segundos, y los sistemas de serving mantienen réplicas precalentadas o copian los pesos entre GPUs por la red rápida (cold start, M19).</p>
+      </aside>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m13"></div>
+
+      <section class="exercise" aria-labelledby="ej-m13">
+        <p class="exercise-title" id="ej-m13">Ejercicio de diseño: elegir hardware para un 405B</p>
+        <p>Vas a servir Llama 3.1 405B a 64 usuarios simultáneos con 16 384 tokens de contexto cada uno, con KV en FP8 y un SLO de TPOT de 50 ms. Tienes dos ofertas: servidores de 8 H200 a 3.5 USD por GPU y hora, o servidores de 8 B200 a 6 USD por GPU y hora.</p>
+        <p>Decide la precisión de los pesos, cuántas GPUs necesitas con cada oferta, si se cumple el TPOT y cuál sale más barata por millón de tokens.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Pesos en FP8:</b> 405 GB. En BF16 serían 810 GB y harían falta el doble de GPUs; FP8 en un modelo de este tamaño pierde muy poca calidad (M14).</li>
+            <li><b>KV:</b> con FP8 son 258 kB por token; 64 × 16 384 tokens × 258 kB ≈ 271 GB.</li>
+            <li><b>H200:</b> con 4 GPUs quedan 564 − 20 − 405 = 139 GB libres, no alcanza. Con 8: 1128 − 40 − 405 = 683 GB libres, sobra. Cada paso lee 405 + 271 GB a 38.4 TB/s: unos 18 ms de TPOT teórico, dentro del SLO.</li>
+            <li><b>B200:</b> con 4 GPUs quedan 720 − 20 − 405 = 295 GB, justo. Cada paso lee 676 GB a 32 TB/s: unos 21 ms. Cumple, pero sin margen de memoria para picos: conviene 8.</li>
+            <li><b>Costo:</b> 8 H200 cuestan 28 USD/h; 4 B200, 24 USD/h, y 8 B200, 48 USD/h. Con 4 B200 sale más barato, pero sin holgura; con holgura, 8 H200 es la opción más económica. La calculadora de 13.5 hace esta cuenta con cualquier precio.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m13"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m13.data.js"></script>
+<script src="../assets/js/data/llm.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-gpu.js"></script>
+</body>
+</html>

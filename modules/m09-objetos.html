@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M09. Almacenamiento de objetos</title>
+<meta name="description" content="Arquitectura tipo S3, erasure coding, signed URLs paso a paso con el algoritmo SigV4, subidas directas y multipart, claves y metadatos, procesamiento por eventos y fallos típicos.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m09">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Almacenamiento de objetos</h1>
+        <p class="lead">Fotos, videos, documentos, backups y pesos de modelos de IA: casi todos los bytes de un sistema grande viven en un almacenamiento de objetos. Este módulo muestra cómo funciona por dentro, cómo se firma una URL byte a byte y cómo se diseña para que tus servidores nunca tengan que mover esos bytes.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M09</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>50 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M02</dd></div>
+          <div><dt>Estado</dt><dd data-status="m09">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar cómo un almacenamiento de objetos logra 11 nueves de durabilidad.</li>
+          <li>Calcular una URL prefirmada paso a paso y saber qué protege y qué no.</li>
+          <li>Diseñar subidas y descargas directas, sin pasar bytes por tu API.</li>
+          <li>Manejar archivos grandes con multipart y limpiar lo que queda a medias.</li>
+          <li>Separar metadatos (tu base) de contenido (el bucket) y procesar archivos por eventos.</li>
+        </ul>
+      </section>
+
+      <h2 id="por-que"><span class="sec-num">9.1</span>Por qué un almacenamiento de objetos</h2>
+
+      <p>Un <dfn data-term="object-storage">almacenamiento de objetos</dfn> guarda archivos (objetos) identificados por una clave dentro de un bucket, detrás de una API HTTP simple: <code>PUT</code>, <code>GET</code>, <code>DELETE</code> y listar por prefijo. No es un sistema de archivos: no hay directorios reales (<code>fotos/2026/gato.jpg</code> es una sola clave con barras), y un objeto no se modifica en su lugar, sino que se reemplaza entero. A cambio, es barato, prácticamente ilimitado y extremadamente durable.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde guardar</th><th>Bueno para</th><th>Malo para</th></tr></thead>
+          <tbody>
+            <tr><td>Base de datos (una columna <code>bytea</code> o <code>blob</code>)</td><td>Datos pequeños y transaccionales</td><td>Archivos de MB: engordan backups y réplicas, y saturan el buffer de la base</td></tr>
+            <tr><td>Disco del servidor</td><td>Datos temporales</td><td>Todo lo demás: se pierde con la instancia y no se comparte</td></tr>
+            <tr><td>Sistema de archivos en red (NFS, EFS)</td><td>Aplicaciones que necesitan semántica de archivos</td><td>Escala y costo</td></tr>
+            <tr><td><b>Almacenamiento de objetos</b></td><td>Archivos de cualquier tamaño, escritos una vez y leídos muchas</td><td>Actualizaciones pequeñas y frecuentes dentro de un archivo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="arquitectura"><span class="sec-num">9.2</span>Arquitectura</h2>
+
+      <p>El mapa muestra la arquitectura completa de los adjuntos de un chat: tu backend (que solo decide y firma), el almacenamiento (front-end, índice de objetos y nodos de almacenamiento), la CDN y un worker que procesa cada archivo por eventos. Los cuatro escenarios cubren subida, procesamiento, descarga y el caso que casi todos olvidan: la subida abandonada.</p>
+
+      <div data-map="m09-objetos"></div>
+
+      <p>Por dentro, un almacenamiento de objetos separa dos problemas. El <b>índice</b> sabe dónde está cada objeto: es una base distribuida y fuertemente consistente (desde 2020, S3 garantiza leer inmediatamente lo que se acaba de escribir <span class="badge badge--doc">Documentado</span>). Los <b>nodos de almacenamiento</b> guardan los bytes con <span data-term="erasure-coding">erasure coding</span>: el objeto se parte en fragmentos de datos y de paridad repartidos entre zonas, y se reconstruye con cualquier subconjunto suficiente. Así S3 Standard está diseñado para 99.999999999&#8239;% de durabilidad anual: si guardas 10 millones de objetos, la expectativa es perder uno cada 10&#8239;000 años. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Durabilidad no es disponibilidad: S3 promete 11 nueves de que no pierde tu objeto, pero su SLA de disponibilidad es de 99.9&#8239;%. Y ninguna de las dos te protege de ti mismo: un <code>DELETE</code> de tu propio código es "durable" también. Para eso existen el versionado de objetos y, en datos críticos, el bloqueo de objetos (object lock) y la replicación a otra cuenta.</p>
+      </aside>
+
+      <h2 id="signed-urls"><span class="sec-num">9.3</span>Signed URLs paso a paso</h2>
+
+      <p>Una <dfn data-term="presigned">URL prefirmada</dfn> resuelve un problema concreto: quieres que un cliente suba o descargue un objeto <em>directamente</em>, sin que los bytes pasen por tus servidores, pero sin darle credenciales. Tu backend calcula una firma <span data-term="hmac">HMAC</span> sobre exactamente la operación permitida (método, objeto, expiración) usando su secreto, y la pone en la URL. El almacenamiento recalcula la firma con su copia del secreto; si coincide y no venció, deja pasar. Nadie más puede fabricar una firma válida sin el secreto.</p>
+
+      <p>Este es el algoritmo real de S3 (SigV4), calculado en tu navegador con credenciales de prueba. Cambia cualquier campo y mira cómo cambia todo, y después prueba a manipular la URL:</p>
+
+      <div data-sim="signurl"></div>
+
+      <p>Lo que una signed URL protege y lo que no:</p>
+      <ul>
+        <li><b>Protege</b> contra la manipulación: cambiar el objeto, el método o la expiración invalida la firma.</li>
+        <li><b>No protege</b> contra la filtración: quien tenga la URL puede usarla hasta que venza. Se comparte por error, queda en logs, en el historial del navegador o en un header <code>Referer</code>. Por eso: vencimientos cortos (minutos), nunca registrar URLs firmadas en logs y firmar con credenciales temporales.</li>
+        <li><b>No se puede revocar</b> una URL puntual: solo rotando las credenciales con las que se firmó, lo que invalida todas.</li>
+        <li><b>Para subidas, limita más</b> que el método y la clave: con un POST policy puedes fijar el tipo de contenido y un rango de tamaños, para que nadie use tu URL de subida de avatares para guardar un video de 5 GB.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: URL firmada o proxy por tu backend</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>URL firmada</h4><p><b>Ganas:</b> los bytes no tocan tus servidores; escala sola; aprovecha CDN y multipart.</p><p><b>Pagas:</b> no ves el contenido mientras viaja; la autorización ocurre al firmar, no al usar.</p></div>
+          <div class="to-col"><h4>Proxy por tu API</h4><p><b>Ganas:</b> control total en cada request (autorización al momento, transformación, auditoría).</p><p><b>Pagas:</b> ancho de banda, memoria y conexiones de tus servidores; un cuello de botella caro.</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> URL firmada para todo lo grande o frecuente; proxy solo cuando necesitas inspeccionar o transformar cada byte, o autorizar en el instante exacto del acceso.</p>
+      </aside>
+
+      <h2 id="multipart"><span class="sec-num">9.4</span>Archivos grandes: multipart</h2>
+
+      <p>Subir un video de 2 GB en un solo PUT por una red móvil es una apuesta: si se corta al 95&#8239;%, se empieza de cero. La <dfn data-term="multipart">subida multipart</dfn> divide el archivo en partes que se suben por separado, en paralelo y con reintentos individuales:</p>
+      <ol class="steps">
+        <li><span class="step-title">Iniciar</span>El backend crea la subida multipart y recibe un <code>UploadId</code>.</li>
+        <li><span class="step-title">Firmar cada parte</span>El backend firma una URL por parte (<code>partNumber=1…N</code>). En S3 cada parte mide entre 5 MB y 5 GB (salvo la última), hasta 10&#8239;000 partes, para objetos de hasta 5 TB. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Subir las partes</span>El cliente sube varias a la vez y guarda el ETag de cada una. Si una falla, repite solo esa.</li>
+        <li><span class="step-title">Completar</span>El backend envía la lista de partes con sus ETags; el almacenamiento las une en un solo objeto, de forma atómica.</li>
+      </ol>
+      <p>Dos detalles de producción: verifica la integridad con checksums por parte (el almacenamiento calcula y compara), y configura una <dfn data-term="lifecycle">regla de ciclo de vida</dfn> que aborte las subidas multipart incompletas después de unos días, porque sus partes se cobran aunque el objeto nunca llegue a existir.</p>
+
+      <h2 id="claves"><span class="sec-num">9.5</span>Claves y metadatos</h2>
+
+      <p>La regla de oro: <b>el bucket guarda contenido; tu base guarda el significado</b>. Quién es el dueño, a qué conversación pertenece, si ya se procesó y si fue borrado son datos de tu dominio y van en tu base de datos (mira el nodo PostgreSQL del mapa). El bucket solo se consulta por clave. Algunas decisiones de diseño de claves:</p>
+      <ul>
+        <li><b>La clave la decide el servidor</b>, nunca el cliente: <code>conv_42/up_77/original.jpg</code>, no el nombre de archivo que envió el usuario (que puede traer <code>../</code> o caracteres raros).</li>
+        <li><b>Nada sensible en la clave:</b> termina en URLs, logs y cachés. Nada de emails ni nombres reales.</li>
+        <li><b>Direccionado por contenido:</b> con el <dfn data-term="content-addressed">hash del contenido como clave</dfn>, dos archivos idénticos ocupan un solo objeto y un objeto nunca cambia bajo su clave, lo que lo hace cacheable para siempre. Es lo que hacen Git, los registros de contenedores y muchos sistemas de backup.</li>
+        <li><b>Distribución de la carga:</b> S3 escala por prefijo (al menos 3&#8239;500 escrituras y 5&#8239;500 lecturas por segundo por prefijo, y los prefijos crecen en paralelo). Con claves que empiezan por algo variable (un id), la carga se reparte sola. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <h2 id="eventos"><span class="sec-num">9.6</span>Procesamiento por eventos</h2>
+
+      <p>El almacenamiento puede publicar un evento cada vez que se crea o borra un objeto. Así, el procesamiento (miniaturas, transcodificación de video, antivirus, extracción de texto para búsqueda o para RAG en la Parte II) no depende de que el cliente avise, y escala con la profundidad de la cola. Todo lo del M07 aplica: la entrega es al menos una vez, así que el worker debe ser idempotente. La forma más simple es que cada salida tenga una clave determinística derivada de la entrada (<code>…/thumb_480.jpg</code>): procesar dos veces sobrescribe lo mismo.</p>
+
+      <h2 id="fallos"><span class="sec-num">9.7</span>Fallos típicos</h2>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Síntoma</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>Objetos huérfanos</td><td>El bucket crece más rápido que los datos útiles</td><td>Estado <code>pending</code> en tu base y limpieza diaria</td></tr>
+            <tr><td>Multipart incompletas</td><td>Costo de almacenamiento sin objetos visibles</td><td>Regla de ciclo de vida que las aborta</td></tr>
+            <tr><td>URL firmada filtrada</td><td>Accesos desde lugares inesperados</td><td>Vencimientos cortos, credenciales temporales, rotación</td></tr>
+            <tr><td>Bucket público por error</td><td>Datos privados indexados por buscadores</td><td>Bloqueo de acceso público a nivel de cuenta; acceso solo por la CDN y el backend</td></tr>
+            <tr><td>Borrado accidental o malicioso</td><td>Datos que "desaparecen" de forma durable</td><td>Versionado, object lock, replicación a otra cuenta</td></tr>
+            <tr><td>Objeto popular sin CDN</td><td>Costos de transferencia y límites por prefijo</td><td>CDN delante, con la firma fuera de la clave de caché</td></tr>
+            <tr><td>Región caída</td><td>Lecturas y escrituras fallan</td><td>Replicación entre regiones para lo crítico</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m09"></div>
+
+      <section class="exercise" aria-labelledby="ej-m09">
+        <p class="exercise-title" id="ej-m09">Ejercicio de diseño: entregables de una plataforma de cursos</p>
+        <p>Una plataforma de cursos online permite a los profesores subir videos de hasta 4 GB y a los alumnos inscritos verlos en streaming. Los videos no pueden ser accesibles para quien no está inscrito, y un alumno que se da de baja debe perder el acceso. Hay picos de 50&#8239;000 alumnos viendo a la vez el estreno de una clase.</p>
+        <p>Diseña la subida, el procesamiento, el almacenamiento, la entrega y el control de acceso.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Subida:</b> multipart con URLs firmadas por parte (partes de 16 MB, 4 en paralelo), iniciada y completada por el backend, que registra el video como <code>pending</code>.</li>
+            <li><b>Procesamiento:</b> evento de objeto creado, cola y workers de transcodificación que generan HLS (segmentos de 4 a 6 s en varias calidades) con claves determinísticas. El video pasa a <code>ready</code> cuando están todas las calidades.</li>
+            <li><b>Almacenamiento:</b> originales en una clase infrecuente (se leen una vez); segmentos HLS en la clase estándar. Versionado activado en el bucket de originales.</li>
+            <li><b>Entrega:</b> por CDN. 50&#8239;000 alumnos piden los mismos segmentos: casi todo es HIT en el borde, y el almacenamiento apenas se entera.</li>
+            <li><b>Acceso:</b> no se firma cada segmento (serían miles de URLs). El backend, al verificar la inscripción, emite una <b>cookie firmada</b> de la CDN, válida para el prefijo del curso durante unas horas. Al darse de baja, el alumno no obtiene cookies nuevas; la vigente vence sola (se acepta esa ventana de horas, o se acorta la validez y se renueva desde el reproductor).</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m09"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m09.data.js"></script>
+<script src="../assets/js/data/maps/m09-objetos.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-signurl.js"></script>
+</body>
+</html>

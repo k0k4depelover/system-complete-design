@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M07. Mensajería asíncrona</title>
+<meta name="description" content="Colas y logs, pub/sub, Kafka con particiones y consumer groups (simulador), semánticas de entrega, consumidores idempotentes, outbox, CDC, DLQ y backpressure.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m07">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Mensajería asíncrona</h1>
+        <p class="lead">Lo asíncrono desacopla servicios, absorbe picos y permite reintentar sin que el usuario espere. A cambio trae duplicados, desorden, lag y una pregunta difícil: ¿se procesó o no? Este módulo muestra las herramientas y los patrones para que un evento nunca se pierda ni se aplique dos veces.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M07</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M05, M06</dd></div>
+          <div><dt>Estado</dt><dd data-status="m07">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir entre una cola, un log y pub/sub según el patrón de consumo.</li>
+          <li>Diseñar particiones y claves para tener orden donde importa y paralelismo donde no.</li>
+          <li>Explicar al menos una vez, como mucho una vez y exactamente una vez, y construir el efecto de la última.</li>
+          <li>Resolver la doble escritura con el patrón outbox y CDC.</li>
+          <li>Manejar mensajes envenenados, DLQ, lag y backpressure.</li>
+        </ul>
+      </section>
+
+      <h2 id="por-que"><span class="sec-num">7.1</span>Por qué asíncrono</h2>
+
+      <p>Cuando un usuario crea un pedido, hay que cobrar, reservar stock, enviar un correo, avisar al almacén, actualizar la analítica y el índice de búsqueda. Si todo eso ocurre dentro de la request, la latencia es la suma de todos, y la disponibilidad es el producto de todas las disponibilidades (M00). Si solo lo imprescindible ocurre en la request y el resto se publica como un evento, cada consumidor trabaja a su ritmo, puede reintentar y puede caerse sin afectar al usuario.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Ganas</th><th>Pagas</th></tr></thead>
+          <tbody>
+            <tr><td>Desacople: el productor no conoce a los consumidores</td><td>Consistencia eventual entre servicios</td></tr>
+            <tr><td>Absorber picos: la cola se llena y se vacía después</td><td>Lag que hay que medir y alertar</td></tr>
+            <tr><td>Reintentos sin que el usuario espere</td><td>Duplicados: todo consumidor debe ser idempotente</td></tr>
+            <tr><td>Agregar consumidores nuevos sin tocar al productor</td><td>Depurar un flujo que cruza varios servicios en el tiempo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="cola-log"><span class="sec-num">7.2</span>Cola, log y pub/sub</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th><dfn data-term="cola">Cola</dfn> (SQS, RabbitMQ)</th><th><dfn data-term="log-distribuido">Log</dfn> (Kafka, Kinesis, Pulsar)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Al consumir</b></td><td>El mensaje se oculta y se borra al confirmarse</td><td>El evento queda; el consumidor avanza su <dfn data-term="offset">offset</dfn></td></tr>
+            <tr><td><b>Varios consumidores</b></td><td>Compiten por los mensajes</td><td>Cada <dfn data-term="consumer-group">consumer group</dfn> lee todo, de forma independiente</td></tr>
+            <tr><td><b>Orden</b></td><td>Aproximado (FIFO en colas especiales)</td><td>Estricto dentro de cada partición</td></tr>
+            <tr><td><b>Reprocesar el pasado</b></td><td>No</td><td>Sí, volviendo a un offset anterior (dentro de la retención)</td></tr>
+            <tr><td><b>Reintento de un mensaje</b></td><td>Individual: vuelve a la cola tras un timeout de visibilidad</td><td>Bloquea la partición, salvo que lo muevas a otro tópico</td></tr>
+            <tr><td><b>Ideal para</b></td><td>Trabajos independientes: enviar correos, procesar imágenes</td><td>Flujos de eventos con varios consumidores, CDC, analítica, event sourcing</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><dfn data-term="pubsub">Pub/sub</dfn> es el patrón de distribución: un evento publicado en un tema llega a todos los suscriptores. Un log lo implementa naturalmente (cada grupo es un suscriptor). Con colas se arma con un fan-out: un tema (SNS, un exchange de RabbitMQ) que copia cada mensaje a una cola por suscriptor. Y hay pub/sub sin persistencia, como el de Redis: si el suscriptor no está conectado en ese instante, el mensaje se pierde. Sirve para avisos que el TTL puede suplir (la invalidación de cachés locales del M04), no para eventos de negocio.</p>
+
+      <h2 id="kafka"><span class="sec-num">7.3</span>Particiones, claves y consumer groups</h2>
+
+      <p>Un tópico de Kafka se divide en particiones, y cada partición es un log ordenado y replicado. Tres reglas explican casi todo su comportamiento:</p>
+      <ol class="steps">
+        <li><span class="step-title">La clave decide la partición</span><code>hash(clave) % particiones</code>. Todos los eventos de una misma clave (un pedido, un usuario) caen en la misma partición y conservan su orden.</li>
+        <li><span class="step-title">Una partición, un consumidor por grupo</span>Dentro de un grupo, cada partición la lee un solo miembro. El número de particiones es el techo de paralelismo.</li>
+        <li><span class="step-title">Cambiar el grupo provoca un rebalanceo</span>Si entra o sale un consumidor, las particiones se reasignan. Durante el rebalanceo, las particiones afectadas no se consumen.</li>
+      </ol>
+
+      <p>Experimenta: sube la producción hasta que el lag crezca, agrega consumidores hasta pasar de 6, activa la clave caliente y el consumidor lento.</p>
+
+      <div data-sim="kafka"></div>
+
+      <ul>
+        <li><b>Más consumidores que particiones no ayuda:</b> los sobrantes quedan ociosos. Por eso se crean tópicos con más particiones de las que hacen falta hoy (aumentarlas después cambia a qué partición va cada clave, y rompe el orden durante la transición).</li>
+        <li><b>Una clave caliente satura una partición</b> aunque sobre capacidad en las demás, igual que la hot key del M04. Si el orden por clave no es necesario, se agrega un sufijo aleatorio a la clave; si lo es, hay que acelerar ese consumidor.</li>
+        <li><b>El <dfn data-term="consumer-lag">lag</dfn> es la métrica que manda.</b> Un lag estable está bien; uno que crece sin bajar significa que falta capacidad.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>La durabilidad de Kafka se configura con tres parámetros que conviene conocer de memoria: <code>replication.factor=3</code> (cada partición en tres brokers), <code>acks=all</code> en el productor (espera a todas las réplicas sincronizadas) y <code>min.insync.replicas=2</code> (si quedan menos de 2 réplicas al día, rechaza escrituras en lugar de aceptar algo que podría perderse). Con <code>acks=1</code>, un broker que muere justo después de confirmar se lleva los eventos consigo.</p>
+      </aside>
+
+      <h2 id="semanticas"><span class="sec-num">7.4</span>Semánticas de entrega</h2>
+
+      <p>Por el problema de los dos generales (M06), ningún sistema puede entregar un mensaje por la red exactamente una vez. Lo que se elige es qué pasa cuando algo falla a mitad de camino:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Semántica</th><th>Cómo se logra</th><th>Si falla a mitad</th><th>Úsala para</th></tr></thead>
+          <tbody>
+            <tr><td>Como mucho una vez</td><td>Confirmar (commit del offset) antes de procesar</td><td>El mensaje se pierde</td><td>Métricas y logs donde perder un poco no importa</td></tr>
+            <tr><td><dfn data-term="at-least-once">Al menos una vez</dfn></td><td>Procesar y después confirmar</td><td>El mensaje se reprocesa</td><td>Casi todo, con consumidores idempotentes</td></tr>
+            <tr><td>"Exactamente una vez" efectivo</td><td>Al menos una vez + deduplicación, o transacciones de Kafka de punta a punta</td><td>Se reprocesa pero el efecto se aplica una vez</td><td>Pagos, inventario, contabilidad</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El consumidor idempotente es el patrón central. El id del mensaje se registra en la misma transacción que el efecto; si ya existía, el mensaje se ignora:</p>
+<pre data-lang="sql"><code>BEGIN;
+-- 1. Reclamar el mensaje: si ya se procesó, esto no inserta nada
+INSERT INTO mensajes_procesados (consumidor, mensaje_id)
+VALUES ('envios', 'evt_01J9ZF3K2M')
+ON CONFLICT DO NOTHING;
+
+-- 2. Si insertó 1 fila, aplicar el efecto en la MISMA transacción
+UPDATE pedidos SET estado = 'listo_para_envio' WHERE id = $1 AND estado = 'pagado';
+
+COMMIT;
+-- 3. Recién después, confirmar el offset en Kafka.
+--    Si el proceso muere antes, el mensaje vuelve y el paso 1 lo descarta.</code></pre>
+
+      <p>Kafka ofrece además productores idempotentes (el broker descarta duplicados de un mismo productor) y transacciones que confirman atómicamente lo que se escribe en varios tópicos junto con los offsets leídos. Eso da exactamente una vez <em>dentro de Kafka</em> (leer, transformar, escribir); en cuanto el efecto sale de Kafka (una base, un correo, una API externa), vuelve a hacer falta la deduplicación del consumidor.</p>
+
+      <h2 id="outbox"><span class="sec-num">7.5</span>La doble escritura y el patrón outbox</h2>
+
+      <p>El error más común al introducir eventos es escribir en la base y después publicar, como dos operaciones separadas:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 274" role="img" aria-labelledby="f71t f71d">
+<title id="f71t">El problema de la doble escritura</title>
+<desc id="f71d">El servicio guarda el pedido en la base y luego intenta publicar el evento en Kafka, pero el proceso muere entre ambas operaciones: el pedido existe y nadie se entera.</desc>
+<defs><marker id="f71-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f71-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f71-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f71-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Servicio de pedidos</text>
+<path class="dg-frame" d="M70.0 40 V264"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">PostgreSQL</text>
+<path class="dg-frame" d="M280.0 40 V264"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Kafka</text>
+<path class="dg-frame" d="M490.0 40 V264"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Consumidores</text>
+<path class="dg-frame" d="M700.0 40 V264"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f71-a)"/>
+<rect x="86.5" y="55" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">INSERT pedido 991; COMMIT</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 106 L75.0 106" marker-end="url(#f71-r)"/>
+<rect x="162.4" y="89" width="25.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="100" text-anchor="middle">OK</text>
+<path d="M20 138 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="127" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="142" text-anchor="middle" style="fill:var(--fail)">el proceso muere aquí (deploy, OOM, corte)</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 174 L485.0 174" marker-end="url(#f71-f)"/>
+<rect x="188.2" y="157" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="168" text-anchor="middle">publicar pedido.creado 991</text>
+<rect x="355.0" y="194" width="335" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="365.0" y="210">nunca se enteran: no hay correo, no hay envío</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 7.1.</b> Entre el commit y la publicación hay una ventana. Invertir el orden no ayuda: se publica un evento de un pedido que después falla al guardarse.</figcaption>
+      </figure>
+
+      <p>El <dfn data-term="outbox">patrón outbox</dfn> lo resuelve con la única transacción que tienes: la de la base. El evento se guarda como una fila en una tabla <code>outbox</code> junto con el cambio de negocio, y un proceso aparte (un relay) lo publica. El relay puede leer la tabla periódicamente o, mejor, leer el WAL con <span data-term="cdc">CDC</span> (Debezium), que no agrega carga de consultas y respeta el orden de los commits.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 410" role="img" aria-labelledby="f72t f72d">
+<title id="f72t">Patrón outbox con relay por CDC</title>
+<desc id="f72d">El servicio escribe el pedido y el evento en la misma transacción. Un relay lee la tabla outbox (o el WAL) y publica en Kafka; si el relay muere, reintenta desde donde quedó, así que el evento puede publicarse más de una vez pero nunca se pierde.</desc>
+<defs><marker id="f72-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f72-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f72-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f72-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Servicio de pedidos</text>
+<path class="dg-frame" d="M70.0 40 V400"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">PostgreSQL</text>
+<path class="dg-frame" d="M280.0 40 V400"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Relay (Debezium)</text>
+<path class="dg-frame" d="M490.0 40 V400"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Kafka</text>
+<path class="dg-frame" d="M700.0 40 V400"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f72-a)"/>
+<rect x="152.5" y="55" width="45.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">BEGIN</text>
+<path class="dg-edge" d="M73.0 106 L275.0 106" marker-end="url(#f72-a)"/>
+<rect x="96.4" y="89" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="100" text-anchor="middle">INSERT pedidos (991 …)</text>
+<path class="dg-edge" d="M73.0 140 L275.0 140" marker-end="url(#f72-a)"/>
+<rect x="60.10000000000001" y="123" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="134" text-anchor="middle">INSERT outbox (pedido.creado 991)</text>
+<path class="dg-edge" d="M73.0 174 L275.0 174" marker-end="url(#f72-a)"/>
+<rect x="93.10000000000001" y="157" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="168" text-anchor="middle">COMMIT: ambos o ninguno</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M283.0 208 L485.0 208" marker-end="url(#f72-q)"/>
+<rect x="283.3" y="191" width="203.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">el WAL trae la fila de outbox</text>
+<path class="dg-edge" d="M493.0 242 L695.0 242" marker-end="url(#f72-a)"/>
+<rect x="516.4" y="225" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="236" text-anchor="middle">publicar con clave 991</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 276 L495.0 276" marker-end="url(#f72-r)"/>
+<rect x="542.8" y="259" width="104.39999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="270" text-anchor="middle">ack (acks=all)</text>
+<path class="dg-edge" d="M490.0 302 h40 v14 h-38" marker-end="url(#f72-a)"/>
+<text class="dg-tiny" x="536.0" y="313">guardar posición del WAL</text>
+<rect x="120.0" y="330" width="360" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="130.0" y="346">si muere antes de guardar, republica: al menos una vez</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 7.2.</b> El evento existe si y solo si el pedido existe. El relay garantiza al menos una vez; los consumidores deduplican.</figcaption>
+      </figure>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">outbox</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Misma base que los datos de negocio</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Columna</th><th>Tipo</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td><code>uuid</code></td><td>Id del evento: los consumidores deduplican con él</td></tr>
+              <tr><td><code>aggregate_type</code>, <code>aggregate_id</code></td><td><code>text</code></td><td>Entidad afectada; <code>aggregate_id</code> es la clave del mensaje (orden por entidad)</td></tr>
+              <tr><td><code>type</code></td><td><code>text</code></td><td><code>pedido.creado</code>, <code>pedido.pagado</code>…</td></tr>
+              <tr><td><code>payload</code></td><td><code>jsonb</code></td><td>El evento, con su versión de esquema</td></tr>
+              <tr><td><code>created_at</code></td><td><code>timestamptz</code></td><td>Para purgar lo ya publicado</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <h2 id="dlq"><span class="sec-num">7.6</span>Reintentos, DLQ y backpressure</h2>
+
+      <p>Un consumidor falla por dos tipos de razones. Las transitorias (la base está lenta, un timeout) se arreglan reintentando con backoff. Las permanentes (un <dfn data-term="poison">mensaje envenenado</dfn>: JSON inválido, un bug con cierto dato) fallan siempre, y reintentarlas sin límite bloquea todo lo que viene detrás en la partición. El diseño estándar:</p>
+      <ol class="steps">
+        <li><span class="step-title">Reintentos locales cortos</span>2 o 3 intentos con backoff de milisegundos, para errores transitorios.</li>
+        <li><span class="step-title">Tópicos de reintento con demora</span>El mensaje pasa a <code>pedidos.reintento.1m</code>, <code>.10m</code>, <code>.1h</code>; un consumidor lo retoma después. La partición original sigue avanzando.</li>
+        <li><span class="step-title"><dfn data-term="dlq">Dead letter queue</dfn></span>Tras el último intento, el mensaje va a una DLQ con el error y el stack. Una alerta avisa, alguien lo revisa y, una vez corregido el bug, se reinyecta.</li>
+      </ol>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: reintentar aparte rompe el orden</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>Bloquear la partición</h4><p><b>Ganas:</b> orden estricto por clave.</p><p><b>Pagas:</b> un mensaje malo detiene a todos los de su partición.</p></div>
+          <div class="to-col"><h4>Mover a un tópico de reintento</h4><p><b>Ganas:</b> la partición sigue fluyendo.</p><p><b>Pagas:</b> un evento posterior de la misma clave puede procesarse antes que el que falló (un <code>pedido.enviado</code> antes que el <code>pedido.pagado</code>).</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> si el orden importa, al mover un mensaje a reintento se "estaciona" también su clave: los siguientes eventos de esa clave esperan detrás de él, y el resto de las claves sigue.</p>
+      </aside>
+
+      <p>El <dfn data-term="backpressure">backpressure</dfn> es el mecanismo inverso: cuando los consumidores no dan abasto, algo tiene que frenar a los productores. Un log absorbe mucho (tiene disco), pero no infinito: la retención borra lo viejo aunque nadie lo haya leído. Las opciones son escalar consumidores, degradar (procesar solo lo prioritario) o limitar a los productores en la entrada.</p>
+
+      <h3 id="esquemas">Esquemas de eventos</h3>
+      <p>Un evento es un contrato con consumidores que no conoces, y vive años en el log. Las reglas de compatibilidad son las de las APIs (M02): agregar campos opcionales sí, renombrar o quitar no. Un <dfn data-term="schema-registry">registro de esquemas</dfn> con Avro o Protobuf verifica cada cambio antes de publicarlo y rechaza los incompatibles.</p>
+
+      <h2 id="fallos"><span class="sec-num">7.7</span>Fallos típicos</h2>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Síntoma</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>Consumidor sin idempotencia</td><td>Correos o cobros duplicados tras un reinicio</td><td>Tabla de mensajes procesados, claves únicas</td></tr>
+            <tr><td>Mensaje envenenado</td><td>Lag de una partición que crece sin parar</td><td>Reintentos limitados y DLQ</td></tr>
+            <tr><td>Tormenta de rebalanceos</td><td>Consumidores que tardan más que el timeout de sesión en procesar un lote y son expulsados del grupo, una y otra vez</td><td>Lotes más chicos, timeouts coherentes, rebalanceo cooperativo</td></tr>
+            <tr><td>Lag mayor que la retención</td><td>Eventos perdidos sin error</td><td>Alertar sobre el lag en relación con la retención</td></tr>
+            <tr><td>Doble escritura</td><td>Pedidos sin evento o eventos sin pedido</td><td>Outbox</td></tr>
+            <tr><td>Cambio de esquema incompatible</td><td>Consumidores que fallan todos a la vez tras un deploy del productor</td><td>Registro de esquemas con verificación de compatibilidad</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m07"></div>
+
+      <section class="exercise" aria-labelledby="ej-m07">
+        <p class="exercise-title" id="ej-m07">Ejercicio de diseño: eventos de un e-commerce</p>
+        <p>Cuando se paga un pedido hay que: descontar stock, enviar un correo, avisar al almacén, sumar puntos de fidelidad y actualizar el tablero de ventas en tiempo casi real. Hay 3&#8239;000 pedidos por minuto en pico. Los puntos de fidelidad nunca pueden duplicarse. El almacén necesita los eventos de cada pedido en orden.</p>
+        <p>Diseña tópicos, claves, particiones, consumidores, qué pasa si el servicio de correo cae dos horas y cómo garantizas que los puntos no se dupliquen.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Publicación:</b> el servicio de pedidos escribe <code>pedido.pagado</code> en su outbox en la misma transacción que el cambio de estado; Debezium lo publica en el tópico <code>pedidos</code>.</li>
+            <li><b>Tópico y clave:</b> <code>pedidos</code> con clave <code>pedido_id</code> (orden por pedido para el almacén), 24 particiones (50 eventos/s en pico caben de sobra, y el margen permite crecer sin reparticionar), <code>replication.factor=3</code>, <code>acks=all</code>, retención de 7 días.</li>
+            <li><b>Consumidores:</b> un consumer group por necesidad (<code>stock</code>, <code>correos</code>, <code>almacen</code>, <code>fidelidad</code>, <code>analitica</code>). Cada uno avanza a su ritmo; si uno cae, los demás no se enteran.</li>
+            <li><b>Correo caído dos horas:</b> el grupo <code>correos</code> acumula lag (2 h × 50 eventos/s ≈ 360&#8239;000 eventos), sin afectar a nadie. Al volver, lo procesa. Alerta si el lag supera, por ejemplo, 30 minutos de eventos, muy por debajo de la retención de 7 días.</li>
+            <li><b>Puntos sin duplicar:</b> el consumidor de fidelidad inserta <code>(evento_id)</code> en <code>mensajes_procesados</code> y suma los puntos en la misma transacción. Mejor aún, el movimiento de puntos es una fila con <code>UNIQUE(pedido_id, tipo)</code>: aunque el mismo pago llegara con dos ids de evento distintos, la base impide el duplicado.</li>
+            <li><b>Tablero en tiempo real:</b> consumidor que agrega en ventanas de 10 s; puede ser "como mucho una vez" si se acepta una pequeña imprecisión, o reconciliarse cada noche con la base.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m07"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m07.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-kafka.js"></script>
+</body>
+</html>

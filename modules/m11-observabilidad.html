@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M11. Observabilidad y operación</title>
+<meta name="description" content="Métricas, logs y traces con OpenTelemetry, RED y USE, cardinalidad, alertas por burn rate sobre SLOs, despliegues canary y blue-green, feature flags, migraciones expand/contract, incidentes y postmortems.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m11">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Observabilidad y operación</h1>
+        <p class="lead">Un sistema en producción falla de formas que nadie anticipó. Este módulo trata de cómo enterarse antes que los usuarios, encontrar la causa en minutos en lugar de horas, y cambiar el sistema todos los días sin que cada despliegue sea una apuesta.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M11</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M00, M08</dd></div>
+          <div><dt>Estado</dt><dd data-status="m11">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir la señal adecuada (métricas, logs o traces) para cada pregunta y conectarlas entre sí.</li>
+          <li>Diseñar métricas con RED y USE sin disparar la cardinalidad.</li>
+          <li>Seguir una request entre servicios con un trace y decidir qué traces guardar.</li>
+          <li>Escribir alertas por burn rate que despierten a alguien solo cuando los usuarios sufren.</li>
+          <li>Desplegar con canary y feature flags, migrar un esquema sin downtime y llevar un incidente hasta su postmortem.</li>
+        </ul>
+      </section>
+
+      <h2 id="pilares"><span class="sec-num">11.1</span>Tres señales, tres preguntas</h2>
+
+      <p>Monitorear es vigilar lo que ya sabes que puede fallar: la CPU, el disco, la tasa de errores. La <dfn data-term="observabilidad">observabilidad</dfn> es poder responder preguntas que no anticipaste ("¿por qué solo fallan los clientes del plan pro en la región de Europa desde el deploy de las 14:00?") sin desplegar código nuevo para averiguarlo. Se construye con tres señales, y cada una responde una pregunta distinta:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Señal</th><th>Qué es</th><th>Pregunta que responde</th><th>Dónde está el costo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Métricas</b></td><td>Números agregados por intervalo: contadores, gauges e histogramas</td><td>¿Pasa algo? ¿Cuánto, dónde y desde cuándo?</td><td>En la cantidad de series (cardinalidad), no en el tráfico</td></tr>
+            <tr><td><b>Logs</b></td><td>Eventos individuales con contexto</td><td>¿Qué pasó exactamente con esta request?</td><td>En el volumen: crece con cada request</td></tr>
+            <tr><td><b>Traces</b></td><td>El recorrido de una request por todos los servicios, como un árbol de spans</td><td>¿En qué servicio y en qué paso se fue el tiempo?</td><td>En el volumen, por eso se muestrean</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El valor aparece cuando las señales están conectadas por identificadores comunes. Un <dfn data-term="exemplar">exemplar</dfn> guarda, junto a un punto del gráfico de latencia, el <code>trace_id</code> de una request real de ese bucket; cada log lleva el <code>trace_id</code> y el <code>span_id</code> del paso que lo escribió. Así una investigación pasa de una herramienta a otra sin buscar a ciegas:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f111t f111d">
+<title id="f111t">Del síntoma a la causa con las tres señales</title>
+<desc id="f111d">Una alerta de métricas avisa que se quema el error budget. El dashboard RED muestra qué ruta y desde cuándo. Un exemplar lleva al trace de una request lenta, que muestra en qué servicio se fue el tiempo. Con el trace_id y el span_id se encuentran los logs exactos de ese paso.</desc>
+<defs><marker id="f111a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-bad" x="14" y="64" width="166" height="96" rx="14"/>
+<text class="dg-label" x="97" y="96" text-anchor="middle">Alerta</text>
+<text class="dg-tiny" x="97" y="120" text-anchor="middle">burn rate 15× en</text>
+<text class="dg-tiny" x="97" y="136" text-anchor="middle">POST /v1/messages</text>
+<text class="dg-group" x="97" y="190" text-anchor="middle">Métricas</text>
+<text class="dg-small" x="97" y="208" text-anchor="middle">¿pasa algo, y cuánto?</text>
+<rect class="dg-box" x="206" y="64" width="166" height="96" rx="14"/>
+<text class="dg-label" x="289" y="96" text-anchor="middle">Dashboard RED</text>
+<text class="dg-tiny" x="289" y="120" text-anchor="middle">errores y p99 por ruta,</text>
+<text class="dg-tiny" x="289" y="136" text-anchor="middle">región y versión</text>
+<text class="dg-group" x="289" y="190" text-anchor="middle">Métricas</text>
+<text class="dg-small" x="289" y="208" text-anchor="middle">¿dónde y desde cuándo?</text>
+<rect class="dg-box" x="398" y="64" width="166" height="96" rx="14"/>
+<text class="dg-label" x="481" y="96" text-anchor="middle">Trace</text>
+<text class="dg-tiny" x="481" y="120" text-anchor="middle">moderación: 500 ms</text>
+<text class="dg-tiny" x="481" y="136" text-anchor="middle">y un reintento</text>
+<text class="dg-group" x="481" y="190" text-anchor="middle">Traces</text>
+<text class="dg-small" x="481" y="208" text-anchor="middle">¿en qué servicio?</text>
+<rect class="dg-box" x="590" y="64" width="166" height="96" rx="14"/>
+<text class="dg-label" x="673" y="96" text-anchor="middle">Logs del span</text>
+<text class="dg-tiny" x="673" y="120" text-anchor="middle">timeout contra</text>
+<text class="dg-tiny" x="673" y="136" text-anchor="middle">moderation-2 (us-east-1b)</text>
+<text class="dg-group" x="673" y="190" text-anchor="middle">Logs</text>
+<text class="dg-small" x="673" y="208" text-anchor="middle">¿qué pasó exactamente?</text>
+<path class="dg-edge" d="M182 112 H203" marker-end="url(#f111a)"/>
+<text class="dg-tiny" x="193.0" y="44" text-anchor="middle">¿qué ruta?</text>
+<path class="dg-feedback" d="M193.0 50 V104"/>
+<path class="dg-edge" d="M374 112 H395" marker-end="url(#f111a)"/>
+<text class="dg-tiny" x="385.0" y="44" text-anchor="middle">exemplar: trace_id</text>
+<path class="dg-feedback" d="M385.0 50 V104"/>
+<path class="dg-edge" d="M566 112 H587" marker-end="url(#f111a)"/>
+<text class="dg-tiny" x="577.0" y="44" text-anchor="middle">trace_id + span_id</text>
+<path class="dg-feedback" d="M577.0 50 V104"/>
+<text class="dg-small" x="385" y="238" text-anchor="middle">Los identificadores compartidos son lo que convierte tres herramientas en una sola investigación.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 11.1.</b> De la alerta a la línea de log exacta. Sin el <code>trace_id</code> en los logs, el último salto es buscar por hora y servidor entre millones de líneas.</figcaption>
+      </figure>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Además de las tres señales clásicas hay dos que se usan cada vez más. El <b>profiling continuo</b> muestrea las pilas de llamadas de toda la flota y muestra qué funciones consumen CPU y memoria. Los <b>eventos anchos</b> (wide events) son un registro por request con decenas de campos (cliente, plan, versión, región, tiempos de cada paso) que se consulta como una base de datos analítica: permiten preguntas nuevas sin haber creado la métrica antes.</p>
+      </aside>
+
+      <h2 id="metricas"><span class="sec-num">11.2</span>Métricas: RED, USE y cardinalidad</h2>
+
+      <p>Hay tres tipos de métrica. Un <b>contador</b> solo sube (requests atendidas, bytes enviados) y se consulta como tasa por segundo. Un <b>gauge</b> sube y baja (conexiones abiertas, profundidad de una cola). Un <b>histograma</b> cuenta cuántas observaciones cayeron en cada rango (<em>bucket</em>) de valores, y es la forma correcta de medir latencia: los percentiles de cada instancia no se pueden promediar (el promedio de doscientos p99 no es el p99 de nada), pero los buckets sí se suman entre instancias y el percentil se calcula al final.</p>
+
+<pre><code># p99 de la latencia por ruta, sumando los buckets de todas las instancias
+histogram_quantile(0.99,
+  sum by (route, le) (rate(http_request_duration_seconds_bucket[5m])))</code></pre>
+
+      <p>Qué medir no se improvisa. Dos métodos cubren casi todo, y los dos caben en un dashboard por servicio (<dfn data-term="red-use">RED y USE</dfn>):</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Método</th><th>Para qué</th><th>Qué mide</th><th>Ejemplos</th></tr></thead>
+          <tbody>
+            <tr><td><b>RED</b></td><td>Servicios que atienden requests</td><td><b>R</b>ate (requests por segundo), <b>E</b>rrors (cuántas fallan), <b>D</b>uration (histograma de latencia)</td><td>Cada endpoint de la API, cada consumidor de una cola</td></tr>
+            <tr><td><b>USE</b></td><td>Recursos</td><td><b>U</b>tilization (qué fracción del tiempo está ocupado), <b>S</b>aturation (cuánto trabajo espera), <b>E</b>rrors</td><td>CPU, memoria, disco, pools de conexiones, GPUs</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las colas agregan dos métricas propias: la profundidad y la edad del mensaje más viejo, o el lag del consumidor en un log (M07). La edad es la mejor de las dos, porque se traduce directo en "los usuarios ven sus datos con cinco minutos de retraso". Los servicios de LLM suman las suyas: TTFT, tokens por segundo por request y ocupación del KV cache (Parte II).</p>
+
+      <p>La trampa de las métricas es la <dfn data-term="cardinalidad">cardinalidad</dfn>. Cada combinación distinta de etiquetas es una serie temporal que el sistema guarda por separado. Un histograma de latencia con 10 buckets genera 12 series por combinación (los buckets, más la suma y el conteo). Con 40 rutas, 8 códigos de estado y 150 pods son, en el peor caso, 12 × 40 × 8 × 150 = <b>576 000 series</b>. Si alguien agrega la etiqueta <code>user_id</code>, cada usuario activo crea al menos 12 series propias: con un millón de usuarios activos en una hora son 12 millones, veinte veces más, y creciendo con el producto.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Una explosión de cardinalidad agota la memoria del sistema de métricas y lo tira, casi siempre justo durante un incidente, que es cuando se crean dashboards nuevos y alguien agrega etiquetas "para investigar". Las reglas que lo evitan: etiquetas con un conjunto de valores acotado (ruta con plantilla, <code>/v1/conversations/{id}</code> y nunca el id real; clase de código <code>5xx</code> en lugar del código exacto cuando alcanza), un límite de series por servicio que rechaza las nuevas, y los identificadores de alta cardinalidad (usuario, request, conversación) en logs y traces, que están hechos para eso.</p>
+      </aside>
+
+      <h2 id="logs"><span class="sec-num">11.3</span>Logs estructurados y correlación</h2>
+
+      <p>Un log útil es un objeto con campos fijos, no una frase: se puede filtrar, agregar y unir con el trace. Los campos que no pueden faltar son la hora con zona, el nivel, el servicio y su versión, el <code>trace_id</code> y el <code>span_id</code>, un nombre de evento estable y los atributos del caso:</p>
+
+<pre data-lang="json"><code>{
+  "ts": "2026-03-14T14:07:31.842Z",
+  "level": "error",
+  "service": "chat-service",
+  "version": "2.14.0",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "event": "moderation.call_failed",
+  "error.type": "timeout",
+  "timeout_ms": 500,
+  "attempt": 1,
+  "tenant_id": "org_77"
+}</code></pre>
+
+      <p>El costo está en el volumen. Con 20 000 requests por segundo, tres líneas por request y 800 bytes por línea, se escriben 48 MB/s: <b>4.1 TB por día</b>, más de 120 TB con 30 días de retención. Tres decisiones lo controlan:</p>
+      <ul>
+        <li><b>Una línea canónica por request.</b> En lugar de muchas líneas sueltas, una sola al terminar con todo el contexto: ruta, estado, duración, cliente, tiempos de cada dependencia. Stripe describe este patrón como <em>canonical log lines</em>. <span class="badge badge--doc">Documentado</span> A 1.5 KB por request son 2.6 TB por día, y cada línea responde más preguntas.</li>
+        <li><b>Muestreo por nivel.</b> Todos los errores y advertencias; una fracción de los eventos de éxito; el nivel debug apagado salvo que se active para un cliente o un servicio durante una investigación.</li>
+        <li><b>Retención por niveles.</b> Una semana indexada para búsqueda rápida, meses comprimidos en almacenamiento de objetos para auditoría.</li>
+      </ul>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Regla de seguridad</p>
+        <p>Nunca se registran contraseñas, tokens, API keys, números de tarjeta ni el contenido de los prompts. La redacción se hace en el origen, en la librería de logging, porque un log que ya salió del proceso se copia a muchos sistemas y ya no se puede borrar de todos (M10).</p>
+      </aside>
+
+      <h2 id="traces"><span class="sec-num">11.4</span>Tracing distribuido</h2>
+
+      <p>Un <dfn data-term="trace">trace distribuido</dfn> sigue una request a través de todos los servicios que toca. Cada paso es un <dfn data-term="span">span</dfn>: una operación con nombre, inicio, duración, atributos y el span padre que la originó. El árbol de spans, dibujado en el tiempo, es el waterfall. Para que los servicios cuelguen sus spans del mismo trace, el contexto viaja con la request en el header <code>traceparent</code>, definido por el estándar W3C Trace Context. <span class="badge badge--doc">Documentado</span> Una llamada de un servicio a otro lo lleva así:</p>
+
+<pre data-lang="http"><code>POST /v1/moderate HTTP/1.1
+Host: moderation.internal
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01</code></pre>
+
+      <p>Sus cuatro partes son la versión (<code>00</code>), el id del trace (16 bytes), el id del span que hace la llamada (8 bytes) y las banderas (<code>01</code>: este trace se está guardando). Cada servicio lee el header, crea su span como hijo y lo propaga en sus propias llamadas: headers HTTP, metadata de gRPC y headers de los mensajes de Kafka. Un solo servicio que no propaga parte el trace en dos.</p>
+
+      <p>Hoy casi todo se instrumenta con <dfn data-term="opentelemetry">OpenTelemetry</dfn>: una API y SDKs por lenguaje (con instrumentación automática de los frameworks y clientes más usados), el protocolo OTLP y un <b>Collector</b> que recibe spans, métricas y logs, los procesa (agrupa, filtra, quita datos sensibles, muestrea) y los exporta al backend que elijas. Sus convenciones semánticas fijan los nombres de los atributos, como <code>http.response.status_code</code> o <code>db.system</code>, para que cualquier herramienta los entienda.</p>
+
+      <p>Explora un trace de la API de chat. Cada fila es un span, con el color de su capa; haz clic en una para ver sus atributos:</p>
+
+      <div data-sim="trace"></div>
+
+      <p>Guardar todos los traces es caro: a 20 000 requests por segundo, con 12 spans de 500 bytes, son 120 MB/s. Hay dos formas de muestrear, y la diferencia importa:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Muestreo por cabeza (head)</th><th><dfn data-term="tail-sampling">Muestreo por cola</dfn> (tail)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Cuándo decide</b></td><td>Al empezar la request, por ejemplo el 1&#8239;% al azar</td><td>Cuando el trace terminó, viendo cómo salió</td></tr>
+            <tr><td><b>Qué guarda</b></td><td>Una muestra representativa; la mayoría de los errores se pierde</td><td>Todos los errores, todo lo más lento que el p99 y una muestra del resto</td></tr>
+            <tr><td><b>Volumen del ejemplo</b></td><td>200 traces/s, 1.2 MB/s</td><td>20 con error + 200 lentos + 0.1&#8239;% del resto = 240 traces/s, 1.4 MB/s</td></tr>
+            <tr><td><b>Costo oculto</b></td><td>Ninguno</td><td>Retener todos los spans unos 30 s hasta decidir: 120 MB/s × 30 s ≈ 3.6 GB de memoria en los Collectors</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El muestreo por cola necesita que todos los spans de un trace lleguen al mismo Collector, aunque vengan de cien servicios distintos. Se resuelve con dos niveles: una primera capa de Collectors reparte los spans por <code>trace_id</code> con hashing consistente (el exportador de balanceo de carga del Collector de OpenTelemetry hace exactamente eso) y la segunda capa decide. <span class="badge badge--doc">Documentado</span> Es el mismo patrón de particionar por clave que viste en M05 y M07.</p>
+      </aside>
+
+      <h2 id="alertas"><span class="sec-num">11.5</span>Alertas sobre SLOs: burn rate</h2>
+
+      <p>Una alerta que despierta a alguien tiene que cumplir dos condiciones: que haya usuarios afectados y que haya algo que hacer. Por eso se alerta por <b>síntomas</b> (el SLO se está incumpliendo) y no por <b>causas</b> (la CPU al 90&#8239;%): una CPU al 90&#8239;% puede no afectar a nadie, y un problema serio puede ocurrir con la CPU al 20&#8239;%. Las alertas que no piden acción entrenan al equipo a ignorarlas, y la siguiente que importe también se ignora. Las causas van a los dashboards, donde ayudan a diagnosticar.</p>
+
+      <p>La medida del síntoma es el <dfn data-term="burn-rate">burn rate</dfn>: a qué velocidad se consume el error budget, relativo a la velocidad que lo agotaría justo al final de la ventana del SLO.</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term">Burn rate</p>
+        <p>burn rate = tasa de errores ÷ (1 − SLO). Con un SLO de 99.9&#8239;% el presupuesto es el 0.1&#8239;% de las requests; si en la última hora falló el 1.5&#8239;%, el burn rate es 15. A ese ritmo, el presupuesto de 30 días dura 30 ÷ 15 = <b>2 días</b>. Con 20 000 requests por segundo, esa hora sola tiró 1.08 millones de requests, el 2.1&#8239;% del presupuesto del mes.</p>
+      </aside>
+
+      <p>Una sola regla no alcanza: una ventana larga tarda en dispararse y en apagarse, y una corta salta con cualquier pico. El SRE Workbook de Google propone reglas con <b>dos ventanas a la vez</b>: la larga comprueba que el problema es significativo y la corta, de un doceavo de su duración, que sigue ocurriendo ahora, para que la alerta se apague pocos minutos después del arreglo. <span class="badge badge--doc">Documentado</span> Cambia el SLO y la tasa de errores para ver qué reglas se disparan:</p>
+
+      <div data-sim="burnrate"></div>
+
+      <p>Así se ve la primera regla en PromQL, para un SLO de 99.9&#8239;%:</p>
+
+<pre><code># Página: se consume el 2 % del presupuesto mensual en una hora (14.4×), y sigue pasando
+(
+  sum(rate(http_requests_total{job="chat-api", code=~"5.."}[1h]))
+    / sum(rate(http_requests_total{job="chat-api"}[1h]))
+) > 14.4 * 0.001
+and
+(
+  sum(rate(http_requests_total{job="chat-api", code=~"5.."}[5m]))
+    / sum(rate(http_requests_total{job="chat-api"}[5m]))
+) > 14.4 * 0.001</code></pre>
+
+      <p>Cada alerta enlaza a su <dfn data-term="runbook">runbook</dfn>: qué significa, cómo confirmar el impacto, qué mitigaciones probar primero (revertir el último deploy, apagar un flag, sacar una zona) y a quién escalar. Si una alerta se dispara y el runbook dice "no hacer nada", la alerta sobra.</p>
+
+      <h2 id="despliegues"><span class="sec-num">11.6</span>Desplegar sin miedo: canary, flags y expand/contract</h2>
+
+      <p>La mayoría de los incidentes empieza con un cambio: código, configuración o infraestructura. No se trata de cambiar menos, sino de que cada cambio llegue primero a pocos usuarios, se compare con lo que había y se pueda revertir en segundos.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Cómo funciona</th><th>Rollback</th><th>Costo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Rolling</b></td><td>Reemplaza las instancias de a unas pocas</td><td>Otro rolling con la versión anterior: minutos</td><td>Ninguno extra; conviven dos versiones durante el cambio</td></tr>
+            <tr><td><b><dfn data-term="blue-green">Blue-green</dfn></b></td><td>Dos entornos completos; el tráfico pasa de uno al otro de una vez</td><td>Volver a apuntar al anterior: segundos</td><td>El doble de capacidad durante el despliegue</td></tr>
+            <tr><td><b><dfn data-term="canary">Canary</dfn></b></td><td>Un porcentaje creciente del tráfico, con análisis automático entre etapas</td><td>Automático, antes de que llegue a la mayoría</td><td>Tráfico suficiente para comparar, y el sistema de análisis</td></tr>
+            <tr><td><b>Shadow</b></td><td>Una copia del tráfico real va a la versión nueva y sus respuestas se descartan</td><td>No hace falta: nadie ve sus respuestas</td><td>Capacidad extra, y cuidado con los efectos: la copia no puede cobrar ni enviar mensajes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f112t f112d">
+<title id="f112t">Despliegue canary por etapas con análisis automático</title>
+<desc id="f112d">La versión nueva recibe el 1 %, luego el 5 %, el 25 %, el 50 % y el 100 % del tráfico. Entre etapas, un análisis compara errores, p99 y TTFT contra la versión estable. Si una etapa empeora, el rollback es automático: en el ejemplo, la etapa del 5 % falla y todo el tráfico vuelve a la versión estable en menos de un minuto.</desc>
+<defs><marker id="f112a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker>
+<marker id="f112f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect x="30" y="156" width="92" height="14" rx="6" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="76" y="146" text-anchor="middle">1 %</text>
+<text class="dg-tiny" x="76" y="188" text-anchor="middle">10 min</text>
+<rect x="178" y="140" width="92" height="30" rx="6" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="224" y="130" text-anchor="middle">5 %</text>
+<text class="dg-tiny" x="224" y="188" text-anchor="middle">10 min</text>
+<rect x="326" y="108" width="92" height="62" rx="6" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="372" y="98" text-anchor="middle">25 %</text>
+<text class="dg-tiny" x="372" y="188" text-anchor="middle">10 min</text>
+<rect x="474" y="82" width="92" height="88" rx="6" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="520" y="72" text-anchor="middle">50 %</text>
+<text class="dg-tiny" x="520" y="188" text-anchor="middle">10 min</text>
+<rect x="622" y="52" width="92" height="118" rx="6" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="668" y="42" text-anchor="middle">100 %</text>
+<text class="dg-tiny" x="668" y="188" text-anchor="middle">listo</text>
+<path class="dg-frame" d="M20 170 H750"/>
+<path class="dg-edge" d="M124 140 H138" marker-end="url(#f112a)"/>
+<path class="dg-edge" d="M162 140 H175" marker-end="url(#f112a)"/>
+<rect x="139" y="129" width="22" height="22" rx="3" transform="rotate(45 150 140)" class="dg-ok"/>
+<text class="dg-label" x="150" y="145" text-anchor="middle" style="font-size:13px">✓</text>
+<path class="dg-edge" d="M272 140 H286" marker-end="url(#f112a)"/>
+<path class="dg-edge" d="M310 140 H323" marker-end="url(#f112a)"/>
+<rect x="287" y="129" width="22" height="22" rx="3" transform="rotate(45 298 140)" class="dg-bad"/>
+<text class="dg-label" x="298" y="145" text-anchor="middle" style="font-size:13px">✕</text>
+<path class="dg-edge" d="M420 140 H434" marker-end="url(#f112a)"/>
+<path class="dg-edge" d="M458 140 H471" marker-end="url(#f112a)"/>
+<rect x="435" y="129" width="22" height="22" rx="3" transform="rotate(45 446 140)" class="dg-ok"/>
+<text class="dg-label" x="446" y="145" text-anchor="middle" style="font-size:13px">✓</text>
+<path class="dg-edge" d="M568 140 H582" marker-end="url(#f112a)"/>
+<path class="dg-edge" d="M606 140 H619" marker-end="url(#f112a)"/>
+<rect x="583" y="129" width="22" height="22" rx="3" transform="rotate(45 594 140)" class="dg-ok"/>
+<text class="dg-label" x="594" y="145" text-anchor="middle" style="font-size:13px">✓</text>
+<path d="M298 154 V214 H90" fill="none" stroke="var(--fail)" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#f112f)"/>
+<text class="dg-tiny dg-fail-text" x="308" y="210">rollback automático: vuelve al 0 % en menos de un minuto</text>
+<text class="dg-small" x="308" y="228">el 95 % de los usuarios nunca vio la versión mala</text>
+<text class="dg-small" x="20" y="270">Entre etapas: errores, p99 y TTFT de la versión nueva contra la estable, con la misma carga y en el mismo momento.</text>
+<text class="dg-group" x="20" y="24">Tráfico a la versión nueva</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 11.2.</b> Un canary útil compara automáticamente la versión nueva con la estable en el mismo momento y con el mismo tipo de tráfico. El tamaño de cada etapa depende del volumen: al 1&#8239;% de 20 000 requests por segundo, 10 minutos son 120 000 requests, suficientes para distinguir una tasa de errores de 0.1&#8239;% de una de 0.5&#8239;% (unos 120 errores frente a unos 600).</figcaption>
+      </figure>
+
+      <p>Un <dfn data-term="feature-flag">feature flag</dfn> separa desplegar código de activar la funcionalidad. El código nuevo llega a producción apagado; después se enciende para el equipo interno, para el 1&#8239;% de los usuarios o para un cliente, y si algo sale mal se apaga en segundos sin desplegar nada. Dos precauciones: el servicio de flags no puede estar en el camino de cada request (los SDKs guardan las reglas en memoria y usan un valor por defecto si no pueden actualizarlas) y cada flag necesita una fecha de retiro, porque los flags olvidados multiplican los caminos del código que nadie prueba.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>La configuración y las operaciones también son cambios, y suelen tener el radio de impacto más grande porque llegan a toda la flota a la vez. El 2 de julio de 2019, una regla nueva del WAF de Cloudflare con una expresión regular de backtracking catastrófico se publicó en todo el mundo en segundos y agotó la CPU de sus servidores durante 27 minutos. El 4 de octubre de 2021, un comando de mantenimiento desconectó toda la red troncal de Facebook; sus servidores DNS, al perder contacto con los datacenters, retiraron sus rutas BGP y la compañía desapareció de internet durante unas seis horas. <span class="badge badge--doc">Documentado</span> La lección: la configuración se revisa, se valida y se despliega por etapas, igual que el código.</p>
+      </aside>
+
+      <p>El caso más delicado es cambiar el esquema de una base de datos que se usa mientras cambia. Durante un deploy conviven la versión vieja y la nueva del código, así que cada paso tiene que funcionar con las dos. El patrón <dfn data-term="expand-contract">expand/contract</dfn> divide el cambio en pasos compatibles; así se renombra la columna <code>nombre</code> a <code>nombre_completo</code>:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Expandir el esquema</span>Agregar <code>nombre_completo</code> como columna nullable. En PostgreSQL 11 o posterior, agregar una columna, incluso con un valor por defecto constante, no reescribe la tabla.</li>
+        <li><span class="step-title">Escribir en las dos</span>Desplegar código que escribe en ambas columnas y sigue leyendo la vieja. Si hay que revertir, el código anterior sigue funcionando.</li>
+        <li><span class="step-title">Copiar lo viejo</span>Rellenar la columna nueva en lotes de unos miles de filas, con pausas, vigilando el retraso de replicación (M05).</li>
+        <li><span class="step-title">Leer de la nueva</span>Desplegar código que lee <code>nombre_completo</code>. Comparar ambas columnas durante un tiempo detecta filas que la copia no alcanzó.</li>
+        <li><span class="step-title">Dejar de escribir la vieja</span>Otro deploy, cuando ya no queda ninguna instancia con el código que la lee.</li>
+        <li><span class="step-title">Contraer</span>Borrar la columna vieja, días después, cuando nada la extraña.</li>
+      </ol>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Un <code>ALTER TABLE</code> necesita un lock exclusivo de la tabla, aunque dure un milisegundo. Si una consulta larga tiene la tabla abierta, el <code>ALTER</code> espera, y todas las consultas que llegan después esperan detrás de él: la tabla queda bloqueada para todos. Por eso las migraciones fijan un límite corto de espera (<code>SET lock_timeout = '2s'</code>) y se reintentan, y los índices se crean con <code>CREATE INDEX CONCURRENTLY</code>, que no bloquea las escrituras.</p>
+      </aside>
+
+      <h2 id="incidentes"><span class="sec-num">11.7</span>Incidentes y postmortems</h2>
+
+      <p>Cuando un incidente empieza, lo primero es <b>mitigar</b>, no entender: revertir el último deploy, apagar el flag, sacar la zona enferma, limitar el tráfico. El diagnóstico completo viene después, con el sistema estable. En incidentes grandes se reparten tres roles para que nadie haga todo a la vez: quien coordina y decide (incident commander), quien investiga y ejecuta las mitigaciones, y quien comunica, en la página de estado y a los clientes, con una cadencia fija aunque no haya novedades.</p>
+
+      <p>Después se escribe un <dfn data-term="postmortem">postmortem sin culpas</dfn>. "Sin culpas" no es amabilidad: si las personas temen ser señaladas, ocultan lo que hicieron y el equipo pierde justo la información que necesita. La pregunta no es quién se equivocó, sino por qué el sistema permitió que un error así llegara a producción. Un ejemplo:</p>
+
+      <div class="adr">
+        <div class="adr-head">
+          <span class="adr-id">Postmortem de ejemplo: 38 minutos de errores al enviar mensajes</span>
+          <span class="adr-state">Publicado</span>
+        </div>
+        <div class="adr-body">
+          <h4>Impacto</h4>
+          <p>Entre las 14:02 y las 14:40 UTC falló el 12&#8239;% de los envíos de mensajes con 503. La ruta recibe unas 3000 requests por segundo: fallaron unas 820 000, el 10.6&#8239;% del error budget del mes.</p>
+          <h4>Línea de tiempo (UTC)</h4>
+          <ul>
+            <li><b>13:55</b> Deploy de moderation 2.14 con rolling update. Moderation no estaba en el pipeline de canary.</li>
+            <li><b>14:02</b> Sube el tráfico de la tarde y empiezan los errores.</li>
+            <li><b>14:09</b> Se dispara la alerta de burn rate de 1 hora (14.4×).</li>
+            <li><b>14:15</b> Se declara SEV2. Los traces muestran que los spans de moderación esperan una conexión libre.</li>
+            <li><b>14:24</b> Se descarta la base de datos como causa.</li>
+            <li><b>14:31</b> Rollback a moderation 2.13.</li>
+            <li><b>14:40</b> La tasa de errores vuelve a lo normal, cuando se vacían los reintentos acumulados.</li>
+          </ul>
+          <h4>Causas</h4>
+          <p>La actualización de una librería cambió el tamaño por defecto del pool de conexiones de 100 a 10. Contribuyeron: moderación se desplegaba sin canary, el dashboard no mostraba la saturación del pool (USE) y la prueba de carga no llegaba al pico de la tarde.</p>
+          <h4>Qué salió bien</h4>
+          <ul class="pm-list">
+            <li class="plus">La alerta llegó a los 7 minutos del inicio, sin falsas alarmas previas.</li>
+            <li class="plus">Los traces señalaron el servicio y el paso exacto.</li>
+          </ul>
+          <h4>Acciones</h4>
+          <ul class="pm-list">
+            <li class="minus">Agregar moderación al pipeline de canary. Responsable: equipo de plataforma, 21 de marzo.</li>
+            <li class="minus">Métrica y alerta de saturación del pool en todos los servicios. Responsable: equipo de moderación, 28 de marzo.</li>
+            <li class="minus">Revertir primero ante cualquier alerta que coincida con un deploy reciente, e investigar después. Responsable: guardia, desde ya.</li>
+          </ul>
+        </div>
+      </div>
+
+      <p>Para saber si la operación mejora con el tiempo, las cuatro métricas de DORA miden el proceso de entrega y no un servicio: frecuencia de deploys, tiempo desde el commit hasta producción, porcentaje de cambios que causan un incidente y tiempo de recuperación. <span class="badge badge--doc">Documentado</span> Los equipos con mejores resultados despliegan más seguido, no menos: cambios chicos, fáciles de revisar y de revertir.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m11"></div>
+
+      <section class="exercise" aria-labelledby="ej-m11">
+        <p class="exercise-title" id="ej-m11">Ejercicio de diseño: operar la API de chat</p>
+        <p>La API de chat recibe 20 000 requests por segundo y pasa por el gateway, el servicio de chat, PostgreSQL, Redis, moderación y el router de inferencia. Tiene dos SLOs en 30 días: 99.9&#8239;% de requests exitosas y 95&#8239;% de respuestas con TTFT menor a 1.5 s. El equipo quiere lanzar una versión nueva del modelo y agregar la columna <code>model_version</code> a la tabla de mensajes, que tiene 4000 millones de filas.</p>
+        <p>Define las métricas y sus etiquetas, la política de logs y de traces, las alertas y cómo desplegar el modelo y la migración sin riesgo.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Métricas:</b> RED por ruta con plantilla, método y clase de código; USE para los pools de conexiones, Redis y las GPUs; TTFT y tokens por segundo como histogramas por modelo y versión. Nada de ids de usuario ni de conversación como etiquetas; <code>pod</code> solo en contadores simples.</li>
+            <li><b>Logs:</b> una línea canónica por request con <code>trace_id</code>, cliente, plan, modelo y versión, tiempos de cada dependencia y tokens; todos los errores; sin prompts ni respuestas, que viven en su propio almacén cifrado (M10).</li>
+            <li><b>Traces:</b> OpenTelemetry en todos los servicios, propagando <code>traceparent</code> también en los mensajes de Kafka. Muestreo por cola: todos los errores, todo lo que supere el p99 o 1.5 s de TTFT, y el 1&#8239;% del resto. Exemplars en los histogramas de latencia.</li>
+            <li><b>Alertas:</b> las reglas de burn rate de dos ventanas para cada SLO (14.4× y 6× despiertan a alguien; 1× abre un ticket), cada una con su runbook. Nada de alertas por CPU.</li>
+            <li><b>Modelo nuevo:</b> detrás de un feature flag por organización y con canary por porcentaje de tráfico (1, 5, 25, 50 y 100&#8239;%), comparando tasa de errores, TTFT, tokens por segundo y la tasa de respuestas cortadas contra el modelo estable. Rollback automático apagando el flag.</li>
+            <li><b>Migración:</b> <code>ADD COLUMN model_version text</code> nullable con <code>lock_timeout</code> corto; el código escribe la versión en los mensajes nuevos; las filas viejas se dejan en <code>NULL</code> ("anterior al registro de versión") en lugar de rellenar 4000 millones de filas sin necesidad. Si hiciera falta un índice, <code>CREATE INDEX CONCURRENTLY</code>.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m11"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m11.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-obs.js"></script>
+</body>
+</html>

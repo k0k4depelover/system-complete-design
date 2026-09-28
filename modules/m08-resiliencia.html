@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M08. Resiliencia</title>
+<meta name="description" content="Timeouts, reintentos con backoff y jitter, presupuestos de reintento, circuit breakers, bulkheads, rate limiting, load shedding, fallas metaestables, degradación, multi-región y chaos engineering.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m08">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Resiliencia</h1>
+        <p class="lead">Todo lo que llamas va a fallar, y casi siempre de la peor forma: lento en lugar de caído. Resiliencia es el conjunto de técnicas que convierten esas fallas en errores acotados en lugar de caídas en cascada, y los simuladores de este módulo muestran cómo un sistema puede quedarse caído aunque la causa ya se haya ido.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M08</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M03, M07</dd></div>
+          <div><dt>Estado</dt><dd data-status="m08">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir timeouts y propagar deadlines de punta a punta.</li>
+          <li>Reintentar sin empeorar las cosas: cuándo, cuántas veces, con qué espera y en qué capa.</li>
+          <li>Aplicar circuit breakers, bulkheads, rate limiting y load shedding.</li>
+          <li>Reconocer y romper una falla metaestable.</li>
+          <li>Diseñar degradación elegante, multi-región y experimentos de caos.</li>
+        </ul>
+      </section>
+
+      <h2 id="timeouts"><span class="sec-num">8.1</span>Timeouts y deadlines</h2>
+
+      <p>La falla más peligrosa no es que una dependencia se caiga, porque eso produce errores rápidos. Es que se ponga lenta: cada request que la espera retiene un hilo, una conexión y memoria, y por la Ley de Little (M00), si el tiempo de espera se multiplica por 20, los recursos ocupados también. Un <dfn data-term="timeout">timeout</dfn> en cada llamada remota acota ese daño. Las reglas:</p>
+      <ul>
+        <li><b>Todo tiene timeout</b>, incluidas las conexiones a la base, a Redis y los clientes HTTP, cuyos valores por defecto suelen ser infinitos o de minutos.</li>
+        <li><b>Se elige con datos:</b> un poco por encima del p99.9 de la dependencia en condiciones normales. Si su p99.9 es 300 ms, 500 ms; no 30 s.</li>
+        <li><b>Timeout de conexión y de lectura por separado:</b> conectar debería tomar milisegundos; si no conecta en 100 ms, algo está mal.</li>
+        <li><b>Los <span data-term="deadline">deadlines</span> se propagan:</b> si el usuario tiene 2 s y ya se gastaron 1.6 s, la llamada siguiente recibe 400 ms, y si ya no queda nada, ni se hace. gRPC lo hace automáticamente con su deadline.</li>
+      </ul>
+
+      <h2 id="reintentos"><span class="sec-num">8.2</span>Reintentos sin tormentas</h2>
+
+      <p>Reintentar convierte fallas transitorias en éxitos invisibles. Mal hecho, convierte un incidente de 5 minutos en uno de una hora. Las condiciones para reintentar:</p>
+      <ol class="steps">
+        <li><span class="step-title">Solo lo idempotente</span>GET, PUT, DELETE, o POST con idempotency key (M02). Nunca un cobro sin clave.</li>
+        <li><span class="step-title">Solo errores transitorios</span>Timeouts, 502, 503, 504, conexión rechazada. Un 400 o un 404 fallará igual la próxima vez.</li>
+        <li><span class="step-title">Con <dfn data-term="backoff">backoff exponencial</dfn> y jitter</span>Esperar cada vez más, con un componente aleatorio. La variante "full jitter" espera un tiempo aleatorio entre 0 y el tope exponencial. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Con límite</span>2 o 3 intentos, y un <dfn data-term="retry-budget">presupuesto de reintentos</dfn>: como máximo un 10&#8239;% extra sobre el tráfico normal.</li>
+        <li><span class="step-title">En una sola capa</span>Si el gateway, el servicio A y el servicio B reintentan 3 veces, C recibe hasta 27 requests por cada una del usuario (M03).</li>
+      </ol>
+
+      <p>Mira qué pasa cuando un servicio pierde el 75&#8239;% de su capacidad durante 5 segundos. Empieza con "Reintento inmediato" y el servidor FIFO; después prueba el presupuesto de reintentos y, por último, un servidor que descarta las requests cuyo cliente ya se fue.</p>
+
+      <div data-sim="retry"></div>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term"><dfn data-term="metastable">Falla metaestable</dfn> <span class="def-en">Bronson y otros, 2021</span></p>
+        <p class="def-one">Un sistema que sigue caído después de que la causa original desapareció, porque un ciclo de realimentación lo mantiene sobrecargado.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Un embotellamiento que sigue horas después de que se retiró el auto accidentado: los que llegan se suman a la fila más rápido de lo que la fila avanza.</dd>
+          <dt>Ejemplo</dt>
+          <dd>En el simulador, con el servidor FIFO: durante el incidente la cola crece; al terminar, el servidor atiende requests que llevan más de 1 s esperando, cuyos clientes ya se fueron y reintentaron. Trabaja al 100&#8239;% y casi todo su trabajo se desperdicia.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Reiniciar no arregla nada: la carga vuelve igual. Hay que romper el ciclo: descartar trabajo vencido, cortar tráfico en la entrada o frenar los reintentos. Varias caídas grandes de proveedores de nube tuvieron esta forma.</dd>
+        </dl>
+      </aside>
+
+      <h2 id="breaker"><span class="sec-num">8.3</span>Circuit breakers y bulkheads</h2>
+
+      <p>Un <dfn data-term="circuit-breaker">circuit breaker</dfn> deja de llamar a una dependencia que está fallando. Protege a ambos lados: tu servicio no gasta recursos en llamadas condenadas, y la dependencia recibe menos carga mientras se recupera.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f81t f81d">
+<title id="f81t">Estados de un circuit breaker</title>
+<desc id="f81d">Cerrado: las llamadas pasan y se cuentan los errores. Si superan el umbral, pasa a abierto: las llamadas fallan al instante durante un tiempo. Después pasa a semiabierto: deja pasar unas pocas de prueba; si funcionan vuelve a cerrado, si fallan vuelve a abierto.</desc>
+<defs><marker id="f81a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-ok" x="40" y="80" width="170" height="80" rx="40"/>
+<text class="dg-label" x="125" y="112" text-anchor="middle">Cerrado</text>
+<text class="dg-tiny" x="125" y="131" text-anchor="middle">las llamadas pasan;</text>
+<text class="dg-tiny" x="125" y="146" text-anchor="middle">se cuentan errores</text>
+<rect class="dg-bad" x="300" y="80" width="170" height="80" rx="40"/>
+<text class="dg-label" x="385" y="112" text-anchor="middle">Abierto</text>
+<text class="dg-tiny" x="385" y="131" text-anchor="middle">fallan al instante,</text>
+<text class="dg-tiny" x="385" y="146" text-anchor="middle">sin llamar a nadie</text>
+<rect class="dg-warnbox" x="560" y="80" width="170" height="80" rx="40"/>
+<text class="dg-label" x="645" y="112" text-anchor="middle">Semiabierto</text>
+<text class="dg-tiny" x="645" y="131" text-anchor="middle">pasan unas pocas</text>
+<text class="dg-tiny" x="645" y="146" text-anchor="middle">llamadas de prueba</text>
+<path class="dg-edge" d="M210 108 H298" marker-end="url(#f81a)"/><text class="dg-tiny" x="254" y="98" text-anchor="middle">errores &gt; umbral</text>
+<path class="dg-edge" d="M470 108 H558" marker-end="url(#f81a)"/><text class="dg-tiny" x="514" y="98" text-anchor="middle">pasó el tiempo</text>
+<path class="dg-edge" d="M600 162 C 560 230, 380 230, 360 164" marker-end="url(#f81a)"/><text class="dg-tiny" x="480" y="226" text-anchor="middle">la prueba falla</text>
+<path class="dg-edge" d="M640 78 C 600 10, 160 10, 125 78" marker-end="url(#f81a)"/><text class="dg-tiny" x="385" y="26" text-anchor="middle">las pruebas funcionan</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.1.</b> Los umbrales típicos: abrir si más del 50&#8239;% de las llamadas de los últimos 10 s fallaron (con un mínimo de 20 llamadas), quedarse abierto 5 a 30 s, y probar con unas pocas llamadas antes de cerrar.</figcaption>
+      </figure>
+
+      <p>Un <dfn data-term="bulkhead">bulkhead</dfn> ataca el mismo problema desde los recursos: en lugar de un pool de 200 hilos compartido por todas las dependencias, cada una tiene su límite de concurrencia (por ejemplo 50). Si una se pone lenta, agota solo su compartimento. La misma idea aplicada a clientes (un límite por tenant) evita que un cliente ruidoso tumbe a los demás.</p>
+
+      <h2 id="rate-limiting"><span class="sec-num">8.4</span>Rate limiting</h2>
+
+      <p>El <span data-term="rate-limiting">rate limiting</span> protege la capacidad y la reparte con justicia. Los algoritmos:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Algoritmo</th><th>Cómo funciona</th><th>Ventaja</th><th>Problema</th></tr></thead>
+          <tbody>
+            <tr><td>Ventana fija</td><td>Contador por minuto que se reinicia</td><td>Trivial, una clave en Redis</td><td>Deja pasar el doble en el borde de la ventana</td></tr>
+            <tr><td>Registro deslizante</td><td>Guarda el timestamp de cada request</td><td>Exacto</td><td>Memoria proporcional al tráfico</td></tr>
+            <tr><td>Ventana deslizante con contadores</td><td>Pondera la ventana anterior y la actual</td><td>Casi exacto, dos contadores</td><td>Aproximación</td></tr>
+            <tr><td><dfn data-term="token-bucket">Token bucket</dfn></td><td>Balde que se recarga a ritmo fijo; cada request consume un token</td><td>Permite ráfagas controladas</td><td>Dos parámetros que elegir</td></tr>
+            <tr><td>Leaky bucket</td><td>Cola que se vacía a ritmo constante</td><td>Salida perfectamente pareja</td><td>Agrega espera en la cola</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div data-sim="bucket"></div>
+
+      <p>En un sistema con muchas instancias, el contador vive en un almacén compartido (Redis) y la operación de leer y descontar tiene que ser atómica: un script Lua en Redis que recarga el balde según el tiempo transcurrido y descuenta en un solo paso. Si Redis cae, se decide entre fail-open con un límite local aproximado o fail-closed (M00). La respuesta al cliente es un <code>429</code> con <code>Retry-After</code> y, idealmente, headers con el límite y lo que queda, para que los clientes bien hechos frenen solos.</p>
+
+      <h2 id="shedding"><span class="sec-num">8.5</span>Load shedding y admission control</h2>
+
+      <p>Todo sistema tiene un punto a partir del cual aceptar más trabajo empeora todo. La razón es la teoría de colas:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f82t f82d">
+<title id="f82t">Tiempo de espera en cola según la utilización</title>
+<desc id="f82d">En una cola M/M/1, el tiempo total en el sistema es el tiempo de servicio dividido por (1 − utilización). Al 50 % es 2 veces el tiempo de servicio, al 80 % 5 veces, al 90 % 10 veces y al 95 % 20 veces.</desc>
+<line class="sim-grid" x1="60" x2="680" y1="220.0" y2="220.0"/><text class="sim-axis" x="52" y="224.0" text-anchor="end">0×</text>
+<line class="sim-grid" x1="60" x2="680" y1="170.0" y2="170.0"/><text class="sim-axis" x="52" y="174.0" text-anchor="end">5×</text>
+<line class="sim-grid" x1="60" x2="680" y1="120.0" y2="120.0"/><text class="sim-axis" x="52" y="124.0" text-anchor="end">10×</text>
+<line class="sim-grid" x1="60" x2="680" y1="70.0" y2="70.0"/><text class="sim-axis" x="52" y="74.0" text-anchor="end">15×</text>
+<line class="sim-grid" x1="60" x2="680" y1="20.0" y2="20.0"/><text class="sim-axis" x="52" y="24.0" text-anchor="end">20×</text>
+<path d="M60.0 210.0 L63.1 209.9 L66.2 209.9 L69.3 209.8 L72.4 209.8 L75.5 209.7 L78.6 209.7 L81.7 209.6 L84.8 209.6 L87.9 209.5 L91.0 209.5 L94.1 209.4 L97.2 209.4 L100.3 209.3 L103.4 209.2 L106.5 209.2 L109.6 209.1 L112.7 209.1 L115.8 209.0 L118.9 209.0 L122.0 208.9 L125.1 208.8 L128.2 208.8 L131.3 208.7 L134.4 208.6 L137.5 208.6 L140.6 208.5 L143.7 208.4 L146.8 208.4 L149.9 208.3 L153.0 208.2 L156.1 208.2 L159.2 208.1 L162.3 208.0 L165.4 208.0 L168.5 207.9 L171.6 207.8 L174.7 207.7 L177.8 207.7 L180.9 207.6 L184.0 207.5 L187.1 207.4 L190.2 207.3 L193.3 207.3 L196.4 207.2 L199.5 207.1 L202.6 207.0 L205.7 206.9 L208.8 206.8 L211.9 206.8 L215.0 206.7 L218.1 206.6 L221.2 206.5 L224.3 206.4 L227.4 206.3 L230.5 206.2 L233.6 206.1 L236.7 206.0 L239.8 205.9 L242.9 205.8 L246.0 205.7 L249.1 205.6 L252.2 205.5 L255.3 205.4 L258.4 205.3 L261.5 205.2 L264.6 205.1 L267.7 205.0 L270.8 204.8 L273.9 204.7 L277.0 204.6 L280.1 204.5 L283.2 204.4 L286.3 204.3 L289.4 204.1 L292.5 204.0 L295.6 203.9 L298.7 203.7 L301.8 203.6 L304.9 203.5 L308.0 203.3 L311.1 203.2 L314.2 203.1 L317.3 202.9 L320.4 202.8 L323.5 202.6 L326.6 202.5 L329.7 202.3 L332.8 202.1 L335.9 202.0 L339.0 201.8 L342.1 201.7 L345.2 201.5 L348.3 201.3 L351.4 201.1 L354.5 201.0 L357.6 200.8 L360.7 200.6 L363.8 200.4 L366.9 200.2 L370.0 200.0 L373.1 199.8 L376.2 199.6 L379.3 199.4 L382.4 199.2 L385.5 198.9 L388.6 198.7 L391.7 198.5 L394.8 198.3 L397.9 198.0 L401.0 197.8 L404.1 197.5 L407.2 197.3 L410.3 197.0 L413.4 196.7 L416.5 196.5 L419.6 196.2 L422.7 195.9 L425.8 195.6 L428.9 195.3 L432.0 195.0 L435.1 194.7 L438.2 194.4 L441.3 194.0 L444.4 193.7 L447.5 193.3 L450.6 193.0 L453.7 192.6 L456.8 192.2 L459.9 191.8 L463.0 191.4 L466.1 191.0 L469.2 190.6 L472.3 190.1 L475.4 189.7 L478.5 189.2 L481.6 188.7 L484.7 188.3 L487.8 187.7 L490.9 187.2 L494.0 186.7 L497.1 186.1 L500.2 185.5 L503.3 184.9 L506.4 184.3 L509.5 183.6 L512.6 183.0 L515.7 182.3 L518.8 181.5 L521.9 180.8 L525.0 180.0 L528.1 179.2 L531.2 178.3 L534.3 177.4 L537.4 176.5 L540.5 175.6 L543.6 174.5 L546.7 173.5 L549.8 172.4 L552.9 171.2 L556.0 170.0 L559.1 168.7 L562.2 167.4 L565.3 165.9 L568.4 164.4 L571.5 162.9 L574.6 161.2 L577.7 159.4 L580.8 157.5 L583.9 155.5 L587.0 153.3 L590.1 151.0 L593.2 148.6 L596.3 145.9 L599.4 143.1 L602.5 140.0 L605.6 136.7 L608.7 133.0 L611.8 129.1 L614.9 124.8 L618.0 120.0 L621.1 114.7 L624.2 108.9 L627.3 102.4 L630.4 95.0 L633.5 86.7 L636.6 77.1 L639.7 66.2 L642.8 53.3 L645.9 38.2 L649.0 20.0" fill="none" stroke="var(--link)" stroke-width="2.5"/>
+<circle cx="370.0" cy="200.0" r="5" fill="var(--ink)"/><text class="sim-val" x="362.0" y="191.0" text-anchor="end">50 %: 2×</text>
+<circle cx="556.0" cy="170.0" r="5" fill="var(--ink)"/><text class="sim-val" x="548.0" y="161.0" text-anchor="end">80 %: 5×</text>
+<circle cx="618.0" cy="119.99999999999997" r="5" fill="var(--ink)"/><text class="sim-val" x="610.0" y="110.99999999999997" text-anchor="end">90 %: 10×</text>
+<circle cx="649.0" cy="20.00000000000017" r="5" fill="var(--ink)"/><text class="sim-val" x="641.0" y="11.00000000000017" text-anchor="end">95 %: 20×</text>
+<text class="sim-axis" x="60" y="244" text-anchor="middle">0 %</text>
+<text class="sim-axis" x="184.0" y="244" text-anchor="middle">20 %</text>
+<text class="sim-axis" x="308.0" y="244" text-anchor="middle">40 %</text>
+<text class="sim-axis" x="432.0" y="244" text-anchor="middle">60 %</text>
+<text class="sim-axis" x="556.0" y="244" text-anchor="middle">80 %</text>
+<text class="sim-axis" x="680.0" y="244" text-anchor="middle">100 %</text>
+<text class="sim-axis" x="60" y="14">tiempo en el sistema, en múltiplos del tiempo de servicio</text>
+<text class="sim-axis" x="680" y="258" text-anchor="end">utilización</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.2.</b> En una cola simple, el tiempo en el sistema es el tiempo de servicio dividido por (1 − utilización). La curva no es lineal: del 80&#8239;% al 95&#8239;% la latencia se cuadruplica.</figcaption>
+      </figure>
+
+      <p>El <span data-term="load-shedding">load shedding</span> rechaza trabajo a propósito antes de llegar a ese punto. Rechazar rápido con un 503 es un favor: el cliente puede reintentar en otra instancia o más tarde, y el resto de las requests se atiende bien. Las técnicas:</p>
+      <ul>
+        <li><b>Límite de concurrencia</b> por instancia: más de N requests en curso, se rechaza. Mejor aún si el límite es adaptativo (se ajusta según la latencia observada, como TCP ajusta su ventana).</li>
+        <li><b>Descartar lo vencido:</b> una request que esperó en cola más que su deadline no se procesa. Es exactamente la opción que rompe la falla metaestable del simulador.</li>
+        <li><b>Prioridades:</b> ante sobrecarga, primero se descarta lo que no es crítico (analítica, precargas, requests de bots) y al final el checkout.</li>
+      </ul>
+
+      <h2 id="degradacion"><span class="sec-num">8.6</span>Degradación elegante</h2>
+
+      <p>La <dfn data-term="graceful-degradation">degradación elegante</dfn> diseña de antemano una versión reducida del producto para cuando algo falla. Una tienda sin el servicio de recomendaciones muestra los más vendidos (precalculados); sin el de reseñas, oculta la sección; sin el de inventario en tiempo real, muestra "disponible" con una verificación al pagar. Se implementa con fallbacks por dependencia y con interruptores (feature flags) que el equipo de guardia puede apagar en segundos para quitar carga. La clave es decidirlo antes del incidente: a las 3 de la mañana nadie diseña bien.</p>
+
+      <h2 id="multiregion"><span class="sec-num">8.7</span>Multi-región y células</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Activo-pasivo</th><th>Activo-activo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Tráfico normal</b></td><td>Una región atiende; la otra espera con datos replicados</td><td>Todas las regiones atienden</td></tr>
+            <tr><td><b>Failover</b></td><td>Promover la pasiva: minutos (<dfn data-term="rpo-rto">RTO</dfn>)</td><td>Redirigir el tráfico: segundos</td></tr>
+            <tr><td><b>Pérdida de datos</b></td><td>Lo no replicado (RPO), si la replicación es asíncrona</td><td>Depende de cómo se resuelven escrituras en varias regiones</td></tr>
+            <tr><td><b>Costo</b></td><td>Capacidad ociosa</td><td>Complejidad: consistencia entre regiones (M06)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Una idea más fina que "una región entera de repuesto" es la <dfn data-term="cell-architecture">arquitectura celular</dfn>: el sistema se divide en celdas completas e independientes, cada una con una parte de los clientes. Un deploy defectuoso o una falla afecta a una celda, no a todos. AWS combina celdas con <em>shuffle sharding</em>: cada cliente se asigna a una combinación pseudoaleatoria de nodos, de modo que dos clientes casi nunca comparten exactamente los mismos, y un cliente que envía tráfico dañino solo afecta a quienes comparten toda su combinación. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si el failover nunca se probó</p>
+        <p>Casi nunca funciona. La región de repuesto no tiene capacidad suficiente, un certificado venció, un servicio auxiliar solo existía en la región principal, o el procedimiento depende del plano de control que acaba de caer. La única forma de saber que un failover funciona es hacerlo regularmente, con tráfico real.</p>
+      </aside>
+
+      <h2 id="caos"><span class="sec-num">8.8</span>Chaos engineering</h2>
+      <p>El <dfn data-term="chaos">chaos engineering</dfn> convierte las suposiciones de este módulo en experimentos. Netflix lo popularizó con Chaos Monkey, que apaga instancias al azar en producción durante el horario laboral, cuando los ingenieros están despiertos. <span class="badge badge--doc">Documentado</span> El método: formular una hipótesis ("si muere una instancia de pagos, el p99 no pasa de 800 ms"), limitar el radio de impacto (un porcentaje del tráfico, una celda), inyectar la falla (matar, agregar latencia, cortar una zona), medir y aprender. Los game days hacen lo mismo con el equipo: se simula un incidente y se practica la respuesta.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m08"></div>
+
+      <section class="exercise" aria-labelledby="ej-m08">
+        <p class="exercise-title" id="ej-m08">Ejercicio de diseño: el checkout un Black Friday</p>
+        <p>El checkout de una tienda llama a 5 servicios: carrito, precios, inventario, pagos (un proveedor externo) y recomendaciones de último momento. En Black Friday el tráfico se multiplica por 8 durante 2 horas, y el año pasado el proveedor de pagos se puso lento (p99 de 12 s) y tumbó todo el sitio.</p>
+        <p>Diseña timeouts, reintentos, circuit breakers, bulkheads, límites y degradaciones para que un problema en cualquiera de los cinco no tumbe el checkout entero.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Recomendaciones:</b> no críticas. Timeout de 150 ms, sin reintentos, fallback a una lista precalculada, y un feature flag para apagarlas por completo en el pico.</li>
+            <li><b>Pagos:</b> timeout de 10 s (los pagos pueden tardar), bulkhead propio de, por ejemplo, 300 llamadas concurrentes, circuit breaker, y reintentos solo con la idempotency key del proveedor. Si el breaker abre, el checkout no se cae: guarda el pedido como "pago pendiente", le dice al usuario que recibirá la confirmación por correo y un worker lo reintenta.</li>
+            <li><b>Precios e inventario:</b> críticos y propios. Timeouts de 200 a 300 ms, 1 reintento con jitter dentro de un presupuesto del 10&#8239;%, bulkheads separados. El inventario reserva con un <code>UPDATE … WHERE disponible &gt;= n</code> (M05).</li>
+            <li><b>Entrada:</b> rate limiting por usuario y por IP para bots, límite de concurrencia adaptativo en cada instancia, y una sala de espera virtual (cola en el edge) si la carga supera lo que el sistema puede atender bien.</li>
+            <li><b>Colas:</b> descartar requests que ya superaron su deadline, para no caer en una falla metaestable cuando el pico baje.</li>
+            <li><b>Antes del día:</b> prueba de carga a 10× y un game day con el proveedor de pagos "lento" inyectado.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m08"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m08.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-resil.js"></script>
+</body>
+</html>

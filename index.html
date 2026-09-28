@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diseño de sistemas reales</title>
+<meta name="description" content="Curso extenso de system design: fundamentos distribuidos, infraestructura de LLMs hasta ChatGPT, pagos tipo Stripe y Cloudflare, con mapas explorables y quizzes.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/home.css">
+</head>
+<body data-root="" class="page-home">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html" aria-current="page">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="#plan">Plan</a>
+    <a href="glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<main class="home" id="contenido">
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-text">
+      <h1 id="hero-title">Diseño de sistemas reales, de una request a ChatGPT</h1>
+      <p class="lead">Un curso para diseñar infraestructura que alguien va a tener que operar: cómo viaja cada request, qué pasa cuando se cae un servidor o una caché, qué colas y bases de datos usar, cómo se sirve un LLM a millones de personas, y cómo funcionan por dentro los pagos y el edge de internet.</p>
+      <div class="hero-actions" data-continue></div>
+    </div>
+  </section>
+
+  <section class="route-map" aria-labelledby="rm-title">
+    <div class="rm-head">
+      <h2 id="rm-title">La ruta</h2>
+      <p class="rm-sub">Cada parada es un módulo con su quiz. Las paradas punteadas todavía están en construcción; se publican por checkpoints.</p>
+    </div>
+    <div class="rm-canvas" data-route-map></div>
+    <ul class="rm-legend" aria-label="Leyenda de la ruta">
+      <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="var(--paper)" stroke="var(--ink-2)" stroke-width="3"/></svg>Módulo</li>
+      <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="5" y="5" width="12" height="12" transform="rotate(45 11 11)" fill="var(--paper)" stroke="var(--ink-2)" stroke-width="3"/></svg>Checkpoint</li>
+      <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="4" y="4" width="14" height="14" rx="2" fill="var(--paper)" stroke="var(--ink-2)" stroke-width="3"/></svg>Mapa explorable</li>
+      <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="var(--ink-2)" stroke="var(--ink-2)" stroke-width="3"/></svg>Completado</li>
+      <li><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="var(--paper)" stroke="var(--ink-3)" stroke-width="2.5" stroke-dasharray="3 3"/></svg>En construcción</li>
+    </ul>
+    <div class="rm-progress" data-progress-strip></div>
+  </section>
+
+  <section class="plan" id="plan" aria-labelledby="plan-title">
+    <h2 id="plan-title" class="visually-hidden">Plan del curso</h2>
+    <div data-parts></div>
+  </section>
+
+  <section class="how" aria-labelledby="how-title">
+    <h2 id="how-title">Cómo funciona</h2>
+    <dl class="how-grid">
+      <div>
+        <dt>Módulos con checkpoint</dt>
+        <dd>Cada módulo termina con un quiz. Con 70&#8239;% o más se habilita su checkpoint y la parada se marca en la ruta.</dd>
+      </div>
+      <div>
+        <dt>Mapas que se recorren</dt>
+        <dd>ChatGPT, Stripe y Cloudflare tienen un mapa gigante: lo arrastras, haces zoom, abres cada nodo (endpoints, esquemas, fallos, números) y reproduces escenarios animados, caídas incluidas.</dd>
+      </div>
+      <div>
+        <dt>Documentado o de referencia</dt>
+        <dd><span class="badge badge--doc">Documentado</span> viene de fuentes públicas. <span class="badge badge--ref">Diseño de referencia</span> es una reconstrucción razonada. Nunca se mezclan sin avisar.</dd>
+      </div>
+      <div>
+        <dt>El glosario siempre a mano</dt>
+        <dd>Los términos subrayados con puntos muestran su definición al pasar el cursor o tocarlos. El <a href="glosario.html">glosario completo</a> crece con cada módulo.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="data-mgmt" aria-labelledby="dm-title">
+    <h2 id="dm-title">Tu progreso</h2>
+    <p>Se guarda solo en este navegador. Si cambias de equipo o de navegador, respáldalo en un archivo y restáuralo allá.</p>
+    <div class="dm-actions">
+      <button type="button" class="btn" data-export>Descargar respaldo</button>
+      <label class="btn btn--ghost dm-import">Restaurar desde archivo<input type="file" accept="application/json,.json" data-import class="visually-hidden"></label>
+      <button type="button" class="btn btn--ghost" data-reset>Reiniciar progreso</button>
+    </div>
+    <p class="dm-msg" role="status" data-dm-msg></p>
+  </section>
+
+  <footer class="site-foot home-foot">
+    <p>Curso en construcción por checkpoints; el plan completo está en <code>PLAN.md</code>. Usa las tipografías del sistema: no descarga fuentes ni depende de ningún CDN.</p>
+  </footer>
+</main>
+
+<div class="rm-tip" role="tooltip" id="rm-tip" hidden></div>
+
+<script src="assets/js/core/sd.js"></script>
+<script src="assets/js/data/course.data.js"></script>
+<script src="assets/js/core/progress.js"></script>
+<script src="assets/js/core/nav.js"></script>
+<script src="assets/js/pages/home.js"></script>
+</body>
+</html>

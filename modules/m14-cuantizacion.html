@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M14. Cuantización</title>
+<meta name="description" content="Formatos numéricos de FP32 a FP4, escalas por tensor y por grupo, cuantizar pesos, activaciones o KV cache, GPTQ, AWQ, SmoothQuant y FP8, cómo medir la pérdida de calidad y el impacto en memoria, latencia y cantidad de GPUs.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m14">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Cuantización</h1>
+        <p class="lead">Guardar cada peso en menos bits es la palanca más barata del serving: el mismo modelo ocupa la mitad o la cuarta parte, entra en menos GPUs y genera más rápido, porque el decode vive de leer memoria. El precio es algo de calidad, y el trabajo de ingeniería es saber cuánta.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M14</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12, M13</dd></div>
+          <div><dt>Estado</dt><dd data-status="m14">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Comparar FP32, BF16, FP16, FP8, INT8, INT4 y FP4 por rango, precisión y memoria.</li>
+          <li>Explicar cómo se cuantiza con escalas y por qué se usan grupos pequeños.</li>
+          <li>Decidir qué cuantizar (pesos, activaciones o KV cache) según lo que quieras acelerar.</li>
+          <li>Distinguir GPTQ, AWQ, SmoothQuant y FP8, y cuándo usar cada uno.</li>
+          <li>Medir la pérdida de calidad antes de desplegar y calcular cuántas GPUs ahorras.</li>
+        </ul>
+      </section>
+
+      <h2 id="formatos"><span class="sec-num">14.1</span>Formatos numéricos</h2>
+
+      <p>Un número de punto flotante tiene tres partes: el signo, el exponente, que da el rango (qué tan grande o chico puede ser), y la mantisa, que da la precisión (cuántos dígitos significativos). Los formatos de menos bits recortan una de las dos, o las dos:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f141t f141d">
+<title id="f141t">Formatos numéricos: signo, exponente y mantisa</title>
+<desc id="f141d">FP32 usa 1 bit de signo, 8 de exponente y 23 de mantisa. BF16 conserva los 8 de exponente y deja 7 de mantisa: mismo rango, menos precisión. FP16 usa 5 de exponente y 10 de mantisa, con un máximo de 65 504. FP8 E4M3 llega a 448 y E5M2 a 57 344. INT8 e INT4 son enteros que necesitan una escala. FP4 E2M1 tiene 1 bit de signo, 2 de exponente y 1 de mantisa, y llega a 6.</desc>
+<rect x="96" y="6" width="12" height="12" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)"/>
+<text class="sim-axis" x="114" y="16">signo</text>
+<rect x="246" y="6" width="12" height="12" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)"/>
+<text class="sim-axis" x="264" y="16">exponente (rango)</text>
+<rect x="396" y="6" width="12" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)"/>
+<text class="sim-axis" x="414" y="16">mantisa (precisión)</text>
+<rect x="546" y="6" width="12" height="12" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)"/>
+<text class="sim-axis" x="564" y="16">entero</text>
+<text class="dg-label" x="0" y="49" style="font-size:13px">FP32</text>
+<rect x="96" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="152" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="166" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="180" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="194" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="208" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="222" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="236" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="250" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="264" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="278" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="292" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="306" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="320" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="334" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="348" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="362" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="376" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="390" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="404" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="418" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="432" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="446" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="460" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="474" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="488" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="502" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="516" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="530" y="34" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="49">±3.4 × 10³⁸, unos 7 dígitos</text>
+<text class="dg-label" x="0" y="79" style="font-size:13px">BF16</text>
+<rect x="96" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="152" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="166" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="180" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="194" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="208" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="222" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="236" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="250" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="264" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="278" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="292" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="306" y="64" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="79">el rango de FP32, unos 3 dígitos</text>
+<text class="dg-label" x="0" y="109" style="font-size:13px">FP16</text>
+<rect x="96" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="152" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="166" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="180" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="194" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="208" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="222" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="236" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="250" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="264" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="278" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="292" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="306" y="94" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="109">hasta 65 504</text>
+<text class="dg-label" x="0" y="139" style="font-size:13px">FP8 E4M3</text>
+<rect x="96" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="152" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="166" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="180" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="194" y="124" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="139">hasta 448</text>
+<text class="dg-label" x="0" y="169" style="font-size:13px">FP8 E5M2</text>
+<rect x="96" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="152" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="166" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="180" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="194" y="154" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="169">hasta 57 344</text>
+<text class="dg-label" x="0" y="199" style="font-size:13px">INT8</text>
+<rect x="96" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="110" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="124" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="138" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="152" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="166" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="180" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="194" y="184" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-small" x="556" y="199">−128 a 127, con escala</text>
+<text class="dg-label" x="0" y="229" style="font-size:13px">FP4 E2M1</text>
+<rect x="96" y="214" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--label-3) 35%, var(--bg))" stroke="var(--label-3)" stroke-width="1"/>
+<rect x="110" y="214" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="124" y="214" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-service) 35%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<rect x="138" y="214" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<text class="dg-small" x="556" y="229">±6, con escala por bloque</text>
+<text class="dg-label" x="0" y="259" style="font-size:13px">INT4</text>
+<rect x="96" y="244" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="110" y="244" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="124" y="244" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="138" y="244" width="12" height="20" rx="2" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-small" x="556" y="259">−8 a 7, con escala</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 14.1.</b> BF16 recorta precisión y conserva el rango de FP32: por eso reemplazó a FP16 para entrenar y servir. Los formatos de 8 y 4 bits solo funcionan acompañados de escalas que llevan cada grupo de valores a su rango.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b><dfn data-term="bf16">BF16</dfn></b> es el formato nativo de casi todos los modelos actuales: se entrenan y se publican así. Es la referencia contra la que se mide todo lo demás.</li>
+        <li><b><dfn data-term="fp8">FP8</dfn></b> tiene dos variantes: E4M3, con más precisión, para pesos y activaciones, y E5M2, con más rango, que se usa sobre todo para gradientes al entrenar. Las GPUs desde Hopper (H100) calculan en FP8 al doble de velocidad que en BF16.</li>
+        <li><b>INT8 e INT4</b> son enteros: cada valor se guarda como un entero chico y se multiplica por una escala al usarlo.</li>
+        <li><b>FP4</b> (E2M1) solo puede representar 0, 0.5, 1, 1.5, 2, 3, 4 y 6, con signo. Blackwell (B200) lo calcula de forma nativa, con escalas por bloques muy chicos (16 o 32 valores) que compensan su pobreza.</li>
+      </ul>
+
+      <h2 id="como"><span class="sec-num">14.2</span>Cómo se cuantiza: escalas y grupos</h2>
+
+      <p><dfn data-term="cuantizacion">Cuantizar</dfn> es llevar cada valor al más cercano de un conjunto chico. Para INT4, con 15 niveles de −7 a 7:</p>
+
+<pre><code>escala = max(|w|) ÷ 7            # el peso más grande del grupo cae en el nivel 7
+q = redondear(w ÷ escala)        # un entero entre −7 y 7: 4 bits
+w' = q × escala                  # lo que el modelo usa al calcular; el error es w' − w</code></pre>
+
+      <p>El problema son los valores extremos. Si un grupo tiene un peso de 0.21 y el resto ronda 0.02, la escala queda en 0.03 y la mayoría de los pesos se redondea a 0 o a ±1: se pierde casi toda su información. La solución es usar una escala por grupo pequeño (típicamente 128 pesos), así un outlier solo arruina a su grupo. Cada escala ocupa memoria: con grupos de 128 y escalas de 16 bits, INT4 cuesta 4.125 bits por peso en lugar de 4. Pruébalo:</p>
+
+      <div data-sim="quant"></div>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term">Outliers de activación</p>
+        <p>En los LLM grandes, unos pocos canales de las activaciones (las salidas intermedias de cada capa) tienen valores cien veces más grandes que el resto, siempre en las mismas posiciones. Cuantizar activaciones con una escala por tensor destruiría a todos los demás canales. Buena parte de los métodos de cuantización existen para lidiar con estos outliers.</p>
+      </aside>
+
+      <h2 id="que"><span class="sec-num">14.3</span>Qué se cuantiza: pesos, activaciones o KV cache</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Notación</th><th>Qué acelera</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>Solo los pesos</td><td>W4A16, W8A16</td><td>El decode y la memoria</td><td>Se leen menos bytes por paso; el cálculo sigue en BF16, desempaquetando los pesos sobre la marcha.</td></tr>
+            <tr><td>Pesos y activaciones</td><td>W8A8 (FP8 o INT8)</td><td>El decode y también el prefill</td><td>El cálculo usa los tensor cores de 8 bits, al doble de velocidad que en BF16.</td></tr>
+            <tr><td>El KV cache</td><td>KV FP8 o INT8</td><td>Más usuarios por GPU y decode con contextos largos</td><td>El cache ocupa la mitad y se lee la mitad en cada paso.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La elección sigue al cuello de botella. Un servicio de chat, dominado por el decode, gana casi todo con cuantizar pesos. Uno de resúmenes de documentos largos, dominado por el prefill, necesita cómputo en 8 bits. Y cuando lo que falta es memoria para usuarios, el KV cache en FP8 duplica la capacidad sin tocar los pesos.</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los kernels de solo pesos (como Marlin para INT4) son muy rápidos con pocos usuarios, pero con batches grandes el trabajo de desempaquetar los pesos empieza a pesar y la ventaja se achica. Por eso, en H100 y B200, la opción por defecto para modelos grandes es FP8 en pesos y activaciones: acelera las dos fases, y en modelos de 70B o más la pérdida es muy chica. Meta publicó Llama 3.1 405B con una versión en FP8 pensada para servirlo en un solo servidor de 8 GPUs. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <h2 id="metodos"><span class="sec-num">14.4</span>GPTQ, AWQ, SmoothQuant y FP8</h2>
+
+      <p>Redondear cada peso al nivel más cercano (round-to-nearest) funciona bien en 8 bits y mal en 4. Los métodos de cuantización post-entrenamiento usan unos cientos de ejemplos de texto, los <dfn data-term="calibracion">datos de calibración</dfn>, para decidir cómo redondear sin reentrenar:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Método</th><th>Qué cuantiza</th><th>La idea</th></tr></thead>
+          <tbody>
+            <tr><td><b><dfn data-term="gptq">GPTQ</dfn></b> (2022)</td><td>Pesos, a 3 o 4 bits</td><td>Cuantiza los pesos de una capa de a uno y corrige los que faltan para compensar el error, usando información de segundo orden sacada de la calibración.</td></tr>
+            <tr><td><b><dfn data-term="awq">AWQ</dfn></b> (2023)</td><td>Pesos, a 4 bits</td><td>Alrededor del 1&#8239;% de los canales de pesos importa mucho más que el resto, y se reconocen por el tamaño de las activaciones que multiplican. AWQ los agranda antes de cuantizar (y achica la activación en la misma proporción) para que pierdan menos.</td></tr>
+            <tr><td><b><dfn data-term="smoothquant">SmoothQuant</dfn></b> (2022)</td><td>Pesos y activaciones, a 8 bits</td><td>Pasa la dificultad de las activaciones a los pesos: divide cada canal con outliers por un factor y multiplica el peso correspondiente por el mismo factor. La cuenta da igual, pero las dos partes quedan fáciles de cuantizar.</td></tr>
+            <tr><td><b>FP8 con escalas</b></td><td>Pesos, activaciones y KV</td><td>E4M3 tiene rango de sobra para casi todo, así que alcanza con una escala por tensor o por canal. Es lo más simple de desplegar en hardware que lo soporta.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Todos dependen de la calibración: si calibras con chat en inglés y el tráfico real es código en español, los canales importantes pueden ser otros y la calidad cae justo donde no mediste. La alternativa más cara es entrenar pensando en la cuantización: modelos como gpt-oss, de OpenAI, se publicaron con los pesos de sus expertos directamente en MXFP4, y el de 120 mil millones de parámetros entra en una sola GPU de 80 GB. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="calidad"><span class="sec-num">14.5</span>Cuánto se pierde</h2>
+
+      <p>No hay una cifra universal: la pérdida depende del modelo, del formato, del método y de la tarea. Lo que sí se repite:</p>
+      <ul>
+        <li><b>Los modelos grandes toleran mejor la cuantización.</b> Un 70B en INT4 suele perder poco; un 8B en INT4 pierde bastante más.</li>
+        <li><b>FP8 casi no pierde</b> en modelos grandes; INT4 y FP4 exigen buenos métodos y medición.</li>
+        <li><b>Las tareas no degradan igual.</b> Matemática, código, razonamiento largo y contextos muy largos suelen sufrir antes que una conversación corta, y las lenguas con menos datos, antes que el inglés.</li>
+        <li><b>La perplejidad engaña.</b> Una métrica global que casi no se mueve puede esconder un problema en la tarea que te importa.</li>
+      </ul>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Un modelo cuantizado sin medir puede pasar todas las pruebas de humo y fallar en un 5&#8239;% de los casos de un cliente: respuestas que se cortan, JSON mal formado, código que no compila. La defensa es la misma que para cualquier cambio de modelo: una batería de evals de tus propias tareas antes de desplegar, y después shadow traffic o canary comparando contra la versión en BF16 (M22).</p>
+      </aside>
+
+      <h2 id="impacto"><span class="sec-num">14.6</span>Impacto en memoria, latencia y costo</h2>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f142t f142d">
+<title id="f142t">Memoria de los pesos de Llama 3.1 70B según el formato</title>
+<desc id="f142d">En FP32 los pesos ocupan 282 GB; en BF16, 141 GB; en FP8, 70.6 GB; en FP4 con escalas por bloque, unos 40 GB; en INT4 con escalas por grupo, unos 36 GB. Una H100 tiene 80 GB y una H200, 141 GB.</desc>
+<line x1="299.3" x2="299.3" y1="20" y2="220" stroke="var(--separator-strong)" stroke-dasharray="4 4"/>
+<text class="sim-axis" x="303.3" y="16">H100: 80 GB</text>
+<line x1="413.2" x2="413.2" y1="20" y2="220" stroke="var(--separator-strong)" stroke-dasharray="4 4"/>
+<text class="sim-axis" x="417.2" y="16">H200: 141 GB</text>
+<text class="sim-label" x="140" y="50" text-anchor="end">FP32</text>
+<rect x="150" y="36" width="527.1" height="22" rx="4" fill="var(--l-gpu)"/>
+<text class="sim-val" x="685.1" y="52">282.4 GB</text>
+<text class="sim-label" x="140" y="88" text-anchor="end">BF16</text>
+<rect x="150" y="74" width="263.6" height="22" rx="4" fill="var(--l-gpu)"/>
+<text class="sim-val" x="421.6" y="90">141.2 GB</text>
+<text class="sim-label" x="140" y="126" text-anchor="end">FP8</text>
+<rect x="150" y="112" width="131.8" height="22" rx="4" fill="var(--l-gpu)"/>
+<text class="sim-val" x="289.8" y="128">70.6 GB</text>
+<text class="sim-label" x="140" y="164" text-anchor="end">FP4 (NVFP4)</text>
+<rect x="150" y="150" width="74.1" height="22" rx="4" fill="var(--l-gpu)"/>
+<text class="sim-val" x="232.1" y="166">39.7 GB</text>
+<text class="sim-label" x="140" y="202" text-anchor="end">INT4 (grupos de 128)</text>
+<rect x="150" y="188" width="67.9" height="22" rx="4" fill="var(--l-gpu)"/>
+<text class="sim-val" x="225.9" y="204">36.4 GB</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 14.2.</b> Los pesos de Llama 3.1 70B según el formato. En BF16 no entran en ninguna GPU sola; en FP8, en una H200; en INT4, en una H100 con lugar para el KV cache.</figcaption>
+      </figure>
+
+      <p>Con el mismo caso del M13, 32 usuarios con 8192 tokens de contexto en H100:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pesos y KV cache</th><th class="r">Pesos</th><th class="r">H100 necesarias</th><th class="r">TPOT teórico</th><th>Riesgo de calidad</th></tr></thead>
+          <tbody>
+            <tr><td>BF16, KV en BF16</td><td class="r">141 GB</td><td class="r">4</td><td class="r">16.9 ms</td><td>Ninguno: es la referencia</td></tr>
+            <tr><td>FP8, KV en BF16</td><td class="r">70.6 GB</td><td class="r">4</td><td class="r">11.7 ms</td><td>Muy bajo</td></tr>
+            <tr><td>FP8, KV en FP8</td><td class="r">70.6 GB</td><td class="r">2</td><td class="r">16.9 ms</td><td>Muy bajo; medir con contextos largos</td></tr>
+            <tr><td>INT4, KV en BF16</td><td class="r">36.4 GB</td><td class="r">2</td><td class="r">18.2 ms</td><td>Bajo a moderado; medir</td></tr>
+            <tr><td>INT4, KV en FP8</td><td class="r">36.4 GB</td><td class="r">2</td><td class="r">11.8 ms</td><td>Moderado; medir las dos cosas</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La tabla muestra las dos formas de usar lo que se ahorra. Con las mismas 4 GPUs, FP8 hace cada paso un 30&#8239;% más rápido. O se pasa a 2 GPUs con una velocidad parecida a la de BF16: la mitad del costo por token. En un servicio que corre 24 horas en decenas de réplicas, esa diferencia paga un equipo entero dedicado a medir la calidad.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m14"></div>
+
+      <section class="exercise" aria-labelledby="ej-m14">
+        <p class="exercise-title" id="ej-m14">Ejercicio de diseño: de 4 GPUs a 2 sin romper nada</p>
+        <p>Sirves Llama 3.1 70B en BF16 con réplicas de 4 H100 para un producto de asistencia a programadores. Finanzas pide bajar el costo a la mitad. Los usuarios generan sobre todo código, con contextos de hasta 16 000 tokens.</p>
+        <p>Propón el formato, cómo vas a medir la calidad y cómo vas a desplegar el cambio sin que los usuarios paguen un error.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Formato:</b> FP8 (W8A8) en pesos y KV cache, con réplicas de 2 H100. Es el cambio de menor riesgo: FP8 casi no pierde en un 70B y acelera también el prefill, que con 16 000 tokens de contexto pesa. INT4 queda como segunda opción si FP8 no alcanza el objetivo.</li>
+            <li><b>Calibración:</b> con muestras reales del tráfico, código y contextos largos incluidos, no con un dataset genérico de chat.</li>
+            <li><b>Evals antes de desplegar:</b> tests de generación de código que se ejecutan (tasa de compilación y de tests que pasan), JSON y tool calls válidos, y tareas con contexto de 16 000 tokens, comparando BF16 contra FP8 con los mismos prompts y temperatura 0.</li>
+            <li><b>Despliegue:</b> primero shadow traffic (la versión FP8 recibe copias de requests reales y se comparan las respuestas sin mostrarlas), después canary al 1, 5 y 25&#8239;% vigilando tasa de errores, respuestas cortadas y señales de los usuarios (regenerar, pulgar abajo), con rollback automático (M11 y M22).</li>
+            <li><b>Resultado esperado:</b> la mitad de GPUs por réplica, un TPOT parecido al de BF16 y un TTFT menor gracias al cómputo en FP8.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m14"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m14.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-quant.js"></script>
+</body>
+</html>

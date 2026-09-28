@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M01. El viaje de una request</title>
+<meta name="description" content="DNS, TCP, TLS 1.3, HTTP/1.1, 2 y 3, CDN y balanceadores: el recorrido completo de una request y en qué se va cada milisegundo.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m01">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>El viaje de una request</h1>
+        <p class="lead">Entre que alguien pulsa Enter y ve la página pasan decenas de pasos repartidos por medio planeta. Este módulo los recorre uno por uno, con un mapa que puedes explorar y escenarios animados, porque casi toda la latencia que sufre un usuario se gana o se pierde fuera de tu código.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M01</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M00</dd></div>
+          <div><dt>Estado</dt><dd data-status="m01">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar cada salto de una request HTTPS, del navegador a la base de datos, y cuánto cuesta cada uno.</li>
+          <li>Contar las idas y vueltas que exige cada combinación de TCP, TLS y QUIC.</li>
+          <li>Elegir TTLs de DNS y políticas de caché sabiendo qué ganas y qué pagas.</li>
+          <li>Comparar HTTP/1.1, HTTP/2 y HTTP/3, incluido el head-of-line blocking.</li>
+          <li>Predecir qué ve el usuario cuando cae el DNS, un servidor o una caché en el camino.</li>
+        </ul>
+      </section>
+
+      <h2 id="mapa"><span class="sec-num">1.1</span>El mapa completo</h2>
+
+      <p>Este es el recorrido que estudia el módulo. Cada caja es un componente real y cada flecha, una conexión con su protocolo. Haz clic en cualquier nodo para ver qué hace, qué interfaz expone, qué datos guarda, cómo falla y sus números. Abajo del mapa hay cinco escenarios: empieza por <b>Primera visita</b> y pulsa Reproducir.</p>
+
+      <div data-map="m01-request"></div>
+
+      <p>La primera visita tarda unos 230 ms hasta el primer byte, y menos de 15 ms son trabajo de servidores: el resto es red. La segunda visita tarda ~21 ms. Todo lo que sigue explica esa diferencia.</p>
+
+      <h2 id="dns"><span class="sec-num">1.2</span>DNS: de un nombre a una IP</h2>
+
+      <p>El <dfn data-term="dns">DNS</dfn> es una base de datos distribuida y jerárquica. Nadie tiene todos los registros: cada nivel sabe a quién delegar el siguiente. Hay cuatro actores:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Caché local (stub resolver)</span>El navegador y el sistema operativo guardan respuestas recientes. Si la tienen, la resolución cuesta microsegundos.</li>
+        <li><span class="step-title">Resolver recursivo</span>El <dfn data-term="resolver">resolver</dfn> de tu ISP o uno público (1.1.1.1, 8.8.8.8) hace el recorrido completo por ti y cachea para millones de usuarios.</li>
+        <li><span class="step-title">Servidores raíz y de TLD</span>No conocen tu dominio: devuelven <em>referencias</em> ("pregúntale a estos") hacia el siguiente nivel.</li>
+        <li><span class="step-title">Servidor autoritativo</span>Tiene los registros reales del dominio y decide su <dfn data-term="ttl">TTL</dfn>. Es la única respuesta que controla el dueño del dominio.</li>
+      </ol>
+
+      <p>Una resolución en frío cuesta entre 3 y 4 idas y vueltas adicionales, pero en la práctica es rara: el resolver ya tiene en caché los TLD y los dominios populares. Lo que sí controlas es el TTL de tus registros, y es un trade-off real:</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: TTL corto o largo</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>TTL corto (30–60 s)</h4><p><b>Ganas:</b> puedes mover el tráfico en un minuto (failover, migraciones, balanceo por DNS).</p><p><b>Pagas:</b> muchas más consultas, y si tu proveedor DNS cae, los clientes pierden la resolución enseguida.</p></div>
+          <div class="to-col"><h4>TTL largo (horas)</h4><p><b>Ganas:</b> casi no hay consultas y el sitio sobrevive un rato aunque el DNS caiga.</p><p><b>Pagas:</b> un error o un cambio tarda horas en llegar a todos.</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> 300 s por defecto. Antes de una migración, bájalo con días de anticipación (el TTL viejo sigue vigente en las cachés) y súbelo de nuevo cuando termines.</p>
+      </aside>
+
+      <p>El DNS también es una herramienta de distribución de tráfico: el autoritativo puede responder IPs distintas según la región del resolver, la salud del destino o pesos (GeoDNS, balanceo por DNS). Y las CDNs lo combinan con <dfn data-term="anycast">anycast</dfn>: responden siempre la misma IP, pero esa IP existe en cientos de ciudades y la red lleva cada paquete a la más cercana (M28).</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla el DNS</p>
+        <p>Si tu proveedor DNS cae, tu sitio sigue funcionando para quien tenga la IP en caché, y desaparece para los demás a medida que vencen los TTL. En octubre de 2016, un DDoS contra el proveedor Dyn dejó inaccesibles durante horas a Twitter, GitHub, Netflix y otros, aunque sus servidores estaban perfectamente. <span class="badge badge--doc">Documentado</span></p>
+        <p><b>Mitigación:</b> dos proveedores DNS independientes listados como servidores NS del dominio, y resolvers que sirvan respuestas vencidas si el autoritativo no responde (serve-stale, RFC 8767).</p>
+      </aside>
+
+      <h2 id="tcp"><span class="sec-num">1.3</span>TCP: una conexión confiable sobre una red que no lo es</h2>
+
+      <p>IP entrega paquetes sueltos, sin garantías: pueden perderse, duplicarse o llegar desordenados. TCP construye encima un flujo de bytes ordenado y confiable, y para eso necesita acordar el estado inicial con el otro extremo: el <dfn data-term="tcp-handshake">handshake de TCP</dfn> (SYN, SYN-ACK, ACK), que cuesta una ida y vuelta completa antes de enviar el primer byte útil.</p>
+
+      <p>Dos mecanismos de TCP explican buena parte del rendimiento real:</p>
+      <ul>
+        <li><b>Control de congestión.</b> TCP no sabe cuánto aguanta la red, así que empieza con poco. Con <dfn data-term="slow-start">slow start</dfn>, la primera ráfaga es de 10 segmentos (~14 kB, RFC 6928) y se duplica en cada ida y vuelta mientras no haya pérdidas. Una respuesta de 100 kB por una conexión nueva necesita ~4 idas y vueltas aunque el enlace sea de 1 Gbps.</li>
+        <li><b>Retransmisión y orden.</b> Si un segmento se pierde, TCP lo reenvía y retiene todo lo que llegó después hasta tenerlo: entrega los bytes en orden, siempre. Esa garantía es la causa del head-of-line blocking de la sección 1.5.</li>
+      </ul>
+
+      <p>La conclusión práctica es que <b>las conexiones nuevas son caras</b>: handshake, slow start y, encima, TLS. Por eso todo el ecosistema intenta reutilizarlas: <dfn data-term="keep-alive">keep-alive</dfn> en HTTP/1.1, multiplexación en HTTP/2 y pools de conexiones entre tus servicios.</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Un proxy que abre una conexión nueva hacia el backend en cada request no solo paga handshakes: cada conexión cerrada queda en estado <code>TIME_WAIT</code> 60 s en Linux, ocupando un puerto efímero. Con el rango por defecto (~28&#8239;000 puertos) y miles de requests por segundo hacia el mismo destino, el proxy se queda sin puertos y empieza a fallar al conectar. La solución es la misma de siempre: un pool de conexiones persistentes.</p>
+      </aside>
+
+      <h2 id="tls"><span class="sec-num">1.4</span>TLS 1.3: cifrar y demostrar quién eres</h2>
+
+      <p><dfn data-term="tls">TLS</dfn> hace tres cosas: acuerda claves de cifrado sin que nadie que escuche pueda deducirlas (intercambio Diffie-Hellman efímero), demuestra que el servidor es quien dice ser (certificado firmado por una autoridad en la que el navegador confía) y protege la integridad de cada byte. En el ClientHello viaja el <dfn data-term="sni">SNI</dfn>, el nombre del sitio, que permite a una misma IP servir miles de dominios con certificados distintos.</p>
+
+      <p>TLS 1.3 (RFC 8446, 2018) redujo el handshake de dos idas y vueltas a una, porque el cliente envía su parte del intercambio de claves desde el primer mensaje. Y <dfn data-term="quic">QUIC</dfn>, el transporte de HTTP/3, fusiona el handshake de transporte con el de TLS. La figura cuenta las idas y vueltas antes del primer byte de respuesta:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 380" role="img" aria-labelledby="f11t f11d">
+<title id="f11t">Idas y vueltas antes del primer byte según el protocolo</title>
+<desc id="f11d">Cuatro diagramas de escalera. TCP con TLS 1.2 necesita 4 idas y vueltas hasta recibir la respuesta; TCP con TLS 1.3, 3; QUIC, 2; QUIC con 0-RTT, 1.</desc>
+<defs><marker id="l-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="l-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<text class="dg-label" x="99.0" y="22" text-anchor="middle">TCP + TLS 1.2</text>
+<text class="dg-small" x="30" y="46" text-anchor="middle">cliente</text>
+<text class="dg-small" x="168" y="46" text-anchor="middle">servidor</text>
+<path class="dg-edge" d="M30 60 V308"/>
+<path class="dg-edge" d="M168 60 V308"/>
+<path class="dg-edge" d="M30 74 L166 102" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="34" y="85">SYN</text>
+<path class="dg-edge" d="M168 102 L32 130" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="164" y="113" text-anchor="end">SYN-ACK</text>
+<path class="dg-edge" d="M30 130 L166 158" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="34" y="141">ACK, ClientHello</text>
+<path class="dg-edge" d="M168 158 L32 186" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="164" y="169" text-anchor="end">ServerHello … Done</text>
+<path class="dg-edge" d="M30 186 L166 214" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="34" y="197">KeyExchange, Finished</text>
+<path class="dg-edge" d="M168 214 L32 242" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="164" y="225" text-anchor="end">Finished</text>
+<path class="dg-edge" d="M30 242 L166 270" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="34" y="253">GET /</text>
+<path class="dg-edge dg-res" d="M168 270 L32 298" marker-end="url(#l-ahr)"/>
+<text class="dg-tiny" x="164" y="281" text-anchor="end">200 OK</text>
+<text class="dg-big" x="99.0" y="342" text-anchor="middle">4 RTT</text>
+<text class="dg-small" x="99.0" y="362" text-anchor="middle">320 ms con RTT de 80 ms</text>
+<text class="dg-label" x="289.0" y="22" text-anchor="middle">TCP + TLS 1.3</text>
+<text class="dg-small" x="220" y="46" text-anchor="middle">cliente</text>
+<text class="dg-small" x="358" y="46" text-anchor="middle">servidor</text>
+<path class="dg-edge" d="M220 60 V308"/>
+<path class="dg-edge" d="M358 60 V308"/>
+<path class="dg-edge" d="M220 74 L356 102" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="224" y="85">SYN</text>
+<path class="dg-edge" d="M358 102 L222 130" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="354" y="113" text-anchor="end">SYN-ACK</text>
+<path class="dg-edge" d="M220 130 L356 158" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="224" y="141">ACK, ClientHello</text>
+<path class="dg-edge" d="M358 158 L222 186" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="354" y="169" text-anchor="end">ServerHello … Finished</text>
+<path class="dg-edge" d="M220 186 L356 214" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="224" y="197">Finished, GET /</text>
+<path class="dg-edge dg-res" d="M358 214 L222 242" marker-end="url(#l-ahr)"/>
+<text class="dg-tiny" x="354" y="225" text-anchor="end">200 OK</text>
+<text class="dg-big" x="289.0" y="342" text-anchor="middle">3 RTT</text>
+<text class="dg-small" x="289.0" y="362" text-anchor="middle">240 ms con RTT de 80 ms</text>
+<text class="dg-label" x="479.0" y="22" text-anchor="middle">QUIC (HTTP/3)</text>
+<text class="dg-small" x="410" y="46" text-anchor="middle">cliente</text>
+<text class="dg-small" x="548" y="46" text-anchor="middle">servidor</text>
+<path class="dg-edge" d="M410 60 V308"/>
+<path class="dg-edge" d="M548 60 V308"/>
+<path class="dg-edge" d="M410 74 L546 102" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="414" y="85">Initial: ClientHello</text>
+<path class="dg-edge" d="M548 102 L412 130" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="544" y="113" text-anchor="end">ServerHello … Finished</text>
+<path class="dg-edge" d="M410 130 L546 158" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="414" y="141">Finished, GET /</text>
+<path class="dg-edge dg-res" d="M548 158 L412 186" marker-end="url(#l-ahr)"/>
+<text class="dg-tiny" x="544" y="169" text-anchor="end">200 OK</text>
+<text class="dg-big" x="479.0" y="342" text-anchor="middle">2 RTT</text>
+<text class="dg-small" x="479.0" y="362" text-anchor="middle">160 ms con RTT de 80 ms</text>
+<text class="dg-label" x="669.0" y="22" text-anchor="middle">QUIC con 0-RTT</text>
+<text class="dg-small" x="600" y="46" text-anchor="middle">cliente</text>
+<text class="dg-small" x="738" y="46" text-anchor="middle">servidor</text>
+<path class="dg-edge" d="M600 60 V308"/>
+<path class="dg-edge" d="M738 60 V308"/>
+<path class="dg-edge" d="M600 74 L736 102" marker-end="url(#l-ah)"/>
+<text class="dg-tiny" x="604" y="85">ClientHello + GET /</text>
+<path class="dg-edge dg-res" d="M738 102 L602 130" marker-end="url(#l-ahr)"/>
+<text class="dg-tiny" x="734" y="113" text-anchor="end">ServerHello, 200 OK</text>
+<text class="dg-big" x="669.0" y="342" text-anchor="middle">1 RTT</text>
+<text class="dg-small" x="669.0" y="362" text-anchor="middle">80 ms con RTT de 80 ms</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 1.1.</b> Con 80 ms de ida y vuelta, pasar de TCP + TLS 1.2 a QUIC con 0-RTT baja el primer byte de 320 ms a 80 ms sin tocar el servidor. Las flechas azules son la respuesta.</figcaption>
+      </figure>
+
+      <p>La reanudación con <dfn data-term="zero-rtt">0-RTT</dfn> permite enviar la request en el primer paquete usando claves de una sesión anterior, con una condición: esos datos pueden ser capturados y reenviados por un atacante (<em>replay</em>). Un GET repetido no hace daño; un <code>POST /pagos</code> repetido cobra dos veces. Por eso los servidores solo aceptan 0-RTT para requests idempotentes.</p>
+
+      <h3 id="donde-termina-tls">Dónde termina TLS</h3>
+      <p>En una arquitectura real, el TLS del usuario casi nunca llega a tu aplicación. Se termina en el borde (CDN o balanceador), y desde ahí hay dos opciones: seguir en texto plano dentro de la red privada, o volver a cifrar hasta el backend (re-encryption, o <em>mTLS</em> entre servicios, M10). La tendencia es cifrar todo, porque "la red interna es segura" es una suposición que un solo servidor comprometido rompe.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si vence un certificado</p>
+        <p>El navegador bloquea la página con un error que el usuario no puede saltarse fácilmente, y le pasa a todos los usuarios en el mismo segundo. Es uno de los SPOF ocultos más comunes: servicios enormes han caído por un certificado vencido en un balanceador o en una dependencia interna.</p>
+        <p><b>Mitigación:</b> renovación automática (ACME, como Let's Encrypt), alertas con semanas de anticipación y un inventario de todos los certificados, incluidos los internos.</p>
+      </aside>
+
+      <h2 id="http"><span class="sec-num">1.5</span>HTTP/1.1, HTTP/2 y HTTP/3</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>HTTP/1.1</th><th>HTTP/2</th><th>HTTP/3</th></tr></thead>
+          <tbody>
+            <tr><td><b>Transporte</b></td><td>TCP</td><td>TCP</td><td>QUIC sobre UDP</td></tr>
+            <tr><td><b>Requests en paralelo</b></td><td>Una por conexión; el navegador abre hasta 6</td><td>Muchos streams en una conexión</td><td>Muchos streams en una conexión</td></tr>
+            <tr><td><b>Headers</b></td><td>Texto, se repiten completos</td><td>Binarios, comprimidos con HPACK</td><td>Binarios, comprimidos con QPACK</td></tr>
+            <tr><td><b>Handshake inicial</b></td><td>TCP + TLS</td><td>TCP + TLS</td><td>Uno solo, con 0-RTT posible</td></tr>
+            <tr><td><b>Head-of-line blocking</b></td><td>Por conexión (una request tapa a la siguiente)</td><td>En TCP: un paquete perdido frena todos los streams</td><td>No entre streams</td></tr>
+            <tr><td><b>Cambio de red (wifi a 4G)</b></td><td>La conexión se rompe</td><td>La conexión se rompe</td><td>Sobrevive: la conexión se identifica por un ID, no por la IP</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El <dfn data-term="hol-blocking">head-of-line blocking</dfn> es la razón de fondo de HTTP/3. HTTP/2 resolvió el bloqueo a nivel de requests (ya no hay que esperar a que termine una para mandar la otra), pero lo movió a la capa de abajo: como todos los streams van por un único flujo TCP ordenado, un paquete perdido de un recurso frena a los demás.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f12t f12d">
+<title id="f12t">Head-of-line blocking en HTTP/1.1, HTTP/2 y HTTP/3</title>
+<desc id="f12d">Con HTTP/1.1 cada recurso espera su turno en su conexión. Con HTTP/2 los tres recursos comparten una conexión TCP y un paquete perdido de A frena también a B y C hasta la retransmisión. Con HTTP/3 solo se frena A.</desc>
+<path class="dg-frame" d="M170 20 V318"/>
+<text class="dg-tiny" x="170" y="14" text-anchor="middle">0</text>
+<text class="dg-tiny" x="216" y="14" text-anchor="middle">10</text>
+<text class="dg-tiny" x="262" y="14" text-anchor="middle">20</text>
+<text class="dg-tiny" x="308" y="14" text-anchor="middle">30</text>
+<text class="dg-tiny" x="354" y="14" text-anchor="middle">40</text>
+<text class="dg-tiny" x="400" y="14" text-anchor="middle">50</text>
+<text class="dg-tiny" x="446" y="14" text-anchor="middle">60</text>
+<text class="dg-tiny" x="492" y="14" text-anchor="middle">70</text>
+<text class="dg-tiny" x="538" y="14" text-anchor="middle">80</text>
+<text class="dg-tiny" x="584" y="14" text-anchor="middle">90</text>
+<text class="dg-tiny" x="630" y="14" text-anchor="middle">100</text>
+<text class="dg-tiny" x="676" y="14" text-anchor="middle">110</text>
+<text class="dg-tiny" x="722" y="14" text-anchor="middle">120</text>
+<text class="dg-small" x="722" y="30" text-anchor="end">ms</text>
+<text class="dg-label" x="8" y="64">HTTP/1.1</text><text class="dg-small" x="8" y="82">una conexión, en fila</text>
+<rect x="170" y="48" width="92" height="22" rx="3" class="hb-a"/><text class="dg-tiny dg-in" x="216.0" y="63" text-anchor="middle">A</text>
+<rect x="262" y="48" width="110.39999999999999" height="22" rx="3" class="hb-lost"/><text class="dg-tiny dg-in" x="317.2" y="63" text-anchor="middle">A: pérdida y reenvío</text>
+<rect x="372.4" y="48" width="92" height="22" rx="3" class="hb-b"/><text class="dg-tiny dg-in" x="418.4" y="63" text-anchor="middle">B</text>
+<rect x="464.40000000000003" y="48" width="92" height="22" rx="3" class="hb-c"/><text class="dg-tiny dg-in" x="510.40000000000003" y="63" text-anchor="middle">C</text>
+<text class="dg-small" x="565.5999999999999" y="64">C termina a los 84 ms</text>
+<text class="dg-label" x="8" y="152">HTTP/2</text><text class="dg-small" x="8" y="170">streams sobre 1 TCP</text>
+<rect x="170.0" y="136" width="28.52" height="22" rx="3" class="hb-a"/><text class="dg-tiny dg-in" x="184.26" y="151" text-anchor="middle">A</text>
+<rect x="200.36" y="136" width="28.52" height="22" rx="3" class="hb-b"/><text class="dg-tiny dg-in" x="214.62" y="151" text-anchor="middle">B</text>
+<rect x="230.72" y="136" width="28.52" height="22" rx="3" class="hb-c"/><text class="dg-tiny dg-in" x="244.98" y="151" text-anchor="middle">C</text>
+<rect x="262" y="136" width="110.39999999999999" height="22" rx="3" class="hb-lost"/><text class="dg-tiny dg-in" x="317.2" y="151" text-anchor="middle">TCP espera el reenvío de A</text>
+<rect x="372.4" y="136" width="28.52" height="22" rx="3" class="hb-a"/><text class="dg-tiny dg-in" x="386.65999999999997" y="151" text-anchor="middle">A</text>
+<rect x="402.76" y="136" width="28.52" height="22" rx="3" class="hb-b"/><text class="dg-tiny dg-in" x="417.02" y="151" text-anchor="middle">B</text>
+<rect x="433.12" y="136" width="28.52" height="22" rx="3" class="hb-c"/><text class="dg-tiny dg-in" x="447.38" y="151" text-anchor="middle">C</text>
+<text class="dg-small" x="469.0" y="152">B y C quedan bloqueados aunque llegaron: terminan a los 64 ms</text>
+<text class="dg-label" x="8" y="240">HTTP/3</text><text class="dg-small" x="8" y="258">streams QUIC independientes</text>
+<rect x="170.0" y="224" width="28.52" height="22" rx="3" class="hb-a"/><text class="dg-tiny dg-in" x="184.26" y="239" text-anchor="middle">A</text>
+<rect x="200.36" y="224" width="28.52" height="22" rx="3" class="hb-b"/><text class="dg-tiny dg-in" x="214.62" y="239" text-anchor="middle">B</text>
+<rect x="230.72" y="224" width="28.52" height="22" rx="3" class="hb-c"/><text class="dg-tiny dg-in" x="244.98" y="239" text-anchor="middle">C</text>
+<rect x="262" y="224" width="28.52" height="22" rx="3" class="hb-b"/><text class="dg-tiny dg-in" x="276.26" y="239" text-anchor="middle">B</text>
+<rect x="292.36" y="224" width="28.52" height="22" rx="3" class="hb-c"/><text class="dg-tiny dg-in" x="306.62" y="239" text-anchor="middle">C</text>
+<text class="dg-small" x="326.4" y="240">B y C terminan a los 33 ms</text>
+<rect x="262" y="254" width="110.39999999999999" height="22" rx="3" class="hb-lost"/><text class="dg-tiny dg-in" x="317.2" y="269" text-anchor="middle">solo A espera</text>
+<rect x="372.4" y="254" width="28.52" height="22" rx="3" class="hb-a"/><text class="dg-tiny dg-in" x="386.65999999999997" y="269" text-anchor="middle">A</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 1.2.</b> Tres recursos (A, B y C) y un paquete de A que se pierde a los 20 ms y se recupera a los 44 ms. En HTTP/2, B y C ya llegaron pero TCP no los entrega hasta tener lo que falta de A.</figcaption>
+      </figure>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Entre tus propios servicios, dentro de un datacenter con pérdida casi nula, HTTP/2 (por ejemplo, gRPC) es la elección habitual. HTTP/3 gana donde la red es mala y cambiante: usuarios móviles, redes wifi saturadas, países con mucha pérdida. Por eso lo ofrecen primero las CDNs, del lado que da al usuario.</p>
+      </aside>
+
+      <h2 id="presupuesto"><span class="sec-num">1.6</span>Dónde se va cada milisegundo</h2>
+
+      <p>La luz en la fibra viaja a ~200&#8239;000 km/s: cada 100 km de fibra agregan ~1 ms de ida y vuelta, y ninguna optimización baja de ahí. Entre Ciudad de México y Virginia hay ~3&#8239;000 km en línea recta, así que el mínimo teórico es ~30 ms de ida y vuelta, y en la práctica, por el trazado real de los cables y los saltos de red, se ven 45 a 60 ms. Con eso, la latencia de una request se descompone así:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Fase</th><th>Primera visita</th><th>Qué la reduce</th></tr></thead>
+          <tbody>
+            <tr><td>DNS</td><td class="num">0 a 300 ms</td><td>Cachés, resolvers cercanos, <code>dns-prefetch</code></td></tr>
+            <tr><td>TCP + TLS</td><td class="num">2 RTT (1 con QUIC)</td><td>CDN cerca del usuario, keep-alive, HTTP/3, <code>preconnect</code></td></tr>
+            <tr><td>Request y respuesta</td><td class="num">1 RTT hasta quien responda</td><td>Caché en la CDN; si no, conexión caliente al origen</td></tr>
+            <tr><td>Servidor</td><td class="num">1 a 100 ms</td><td>Caché, índices, menos llamadas en serie</td></tr>
+            <tr><td>Transferencia</td><td class="num">Según tamaño y slow start</td><td>Compresión (Brotli, zstd), respuestas más pequeñas</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Una regla que sale de esta tabla: <b>las idas y vueltas en serie son el enemigo</b>. Una app móvil que hace tres llamadas a la API una detrás de otra, cada una con conexión nueva, multiplica todos los costos por tres. Agruparlas, paralelizarlas o reutilizar la conexión vale más que cualquier optimización del servidor.</p>
+
+      <h2 id="fallos"><span class="sec-num">1.7</span>Fallos en el camino</h2>
+
+      <p>Cada salto del mapa puede fallar, y cada falla tiene una firma distinta para el usuario. Los escenarios <b>Cae un servidor de aplicación</b> y <b>Redis cae</b> del mapa muestran las dos más instructivas.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Qué ve el usuario</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>Proveedor DNS caído</td><td>"No se encuentra el sitio", a medida que vencen los TTL</td><td>Dos proveedores DNS, TTL razonable</td></tr>
+            <tr><td>Certificado vencido</td><td>Pantalla de error de seguridad para todos</td><td>Renovación automática y alertas</td></tr>
+            <tr><td>Pérdida de paquetes</td><td>Lentitud, cortes en streaming</td><td>HTTP/3, CDN cercana</td></tr>
+            <tr><td>PoP de la CDN caído</td><td>Nada: otro PoP toma su tráfico vía anycast</td><td>Retiro automático de la ruta BGP</td></tr>
+            <tr><td>Instancia de la app caída</td><td>Nada, si la request era idempotente y el balanceador reintentó</td><td><dfn data-term="health-check">Health checks</dfn> y reintentos solo en requests idempotentes</td></tr>
+            <tr><td>Caché caída</td><td>Lentitud; en el peor caso, caída de la base de datos</td><td>Timeouts cortos, circuit breaker, capacidad de reserva (M04, M08)</td></tr>
+            <tr><td>Región de origen caída</td><td>Errores en todo lo que no esté en caché</td><td>Multi-región con failover (M08)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Prueba ahora el escenario de la instancia caída en el mapa y fíjate en el paso 6: el balanceador puede reintentar porque la request es un GET. <a href="#scenario=app-cae">Abrir el escenario en el mapa</a>.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m01"></div>
+
+      <section class="exercise" aria-labelledby="ej-m01">
+        <p class="exercise-title" id="ej-m01">Ejercicio de diseño: una app lejos de su servidor</p>
+        <p>Tu API vive en us-east-1. Tus usuarios están en Buenos Aires, a 140 ms de ida y vuelta. Cada pantalla de la app hace 3 llamadas a la API, una después de otra, y abre una conexión nueva (TCP + TLS 1.3) para cada una. El servidor tarda 30 ms en responder cada llamada.</p>
+        <p>Calcula cuánto tarda una pantalla. Después propón cambios, en orden de impacto, y recalcula con cada uno.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <div class="table-wrap">
+            <table class="t">
+              <thead><tr><th>Situación</th><th>Cálculo</th><th class="r">Pantalla</th></tr></thead>
+              <tbody>
+                <tr><td>Hoy</td><td>3 × (3 RTT × 140 ms + 30 ms)</td><td class="r">1.35 s</td></tr>
+                <tr><td>Reutilizar la conexión (keep-alive)</td><td>(3 × 140 + 30) + 2 × (140 + 30)</td><td class="r">790 ms</td></tr>
+                <tr><td>Además, llamadas en paralelo (HTTP/2)</td><td>2 RTT de handshake + 1 RTT + 30 ms</td><td class="r">450 ms</td></tr>
+                <tr><td>Además, CDN o edge en Buenos Aires (10 ms de RTT) con conexión caliente al origen</td><td>2 × 10 (handshakes) + 10 + 140 + 30</td><td class="r">200 ms</td></tr>
+                <tr><td>Con la conexión ya abierta (pantallas siguientes)</td><td>10 + 140 + 30</td><td class="r">180 ms</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Otra opción es un <em>BFF</em> (backend for frontend) que junte las tres llamadas en una (M03). El piso de ~150 ms solo se rompe acercando los datos al usuario: una réplica de lectura en São Paulo o respuestas cacheables en el edge.</p>
+        </details>
+      </section>
+
+      <div data-checkpoint="m01"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m01.data.js"></script>
+<script src="../assets/js/data/maps/m01-request.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+</body>
+</html>

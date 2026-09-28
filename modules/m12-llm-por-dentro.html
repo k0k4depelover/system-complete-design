@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M12. Un LLM visto por un ingeniero de sistemas</title>
+<meta name="description" content="Tokens y tokenizer, generación autorregresiva, prefill y decode, KV cache con su fórmula, por qué el decode está limitado por memoria, TTFT, TPOT, goodput y el costo de un token.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m12">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Un LLM visto por un ingeniero de sistemas</h1>
+        <p class="lead">No hace falta saber entrenar un modelo para servirlo bien, pero sí saber qué le pide a la máquina. Este módulo mira un LLM como lo ve la infraestructura: una función que se llama una vez por token, un archivo de pesos que se lee entero en cada paso y una memoria que crece con cada conversación.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M12</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M00, M01</dd></div>
+          <div><dt>Estado</dt><dd data-status="m12">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar la generación de texto como un bucle de llamadas al modelo, un token por vuelta.</li>
+          <li>Contar tokens y entender por qué son la unidad de costo, de límites y de latencia.</li>
+          <li>Distinguir prefill y decode, y decir cuál está limitado por cómputo y cuál por memoria.</li>
+          <li>Calcular el KV cache de un modelo y cuántas conversaciones caben en un despliegue.</li>
+          <li>Medir TTFT, TPOT, throughput y goodput, y estimar el costo de un millón de tokens.</li>
+        </ul>
+      </section>
+
+      <h2 id="caja"><span class="sec-num">12.1</span>El modelo como una función</h2>
+
+      <p>Para la infraestructura, un LLM es una función con una entrada y una salida muy grandes. Recibe una secuencia de tokens y devuelve, para la posición siguiente, un puntaje por cada token posible del vocabulario: los <dfn data-term="logits">logits</dfn>. Esa función está definida por sus pesos. Llama 3.1 70B tiene 70 600 millones de ellos; en BF16, a 2 bytes cada uno, ocupan 141 GB. Se cargan una vez en la memoria de las GPUs y no cambian mientras se sirven.</p>
+
+      <p>Generar texto es llamar a esa función en bucle: se elige un token a partir de los logits, se agrega a la secuencia y se vuelve a llamar. Esa es la <dfn data-term="autorregresivo">generación autorregresiva</dfn>, y de ella sale casi todo lo que viene en esta parte del curso: una respuesta de 500 tokens son 500 vueltas del bucle, una detrás de otra.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f121t f121d">
+<title id="f121t">El ciclo de generación de un LLM</title>
+<desc id="f121d">El texto pasa por el tokenizer y se convierte en IDs de tokens. El modelo procesa esos IDs y produce logits, una puntuación para cada token del vocabulario. El muestreo elige un token, que se agrega a la secuencia y vuelve a entrar al modelo. El KV cache guarda lo calculado de los tokens anteriores para no repetirlo, y cada token nuevo se convierte en texto y viaja al usuario por streaming.</desc>
+<defs><marker id="f121a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="65" y="120" text-anchor="middle">Texto</text>
+<text class="dg-tiny" x="65" y="140" text-anchor="middle">"¿Qué es el</text>
+<text class="dg-tiny" x="65" y="155" text-anchor="middle">KV cache?"</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="136" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="193" y="120" text-anchor="middle">Tokenizer</text>
+<text class="dg-tiny" x="193" y="140" text-anchor="middle">texto → IDs</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="264" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="321" y="120" text-anchor="middle">Secuencia</text>
+<text class="dg-tiny" x="321" y="140" text-anchor="middle">[34 207, 15 391,</text>
+<text class="dg-tiny" x="321" y="155" text-anchor="middle">…, 30]</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="392" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="449" y="120" text-anchor="middle">Modelo</text>
+<text class="dg-tiny" x="449" y="140" text-anchor="middle">80 capas</text>
+<text class="dg-tiny" x="449" y="155" text-anchor="middle">141 GB de pesos</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="520" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="577" y="120" text-anchor="middle">Logits</text>
+<text class="dg-tiny" x="577" y="140" text-anchor="middle">un puntaje por</text>
+<text class="dg-tiny" x="577" y="155" text-anchor="middle">cada uno de 128 256</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="648" y="96" width="114" height="70" rx="10"/>
+<text class="dg-label" x="705" y="120" text-anchor="middle">Muestreo</text>
+<text class="dg-tiny" x="705" y="140" text-anchor="middle">temperatura,</text>
+<text class="dg-tiny" x="705" y="155" text-anchor="middle">top-p</text>
+<path class="dg-edge" d="M123 131 H133" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M251 131 H261" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M379 131 H389" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M507 131 H517" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M635 131 H645" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M705 94 V52 H321 V92" marker-end="url(#f121a)"/>
+<text class="dg-tiny" x="513" y="44" text-anchor="middle">el token elegido se agrega a la secuencia y el ciclo se repite, un token por vuelta</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="349" y="210" width="200" height="56" rx="10"/>
+<text class="dg-label" x="449" y="232" text-anchor="middle">KV cache</text>
+<text class="dg-tiny" x="449" y="251" text-anchor="middle">lo calculado de los tokens previos</text>
+<path class="dg-edge" d="M430 168 V206" marker-end="url(#f121a)"/>
+<path class="dg-edge" d="M468 207 V170" marker-end="url(#f121a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="620" y="210" width="142" height="56" rx="10"/>
+<text class="dg-label" x="691" y="232" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="691" y="251" text-anchor="middle">recibe cada token</text>
+<path class="dg-edge" d="M705 168 V206" marker-end="url(#f121a)"/>
+<text class="dg-tiny" x="713" y="192">stream</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 12.1.</b> Cada vuelta produce un solo token. El KV cache evita recalcular lo que ya se procesó de los tokens anteriores, y cada token viaja al usuario en cuanto existe.</figcaption>
+      </figure>
+
+      <p>Dos consecuencias que un ingeniero de sistemas tiene que tener presentes:</p>
+      <ul>
+        <li><b>El modelo no guarda estado entre requests.</b> Cada request lleva la conversación completa. La "memoria" de un chat es contexto que el producto vuelve a enviar en cada mensaje (M20), y por eso cada mensaje de una conversación larga cuesta más que el anterior.</li>
+        <li><b>La salida es aleatoria a propósito.</b> El token no se elige siempre por el puntaje más alto: se muestrea según la <dfn data-term="sampling">temperatura y el top-p</dfn>, para que el texto no sea repetitivo. Con temperatura 0 se elige siempre el más probable, pero ni así la respuesta es idéntica en cada llamada: el resultado cambia según con qué otras requests compartió el batch, porque el orden de las sumas en punto flotante cambia con él. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <h2 id="tokens"><span class="sec-num">12.2</span>Tokens: la unidad de todo</h2>
+
+      <p>El modelo no ve letras ni palabras: ve tokens, pedazos de texto de un vocabulario fijo. El <dfn data-term="tokenizer">tokenizer</dfn> convierte el texto en una lista de IDs antes de entrar al modelo, y hace lo inverso con cada token que sale. Los vocabularios actuales tienen entre 100 000 y 200 000 piezas: el de Llama 3 tiene 128 256, y el de GPT-4o, unas 200 000. Como regla práctica, en inglés un token equivale a unos 4 caracteres, más o menos tres cuartos de palabra. <span class="badge badge--doc">Documentado</span> El mismo texto en español suele necesitar más tokens, porque los tokenizers se entrenan con más texto en inglés.</p>
+
+      <div data-sim="tokenizer"></div>
+
+      <p>Los tokens importan porque son la unidad de casi todo lo que la infraestructura mide y cobra:</p>
+      <ul>
+        <li><b>Costo:</b> las APIs cobran por millón de tokens, con precios distintos para los de entrada y los de salida (12.7).</li>
+        <li><b>Límites:</b> la ventana de contexto se mide en tokens (M16), y las cuotas de uso también, en tokens por minuto (M18).</li>
+        <li><b>Latencia:</b> cada token de salida es una vuelta del bucle. El tiempo de una respuesta crece con su largo en tokens, no con el del prompt.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los tokens se cuentan con el tokenizer del modelo, nunca estimando por caracteres, antes de enviar la request, para validar límites y reservar cuota, y de nuevo en el servidor, que tiene la cuenta definitiva. Hay que sumar los tokens que agrega la plantilla de chat: cada mensaje lleva marcadores de rol, como <code>&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;</code> en Llama 3, que no escribió nadie pero ocupan contexto y se cobran.</p>
+      </aside>
+
+<pre data-lang="python"><code>import tiktoken
+
+enc = tiktoken.get_encoding("o200k_base")          # el tokenizer de GPT-4o
+ids = enc.encode("Los modelos de lenguaje no leen palabras: leen tokens.")
+print(len(ids))                                    # la cuenta real, no una estimación
+print(enc.decode(ids[:3]))                         # los tres primeros tokens, como texto</code></pre>
+
+      <h2 id="prefill-decode"><span class="sec-num">12.3</span>Prefill y decode: dos trabajos distintos</h2>
+
+      <p>Una request pasa por dos fases que le piden cosas opuestas a la GPU. En el <dfn data-term="prefill">prefill</dfn>, el modelo procesa todos los tokens del prompt a la vez, en una sola pasada: son multiplicaciones de matrices grandes que aprovechan todo el cómputo de la GPU. El prefill llena el KV cache con el prompt y produce el primer token. En el <dfn data-term="decode">decode</dfn>, cada paso genera un solo token por request, y para eso tiene que leer todos los pesos de la memoria: poco cómputo por cada byte leído.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f122t f122d">
+<title id="f122t">Línea de tiempo de una request: cola, prefill y decode</title>
+<desc id="f122d">La request espera en cola 60 ms. El prefill procesa los 2000 tokens del prompt a la vez en unos 90 ms y produce el primer token: el TTFT es la suma, 150 ms. Después cada paso de decode produce un token, uno cada 12 ms: eso es el TPOT. El tiempo total es el TTFT más el TPOT por los tokens restantes.</desc>
+<defs><marker id="f122a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="40.0" y="100" width="132.0" height="40" rx="6" fill="var(--fill)" stroke="var(--separator-strong)" stroke-dasharray="4 3"/>
+<text class="dg-small" x="106.0" y="125" text-anchor="middle">cola</text>
+<rect x="172.0" y="100" width="198.00000000000003" height="40" rx="6" fill="color-mix(in srgb, var(--l-gpu) 28%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="271.0" y="119" text-anchor="middle">Prefill</text>
+<text class="dg-tiny" x="271.0" y="134" text-anchor="middle">2000 tokens a la vez</text>
+<rect x="371.5" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="397.90000000000003" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="424.3" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="450.70000000000005" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="477.1" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="503.50000000000006" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="529.9000000000001" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="556.3000000000001" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="582.7" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="609.1" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="635.5" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<rect x="661.9000000000001" y="108" width="23.400000000000002" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<text class="dg-tiny" x="528.4" y="158" text-anchor="middle">Decode: un token por paso</text>
+<path class="dg-edge" d="M40.0 140 V186" />
+<path class="dg-edge" d="M370.0 140 V186"/>
+<path class="dg-edge" d="M43.0 180 H367.0" marker-start="url(#f122a)" marker-end="url(#f122a)"/>
+<text class="dg-label" x="205.0" y="174" text-anchor="middle" style="font-size:13px">TTFT = 150 ms</text>
+<path class="dg-edge" d="M396.40000000000003 96 V70"/><path class="dg-edge" d="M422.8 96 V70"/>
+<path class="dg-edge" d="M399.40000000000003 76 H419.8" marker-start="url(#f122a)" marker-end="url(#f122a)"/>
+<text class="dg-label" x="409.6" y="64" text-anchor="middle" style="font-size:13px">TPOT = 12 ms</text>
+<text class="dg-small" x="40.0" y="40">Tiempo total = TTFT + TPOT × (tokens de salida − 1)</text>
+<text class="dg-small" x="40.0" y="58">Con 500 tokens: 150 ms + 12 ms × 499 ≈ 6.1 s, aunque el usuario ya lee desde los 150 ms</text>
+<text class="sim-axis" x="40.0" y="208" text-anchor="middle">0 ms</text>
+<text class="sim-axis" x="150.0" y="208" text-anchor="middle">50 ms</text>
+<text class="sim-axis" x="260.0" y="208" text-anchor="middle">100 ms</text>
+<text class="sim-axis" x="370.0" y="208" text-anchor="middle">150 ms</text>
+<text class="sim-axis" x="480.00000000000006" y="208" text-anchor="middle">200 ms</text>
+<text class="sim-axis" x="590.0" y="208" text-anchor="middle">250 ms</text>
+<text class="sim-axis" x="686.8000000000001" y="208" text-anchor="middle">294 ms</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 12.2.</b> La espera en cola y el prefill deciden cuándo aparece el primer token; el decode, a qué ritmo llegan los siguientes. Son dos métricas con causas distintas.</figcaption>
+      </figure>
+
+      <p>Con números, para Llama 3.1 70B con pesos en FP8 sobre 4 GPUs H100:</p>
+      <ul>
+        <li><b>Prefill de 2000 tokens:</b> cada token cuesta unas 2 operaciones por parámetro, así que son 2 × 70 600 millones × 2000 ≈ 2.8 × 10<sup>14</sup> operaciones. Las 4 GPUs suman unos 7.9 × 10<sup>15</sup> FLOPS en FP8; a un 40&#8239;% de eso, el prefill tarda unos <b>90 ms</b>.</li>
+        <li><b>Un paso de decode:</b> hay que leer los 70.6 GB de pesos. Las 4 GPUs leen de su memoria a 13.4 TB/s en total, así que cada paso tarda al menos <b>5.3 ms</b>: como máximo unos 190 tokens por segundo para esa request, aunque el cómputo de las GPUs esté casi ocioso.</li>
+      </ul>
+      <p>Que las dos fases tengan cuellos de botella distintos es la razón de ser de buena parte de los motores de inferencia: mezclarlas bien en un mismo batch, o separarlas en máquinas distintas, es tema del M15.</p>
+
+      <h2 id="kv-cache"><span class="sec-num">12.4</span>El KV cache</h2>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term"><dfn data-term="kv-cache">KV cache</dfn></p>
+        <p>En cada capa, la atención compara el token nuevo con todos los anteriores a través de dos vectores por token: la clave (<em>key</em>) y el valor (<em>value</em>). El KV cache los guarda para no recalcularlos en cada paso. Hace que cada token nuevo cueste lo mismo que el anterior, en lugar de reprocesar toda la secuencia, a cambio de memoria que crece con cada token de cada conversación.</p>
+      </aside>
+
+      <p>Su tamaño sale de la configuración del modelo:</p>
+
+<pre><code>bytes por token = 2 (K y V) × capas × kv_heads × head_dim × bytes por valor
+
+Llama 3.1 70B en BF16:  2 × 80 × 8 × 128 × 2 = 327 680 bytes ≈ 328 kB por token
+Una conversación de 8192 tokens:  8192 × 328 kB ≈ 2.7 GB</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modelo</th><th>Capas, KV heads, head_dim</th><th class="r">KV por token</th><th class="r">8192 tokens</th><th class="r">128k tokens</th></tr></thead>
+          <tbody>
+            <tr><td>Llama 3.1 8B</td><td>32, 8, 128</td><td class="r">131 kB</td><td class="r">1.07 GB</td><td class="r">17.2 GB</td></tr>
+            <tr><td>Llama 3.1 70B</td><td>80, 8, 128</td><td class="r">328 kB</td><td class="r">2.68 GB</td><td class="r">42.9 GB</td></tr>
+            <tr><td>Llama 3.1 405B</td><td>126, 8, 128</td><td class="r">516 kB</td><td class="r">4.23 GB</td><td class="r">67.6 GB</td></tr>
+            <tr><td>GPT-3 175B, sin GQA</td><td>96, 96, 128</td><td class="r">4.72 MB</td><td class="r">38.7 GB</td><td class="r">—</td></tr>
+            <tr><td>DeepSeek-V3, con MLA</td><td>61 capas, 576 valores comprimidos</td><td class="r">70 kB</td><td class="r">0.58 GB</td><td class="r">9.2 GB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La diferencia entre GPT-3 y Llama 3.1 70B es de diseño. GPT-3 tiene un par K y V por cada una de sus 96 cabezas de atención. Llama 3 usa <dfn data-term="gqa">GQA</dfn>: 64 cabezas de consulta comparten 8 pares de K y V, y el cache ocupa 8 veces menos que sin compartir. DeepSeek-V3 va más lejos con <dfn data-term="mla">MLA</dfn>: guarda un vector comprimido por token y capa y reconstruye K y V al usarlo. Para quien sirve un modelo, esta elección de arquitectura pesa tanto como la cantidad de parámetros.</p>
+
+      <p>Mira cómo crece el cache mientras se genera una respuesta, y qué pasa con la memoria del despliegue cuando suben el contexto o los usuarios:</p>
+
+      <div data-sim="kvcache"></div>
+
+      <p>El KV cache es el recurso escaso del serving. En el despliegue de 4 H100 con el 70B en FP8, de los 320 GB quedan unos 229 GB libres después de los pesos y la reserva del runtime: unos 700 000 tokens de cache, o 85 conversaciones de 8192 tokens a la vez. Por eso los motores administran el cache en bloques, como la memoria virtual de un sistema operativo (PagedAttention, M15); por eso una ventana de contexto grande cuesta caro (M16); y por eso guardar el cache en FP8 duplica la capacidad (M14).</p>
+
+      <h2 id="memoria"><span class="sec-num">12.5</span>Por qué el decode está limitado por memoria</h2>
+
+      <p>En cada paso de decode, cada request aporta un token y unas 2 operaciones por parámetro; los pesos se leen una vez por paso y sirven para todas las requests del batch. Con una sola request, el 70B hace 141 mil millones de operaciones por cada 70.6 GB leídos: 2 operaciones por byte. Una H100 puede hacer unas 590 operaciones FP8 por cada byte que lee de su memoria. La GPU pasa casi todo el paso esperando datos.</p>
+
+      <p>La salida es juntar requests. Si 64 requests comparten el paso, los mismos pesos producen 64 tokens: el throughput se multiplica casi gratis. El límite no tarda en aparecer, porque cada request también tiene que leer su propio KV cache en cada paso, y ese cache crece con su contexto:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f123t f123d">
+<title id="f123t">Tokens por segundo según el tamaño del batch</title>
+<desc id="f123d">Llama 3.1 70B en FP8 sobre 4 H100, con 4000 tokens de contexto por usuario, en el límite teórico de ancho de banda. Con 1 usuario: 186 tokens por segundo en total y por usuario. Con 64: 5551 en total y 87 por usuario. Con 175, cuando la memoria se llena: 7817 en total y 45 por usuario.</desc>
+<text class="dg-group" x="0" y="22">Tokens por segundo en total</text>
+<line class="sim-grid" x1="52" x2="352" y1="234.0" y2="234.0"/><text class="sim-axis" x="46" y="238.0" text-anchor="end">0</text>
+<line class="sim-grid" x1="52" x2="352" y1="186.5" y2="186.5"/><text class="sim-axis" x="46" y="190.5" text-anchor="end">2 000</text>
+<line class="sim-grid" x1="52" x2="352" y1="139.0" y2="139.0"/><text class="sim-axis" x="46" y="143.0" text-anchor="end">4 000</text>
+<line class="sim-grid" x1="52" x2="352" y1="91.5" y2="91.5"/><text class="sim-axis" x="46" y="95.5" text-anchor="end">6 000</text>
+<line class="sim-grid" x1="52" x2="352" y1="44.0" y2="44.0"/><text class="sim-axis" x="46" y="48.0" text-anchor="end">8 000</text>
+<text class="sim-axis" x="52.0" y="250" text-anchor="middle">1</text>
+<text class="sim-axis" x="136.5" y="250" text-anchor="middle">50</text>
+<text class="sim-axis" x="222.7" y="250" text-anchor="middle">100</text>
+<text class="sim-axis" x="308.9" y="250" text-anchor="middle">150</text>
+<text class="sim-axis" x="352.0" y="250" text-anchor="middle">175</text>
+<path d="M52.0 229.6 L53.7 225.3 L55.4 221.2 L57.2 217.2 L58.9 213.4 L60.6 209.7 L62.3 206.1 L64.1 202.6 L65.8 199.2 L67.5 196.0 L69.2 192.8 L71.0 189.8 L72.7 186.8 L74.4 183.9 L76.1 181.1 L77.9 178.4 L79.6 175.8 L81.3 173.2 L83.0 170.7 L84.8 168.3 L86.5 165.9 L88.2 163.6 L89.9 161.3 L91.7 159.2 L93.4 157.0 L95.1 155.0 L96.8 152.9 L98.6 151.0 L100.3 149.0 L102.0 147.1 L103.7 145.3 L105.4 143.5 L107.2 141.8 L108.9 140.0 L110.6 138.4 L112.3 136.7 L114.1 135.1 L115.8 133.6 L117.5 132.0 L119.2 130.5 L121.0 129.1 L122.7 127.6 L124.4 126.2 L126.1 124.8 L127.9 123.5 L129.6 122.2 L131.3 120.9 L133.0 119.6 L134.8 118.3 L136.5 117.1 L138.2 115.9 L139.9 114.7 L141.7 113.6 L143.4 112.4 L145.1 111.3 L146.8 110.2 L148.6 109.2 L150.3 108.1 L152.0 107.1 L153.7 106.1 L155.4 105.1 L157.2 104.1 L158.9 103.1 L160.6 102.2 L162.3 101.2 L164.1 100.3 L165.8 99.4 L167.5 98.5 L169.2 97.6 L171.0 96.8 L172.7 95.9 L174.4 95.1 L176.1 94.3 L177.9 93.5 L179.6 92.7 L181.3 91.9 L183.0 91.1 L184.8 90.4 L186.5 89.6 L188.2 88.9 L189.9 88.2 L191.7 87.5 L193.4 86.8 L195.1 86.1 L196.8 85.4 L198.6 84.7 L200.3 84.0 L202.0 83.4 L203.7 82.7 L205.4 82.1 L207.2 81.5 L208.9 80.9 L210.6 80.2 L212.3 79.6 L214.1 79.0 L215.8 78.5 L217.5 77.9 L219.2 77.3 L221.0 76.8 L222.7 76.2 L224.4 75.6 L226.1 75.1 L227.9 74.6 L229.6 74.0 L231.3 73.5 L233.0 73.0 L234.8 72.5 L236.5 72.0 L238.2 71.5 L239.9 71.0 L241.7 70.5 L243.4 70.0 L245.1 69.6 L246.8 69.1 L248.6 68.6 L250.3 68.2 L252.0 67.7 L253.7 67.3 L255.4 66.9 L257.2 66.4 L258.9 66.0 L260.6 65.6 L262.3 65.1 L264.1 64.7 L265.8 64.3 L267.5 63.9 L269.2 63.5 L271.0 63.1 L272.7 62.7 L274.4 62.3 L276.1 61.9 L277.9 61.6 L279.6 61.2 L281.3 60.8 L283.0 60.4 L284.8 60.1 L286.5 59.7 L288.2 59.4 L289.9 59.0 L291.7 58.7 L293.4 58.3 L295.1 58.0 L296.8 57.6 L298.6 57.3 L300.3 57.0 L302.0 56.6 L303.7 56.3 L305.4 56.0 L307.2 55.7 L308.9 55.3 L310.6 55.0 L312.3 54.7 L314.1 54.4 L315.8 54.1 L317.5 53.8 L319.2 53.5 L321.0 53.2 L322.7 52.9 L324.4 52.6 L326.1 52.3 L327.9 52.1 L329.6 51.8 L331.3 51.5 L333.0 51.2 L334.8 51.0 L336.5 50.7 L338.2 50.4 L339.9 50.1 L341.7 49.9 L343.4 49.6 L345.1 49.4 L346.8 49.1 L348.6 48.8 L350.3 48.6 L352.0 48.3" fill="none" stroke="var(--l-gpu)" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="52.0" cy="229.6" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="60.0" y="221.6" text-anchor="start">186</text>
+<circle cx="160.6" cy="102.2" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="168.6" y="94.2" text-anchor="start">5 551</text>
+<circle cx="352.0" cy="48.3" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="344.0" y="40.3" text-anchor="end">7 817</text>
+<text class="sim-axis" x="352" y="266" text-anchor="end">usuarios en el batch</text>
+<text class="dg-group" x="392" y="22">Tokens por segundo de cada usuario</text>
+<line class="sim-grid" x1="444" x2="744" y1="234.0" y2="234.0"/><text class="sim-axis" x="438" y="238.0" text-anchor="end">0</text>
+<line class="sim-grid" x1="444" x2="744" y1="186.5" y2="186.5"/><text class="sim-axis" x="438" y="190.5" text-anchor="end">50</text>
+<line class="sim-grid" x1="444" x2="744" y1="139.0" y2="139.0"/><text class="sim-axis" x="438" y="143.0" text-anchor="end">100</text>
+<line class="sim-grid" x1="444" x2="744" y1="91.5" y2="91.5"/><text class="sim-axis" x="438" y="95.5" text-anchor="end">150</text>
+<line class="sim-grid" x1="444" x2="744" y1="44.0" y2="44.0"/><text class="sim-axis" x="438" y="48.0" text-anchor="end">200</text>
+<text class="sim-axis" x="444.0" y="250" text-anchor="middle">1</text>
+<text class="sim-axis" x="528.5" y="250" text-anchor="middle">50</text>
+<text class="sim-axis" x="614.7" y="250" text-anchor="middle">100</text>
+<text class="sim-axis" x="700.9" y="250" text-anchor="middle">150</text>
+<text class="sim-axis" x="744.0" y="250" text-anchor="middle">175</text>
+<path d="M444.0 57.0 L445.7 60.1 L447.4 63.2 L449.2 66.2 L450.9 69.0 L452.6 71.8 L454.3 74.4 L456.1 77.0 L457.8 79.5 L459.5 81.9 L461.2 84.3 L463.0 86.5 L464.7 88.7 L466.4 90.9 L468.1 93.0 L469.9 95.0 L471.6 96.9 L473.3 98.9 L475.0 100.7 L476.8 102.5 L478.5 104.3 L480.2 106.0 L481.9 107.6 L483.7 109.3 L485.4 110.8 L487.1 112.4 L488.8 113.9 L490.6 115.4 L492.3 116.8 L494.0 118.2 L495.7 119.6 L497.4 120.9 L499.2 122.2 L500.9 123.5 L502.6 124.7 L504.3 125.9 L506.1 127.1 L507.8 128.3 L509.5 129.4 L511.2 130.5 L513.0 131.6 L514.7 132.7 L516.4 133.7 L518.1 134.8 L519.9 135.8 L521.6 136.7 L523.3 137.7 L525.0 138.7 L526.8 139.6 L528.5 140.5 L530.2 141.4 L531.9 142.3 L533.7 143.1 L535.4 144.0 L537.1 144.8 L538.8 145.6 L540.6 146.4 L542.3 147.2 L544.0 147.9 L545.7 148.7 L547.4 149.4 L549.2 150.2 L550.9 150.9 L552.6 151.6 L554.3 152.3 L556.1 153.0 L557.8 153.6 L559.5 154.3 L561.2 155.0 L563.0 155.6 L564.7 156.2 L566.4 156.8 L568.1 157.4 L569.9 158.0 L571.6 158.6 L573.3 159.2 L575.0 159.8 L576.8 160.3 L578.5 160.9 L580.2 161.4 L581.9 162.0 L583.7 162.5 L585.4 163.0 L587.1 163.6 L588.8 164.1 L590.6 164.6 L592.3 165.1 L594.0 165.5 L595.7 166.0 L597.4 166.5 L599.2 167.0 L600.9 167.4 L602.6 167.9 L604.3 168.3 L606.1 168.8 L607.8 169.2 L609.5 169.6 L611.2 170.0 L613.0 170.5 L614.7 170.9 L616.4 171.3 L618.1 171.7 L619.9 172.1 L621.6 172.5 L623.3 172.9 L625.0 173.2 L626.8 173.6 L628.5 174.0 L630.2 174.4 L631.9 174.7 L633.7 175.1 L635.4 175.4 L637.1 175.8 L638.8 176.1 L640.6 176.5 L642.3 176.8 L644.0 177.2 L645.7 177.5 L647.4 177.8 L649.2 178.1 L650.9 178.5 L652.6 178.8 L654.3 179.1 L656.1 179.4 L657.8 179.7 L659.5 180.0 L661.2 180.3 L663.0 180.6 L664.7 180.9 L666.4 181.2 L668.1 181.5 L669.9 181.7 L671.6 182.0 L673.3 182.3 L675.0 182.6 L676.8 182.8 L678.5 183.1 L680.2 183.4 L681.9 183.6 L683.7 183.9 L685.4 184.2 L687.1 184.4 L688.8 184.7 L690.6 184.9 L692.3 185.2 L694.0 185.4 L695.7 185.6 L697.4 185.9 L699.2 186.1 L700.9 186.4 L702.6 186.6 L704.3 186.8 L706.1 187.1 L707.8 187.3 L709.5 187.5 L711.2 187.7 L713.0 187.9 L714.7 188.2 L716.4 188.4 L718.1 188.6 L719.9 188.8 L721.6 189.0 L723.3 189.2 L725.0 189.4 L726.8 189.6 L728.5 189.8 L730.2 190.0 L731.9 190.2 L733.7 190.4 L735.4 190.6 L737.1 190.8 L738.8 191.0 L740.6 191.2 L742.3 191.4 L744.0 191.6" fill="none" stroke="var(--l-gpu)" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="444.0" cy="57.0" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="452.0" y="49.0" text-anchor="start">186</text>
+<circle cx="552.6" cy="151.6" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="560.6" y="143.6" text-anchor="start">87</text>
+<circle cx="744.0" cy="191.6" r="4.5" fill="var(--l-gpu)" stroke="var(--bg)" stroke-width="2"/>
+<text class="sim-val" x="736.0" y="183.6" text-anchor="end">45</text>
+<text class="sim-axis" x="744" y="266" text-anchor="end">usuarios en el batch</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 12.3.</b> Llama 3.1 70B en FP8 sobre 4 H100, con 4000 tokens de contexto por usuario, en el límite teórico. Con 64 usuarios, el KV que se lee en cada paso (84 GB) ya pesa más que los pesos (71 GB). A los 175 usuarios la memoria se llena.</figcaption>
+      </figure>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>El tamaño del batch es la perilla entre costo y velocidad. Más usuarios por paso bajan el costo por token, porque cada GPU produce más, y suben el TPOT de cada usuario. Un SLO de TPOT (por ejemplo, 50 ms) fija cuántos usuarios caben por despliegue; la memoria del KV fija el otro techo. El que se alcance primero manda.</p>
+      </aside>
+
+      <h2 id="metricas"><span class="sec-num">12.6</span>Las métricas que importan</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Métrica</th><th>Qué mide</th><th>De qué depende</th><th>Objetivo típico en un chat</th></tr></thead>
+          <tbody>
+            <tr><td><b><dfn data-term="ttft">TTFT</dfn></b></td><td>Desde que llega la request hasta el primer token</td><td>Espera en cola, largo del prompt, prefill</td><td>p95 menor a 1 s</td></tr>
+            <tr><td><b><dfn data-term="itl">TPOT o ITL</dfn></b></td><td>Tiempo entre tokens de salida</td><td>Tamaño del batch, contexto de cada usuario, ancho de banda</td><td>p95 menor a 50 ms (20 tokens/s)</td></tr>
+            <tr><td><b>Latencia total</b></td><td>TTFT + TPOT × (tokens de salida − 1)</td><td>Sobre todo, el largo de la respuesta</td><td>No se fija sola: depende de lo que se pida</td></tr>
+            <tr><td><b>Throughput</b></td><td>Tokens por segundo por GPU, de entrada y de salida por separado</td><td>Batch, cuantización, motor</td><td>Define el costo (12.7)</td></tr>
+            <tr><td><b><dfn data-term="goodput">Goodput</dfn></b></td><td>Requests por segundo que cumplen el SLO de TTFT y de TPOT</td><td>Todo lo anterior a la vez</td><td>Lo que realmente se optimiza</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los objetivos de la tabla son decisiones de diseño, no estándares. Salen de cómo se lee: una persona lee en silencio unas 4 palabras por segundo, del orden de 5 a 6 tokens por segundo, así que un stream a 20 tokens por segundo ya va por delante del lector. Con TTFT de 400 ms y TPOT de 25 ms, una respuesta de 500 tokens tarda 0.4 + 0.025 × 499 ≈ 13 s en completarse, pero el usuario empieza a leer a los 400 ms. Sin streaming, esos 13 s serían una pantalla vacía.</p>
+
+      <p>El throughput solo engaña: se puede subir llenando el batch hasta que nadie cumpla su SLO. Por eso los papers de serving recientes optimizan el goodput, término que popularizó DistServe (OSDI 2024). <span class="badge badge--doc">Documentado</span> Medir bien exige separar la espera en cola, el prefill y el decode en spans distintos del trace (M11): un TTFT alto por cola se arregla con capacidad, y uno por prefill, con otra cosa (M15 y M16).</p>
+
+      <h2 id="costo"><span class="sec-num">12.7</span>Cuánto cuesta un token</h2>
+
+<pre><code>costo por millón de tokens = costo por hora del despliegue ÷ (tokens por segundo × 3600) × 1 000 000</code></pre>
+
+      <p>Con el despliegue de antes: 4 H100 a un precio supuesto de 2.5 USD por GPU y hora son 10 USD por hora. Con 64 usuarios, el límite teórico es de unos 5550 tokens de salida por segundo; un motor real llega a un 60&#8239;%, unos 3300. En una hora son 12 millones de tokens: unos <b>0.83 USD por millón de tokens de salida</b>, solo en GPUs. Faltan el prefill, la capacidad ociosa de las horas tranquilas, la red, el almacenamiento y el equipo.</p>
+
+      <p>El mismo cálculo explica por qué las APIs cobran varias veces más por un token de salida que por uno de entrada. Un prefill procesa miles de tokens por pasada y aprovecha el cómputo; cada token de salida necesita su propio paso de decode, dominado por lecturas de memoria. Y explica dos decisiones de producto que verás más adelante: las APIs batch, con descuento a cambio de esperar horas, que llenan la capacidad ociosa (M17), y el autoscaling agresivo, porque una GPU quieta a las 4 de la mañana cuesta lo mismo que una llena (M19).</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m12"></div>
+
+      <section class="exercise" aria-labelledby="ej-m12">
+        <p class="exercise-title" id="ej-m12">Ejercicio de diseño: un asistente interno con 150 usuarios a la vez</p>
+        <p>Una empresa quiere servir Llama 3.1 70B con pesos en FP8 para su asistente interno. En la hora pico hay 150 conversaciones generando a la vez, con 6000 tokens de contexto en promedio, y el SLO de TPOT es de 50 ms. Tiene GPUs H100 de 80 GB, con unos 5 GB por GPU reservados para el runtime.</p>
+        <p>Calcula el KV cache de una conversación y el total, decide cuántas GPUs hacen falta y cómo agruparlas, y estima el TPOT. ¿Qué cambia si el KV se guarda en FP8?</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>KV por conversación:</b> 6000 × 328 kB ≈ 1.97 GB. Por 150 conversaciones: unos 295 GB.</li>
+            <li><b>Con 4 GPUs no alcanza:</b> 320 GB − 70.6 de pesos − 20 de reserva dejan 229 GB, menos que 295.</li>
+            <li><b>Dos réplicas de 4 GPUs, con 75 conversaciones cada una:</b> cada réplica necesita 147 GB de KV y tiene 229 libres. Cada paso lee 70.6 + 147 GB a 13.4 TB/s: unos 16 ms de TPOT teórico, alrededor de 25 ms en la práctica, dentro del SLO. Dos réplicas además dan redundancia: si una cae, la otra sigue atendiendo, peor pero sin cortar el servicio.</li>
+            <li><b>Una réplica de 8 GPUs</b> también sirve: 529 GB libres y un paso de unos 14 ms. Pero comunica más entre GPUs en cada paso, y una sola réplica es un punto único de falla.</li>
+            <li><b>KV en FP8:</b> el cache baja a unos 147 GB en total. Una réplica de 4 GPUs alcanzaría para las 150 conversaciones, con pasos de unos 16 ms teóricos, a cambio de una pérdida de calidad pequeña que hay que medir (M14).</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m12"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m12.data.js"></script>
+<script src="../assets/js/data/llm.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-llm.js"></script>
+</body>
+</html>

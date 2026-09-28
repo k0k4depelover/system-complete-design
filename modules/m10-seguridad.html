@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M10. Seguridad e identidad</title>
+<meta name="description" content="Autenticación y autorización, sesiones, JWT y tokens opacos (laboratorio interactivo), OAuth 2.0 y OIDC con PKCE, API keys, mTLS, secretos, KMS y envelope encryption, aislamiento multi-tenant y ataques típicos.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m10">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Seguridad e identidad</h1>
+        <p class="lead">Cada request de un sistema real responde dos preguntas antes de hacer nada: quién la envía y si puede hacer lo que pide. Este módulo recorre cómo se contesta eso entre usuarios, aplicaciones y servicios, cómo se protegen los datos y las claves, y los errores que más se explotan en APIs reales.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M10</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M02</dd></div>
+          <div><dt>Estado</dt><dd data-status="m10">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir entre sesiones, tokens opacos y JWT, y verificar un JWT correctamente.</li>
+          <li>Explicar el flujo de OAuth 2.0 con PKCE y la diferencia entre OAuth y OpenID Connect.</li>
+          <li>Diseñar API keys, identidad entre servicios con mTLS y la gestión de secretos.</li>
+          <li>Cifrar datos con envelope encryption y aislar tenants en un SaaS.</li>
+          <li>Reconocer BOLA, SSRF y otros ataques frecuentes contra APIs.</li>
+        </ul>
+      </section>
+
+      <h2 id="basicos"><span class="sec-num">10.1</span>Autenticación, autorización y el modelo de amenazas</h2>
+
+      <p><dfn data-term="authn-authz">Autenticar</dfn> es comprobar quién hace la request; autorizar es decidir si esa identidad puede hacer eso con ese recurso. Son dos pasos, y el segundo se olvida más: una API que verifica el token y después devuelve cualquier factura que le pidan está autenticada, pero no autorizada.</p>
+
+      <p>Antes de elegir mecanismos se hace un modelo de amenazas, respondiendo tres preguntas: <b>qué protegemos</b> (dinero, conversaciones privadas, credenciales), <b>de quién</b> (usuarios curiosos, atacantes externos, un empleado, un servicio comprometido) y <b>qué pasa si falla cada barrera</b>. De ahí sale el principio de defensa en profundidad: ninguna barrera única, varias capas independientes, y el menor privilegio posible en cada una.</p>
+
+      <h2 id="tokens"><span class="sec-num">10.2</span>Sesiones, tokens opacos y JWT</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Cookie de sesión</th><th><dfn data-term="opaque-token">Token opaco</dfn></th><th><dfn data-term="jwt">JWT</dfn></th></tr></thead>
+          <tbody>
+            <tr><td><b>Qué contiene</b></td><td>Un id aleatorio</td><td>Un id aleatorio</td><td>Los datos (claims) firmados</td></tr>
+            <tr><td><b>Cómo se verifica</b></td><td>Buscando la sesión en un almacén</td><td>Consultando al emisor (introspección) o a una caché</td><td>Localmente, con la clave: sin consultar a nadie</td></tr>
+            <tr><td><b>Revocación</b></td><td>Inmediata</td><td>Inmediata</td><td>Solo cuando vence (salvo listas de revocación)</td></tr>
+            <tr><td><b>Ideal para</b></td><td>Aplicaciones web propias</td><td>APIs públicas donde revocar importa</td><td>Muchos servicios que verifican sin un punto central</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con cookies, tres atributos no se negocian: <code>HttpOnly</code> (el JavaScript de la página no puede leerla, lo que frena el robo por XSS), <code>Secure</code> (solo viaja por HTTPS) y <code>SameSite=Lax</code> o <code>Strict</code> (no se envía en requests iniciadas por otros sitios, lo que frena el CSRF).</p>
+
+      <p>Un JWT tiene tres partes: header, payload y firma. El payload está codificado, no cifrado, así que cualquiera puede leerlo; lo que la firma garantiza es que nadie lo modificó. Una API que recibe un JWT verifica, en cada request, la firma con el algoritmo que ella decide, la expiración (<code>exp</code>), el emisor (<code>iss</code>), la audiencia (<code>aud</code>) y después los permisos (<code>scope</code>, <code>role</code>) contra el recurso pedido. Prueba a romperlo:</p>
+
+      <div data-sim="jwt"></div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El patrón habitual combina lo mejor de ambos mundos: un <b>access token</b> JWT corto (5 a 15 minutos) que las APIs verifican localmente, y un <b>refresh token</b> opaco de larga duración, guardado de forma segura, que solo el servidor de autorización acepta y que se puede revocar. Los refresh tokens se rotan en cada uso: si uno aparece dos veces, alguien lo robó, y se revoca toda la familia. Las claves de firma se rotan publicando las públicas en un JWKS con un <code>kid</code> por clave, así las APIs aceptan la vieja y la nueva durante la transición.</p>
+      </aside>
+
+      <h2 id="oauth"><span class="sec-num">10.3</span>OAuth 2.0 y OpenID Connect</h2>
+
+      <p><dfn data-term="oauth">OAuth 2.0</dfn> resuelve la delegación: que una aplicación actúe sobre tus recursos en otro servicio, con permisos limitados (scopes), sin conocer tu contraseña. <dfn data-term="oidc">OpenID Connect</dfn> le agrega identidad: además del access token, un ID token que dice quién eres. Hay cuatro roles: el usuario (dueño de los recursos), el cliente (la app), el servidor de autorización (emite tokens) y el resource server (la API).</p>
+
+      <p>El flujo recomendado hoy para casi todos los clientes es <b>authorization code con <dfn data-term="pkce">PKCE</dfn></b>:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 444" role="img" aria-labelledby="f101t f101d">
+<title id="f101t">OAuth 2.0 authorization code con PKCE</title>
+<desc id="f101d">La app genera un verificador secreto y envía su hash al servidor de autorización. El usuario inicia sesión y da su consentimiento; el navegador vuelve a la app con un código. La app canjea el código enviando el verificador original; el servidor compara el hash y entrega los tokens. Con el access token, la app llama a la API.</desc>
+<defs><marker id="f101-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f101-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f101-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f101-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App (cliente)</text>
+<path class="dg-frame" d="M70.0 40 V434"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Navegador y usuario</text>
+<path class="dg-frame" d="M280.0 40 V434"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor de autorización</text>
+<path class="dg-frame" d="M490.0 40 V434"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">API (resource server)</text>
+<path class="dg-frame" d="M700.0 40 V434"/>
+<path class="dg-edge" d="M70.0 64 h40 v14 h-38" marker-end="url(#f101-a)"/>
+<text class="dg-tiny" x="116.0" y="75">verifier aleatorio; challenge = SHA256(verifier)</text>
+<path class="dg-edge" d="M73.0 106 L275.0 106" marker-end="url(#f101-a)"/>
+<rect x="0.700000000000017" y="89" width="348.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="100" text-anchor="middle">redirigir a /authorize?…&amp;code_challenge=…&amp;state=xyz</text>
+<path class="dg-edge" d="M283.0 140 L485.0 140" marker-end="url(#f101-a)"/>
+<rect x="250.3" y="123" width="269.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">GET /authorize (login + consentimiento)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 174 L285.0 174" marker-end="url(#f101-r)"/>
+<rect x="253.60000000000002" y="157" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="168" text-anchor="middle">302 → app/callback?code=c_91&amp;state=xyz</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 208 L75.0 208" marker-end="url(#f101-r)"/>
+<rect x="27.099999999999994" y="191" width="295.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="202" text-anchor="middle">code=c_91, state=xyz (se verifica el state)</text>
+<path class="dg-edge" d="M73.0 242 L485.0 242" marker-end="url(#f101-a)"/>
+<rect x="148.60000000000002" y="225" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="236" text-anchor="middle">POST /token  code=c_91 + code_verifier</text>
+<rect x="500.0" y="262" width="237" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="510.0" y="278">¿SHA256(verifier) == challenge?</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 310 L75.0 310" marker-end="url(#f101-r)"/>
+<rect x="122.20000000000002" y="293" width="315.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="304" text-anchor="middle">access_token (15 min), refresh_token, id_token</text>
+<path class="dg-edge" d="M73.0 344 L695.0 344" marker-end="url(#f101-a)"/>
+<rect x="273.4" y="327" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">GET /me  Authorization: Bearer …</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 378 L75.0 378" marker-end="url(#f101-r)"/>
+<rect x="256.9" y="361" width="256.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">200: verifica firma, exp, aud y scope</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 10.1.</b> La contraseña del usuario solo la ve el servidor de autorización. El parámetro <code>state</code> evita que un atacante inyecte su propio código (CSRF), y PKCE evita que un código interceptado sirva para algo.</figcaption>
+      </figure>
+
+      <p>Otros flujos y errores a conocer:</p>
+      <ul>
+        <li><b>Client credentials:</b> para servicio a servicio, sin usuario. El servicio se autentica con su propia credencial y recibe un token con sus scopes.</li>
+        <li><b>El flujo implícito está en desuso:</b> entregaba el token en la URL, donde se filtra en historiales y logs.</li>
+        <li><b>Validar las redirect URI exactas:</b> aceptar cualquier URL "que empiece con" la registrada permite que un atacante reciba el código.</li>
+      </ul>
+
+      <h2 id="api-keys"><span class="sec-num">10.4</span>API keys</h2>
+
+      <p>Para APIs que consumen servidores de otras empresas, las API keys siguen siendo lo más práctico. El diseño que usan los proveedores serios:</p>
+      <ol class="steps">
+        <li><span class="step-title">Formato reconocible</span>Un prefijo con el tipo y el entorno más una parte aleatoria larga: <code>sk_live_…</code>, <code>sk_test_…</code>. El prefijo permite detectarlas en repositorios públicos; GitHub escanea los repositorios buscando formatos de claves de proveedores asociados y les avisa cuando encuentra una. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Guardar solo un hash</span>La clave completa se muestra una sola vez al crearla. Como es larga y aleatoria, basta un SHA-256 (no hace falta bcrypt). Para buscarla, se indexa por el hash.</li>
+        <li><span class="step-title">Scopes y restricciones</span>Solo lectura, solo ciertos endpoints, IPs permitidas. La clave de un proceso de reportes no debería poder emitir reembolsos.</li>
+        <li><span class="step-title">Rotación sin cortes</span>Dos claves activas a la vez: el cliente cambia a la nueva, verifica y revoca la vieja.</li>
+      </ol>
+
+      <h2 id="servicios"><span class="sec-num">10.5</span>Identidad entre servicios</h2>
+      <p>Dentro del sistema, cada servicio necesita saber con certeza quién lo llama, sin confiar en "viene de la red interna". Con <dfn data-term="mtls">mTLS</dfn>, ambos extremos presentan certificados de corta duración (horas) emitidos automáticamente por una autoridad interna; el estándar SPIFFE define identidades del tipo <code>spiffe://empresa/ns/pagos/sa/api</code>. Un service mesh (M03) suele encargarse de todo esto sin tocar el código. Sobre esa identidad se escriben políticas: "solo el servicio de checkout puede llamar a <code>POST /pagos</code>". Es el núcleo de lo que se llama zero trust: ninguna request se acepta por venir de dentro.</p>
+
+      <h2 id="cifrado"><span class="sec-num">10.6</span>Secretos, cifrado y KMS</h2>
+
+      <p>Los secretos (contraseñas de bases, claves de APIs de terceros, claves de firma) no van en el código, ni en el repositorio, ni en variables de entorno que terminan en logs. Van en un gestor de secretos, se entregan a cada servicio con su identidad, se rotan y cada acceso queda auditado.</p>
+
+      <p>Para cifrar datos en reposo a gran escala se usa <dfn data-term="envelope">envelope encryption</dfn> con un <dfn data-term="kms">KMS</dfn>:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f102t f102d">
+<title id="f102t">Envelope encryption con un KMS</title>
+<desc id="f102d">Cada dato se cifra con una clave de datos (DEK) propia. La DEK se cifra con una clave maestra (KEK) que nunca sale del KMS. Se guardan juntos el dato cifrado y la DEK cifrada. Para leer, se pide al KMS que descifre la DEK y con ella se descifra el dato.</desc>
+<defs><marker id="f102a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="520" y="20" width="240" height="140" rx="10"/><text class="dg-group" x="534" y="42">KMS (HSM)</text>
+<rect class="dg-box dg-box--em" x="560" y="60" width="160" height="50" rx="5"/><text class="dg-label" x="640" y="82" text-anchor="middle">KEK (clave maestra)</text><text class="dg-tiny" x="640" y="99" text-anchor="middle">nunca sale del KMS</text>
+<text class="dg-small" x="640" y="140" text-anchor="middle">GenerateDataKey / Decrypt</text>
+<rect class="dg-box" x="20" y="60" width="170" height="50" rx="5"/><text class="dg-label" x="105" y="82" text-anchor="middle">Dato en claro</text><text class="dg-tiny" x="105" y="99" text-anchor="middle">conversación, archivo</text>
+<rect class="dg-box" x="280" y="60" width="160" height="50" rx="5"/><text class="dg-label" x="360" y="82" text-anchor="middle">DEK en claro</text><text class="dg-tiny" x="360" y="99" text-anchor="middle">solo en memoria, un rato</text>
+<path class="dg-edge" d="M558 85 H442" marker-end="url(#f102a)"/><text class="dg-tiny" x="500" y="77" text-anchor="middle">1. DEK nueva</text>
+<path class="dg-edge" d="M105 110 V170" marker-end="url(#f102a)"/><path class="dg-edge" d="M300 110 L150 170" marker-end="url(#f102a)"/><text class="dg-tiny" x="120" y="145">2. AES-GCM con la DEK</text>
+<path class="dg-edge" d="M600 110 L430 190" marker-end="url(#f102a)"/><text class="dg-tiny" x="530" y="170" text-anchor="middle">3. DEK cifrada con la KEK</text>
+<rect class="dg-frame" x="20" y="175" width="440" height="100" rx="10"/><text class="dg-group" x="34" y="197">Lo que se guarda (en la base o el bucket)</text>
+<rect class="dg-box" x="36" y="210" width="190" height="48" rx="5"/><text class="dg-label" x="131" y="231" text-anchor="middle">Dato cifrado</text><text class="dg-tiny" x="131" y="248" text-anchor="middle">ilegible sin la DEK</text>
+<rect class="dg-box" x="250" y="210" width="190" height="48" rx="5"/><text class="dg-label" x="345" y="231" text-anchor="middle">DEK cifrada</text><text class="dg-tiny" x="345" y="248" text-anchor="middle">ilegible sin la KEK</text>
+<text class="dg-small" x="490" y="215">Para leer: KMS descifra la DEK (queda auditado)</text>
+<text class="dg-small" x="490" y="235">y con ella se descifra el dato, localmente.</text>
+<text class="dg-small" x="490" y="262">Borrar la DEK = borrar el dato para siempre</text>
+<text class="dg-small" x="490" y="280">(crypto-shredding), aunque haya copias.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 10.2.</b> La clave maestra nunca sale del KMS; cada dato tiene su propia clave de datos, que viaja cifrada junto a él.</figcaption>
+      </figure>
+
+      <p>Un efecto útil: si cada usuario tiene su propia DEK, borrarla vuelve ilegibles todos sus datos, incluidas las copias en backups que no puedes modificar. Esa técnica, llamada <em>crypto-shredding</em>, es una forma práctica de cumplir con pedidos de borrado como los del GDPR.</p>
+
+      <h2 id="multitenant"><span class="sec-num">10.7</span>Aislamiento multi-tenant</h2>
+
+      <p>En un SaaS, el peor incidente posible es que un cliente vea los datos de otro. El error que lo causa casi siempre es el mismo: <dfn data-term="bola">BOLA</dfn> (también llamado IDOR), una consulta que filtra por el id del objeto pero no por el tenant. Las defensas, en capas:</p>
+      <ul>
+        <li><b>El tenant sale del token, nunca de la request:</b> el cliente no puede elegir su tenant enviando un parámetro.</li>
+        <li><b>Filtro obligatorio en la capa de datos:</b> un repositorio que agrega <code>tenant_id</code> a toda consulta, y pruebas que verifican que ninguna consulta lo omite.</li>
+        <li><b><dfn data-term="rls">Row-level security</dfn></b> en PostgreSQL como red de seguridad: aunque el código olvide el filtro, la base no devuelve filas de otro tenant.</li>
+      </ul>
+<pre data-lang="sql"><code>ALTER TABLE facturas ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY aislamiento_tenant ON facturas
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+
+-- En cada request, la aplicación fija el tenant del token antes de consultar:
+SET LOCAL app.tenant_id = '6f1c…';
+SELECT * FROM facturas WHERE id = $1;   -- una factura de otro tenant simplemente no aparece</code></pre>
+      <p>El otro eje del aislamiento es la capacidad: límites por tenant (M08) para que un cliente ruidoso no degrade a los demás, y en clientes muy grandes, su propia base o su propia celda.</p>
+
+      <h2 id="ataques"><span class="sec-num">10.8</span>Ataques frecuentes y datos personales</h2>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Ataque</th><th>Cómo funciona</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>BOLA / IDOR</td><td>Pedir <code>/facturas/124</code> siendo dueño de la 123</td><td>Autorización por objeto; RLS</td></tr>
+            <tr><td><dfn data-term="ssrf">SSRF</dfn></td><td>Hacer que tu servidor pida una URL interna, como el endpoint de metadatos de la nube</td><td>Validar el destino tras resolver el DNS, metadatos con token de sesión, descargas desde un entorno aislado</td></tr>
+            <tr><td>Inyección SQL</td><td>Datos del usuario concatenados en una consulta</td><td>Consultas parametrizadas, siempre</td></tr>
+            <tr><td>XSS</td><td>JavaScript del atacante ejecutado en la página de la víctima</td><td>Escapar la salida, Content-Security-Policy, cookies <code>HttpOnly</code></td></tr>
+            <tr><td>CSRF</td><td>Otro sitio dispara una acción con las cookies de la víctima</td><td><code>SameSite</code>, tokens anti-CSRF</td></tr>
+            <tr><td>Clave filtrada</td><td>Una API key en un repositorio público</td><td>Prefijos escaneables, rotación, scopes mínimos</td></tr>
+            <tr><td>Relleno de credenciales</td><td>Probar contraseñas filtradas de otros sitios</td><td>Rate limiting por cuenta e IP, MFA, detección de contraseñas filtradas</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa con un SSRF en la nube</p>
+        <p>En 2019, una vulnerabilidad SSRF en un firewall de aplicaciones mal configurado permitió a una atacante pedir credenciales al servicio de metadatos de AWS desde dentro de la infraestructura de Capital One, y con ellas leer datos de más de 100 millones de personas. <span class="badge badge--doc">Documentado</span> A raíz de casos así, AWS lanzó IMDSv2, que exige un token de sesión obtenido con un PUT y no se puede disparar con un simple GET redirigido.</p>
+      </aside>
+
+      <p>Sobre los datos personales (PII): recolectar solo lo necesario, cifrarlo, no escribirlo en logs (los logs se copian a muchos más lugares que la base), definir cuánto tiempo se retiene y tener un proceso de borrado que llegue también a réplicas, cachés, índices de búsqueda y backups. Y registrar en un log de auditoría inmutable quién accedió a qué.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m10"></div>
+
+      <section class="exercise" aria-labelledby="ej-m10">
+        <p class="exercise-title" id="ej-m10">Ejercicio de diseño: la API pública de un producto de IA</p>
+        <p>Vas a exponer una API de un modelo de lenguaje a empresas. Tendrán API keys para sus servidores, un panel web para sus empleados con inicio de sesión corporativo, y permisos por proyecto. Los prompts de los clientes pueden contener datos confidenciales. Un cliente debe poder revocar una clave filtrada y que deje de funcionar en segundos.</p>
+        <p>Diseña la autenticación de cada tipo de acceso, la autorización por proyecto, el almacenamiento de claves y cómo proteges los prompts.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>API keys de servidor:</b> formato <code>sk-proj-…</code> con prefijo escaneable, guardadas como SHA-256, asociadas a un proyecto y con scopes. El gateway valida la clave contra una caché con TTL de unos segundos, alimentada por eventos de revocación: una clave revocada deja de funcionar en segundos sin consultar la base en cada request.</li>
+            <li><b>Panel web:</b> OIDC con el proveedor de identidad corporativo del cliente (SSO), authorization code con PKCE, sesión en cookie <code>HttpOnly</code>, <code>Secure</code> y <code>SameSite=Lax</code>.</li>
+            <li><b>Autorización:</b> roles por proyecto (owner, member, reader) evaluados en cada request; el proyecto sale de la clave o de la sesión, nunca de un parámetro libre. Pruebas automáticas de BOLA para cada endpoint.</li>
+            <li><b>Prompts:</b> cifrados en reposo con envelope encryption y una DEK por organización (permite crypto-shredding si el cliente se va), fuera de los logs de aplicación, con retención configurable (por ejemplo 30 días, o cero para clientes que lo exijan) y accesos auditados.</li>
+            <li><b>Entre servicios:</b> mTLS con identidades SPIFFE; el servicio de inferencia solo acepta llamadas del gateway.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m10"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m10.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-signurl.js"></script>
+<script src="../assets/js/widgets/sim-jwt.js"></script>
+</body>
+</html>

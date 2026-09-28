@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CP-A. Checkpoint A: fundamentos</title>
+<meta name="description" content="Examen integrador de la Parte I (M00 a M11) y diseño completo de un acortador de URLs a escala, con solución de referencia.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="cpa">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Checkpoint A: fundamentos</h1>
+        <p class="lead">La Parte I termina aquí. El examen mezcla los doce módulos en situaciones concretas, y el diseño te pide juntarlo todo en un sistema real: estimar, elegir, escribir el contrato y el esquema, y decir qué pasa cuando falla cada pieza.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>CP-A</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M00 a M11</dd></div>
+          <div><dt>Estado</dt><dd data-status="cpa">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Qué vas a demostrar</h2>
+        <ul>
+          <li>Razonar con números: tráfico, almacenamiento, latencia y disponibilidad.</li>
+          <li>Elegir entre patrones de caché, bases de datos, colas y modelos de consistencia según el caso, y justificar lo que descartas.</li>
+          <li>Diseñar un sistema completo con su API, su esquema, sus caminos de lectura y escritura, sus fallos y su operación.</li>
+        </ul>
+      </section>
+
+      <h2 id="examen"><span class="sec-num">A.1</span>El examen</h2>
+
+      <p>Veinte preguntas que cruzan los doce módulos; se aprueba con el 70&#8239;%. Cada explicación dice qué módulo repasar si fallaste, y puedes repetirlo las veces que quieras. Aprobarlo habilita el botón para marcar el checkpoint como completado, al final de la página.</p>
+
+      <div data-quiz="cpa"></div>
+
+      <h2 id="diseno"><span class="sec-num">A.2</span>Diseño: un acortador de URLs a escala</h2>
+
+      <p>Un acortador parece trivial, una tabla de dos columnas, y por eso es un buen ejercicio: casi toda la dificultad está en lo que rodea a esa tabla. La escala, la latencia en todo el mundo, los links que se vuelven virales, el abuso y la analítica.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Requisitos funcionales</th><th>Requisitos no funcionales</th></tr></thead>
+          <tbody>
+            <tr><td>Crear un link corto para una URL, con alias propio y vencimiento opcionales</td><td>100 millones de links nuevos y 10 000 millones de redirecciones por mes; un link viral puede recibir decenas de miles de clics por segundo</td></tr>
+            <tr><td>Redirigir el link corto a la URL original</td><td>Redirección: p99 menor a 50 ms medido en el edge, en cualquier continente, y disponibilidad de 99.99&#8239;%</td></tr>
+            <tr><td>Ver estadísticas de clics por link: por día, país y sitio de origen</td><td>Creación: p99 menor a 300 ms y disponibilidad de 99.9&#8239;%</td></tr>
+            <tr><td>Desactivar un link</td><td>Un link confirmado sobrevive a la caída de una zona; ante la pérdida de una región entera se aceptan hasta 5 s de links recientes (RPO). Se guardan 5 años</td></tr>
+            <tr><td></td><td>Estadísticas con hasta 5 minutos de retraso y un error máximo del 0.1&#8239;%. Los códigos no pueden ser adivinables en secuencia</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Escribe tu diseño como un design doc corto (M00) antes de mirar la solución. Tiene que incluir:</p>
+      <ol>
+        <li>Estimaciones: requests por segundo de lectura y de escritura con su pico, almacenamiento a 5 años y longitud del código.</li>
+        <li>La API, con sus códigos de respuesta.</li>
+        <li>El modelo de datos y la base elegida.</li>
+        <li>La arquitectura, con el camino de lectura y el de escritura.</li>
+        <li>Cómo se generan los códigos.</li>
+        <li>Qué pasa cuando falla cada pieza: la caché, la base, una región, un link viral, un link malicioso.</li>
+        <li>SLIs, alertas y cómo despliegas cambios.</li>
+      </ol>
+      <p>Lo que más importa no es acertar con la solución de referencia, sino que cada decisión tenga su alternativa descartada y su motivo.</p>
+
+      <h2 id="solucion"><span class="sec-num">A.3</span>Solución de referencia</h2>
+
+      <p>Hay más de un buen diseño. Este es uno completo, con sus decisiones explicadas; compáralo con el tuyo decisión por decisión.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver la solución de referencia</summary>
+        <div class="solution-body">
+
+        <h3>Estimaciones</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Magnitud</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+            <tbody>
+              <tr><td>Escrituras</td><td>100 millones ÷ 2.59 millones de segundos por mes, por 3 en el pico</td><td class="r">39/s, pico de 120/s</td></tr>
+              <tr><td>Lecturas</td><td>10 000 millones ÷ 2.59 millones de segundos, por 3 en el pico</td><td class="r">3900/s, pico de 12 000/s</td></tr>
+              <tr><td>Relación lectura/escritura</td><td>10 000 millones ÷ 100 millones</td><td class="r">100 a 1</td></tr>
+              <tr><td>Links a 5 años</td><td>100 millones × 12 meses × 5 años</td><td class="r">6000 millones</td></tr>
+              <tr><td>Almacenamiento</td><td>6000 millones × unos 500 bytes (URL, metadatos e índices)</td><td class="r">3 TB, 9 TB con 3 réplicas</td></tr>
+              <tr><td>Eventos de clic</td><td>10 000 millones × 200 bytes</td><td class="r">2 TB por mes sin comprimir</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><b>Longitud del código.</b> En base62 (a–z, A–Z, 0–9), 6 caracteres dan 62<sup>6</sup> ≈ 5.7 × 10<sup>10</sup> combinaciones: a los 5 años estaría ocupado el 10.6&#8239;%, un código al azar chocaría una de cada diez veces y cualquiera encontraría links ajenos probando códigos. Con 7 caracteres son 62<sup>7</sup> ≈ 3.5 × 10<sup>12</sup>: ocupación del 0.17&#8239;%. Siete caracteres.</p>
+
+        <h3>API</h3>
+        <div class="endpoint">
+          <div class="ep-head">
+            <span class="ep-method" data-m="POST">POST</span>
+            <code class="ep-path">/v1/links</code>
+            <span class="badge badge--ref">Diseño de referencia</span>
+          </div>
+          <p class="ep-desc">Crea un link corto. Con la misma <code>Idempotency-Key</code>, un reintento devuelve el mismo link en lugar de crear otro.</p>
+          <div class="ep-body">
+            <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/links HTTP/1.1
+Authorization: Bearer &lt;API key o sesión&gt;
+Content-Type: application/json
+Idempotency-Key: 9b2f6c1e-5a47-4d8e-a1f3-7c0d2e9b4a61
+
+{
+  "url": "https://example.com/campañas/otoño?utm_source=newsletter",
+  "alias": null,
+  "expires_at": "2027-01-31T23:59:59Z"
+}</code></pre>
+            <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{
+  "code": "aB3xK9q",
+  "short_url": "https://sho.rt/aB3xK9q",
+  "url": "https://example.com/campa%C3%B1as/oto%C3%B1o?utm_source=newsletter",
+  "expires_at": "2027-01-31T23:59:59Z",
+  "created_at": "2026-09-27T14:03:11Z"
+}</code></pre>
+            <p class="ep-sec">Códigos de respuesta</p>
+            <ul class="ep-responses">
+              <li><span class="st st--2xx">201</span><span>Link creado. Un reintento con la misma clave recibe la misma respuesta.</span></li>
+              <li><span class="st st--4xx">400</span><span>URL inválida, de más de 2048 caracteres o con un esquema distinto de <code>http</code> y <code>https</code> (nada de <code>javascript:</code> ni <code>data:</code>).</span></li>
+              <li><span class="st st--4xx">409</span><span>El alias ya existe, o una request con la misma clave sigue en curso.</span></li>
+              <li><span class="st st--4xx">422</span><span>El destino está en una lista de phishing o malware, o la clave de idempotencia se reutilizó con otro cuerpo.</span></li>
+              <li><span class="st st--4xx">429</span><span>Se superó el límite de creación. Incluye <code>Retry-After</code>.</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Endpoint</th><th>Respuesta</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET /{code}</code></td><td>302 con <code>Location</code>. 404 si no existe; 410 si venció o se desactivó, con una página que explica por qué.</td></tr>
+              <tr><td><code>GET /v1/links/{code}/stats?from=…&amp;to=…&amp;by=day|country|referrer</code></td><td>200 con los conteos. Solo para el dueño del link: si no lo es, 404.</td></tr>
+              <tr><td><code>DELETE /v1/links/{code}</code></td><td>204. Marca el link como desactivado y purga la CDN; no borra la fila, que sigue ocupando el código.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Modelo de datos</h3>
+        <figure class="schema">
+          <figcaption class="schema-head">
+            <code class="schema-name">links</code>
+            <span class="schema-chip">Almacén clave-valor</span>
+            <span class="schema-chip">Partición: <b>code</b></span>
+            <span class="schema-chip">~500 B por link</span>
+            <span class="badge badge--ref">Diseño de referencia</span>
+          </figcaption>
+          <div class="table-wrap">
+            <table class="t t--schema">
+              <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+              <tbody>
+                <tr><td><code>code</code><span class="key">PK</span></td><td><code>string(7)</code></td><td>Único; se inserta solo si no existe</td><td>La única consulta del camino caliente es por esta clave</td></tr>
+                <tr><td><code>url</code></td><td><code>string</code></td><td>Hasta 2048 caracteres, normalizada</td><td>El destino de la redirección</td></tr>
+                <tr><td><code>owner_id</code></td><td><code>string</code></td><td>Nulo en links anónimos</td><td>Autorización de estadísticas y desactivación; índice secundario <code>(owner_id, created_at)</code> para listar "mis links"</td></tr>
+                <tr><td><code>status</code></td><td><code>string</code></td><td><code>active</code> o <code>disabled</code></td><td>Desactivar sin liberar el código</td></tr>
+                <tr><td><code>expires_at</code></td><td><code>timestamp</code></td><td>Opcional</td><td>La redirección responde 410 después de esta fecha</td></tr>
+                <tr><td><code>created_at</code></td><td><code>timestamp</code></td><td>Obligatorio</td><td>Auditoría y orden del listado</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </figure>
+        <p>El acceso es siempre por clave exacta, no hay joins y las escrituras son pocas: encaja un almacén clave-valor replicado en tres zonas, con escritura condicional (insertar solo si el código no existe). PostgreSQL también funcionaría durante años, particionado por hash del código cuando crezca; lo que decide es el equipo y lo que ya opera. Las claves de idempotencia viven aparte, con un TTL de 24 horas.</p>
+
+        <h3>Generación de códigos</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Opción</th><th>A favor</th><th>En contra</th></tr></thead>
+            <tbody>
+              <tr><td>Hash de la URL (los primeros 7 caracteres)</td><td>La misma URL da el mismo código</td><td>Colisiones entre URLs distintas; dos usuarios que acortan la misma URL comparten estadísticas</td></tr>
+              <tr><td>Contador global en base62</td><td>Sin colisiones</td><td>Códigos consecutivos y adivinables; el contador es un punto central (se mitiga repartiendo rangos a cada instancia)</td></tr>
+              <tr><td><b>Aleatorio, 7 caracteres</b></td><td>No adivinable, sin coordinación entre instancias</td><td>Colisiones, raras: con 0.17&#8239;% de ocupación se resuelven reintentando</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><b>Decisión:</b> 7 caracteres de un generador criptográfico e inserción condicional; si el código existe, se genera otro (hasta tres intentos, y el tercero casi nunca ocurre). Los alias propios usan la misma inserción condicional contra la misma tabla, más una lista de palabras reservadas (<code>api</code>, <code>login</code>, <code>admin</code>…).</p>
+
+        <h3>Arquitectura</h3>
+        <figure class="figure">
+          <div class="figure-frame">
+<svg viewBox="0 0 770 420" role="img" aria-labelledby="fcpat fcpad">
+<title id="fcpat">Arquitectura de referencia del acortador de URLs</title>
+<desc id="fcpad">El cliente llega al edge de la CDN, que responde la redirección desde su caché. En un fallo de caché la request pasa por el API gateway al servicio de links, que busca el código en Redis y, si no está, en el almacén clave-valor particionado por código. El edge publica un evento por clic en Kafka; un agregador cuenta los clics por minuto y los guarda en ClickHouse. Los links nuevos también se publican en Kafka, donde un escáner de abuso los revisa y desactiva los maliciosos.</desc>
+<defs><marker id="fcpa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker>
+<marker id="fcpq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="16" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="91.0" y="63" text-anchor="middle">Cliente</text>
+<text class="dg-tiny" x="91.0" y="81" text-anchor="middle">navegador o app</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="206" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="63" text-anchor="middle">Edge de la CDN</text>
+<text class="dg-tiny" x="281.0" y="81" text-anchor="middle">cachea el 302 en el PoP</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="396" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="471.0" y="63" text-anchor="middle">API gateway</text>
+<text class="dg-tiny" x="471.0" y="81" text-anchor="middle">auth y rate limiting</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="586" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="63" text-anchor="middle">Servicio de links</text>
+<text class="dg-tiny" x="661.0" y="81" text-anchor="middle">crear y resolver</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="586" y="140" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="163" text-anchor="middle">Redis</text>
+<text class="dg-tiny" x="661.0" y="181" text-anchor="middle">código → URL</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="586" y="240" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="263" text-anchor="middle">Almacén clave-valor</text>
+<text class="dg-tiny" x="661.0" y="281" text-anchor="middle">partición por código</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="206" y="140" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="163" text-anchor="middle">Kafka</text>
+<text class="dg-tiny" x="281.0" y="181" text-anchor="middle">temas clicks y links</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="396" y="140" width="150" height="54" rx="10"/>
+<text class="dg-label" x="471.0" y="163" text-anchor="middle">Escáner de abuso</text>
+<text class="dg-tiny" x="471.0" y="181" text-anchor="middle">phishing y malware</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="206" y="240" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="263" text-anchor="middle">Agregador</text>
+<text class="dg-tiny" x="281.0" y="281" text-anchor="middle">conteos por minuto</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="206" y="340" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="363" text-anchor="middle">ClickHouse</text>
+<text class="dg-tiny" x="281.0" y="381" text-anchor="middle">estadísticas por link</text>
+<path class="dg-edge" d="M168 67.0 H203" marker-end="url(#fcpa)"/>
+<path class="dg-edge" d="M358 67.0 H393" marker-end="url(#fcpa)"/>
+<path class="dg-edge" d="M548 67.0 H583" marker-end="url(#fcpa)"/>
+<text class="dg-tiny" x="186" y="30" text-anchor="middle">GET /aB3xK9q</text>
+<text class="dg-tiny" x="376" y="30" text-anchor="middle">fallo de caché</text>
+<path class="dg-edge" d="M661.0 96 V137" marker-end="url(#fcpa)"/>
+<path class="dg-edge" d="M661.0 196 V237" marker-end="url(#fcpa)"/>
+<text class="dg-tiny" x="669.0" y="220">si no está</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M281.0 96 V137" marker-end="url(#fcpq)"/>
+<text class="dg-tiny" x="273.0" y="120" text-anchor="end">un evento</text>
+<text class="dg-tiny" x="273.0" y="134" text-anchor="end">por clic</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M602 96 V116 H330 V137" marker-end="url(#fcpq)"/>
+<text class="dg-tiny" x="531.0" y="111" text-anchor="middle">links creados</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M358 167.0 H393" marker-end="url(#fcpq)"/>
+<path class="dg-feedback" d="M547 177.0 C 576 177.0, 566 267.0, 583 267.0" marker-end="url(#fcpa)"/>
+<text class="dg-tiny" x="542" y="260" text-anchor="end">desactiva el link</text>
+<text class="dg-tiny" x="542" y="276" text-anchor="end">y purga la CDN</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M281.0 196 V237" marker-end="url(#fcpq)"/>
+<path class="dg-edge" d="M281.0 296 V337" marker-end="url(#fcpa)"/>
+<text class="dg-small" x="16" y="250">Camino asíncrono:</text>
+<text class="dg-small" x="16" y="267">nunca frena una</text>
+<text class="dg-small" x="16" y="284">redirección</text>
+</svg>
+          </div>
+          <figcaption><b>Figura A.1.</b> El camino de la redirección (arriba) nunca espera al de la analítica (abajo). El endpoint de estadísticas consulta ClickHouse a través del mismo gateway.</figcaption>
+        </figure>
+
+        <h3>Camino de lectura</h3>
+        <ol class="steps">
+          <li><span class="step-title">El edge responde</span>El DNS devuelve una IP anycast de la CDN y el enrutamiento de internet lleva la request al PoP más cercano (M01). Si el PoP tiene la redirección en caché, responde en pocos milisegundos y registra el clic en sus logs.</li>
+          <li><span class="step-title">302, no 301</span>Un 301 lo cachean los navegadores sin fecha de vencimiento, salvo que se indique otra cosa: menos tráfico, pero los clics repetidos no se cuentan y un link desactivado sigue funcionando en ese navegador. La respuesta es <code>302</code> con <code>Cache-Control: max-age=0, s-maxage=3600</code>: el navegador vuelve a preguntar cada vez y la CDN guarda la respuesta una hora.</li>
+          <li><span class="step-title">Fallo de caché</span>El edge llama al origen de su continente: gateway, servicio de links, Redis de la región (tasa de acierto alta) y, si no está, el almacén clave-valor.</li>
+          <li><span class="step-title">Orígenes por continente</span>Muchos links reciben pocos clics, así que más del 1&#8239;% de las redirecciones llegará al origen, y el p99 lo deciden ellas. Un fallo de caché que cruza el océano cuesta más de 150 ms, por eso el servicio, Redis y réplicas de lectura del almacén se despliegan en América, Europa y Asia: un fallo cuesta entonces entre 20 y 40 ms.</li>
+          <li><span class="step-title">Links virales</span>La CDN agrupa los fallos simultáneos de la misma URL (request coalescing): al origen llega más o menos una request por PoP y por hora, aunque el link reciba 50 000 clics por segundo.</li>
+        </ol>
+
+        <h3>Camino de escritura</h3>
+        <ol class="steps">
+          <li><span class="step-title">Gateway</span>Autenticación (API key o sesión) y rate limiting con token bucket por usuario, por IP y, para los anónimos, límites mucho más bajos.</li>
+          <li><span class="step-title">Validación</span>Esquema <code>http</code> o <code>https</code>, longitud, normalización y una lista local de dominios maliciosos conocidos (un filtro de Bloom en memoria) para rechazar lo obvio sin llamar a nadie.</li>
+          <li><span class="step-title">Inserción condicional en una sola región</span>Las creaciones se escriben en una región primaria, replicada de forma síncrona en tres zonas. No se aceptan escrituras en varias regiones a la vez: con replicación multi-región de último escritor gana, dos regiones que generan el mismo código a la vez se pisarían en silencio (M06). Con 120 escrituras por segundo, una región alcanza; la réplica a las otras regiones es asíncrona, y de ahí sale el RPO de 5 s.</li>
+          <li><span class="step-title">Evento</span>El link nuevo sale hacia Kafka por un outbox o por CDC (M07), para el escáner de abuso. La respuesta 201 no espera al escáner.</li>
+        </ol>
+
+        <h3>Analítica de clics</h3>
+        <p>Los edges publican un evento por clic (código, hora, país, dominio de origen, tipo de dispositivo) en el tema <code>clicks</code> de Kafka, particionado por código. Un procesador de streams cuenta por código, minuto, país y origen, deduplica por id de evento dentro de la ventana (la entrega es al menos una vez) y escribe los conteos en ClickHouse con una clave <code>(code, minuto, país, origen)</code>, así un reintento reemplaza el conteo en lugar de sumarlo dos veces. Un link con 50 000 clics por segundo concentra 10 MB/s en una sola partición: los colectores del edge agregan por segundo antes de publicar, y el volumen cae a un evento por código, PoP y segundo.</p>
+
+        <h3>Fallos</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Falla</th><th>Qué pasa</th><th>Mitigación</th></tr></thead>
+            <tbody>
+              <tr><td>Cae el Redis de una región</td><td>Todos los fallos de la CDN van al almacén</td><td>El servicio limita su concurrencia hacia el almacén y agrupa lecturas del mismo código; la CDN sigue sirviendo lo cacheado. El Redis vuelve con recalentamiento gradual (M04)</td></tr>
+              <tr><td>El almacén no responde en una región</td><td>Fallan las lecturas no cacheadas</td><td>Las lecturas van a la réplica de otra región, con más latencia; los links cacheados ni se enteran</td></tr>
+              <tr><td>Cae la región primaria</td><td>No se pueden crear links</td><td>Failover de las escrituras a otra región (RTO de minutos; RPO de hasta 5 s). La redirección no depende de la región primaria</td></tr>
+              <tr><td>Un link se vuelve viral</td><td>Clave caliente</td><td>La CDN lo absorbe; la analítica preagrega en el edge</td></tr>
+              <tr><td>Kafka no está disponible</td><td>Los clics no se pueden publicar</td><td>Las redirecciones siguen. Los edges guardan los eventos en un buffer local y la CDN entrega además sus logs en lote al almacenamiento de objetos, de donde se reprocesan: las estadísticas se atrasan, no se pierden</td></tr>
+              <tr><td>Un link de phishing</td><td>Daño a terceros y a la reputación del dominio</td><td>El escáner lo marca como <code>disabled</code> y purga la CDN en segundos; la redirección muestra una página de advertencia con 410. Un endpoint de denuncias alimenta al escáner</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Seguridad y abuso</h3>
+        <ul>
+          <li>Solo destinos <code>http</code> y <code>https</code>: un <code>javascript:</code> convertiría al acortador en un vector de XSS.</li>
+          <li>Rate limiting de creación por usuario, IP y dominio de destino: una campaña de spam crea millones de links hacia el mismo dominio.</li>
+          <li>Códigos aleatorios, y estadísticas y desactivación solo para el dueño, verificando <code>owner_id</code> en cada acceso (BOLA, M10).</li>
+          <li>Alias propios con palabras reservadas y una política de marcas registradas.</li>
+        </ul>
+
+        <h3>Observabilidad y despliegue</h3>
+        <ul>
+          <li><b>SLIs:</b> redirecciones exitosas y su latencia, medidas en los logs del edge (es lo que el usuario vive); creaciones exitosas y su latencia en el gateway; retraso de las estadísticas medido por el lag del consumidor.</li>
+          <li><b>Alertas:</b> burn rate de dos ventanas para cada SLO (M11). La tasa de acierto de la CDN y de Redis va a los dashboards: explica los síntomas, no despierta a nadie.</li>
+          <li><b>Despliegues:</b> canary por región para el servicio; las reglas de la CDN se despliegan por etapas, porque un error ahí rompe todas las redirecciones del mundo a la vez.</li>
+        </ul>
+
+        <h3>Decisiones y alternativas</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Decisión</th><th>Alternativa descartada</th><th>Por qué</th></tr></thead>
+            <tbody>
+              <tr><td>302 cacheado en la CDN</td><td>301</td><td>Contar los clics y poder desactivar un link pesan más que el tráfico ahorrado</td></tr>
+              <tr><td>Códigos aleatorios de 7 caracteres</td><td>Contador en base62</td><td>No adivinables y sin coordinación; las colisiones son raras y baratas</td></tr>
+              <tr><td>Escrituras en una región primaria</td><td>Escritura en todas las regiones</td><td>Evita que dos regiones asignen el mismo código; 120 escrituras por segundo no lo necesitan</td></tr>
+              <tr><td>Orígenes de lectura por continente</td><td>Un solo origen</td><td>Con la cola larga de links poco visitados, el p99 lo deciden los fallos de la CDN</td></tr>
+              <tr><td>Clics contados en el edge</td><td>Contar en el servicio</td><td>El servicio no ve los clics que resuelve la CDN, que son casi todos</td></tr>
+            </tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+
+      <h2 id="repaso"><span class="sec-num">A.4</span>Qué repasar según tus errores</h2>
+
+      <div class="table-wrap no-autolink">
+        <table class="t">
+          <thead><tr><th>Si te costó</th><th>Repasa</th></tr></thead>
+          <tbody>
+            <tr><td>Estimar tráfico, almacenamiento o disponibilidad</td><td><a href="m00-metodo.html#estimaciones">M00, estimaciones</a> y <a href="m00-metodo.html#disponibilidad-compuesta">disponibilidad compuesta</a></td></tr>
+            <tr><td>Calcular latencias de red</td><td><a href="m01-viaje-request.html#presupuesto">M01, dónde se va cada milisegundo</a></td></tr>
+            <tr><td>Reintentos seguros y contratos de API</td><td><a href="m02-apis.html#idempotencia">M02, idempotencia</a></td></tr>
+            <tr><td>Elegir un algoritmo de balanceo</td><td><a href="m03-balanceo-gateways.html#algoritmos">M03, algoritmos</a></td></tr>
+            <tr><td>Estampidas y caídas de la caché</td><td><a href="m04-cache.html#stampede">M04, cache stampede</a> y <a href="m04-cache.html#caida">cuando la caché entera cae</a></td></tr>
+            <tr><td>Aislamiento, sharding y quórums</td><td><a href="m05-bases-de-datos.html#transacciones">M05, transacciones</a>, <a href="m05-bases-de-datos.html#sharding">sharding</a> y <a href="m05-bases-de-datos.html#quorum">quórums</a></td></tr>
+            <tr><td>Consistencia, consenso y leases</td><td><a href="m06-teoria-distribuida.html#pacelc">M06, PACELC</a> y <a href="m06-teoria-distribuida.html#leases">leases y fencing tokens</a></td></tr>
+            <tr><td>Eventos confiables y orden</td><td><a href="m07-mensajeria.html#outbox">M07, outbox</a> y <a href="m07-mensajeria.html#kafka">particiones</a></td></tr>
+            <tr><td>Reintentos, límites y sobrecarga</td><td><a href="m08-resiliencia.html#reintentos">M08, reintentos</a> y <a href="m08-resiliencia.html#rate-limiting">rate limiting</a></td></tr>
+            <tr><td>Subidas y descargas directas</td><td><a href="m09-objetos.html#signed-urls">M09, signed URLs</a></td></tr>
+            <tr><td>Autorización</td><td><a href="m10-seguridad.html#multitenant">M10, aislamiento multi-tenant</a></td></tr>
+            <tr><td>Alertas e incidentes</td><td><a href="m11-observabilidad.html#alertas">M11, burn rate</a> e <a href="m11-observabilidad.html#incidentes">incidentes</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div data-checkpoint="cpa"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/cpa.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+</body>
+</html>

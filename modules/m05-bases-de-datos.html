@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M05. Bases de datos</title>
+<meta name="description" content="Modelos de datos, B-tree vs LSM, índices, transacciones y niveles de aislamiento, replicación, quórum, sharding con hashing consistente y cómo elegir una base.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m05">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Bases de datos</h1>
+        <p class="lead">La base de datos es la pieza más difícil de cambiar de todo el sistema: se elige una vez y se vive con ella años. Este módulo recorre cómo guarda los datos, qué garantiza cuando dos transacciones chocan, cómo se replica y cómo se reparte entre máquinas, con widgets para ver cada trade-off.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M05</dd></div>
+          <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M00, M04</dd></div>
+          <div><dt>Estado</dt><dd data-status="m05">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir el modelo de datos y el motor según los patrones de acceso, no según la moda.</li>
+          <li>Diseñar índices compuestos y leer por qué una consulta es lenta.</li>
+          <li>Predecir qué anomalías permite cada nivel de aislamiento y cómo evitarlas.</li>
+          <li>Configurar replicación y quórums sabiendo qué consistencia obtienes.</li>
+          <li>Particionar datos con la clave correcta y rebalancear sin mover todo.</li>
+        </ul>
+      </section>
+
+      <h2 id="modelos"><span class="sec-num">5.1</span>Modelos de datos</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modelo</th><th>Ejemplos</th><th>Úsalo cuando</th><th>Evítalo cuando</th></tr></thead>
+          <tbody>
+            <tr><td><b>Relacional</b></td><td>PostgreSQL, MySQL</td><td>Hay relaciones, transacciones y consultas que no conoces de antemano. Es la opción por defecto</td><td>Necesitas millones de escrituras por segundo en una sola tabla</td></tr>
+            <tr><td><b>Clave-valor</b></td><td>Redis, DynamoDB</td><td>Accedes siempre por clave: sesiones, carritos, contadores</td><td>Necesitas consultar por otros campos</td></tr>
+            <tr><td><b>Documentos</b></td><td>MongoDB, Firestore</td><td>Cada entidad se lee entera y su forma varía</td><td>Hay muchas relaciones entre entidades</td></tr>
+            <tr><td><b>Columnas anchas</b></td><td>Cassandra, ScyllaDB, Bigtable</td><td>Escrituras masivas con acceso por partición conocida: mensajes, eventos, series</td><td>Necesitas joins o consultas ad hoc</td></tr>
+            <tr><td><b>Grafo</b></td><td>Neo4j</td><td>Las preguntas son sobre caminos: "amigos de amigos", fraude en redes</td><td>Los datos son tabulares</td></tr>
+            <tr><td><b>Series de tiempo</b></td><td>TimescaleDB, Prometheus, InfluxDB</td><td>Métricas y telemetría con agregaciones por ventana</td><td>Datos transaccionales</td></tr>
+            <tr><td><b>Vectores</b></td><td>pgvector, Pinecone, Milvus</td><td>Búsqueda por similitud de embeddings (RAG, M20)</td><td>Búsqueda exacta</td></tr>
+            <tr><td><b>Búsqueda</b></td><td>Elasticsearch, OpenSearch</td><td>Texto libre, relevancia, facetas</td><td>Como fuente de verdad</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un sistema real combina varios. El patrón habitual es una fuente de verdad transaccional y <b>vistas derivadas</b> (búsqueda, caché, analítica) alimentadas desde su log de cambios: si una vista se corrompe, se reconstruye desde la fuente.</p>
+
+      <h2 id="almacenamiento"><span class="sec-num">5.2</span>Cómo guarda los datos: B-tree y LSM</h2>
+
+      <p>Toda base empieza escribiendo cada cambio en el <dfn data-term="wal">WAL</dfn> antes de aplicarlo: si se corta la luz, al arrancar reproduce el log. Lo que cambia es cómo organiza los datos después:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f51t f51d">
+<title id="f51t">B-tree frente a LSM-tree</title>
+<desc id="f51d">A la izquierda, un B-tree: una raíz, nodos internos y hojas ordenadas; una escritura modifica una página en su lugar. A la derecha, un LSM-tree: las escrituras van al WAL y a una memtable en memoria, que se vuelca como SSTable inmutable al nivel 0 y luego se compacta hacia niveles más grandes.</desc>
+<defs><marker id="f51a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">B-tree (PostgreSQL, MySQL InnoDB)</text>
+<text class="dg-group" x="410" y="20">LSM-tree (RocksDB, Cassandra, ScyllaDB)</text>
+<path class="dg-frame" d="M395 8 V322"/>
+<rect class="dg-box dg-box--em" x="140" y="40" width="110" height="34" rx="4"/><text class="dg-tiny dg-in" x="195" y="61" text-anchor="middle">raíz: 40 | 80</text>
+<rect class="dg-box" x="30" y="110" width="110" height="34" rx="4"/><text class="dg-tiny dg-in" x="85" y="131" text-anchor="middle">10 | 25</text>
+<path class="dg-edge" d="M195 74 L85 108" marker-end="url(#f51a)"/>
+<rect class="dg-box" x="140" y="110" width="110" height="34" rx="4"/><text class="dg-tiny dg-in" x="195" y="131" text-anchor="middle">50 | 65</text>
+<path class="dg-edge" d="M195 74 L195 108" marker-end="url(#f51a)"/>
+<rect class="dg-box" x="250" y="110" width="110" height="34" rx="4"/><text class="dg-tiny dg-in" x="305" y="131" text-anchor="middle">90 | 120</text>
+<path class="dg-edge" d="M195 74 L305 108" marker-end="url(#f51a)"/>
+<rect class="dg-box" x="12" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="40" y="204" text-anchor="middle">hoja</text>
+<rect class="dg-box" x="74" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="102" y="204" text-anchor="middle">hoja</text>
+<rect class="dg-box" x="136" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="164" y="204" text-anchor="middle">hoja</text>
+<rect class="dg-box" x="198" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="226" y="204" text-anchor="middle">hoja</text>
+<rect class="dg-box" x="260" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="288" y="204" text-anchor="middle">hoja</text>
+<rect class="dg-box" x="322" y="185" width="56" height="30" rx="3"/><text class="dg-tiny" x="350" y="204" text-anchor="middle">hoja</text>
+<path class="dg-edge" d="M85 144 L40 183" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M85 144 L102 183" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M195 144 L164 183" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M195 144 L226 183" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M305 144 L288 183" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M305 144 L350 183" marker-end="url(#f51a)"/>
+<text class="dg-small" x="10" y="246">Escribe en su lugar: busca la hoja y modifica la página.</text>
+<text class="dg-small" x="10" y="266">Lectura: O(log n) páginas, casi siempre 3 o 4 saltos.</text>
+<text class="dg-small" x="10" y="286">Pagas: escrituras aleatorias y divisiones de páginas.</text>
+<text class="dg-small" x="10" y="306">Brilla en: lecturas y rangos, cargas mixtas.</text>
+<rect class="dg-box" x="410" y="40" width="110" height="34" rx="4"/><text class="dg-tiny dg-in" x="465" y="61" text-anchor="middle">escritura</text>
+<rect class="dg-box" x="545" y="40" width="90" height="34" rx="4"/><text class="dg-tiny dg-in" x="590" y="61" text-anchor="middle">WAL (disco)</text>
+<rect class="dg-box dg-box--em" x="650" y="40" width="112" height="34" rx="4"/><text class="dg-tiny dg-in" x="706" y="61" text-anchor="middle">memtable (RAM)</text>
+<path class="dg-edge" d="M520 57 H543" marker-end="url(#f51a)"/><path class="dg-edge" d="M635 57 H648" marker-end="url(#f51a)"/>
+<path class="dg-edge" d="M706 74 V100" marker-end="url(#f51a)"/><text class="dg-tiny" x="712" y="92">flush</text>
+<text class="dg-small" x="410" y="124">L0</text>
+<rect class="dg-box" x="440" y="104" width="60" height="28" rx="3"/><text class="dg-tiny" x="470.0" y="122" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="506" y="104" width="60" height="28" rx="3"/><text class="dg-tiny" x="536.0" y="122" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="572" y="104" width="60" height="28" rx="3"/><text class="dg-tiny" x="602.0" y="122" text-anchor="middle">SSTable</text>
+<text class="dg-small" x="410" y="168">L1</text>
+<rect class="dg-box" x="440" y="148" width="70" height="28" rx="3"/><text class="dg-tiny" x="475.0" y="166" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="516" y="148" width="70" height="28" rx="3"/><text class="dg-tiny" x="551.0" y="166" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="592" y="148" width="70" height="28" rx="3"/><text class="dg-tiny" x="627.0" y="166" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="668" y="148" width="70" height="28" rx="3"/><text class="dg-tiny" x="703.0" y="166" text-anchor="middle">SSTable</text>
+<text class="dg-small" x="410" y="212">L2</text>
+<rect class="dg-box" x="440" y="192" width="64" height="28" rx="3"/><text class="dg-tiny" x="472.0" y="210" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="510" y="192" width="64" height="28" rx="3"/><text class="dg-tiny" x="542.0" y="210" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="580" y="192" width="64" height="28" rx="3"/><text class="dg-tiny" x="612.0" y="210" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="650" y="192" width="64" height="28" rx="3"/><text class="dg-tiny" x="682.0" y="210" text-anchor="middle">SSTable</text>
+<rect class="dg-box" x="720" y="192" width="64" height="28" rx="3"/><text class="dg-tiny" x="752.0" y="210" text-anchor="middle">SSTable</text>
+<path class="dg-feedback" d="M752 132 C770 160, 770 180, 752 200" marker-end="url(#f51a)"/><text class="dg-tiny" x="700" y="196" text-anchor="end">compactación</text>
+<text class="dg-small" x="410" y="246">Escribe secuencial: WAL + memoria; archivos inmutables.</text>
+<text class="dg-small" x="410" y="266">Lectura: memtable y varios niveles (filtros de Bloom).</text>
+<text class="dg-small" x="410" y="286">Pagas: compactación de fondo y amplificación de lectura.</text>
+<text class="dg-small" x="410" y="306">Brilla en: muchísimas escrituras (logs, series, eventos).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.1.</b> El <dfn data-term="btree">B-tree</dfn> modifica páginas en su lugar; el <dfn data-term="lsm">LSM-tree</dfn> solo agrega archivos inmutables y los fusiona en segundo plano.</figcaption>
+      </figure>
+
+      <p>El trade-off se mide en <em>amplificaciones</em>: cuántos bytes se escriben en disco por cada byte que escribió la aplicación, y cuántos lugares hay que mirar por cada lectura. El B-tree amplifica escrituras (reescribe una página de 8 kB por una fila de 100 bytes); el LSM amplifica lecturas (una clave puede estar en varios niveles; los filtros de Bloom evitan leer la mayoría) y consume disco y CPU en compactaciones que, si se atrasan, degradan todo.</p>
+
+      <h2 id="indices"><span class="sec-num">5.3</span>Índices</h2>
+
+      <p>Un índice es una copia ordenada de algunas columnas con un puntero a la fila. Las reglas que más importan en producción:</p>
+      <ul>
+        <li><b>Prefijo izquierdo:</b> un índice <code>(tenant_id, created_at)</code> sirve para filtrar por <code>tenant_id</code>, o por <code>tenant_id</code> y un rango de <code>created_at</code>, pero no por <code>created_at</code> solo.</li>
+        <li><b>Igualdad primero, rango después:</b> en <code>(estado, fecha)</code>, <code>WHERE estado = 'pendiente' AND fecha &gt; X</code> recorre un tramo contiguo del índice.</li>
+        <li><b>Índice que cubre:</b> si el índice incluye todas las columnas que pide la consulta (<code>INCLUDE</code> en PostgreSQL), la base no necesita tocar la tabla.</li>
+        <li><b>Cada índice cuesta en escrituras:</b> una tabla con 8 índices hace 9 escrituras por cada <code>INSERT</code>. Los índices que nadie usa se borran.</li>
+      </ul>
+<pre data-lang="sql"><code>EXPLAIN ANALYZE
+SELECT id, total FROM pedidos
+WHERE tenant_id = 42 AND created_at &gt; now() - interval '7 days'
+ORDER BY created_at DESC LIMIT 50;
+
+-- Bien:  Index Scan Backward using pedidos_tenant_created on pedidos  (rows=50, time=0.3 ms)
+-- Mal:   Seq Scan on pedidos  Filter: …  Rows Removed by Filter: 48 000 000  (time=9 800 ms)</code></pre>
+
+      <h2 id="transacciones"><span class="sec-num">5.4</span>Transacciones y niveles de aislamiento</h2>
+
+      <p>Una transacción <dfn data-term="acid">ACID</dfn> promete que sus cambios se aplican todos o ninguno y que, una vez confirmados, sobreviven. Lo delicado es la "I": qué ve cada transacción de las otras mientras corren a la vez. Aislar por completo (como si fueran de a una) es caro, así que las bases ofrecen <dfn data-term="isolation">niveles de aislamiento</dfn> que permiten ciertas anomalías a cambio de rendimiento. Elige un nivel y una anomalía para ver una ejecución intercalada:</p>
+
+      <div data-sim="isolation"></div>
+
+      <p>La anomalía más traicionera es el <dfn data-term="write-skew">write skew</dfn>, porque el nivel por defecto de casi todas las bases la permite y no produce ningún error: solo datos que violan una regla del negocio. Tres formas de protegerse, de más a menos general:</p>
+      <ol class="steps">
+        <li><span class="step-title">Serializable</span>La base detecta el conflicto y aborta una transacción. La aplicación tiene que estar preparada para reintentar (error <code>40001</code> en PostgreSQL).</li>
+        <li><span class="step-title">Bloquear lo que lees</span><code>SELECT … FOR UPDATE</code> sobre las filas en las que basas la decisión.</li>
+        <li><span class="step-title">Llevar la regla a una restricción</span>Un <code>UNIQUE</code>, un <code>CHECK</code> o una restricción de exclusión hacen que la base haga cumplir la regla sin importar el aislamiento. Siempre que puedas, esta es la mejor.</li>
+      </ol>
+
+      <h2 id="replicacion"><span class="sec-num">5.5</span>Replicación</h2>
+
+      <p>Se replica por tres razones: sobrevivir a la caída de una máquina, repartir lecturas y acercar datos a los usuarios. Hay tres arquitecturas:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Un líder</th><th>Varios líderes</th><th>Sin líder</th></tr></thead>
+          <tbody>
+            <tr><td><b>Quién acepta escrituras</b></td><td>Solo el líder</td><td>Un líder por región o datacenter</td><td>Cualquier réplica</td></tr>
+            <tr><td><b>Conflictos</b></td><td>No hay</td><td>Sí: dos regiones cambian lo mismo</td><td>Sí: se resuelven con versiones o último que escribe</td></tr>
+            <tr><td><b>Si cae el líder</b></td><td>Failover: segundos a minutos sin escrituras</td><td>Las otras regiones siguen</td><td>No hay líder que perder</td></tr>
+            <tr><td><b>Ejemplos</b></td><td>PostgreSQL, MySQL, MongoDB</td><td>Replicación activa-activa entre regiones</td><td>Cassandra, DynamoDB (<dfn data-term="leaderless">estilo Dynamo</dfn>)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con un líder, la decisión central es <b>síncrona o asíncrona</b>. Síncrona: el commit espera a que la réplica confirme, así que un failover no pierde nada, pero cada escritura paga la ida y vuelta a la réplica y, si la réplica cae, el líder se frena. Asíncrona: escrituras rápidas, pero el failover puede perder las últimas transacciones y las réplicas van detrás. Es exactamente el trade-off de latencia contra consistencia de PACELC (M06). Lo habitual es una réplica síncrona en otra zona y el resto asíncronas.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa con el retraso de replicación</p>
+        <p>El <dfn data-term="replication-lag">retraso de replicación</dfn> suele ser de milisegundos, pero bajo carga o durante un vacuum largo puede llegar a minutos. Síntomas: un usuario guarda algo y no lo ve al recargar (falta <dfn data-term="read-your-writes">read-your-writes</dfn>); una lista muestra un elemento y en la siguiente recarga desaparece (falta de lecturas monótonas, porque la segunda lectura fue a una réplica más atrasada).</p>
+        <p><b>Mitigación:</b> leer del líder durante unos segundos después de que el usuario escribe; o guardar la posición del log (LSN) de su última escritura y leer solo de réplicas que ya la aplicaron; y fijar a cada usuario a la misma réplica para lecturas monótonas. Y alertar sobre el retraso: una réplica una hora atrasada es un incidente.</p>
+      </aside>
+
+      <h3 id="quorum">Quórums</h3>
+      <p>En la replicación sin líder, el cliente escribe en N réplicas y espera W confirmaciones; lee de R y se queda con la versión más nueva. Si W + R &gt; N, todo conjunto de lectura se solapa con todo conjunto de escritura: al menos una de las réplicas leídas tiene el último valor.</p>
+
+      <div data-sim="quorum"></div>
+
+      <p>Configuraciones típicas: N = 3, W = 2, R = 2 (equilibrado); W = 3, R = 1 (lecturas rápidas, escrituras frágiles); W = 1, R = 1 (máxima velocidad, consistencia eventual). Para que las réplicas converjan aunque nadie las lea, estos sistemas usan <em>read repair</em> (al leer, se corrigen las réplicas atrasadas) y <em>anti-entropía</em> con árboles de Merkle (comparan resúmenes de rangos de claves y sincronizan solo lo que difiere).</p>
+
+      <h2 id="sharding"><span class="sec-num">5.6</span>Particionado (sharding)</h2>
+
+      <p>Cuando los datos o las escrituras no caben en una máquina, se reparten con <dfn data-term="sharding">sharding</dfn>. Todo depende de la <dfn data-term="partition-key">partition key</dfn>, que decide en qué shard vive cada fila:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Cómo</th><th>Ganas</th><th>Pagas</th></tr></thead>
+          <tbody>
+            <tr><td>Por rango</td><td><code>A–F</code> al shard 1, <code>G–M</code> al 2…</td><td>Consultas por rango eficientes</td><td>Claves monótonas (fechas, IDs secuenciales) concentran las escrituras en un shard</td></tr>
+            <tr><td>Por hash</td><td><code>hash(clave)</code> decide el shard</td><td>Carga pareja</td><td>Los rangos tocan todos los shards</td></tr>
+            <tr><td>Por directorio</td><td>Una tabla dice qué shard tiene cada tenant</td><td>Mover un cliente grande a su propio shard</td><td>Otro componente crítico que consultar y mantener</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La clave correcta hace que las consultas frecuentes toquen un solo shard. En un chat, <code>conversation_id</code>: todo el historial de una conversación vive junto (M00). En un SaaS, <code>tenant_id</code>: cada cliente vive en un shard, con un plan para los clientes gigantes. Las consultas que cruzan shards (un índice secundario global, un reporte de todo) se resuelven aparte: consultando todos los shards en paralelo (scatter-gather) o manteniendo una vista derivada.</p>
+
+      <h3 id="rebalanceo">Rebalancear sin mover todo</h3>
+      <p>El día que agregas un shard hay que mover datos. Con <code>hash(clave) mod N</code>, cambiar N cambia el destino de casi todas las claves. Dos soluciones:</p>
+      <ul>
+        <li><b>Muchas particiones fijas:</b> se crean, por ejemplo, 1&#8239;024 particiones desde el principio y se asignan a los nodos; agregar un nodo es mover algunas particiones enteras. Lo usan Elasticsearch, Kafka y Riak.</li>
+        <li><b><dfn data-term="consistent-hashing">Hashing consistente</dfn></b>: nodos y claves en un anillo de hashes; cada clave pertenece al siguiente nodo en sentido horario. Con <dfn data-term="vnodes">nodos virtuales</dfn>, cada nodo ocupa muchas posiciones y la carga se empareja. Lo usan Cassandra, DynamoDB y muchas cachés distribuidas.</li>
+      </ul>
+
+      <div data-sim="ring"></div>
+
+      <h2 id="elegir"><span class="sec-num">5.7</span>Cómo elegir</h2>
+
+      <p>Tres preguntas resuelven la mayoría de los casos, en este orden:</p>
+      <ol class="steps">
+        <li><span class="step-title">¿Qué no puedo perder ni duplicar?</span>Dinero, pedidos, inventario: base transaccional con aislamiento fuerte y replicación síncrona. No se negocia.</li>
+        <li><span class="step-title">¿Cómo se accede?</span>Por clave, por rango, por texto, por similitud, por agregación temporal. Cada patrón tiene su almacén.</li>
+        <li><span class="step-title">¿Cuánto y qué tan rápido crece?</span>Si cabe en un PostgreSQL grande con réplicas (y cabe mucho más de lo que se suele creer: terabytes y decenas de miles de transacciones por segundo), empieza por ahí.</li>
+      </ol>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Muchas empresas grandes corren sobre bases relacionales mucho más allá de lo que parecería razonable: Figma documentó cómo escaló PostgreSQL particionando verticalmente (tablas en distintas bases) antes de hacer sharding horizontal, y Notion hizo sharding de su PostgreSQL por espacio de trabajo. <span class="badge badge--doc">Documentado</span> Cambiar de base de datos es de los proyectos más caros que existen; elegir la aburrida al principio rara vez es un error.</p>
+      </aside>
+
+      <h2 id="fallos"><span class="sec-num">5.8</span>Fallos típicos</h2>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Mecanismo</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>Split brain</td><td>Una partición de red deja a dos nodos creyéndose líderes</td><td>Consenso para elegir líder (M06) y <dfn data-term="fencing">fencing tokens</dfn></td></tr>
+            <tr><td>Conexiones agotadas</td><td>1&#8239;000 instancias × 20 conexiones = 20&#8239;000 procesos en PostgreSQL</td><td>Pooler (PgBouncer) en modo transacción</td></tr>
+            <tr><td>Partición caliente</td><td>Una clave monótona o un tenant enorme</td><td>Cambiar la clave, sufijos aleatorios, directorio para tenants grandes</td></tr>
+            <tr><td>Transacción eterna</td><td>Una transacción abierta horas impide limpiar versiones viejas (vacuum) y la tabla se hincha</td><td>Timeouts de transacción y alertas sobre la más antigua</td></tr>
+            <tr><td>Migración que bloquea</td><td>Un <code>ALTER TABLE</code> que reescribe la tabla toma un lock exclusivo durante minutos</td><td>Migraciones expand/contract y herramientas en línea (M11)</td></tr>
+            <tr><td>Failover que pierde datos</td><td>Réplica asíncrona promovida sin tener los últimos commits</td><td>Réplica síncrona en otra zona</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m05"></div>
+
+      <section class="exercise" aria-labelledby="ej-m05">
+        <p class="exercise-title" id="ej-m05">Ejercicio de diseño: datos de un marketplace</p>
+        <p>Un marketplace tiene 50 millones de productos de 2 millones de vendedores, 20&#8239;000 pedidos por minuto en pico, búsqueda por texto con filtros, reseñas y un inventario que no puede venderse por debajo de cero.</p>
+        <p>Elige los almacenes, define las claves de partición, escribe el esquema de <code>pedidos</code> e <code>inventario</code>, y explica cómo evitas vender más stock del que hay.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Pedidos e inventario:</b> PostgreSQL. 20&#8239;000 pedidos por minuto son ~330 por segundo: un solo clúster con réplica síncrona basta durante mucho tiempo. Si hiciera falta particionar, por <code>vendedor_id</code> para el inventario y por <code>comprador_id</code> para los pedidos.</li>
+            <li><b>Catálogo y búsqueda:</b> los productos en PostgreSQL como fuente de verdad; OpenSearch como vista derivada alimentada por CDC.</li>
+            <li><b>Reseñas:</b> tabla en PostgreSQL particionada por <code>producto_id</code>, con el promedio precalculado en el producto.</li>
+            <li><b>Stock que nunca baja de cero:</b> se lleva a la base, no a la aplicación:</li>
+          </ul>
+<pre data-lang="sql"><code>CREATE TABLE inventario (
+  sku        text PRIMARY KEY,
+  vendedor_id uuid NOT NULL,
+  disponible integer NOT NULL CHECK (disponible &gt;= 0),
+  version    bigint NOT NULL DEFAULT 1
+);
+
+-- Reservar 2 unidades: atómico, sin leer antes. Si no alcanza, el CHECK falla y no se vende.
+UPDATE inventario SET disponible = disponible - 2, version = version + 1
+WHERE sku = $1 AND disponible &gt;= 2
+RETURNING disponible;      -- 0 filas afectadas = sin stock
+
+CREATE TABLE pedidos (
+  id            uuid PRIMARY KEY,           -- UUIDv7
+  comprador_id  uuid NOT NULL,
+  estado        text NOT NULL CHECK (estado IN ('creado', 'pagado', 'enviado', 'cancelado')),
+  total_centavos bigint NOT NULL,
+  moneda        char(3) NOT NULL,
+  idempotency_key text NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (comprador_id, idempotency_key)    -- un reintento no crea otro pedido
+);</code></pre>
+          <p>El <code>UPDATE … WHERE disponible &gt;= 2</code> evita la actualización perdida sin bloqueos explícitos, y el <code>CHECK</code> es la red de seguridad. La reserva de stock y la creación del pedido van en la misma transacción; el pago, que es externo, se coordina con una saga (M27).</p>
+        </details>
+      </section>
+
+      <div data-checkpoint="m05"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m05.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-db.js"></script>
+</body>
+</html>
