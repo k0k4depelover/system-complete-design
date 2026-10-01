@@ -3,13 +3,15 @@
 > Archivo de continuidad. Se actualiza al terminar cada módulo. Si la sesión se corta, una sesión nueva puede
 > retomar leyendo este archivo, `PLAN.md` (currículo completo) y una página ya hecha como plantilla (`modules/m00-metodo.html`).
 
-**Última actualización:** 2026-09-30.
+**Última actualización:** 2026-10-01.
+
+**Pedido vigente del usuario (2026-10-01):** "continua": seguir la Parte II. **M19 terminado y probado.** Después: "implementa el producto ChatGPT" (con 20 minutos de plazo): **M20 publicado y probado**, en versión compacta. Siguiente: M21, metering y facturación por uso.
 
 **Pedidos vigentes del usuario (2026-09-30, segunda parte):**
 1. "Implementa el M17 y M18": **terminado.** M17 (API del LLM y streaming, 10 secciones, visor SSE y calculadora de streams) y M18 (cuotas por tokens, 9 secciones, dos simuladores y la calculadora de escrow, con la sección 18.8 de teoría distribuida aplicada al limitador) están publicados y probados.
 2. `CLAUDE.md` en la raíz, con reglas, catálogo de componentes y la estructura de `tree /f`: **hecho.** Se regenera la sección de estructura con `tree /f` al agregar archivos.
-3. "Profundiza mucho más en la teoría distribuida, eso es lo que más me interesa": **en curso.** Plan: ampliar el M06 en profundidad (secciones nuevas y más detalle en las actuales).
-4. "Agrega más ejercicios con solución como el del planificador de tareas, como quizzes interactivos con respuestas ya hechas": **en curso.** Plan: un componente de ejercicio guiado (`data-exercise`, escenario, decisiones con explicación y solución de referencia al final) que no cuenta para el checkpoint; primero en el M06 y el M18.
+3. "Profundiza mucho más en la teoría distribuida, eso es lo que más me interesa": **terminado.** El M06 pasó de 8 a 15 secciones (180 min): modelo del sistema y safety/liveness, detectores de fallas (Chandra–Toueg, Ω, phi accrual, SWIM y gossip), CAP con su demostración y harvest/yield, PACELC, linealizabilidad con un verificador interactivo, secuencial, garantías de sesión y serializabilidad estricta, quórums (ABD, sloppy, flexibles), relojes (happens-before, vectoriales, HLC, TrueTime y commit wait), Raft a fondo (las cinco propiedades, la regla de commit, ReadIndex y leases, cambios de membresía, PreVote/CheckQuorum, el incidente de Cloudflare de 2020), Paxos y Multi-Paxos, FLP con sus salidas y cotas, 2PC, Paxos Commit y Percolator, CRDTs y anti-entropía, bizantinas (cota por quórums, firmas, HotStuff, corrupción silenciosa), leases, fencing y el debate de Redlock, y verificación (Jepsen, TLA+, simulación determinista). 14 figuras, quiz de 18 y 36 términos nuevos.
+4. "Agrega más ejercicios con solución como el del planificador de tareas, como quizzes interactivos con respuestas ya hechas": **terminado.** Componente de ejercicio guiado (`core/exercise.js`, `data-exercise`, datos en `data/exercises/<id>.data.js`): escenario, decisiones de a una con su explicación y la solución de referencia al final; no cuenta para el checkpoint. M06 tiene 7 (detector de fallas, relojes, Raft en un corte de red, transferencia entre shards, contador en tres regiones, ¿es seguro este lock? y el planificador, que reemplazó al ejercicio estático) y M18 tiene 1 (límite global para 30 gateways en tres regiones). Para sumar ejercicios a otros módulos: `"exercises": true` en el META, o agregar los dos `<script>` a mano en una página existente (ver M18).
 
 **Pedido anterior del usuario (2026-09-30), terminado:**
 1. **M28 Cloudflare:** cómo corren los Workers comparados con Kubernetes, Lambda/microVMs y contenedores (sección 28.8, figura y tabla), más Unimog, Traffic Manager, Pingora, Durable Objects por dentro, Quicksilver y las caídas de 2019 y 2025.
@@ -41,9 +43,12 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 ## Dónde quedó el trabajo
 
 - **CP3 completo:** M06 a M11 y el Checkpoint A publicados, más el rediseño Apple y los enlaces automáticos a términos.
-- **Parte II:** M12 a M18 publicados; M19 a M26, el mapa y el CP-B en pausa.
+- **Parte II:** M12 a M20 publicados; siguen M21 a M26, el mapa y el CP-B.
+- **M20 (2026-10-01):** fragmento en el scratchpad de la sesión (`frags/m20.html`, figuras en `svg_m20.py`); la página `modules/m20-producto-chatgpt.html` ya es la fuente de verdad. Pruebas: 0 errores de consola, 0 términos faltantes, 0 desborde a 390 px, `links.mjs` sin problemas en todo el sitio, figuras revisadas en claro y oscuro. Por el plazo quedó sin widget, sin mapa y con ejercicio estático. Pendientes posibles: un árbol de mensajes interactivo (regenerar, editar y cambiar de rama), un ejercicio guiado y una calculadora del pipeline de archivos.
+- **M19 (2026-10-01):** fragmento en el scratchpad de la sesión (`frags/m19.html`, figuras en `svg_m19.py`). La página `modules/m19-router-flota.html` ya es la fuente de verdad. Pruebas: 0 errores de consola, 0 términos faltantes, 8 escenarios del mapa, 0 desborde a 390 px, `links.mjs` sin problemas en todo el sitio, ejercicio guiado 6 de 6, capturas en claro y oscuro revisadas.
+- **M06 ampliado (2026-09-30):** fragmento en el scratchpad de la sesión (`frags/m06_a.html`, `m06_b.html` y `m06_c.html`, unidos en `m06.html`; figuras en `svg_m06c.py` y `svg_m06d.py`). La página `modules/m06-teoria-distribuida.html` ya es la fuente de verdad. Se conservaron las anclas que usan otros módulos (`cap`, `pacelc`, `consistencia`, `relojes`, `consenso`, `imposibles`, `bizantinas`, `leases`).
 - **Casos de estudio:** M27 (Stripe), M28 (Cloudflare) y M29 (WhatsApp) publicados, con sus mapas embebidos. Falta el Checkpoint C, que no se pidió todavía.
-- **Siguiente:** esperar indicaciones del usuario (retomar la Parte II en el M17, el Checkpoint C, o la Fase 2: Twitter y Google Docs).
+- **Siguiente:** M21, metering y facturación por uso. Después M22; el Checkpoint C y la Fase 2 esperan indicaciones.
 
 ---
 
@@ -85,7 +90,7 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - Al agregar un módulo: poner `deep` a sus términos nuevos y revisar con `links.mjs` que no haya alias ambiguos (así se detectaron "latencia de cola" en el sentido de espera en cola y "estampida" en M03).
 
 ### CP3 (en curso)
-- [x] M06, teoría distribuida: simulador de Raft `widgets/sim-raft.js` (elecciones, partición, log).
+- [x] M06, teoría distribuida: simulador de Raft `widgets/sim-raft.js` (elecciones, partición, log). Ampliado el 2026-09-30 a 15 secciones, con el verificador de linealizabilidad `widgets/sim-lin.js` (búsqueda exhaustiva de un orden linealizable y otro secuencial, lógica en `SD.linCore`) y 7 ejercicios guiados.
 - [x] M07, mensajería: simulador de Kafka `widgets/sim-kafka.js` (particiones, consumer group, lag, rebalanceo).
 - [x] M08, resiliencia: token bucket y tormenta de reintentos con falla metaestable (`widgets/sim-resil.js`).
 - [x] M09, objetos y signed URLs: generador SigV4 `widgets/sim-signurl.js` (SHA-256 y HMAC en JS puro, verificado contra el ejemplo oficial de AWS: la firma `aeeed9bb…` coincide) y mapa `m09-objetos` (9 nodos y 4 escenarios).
@@ -106,9 +111,9 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - [x] M15, motores de inferencia: simulador de static contra continuous batching y calculadora de speculative decoding (`widgets/sim-engine.js`); PagedAttention, prefix caching, chunked prefill, desagregación, paralelismo y configuración de vLLM.
 - [x] M16, context windows: estrategias de contexto sobre una conversación que no entra y calculadora del costo de una conversación con y sin prompt caching (`widgets/sim-context.js`).
 - [x] M17, diseño de la API del LLM: endpoints y esquemas (chat, Responses, Messages, embeddings, archivos y batches), SSE a fondo con los tres formatos, infraestructura del streaming, cancelación hasta la GPU, streams reanudables, tool calling, salidas estructuradas, errores y un endpoint de referencia en Python. Visor de streams evento por evento y calculadora de streams abiertos (`widgets/sim-sse.js`), 6 figuras (`svg_m17.py` en el scratchpad), quiz de 9 y 6 términos nuevos; `sse` ahora apunta a `m17#sse`.
-- [x] M18, rate limiting y cuotas por tokens: dimensiones, estimar antes de saber, reservar y reconciliar con scripts de Lua, algoritmos, cuotas por niveles y headers, reparto justo, admission control y el limitador como problema distribuido (confluencia de invariantes, contador central, CRDT y escrow, CAP y PACELC, Redis Cluster, relojes, reconciliación exactamente una vez). Simuladores de reservas y de cuatro clientes sobre una flota, y calculadora de escrow (`widgets/sim-quota.js`, con la lógica en `SD.quotaCore`), 4 figuras (`svg_m18.py`), quiz de 9 y 13 términos nuevos.
-- [ ] M19, router y flota GPU
-- [ ] M20, el producto ChatGPT (árbol de mensajes)
+- [x] M18, rate limiting y cuotas por tokens: dimensiones, estimar antes de saber, reservar y reconciliar con scripts de Lua, algoritmos, cuotas por niveles y headers, reparto justo, admission control y el limitador como problema distribuido (confluencia de invariantes, contador central, CRDT y escrow, CAP y PACELC, Redis Cluster, relojes, reconciliación exactamente una vez). Simuladores de reservas y de cuatro clientes sobre una flota, y calculadora de escrow (`widgets/sim-quota.js`, con la lógica en `SD.quotaCore`), 4 figuras (`svg_m18.py`), quiz de 9 y 13 términos nuevos. Ejercicio guiado `m18-limitador` al final de 18.8.
+- [x] M19, router y flota GPU: plano de control y de datos con estabilidad estática, model registry con alias y canary, señales para elegir réplica, routing por prefijo con carga acotada (índice de prefijos, hashing consistente con carga acotada), autoscaling por uso de KV cache con la fórmula del HPA, cold start y carga de pesos con pool precalentado, spot con drenaje y continuación de streams, fallback entre modelos y entre regiones. Mapa de la flota (16 nodos, 8 escenarios), simulador de cinco políticas de routing y calculadora de cold start y colchón (`widgets/sim-router.js`, lógica en `SD.routerCore`), 6 figuras (`svg_m19.py`), quiz de 9, 9 términos nuevos y el ejercicio guiado `m19-flota`.
+- [x] M20, el producto ChatGPT: piezas alrededor del modelo y escala (800 millones de usuarios semanales), esquema de conversaciones con current_node y tabla del historial por usuario, mensajes como árbol (regenerar y editar crean hermanos; formato `mapping` del export), armar el contexto desde la rama (SQL recursivo y Python), un turno de punta a punta con id del cliente como idempotency key y buffer de eventos en Redis para reanudar, archivos y RAG (signed URL, parsing, chunking 800/400, `text-embedding-3-large` a 256 dimensiones, búsqueda híbrida), herramientas y sandbox de código, memoria, moderación y feedback. 2 figuras (`svg_m20.py`), quiz de 9, 4 términos nuevos y ejercicio estático "compartir conversación".
 - [ ] M21, metering y facturación por uso
 - [ ] M22, operar modelos en producción
 - [ ] M23, imágenes y multimodal

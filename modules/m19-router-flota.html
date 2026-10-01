@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M19. Router y flota GPU</title>
+<meta name="description" content="Lo que hay entre el gateway y las GPUs: plano de control y plano de datos, model registry y canary, cómo elegir réplica con el prefix caching y la carga a la vista, autoscaling con la métrica correcta, cold start y carga de pesos, drenaje ante un aviso de spot, continuar una respuesta en otra réplica, y fallback entre modelos y entre regiones.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m19">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Router y flota GPU</h1>
+        <p class="lead">Un motor de inferencia sirve un modelo en una réplica. Una API sirve millones de conversaciones con cientos de réplicas que arrancan, fallan, cambian de versión y a veces desaparecen con dos minutos de aviso. Este módulo diseña lo que hay entre el gateway y las GPUs: el router que elige réplica según lo que cada una ya tiene en su KV cache, el autoscaler que decide cuántas hay, el registry que sabe qué versión corre dónde, y lo que pasa cuando se va una réplica, un nodo spot o una región entera.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M19</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M03, M13, M15, M18</dd></div>
+          <div><dt>Estado</dt><dd data-status="m19">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Separar el plano de control del plano de datos de una flota de inferencia, y explicar por qué el segundo tiene que seguir funcionando sin el primero.</li>
+          <li>Elegir una política de routing que aproveche el prefix caching sin saturar réplicas, y medir su efecto en el TTFT.</li>
+          <li>Dimensionar el autoscaling: con qué métrica, cuánto tarda una réplica en arrancar y cuánto colchón hace falta mientras tanto.</li>
+          <li>Drenar una réplica ante un aviso de spot o un despliegue, y continuar en otra réplica una respuesta que se cortó.</li>
+          <li>Diseñar el fallback entre modelos y entre regiones con números: cuánta capacidad sobra y a quién se recorta primero.</li>
+        </ul>
+      </section>
+
+      <h2 id="flota"><span class="sec-num">19.1</span>La flota en números</h2>
+
+      <p>Seguimos con el ejemplo del M15: Llama 3.1 70B en BF16, servido con vLLM en réplicas de 4 H100 unidas por tensor parallelism. <span class="badge badge--ref">Diseño de referencia</span> Las cuentas de una réplica salen del M12 y del M13:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Pesos</td><td>70.6 mil millones de parámetros × 2 bytes</td><td class="r">141 GB</td></tr>
+            <tr><td>KV cache por token</td><td>2 (K y V) × 80 capas × 8 cabezas KV × 128 × 2 bytes</td><td class="r">320 kB</td></tr>
+            <tr><td>Memoria para KV cache</td><td>4 × 80 GB, menos los pesos, las activaciones y un margen</td><td class="r">~137 GB, ~418&#8239;000 tokens</td></tr>
+            <tr><td>Streams a la vez con un TPOT de ~30 ms</td><td>~6&#8239;500 tokens de contexto promedio cada uno</td><td class="r">64</td></tr>
+            <tr><td>Prefill</td><td>2 × 70.6 mil millones de FLOPs por token, con 4 × 989 TFLOPS al 50&#8239;% de MFU</td><td class="r">~14&#8239;000 tokens/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Ahora, la flota. En el pico hay 6&#8239;000 conversaciones generando a la vez. A 64 por réplica hacen falta 94 réplicas, y con un objetivo de uso del 75&#8239;% para absorber ráfagas, 125. Son 500 H100: a 4 dólares por GPU y hora, 1.46 millones de dólares por mes. Con números así, cada punto porcentual de eficiencia vale unos 15&#8239;000 dólares por mes, y el router y el autoscaler son las dos piezas que más la mueven.</p>
+
+      <p>Una flota tiene problemas que una réplica sola no tiene:</p>
+      <ul>
+        <li><b>Requests muy desiguales.</b> Una de 300 tokens y otra de 100&#8239;000 cuestan tres órdenes de magnitud distinto (M18): contar requests no mide la carga.</li>
+        <li><b>Estado en cada réplica.</b> Cada una guarda en su KV cache los prefijos que ya calculó. Mandar un turno a la réplica equivocada repite trabajo hecho.</li>
+        <li><b>Arranques lentos.</b> Una réplica nueva tarda minutos, no segundos, en estar lista.</li>
+        <li><b>Capacidad que se va.</b> GPUs que fallan, nodos spot que la nube recupera, versiones que se reemplazan.</li>
+      </ul>
+
+      <h2 id="planos"><span class="sec-num">19.2</span>Plano de control y plano de datos</h2>
+
+      <p>Conviene separar dos clases de decisión. El <dfn data-term="plano-control">plano de control</dfn> decide sobre la flota, en minutos: qué versiones existen, cuánto tráfico recibe cada una, cuántas réplicas hay y en qué nodos corren. El plano de datos decide sobre cada request, en milisegundos: a qué réplica va y por dónde vuelve el stream.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 456" role="img" aria-labelledby="f191t f191d">
+<title id="f191t">Plano de control y plano de datos de una flota de inferencia</title>
+<desc id="f191d">Arriba, el plano de control: el model registry guarda qué modelos y versiones existen; el servicio de despliegues decide qué versión recibe cuánto tráfico y publica la tabla de rutas al router; el autoscaler lee la cola, el uso de KV cache y el TTFT de las réplicas y decide cuántas tiene que haber; el placement, por ejemplo Kubernetes, arranca y apaga réplicas en nodos con GPU. Abajo, el plano de datos: los clientes llegan al gateway, que autentica y aplica cuotas; el router elige una réplica de un pool, uno por modelo. Si el plano de control cae, el de datos sigue sirviendo con la última tabla de rutas.</desc>
+<defs><marker id="f191a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="10" y="10" width="742" height="108" rx="10"/>
+<text class="dg-group" x="24" y="32">Plano de control: decide qué corre y dónde, y cambia en minutos</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="26" y="46" width="164" height="56" rx="9"/>
+<text class="dg-label" x="108.0" y="71.0" text-anchor="middle" style="font-size:13.5px">Model registry</text>
+<text class="dg-tiny" x="108.0" y="87.0" text-anchor="middle">modelos, versiones, pesos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="208" y="46" width="164" height="56" rx="9"/>
+<text class="dg-label" x="290.0" y="71.0" text-anchor="middle" style="font-size:13.5px">Despliegues</text>
+<text class="dg-tiny" x="290.0" y="87.0" text-anchor="middle">versión y peso de cada una</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="390" y="46" width="164" height="56" rx="9"/>
+<text class="dg-label" x="472.0" y="71.0" text-anchor="middle" style="font-size:13.5px">Autoscaler</text>
+<text class="dg-tiny" x="472.0" y="87.0" text-anchor="middle">cuántas réplicas</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="572" y="46" width="164" height="56" rx="9"/>
+<text class="dg-label" x="654.0" y="71.0" text-anchor="middle" style="font-size:13.5px">Placement</text>
+<text class="dg-tiny" x="654.0" y="87.0" text-anchor="middle">en qué nodo (Kubernetes)</text>
+<path class="dg-edge" d="M190 74 H204" marker-end="url(#f191a)"/>
+<path class="dg-edge" d="M554 74 H568" marker-end="url(#f191a)"/>
+<path class="dg-edge" d="M330 102 V270" marker-end="url(#f191a)"/>
+<text class="dg-tiny" x="340" y="140">tabla de rutas</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M530 214 V106" marker-end="url(#f191a)"/>
+<text class="dg-tiny" x="522" y="166" text-anchor="end">cola, KV cache, TTFT</text>
+<path class="dg-edge" d="M690 102 V214" marker-end="url(#f191a)"/>
+<text class="dg-tiny" x="682" y="190" text-anchor="end">arranca y apaga réplicas</text>
+<rect class="dg-frame" x="10" y="200" width="742" height="200" rx="10"/>
+<text class="dg-group" x="24" y="222">Plano de datos: atiende cada request, en milisegundos</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="26" y="276" width="112" height="56" rx="9"/>
+<text class="dg-label" x="82.0" y="301.0" text-anchor="middle" style="font-size:13.5px">Clientes</text>
+<text class="dg-tiny" x="82.0" y="317.0" text-anchor="middle">app y API</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="160" y="276" width="132" height="56" rx="9"/>
+<text class="dg-label" x="226.0" y="301.0" text-anchor="middle" style="font-size:13.5px">Gateway</text>
+<text class="dg-tiny" x="226.0" y="317.0" text-anchor="middle">auth y cuotas (M18)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="314" y="276" width="150" height="56" rx="9"/>
+<text class="dg-label" x="389.0" y="301.0" text-anchor="middle" style="font-size:13.5px">Router</text>
+<text class="dg-tiny" x="389.0" y="317.0" text-anchor="middle">elige la réplica</text>
+<path class="dg-edge" d="M138 304 H156" marker-end="url(#f191a)"/>
+<path class="dg-edge" d="M292 304 H310" marker-end="url(#f191a)"/>
+<rect class="dg-frame" x="506" y="230" width="236" height="74" rx="8"/>
+<text class="dg-tiny" x="518" y="248">Pool de Llama 70B</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="518" y="256" width="64" height="38" rx="9"/>
+<text class="dg-label" x="550.0" y="280.0" text-anchor="middle" style="font-size:13px">R1</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="592" y="256" width="64" height="38" rx="9"/>
+<text class="dg-label" x="624.0" y="280.0" text-anchor="middle" style="font-size:13px">R2</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="666" y="256" width="64" height="38" rx="9"/>
+<text class="dg-label" x="698.0" y="280.0" text-anchor="middle" style="font-size:13px">R3</text>
+<rect class="dg-frame" x="506" y="316" width="236" height="74" rx="8"/>
+<text class="dg-tiny" x="518" y="334">Pool de 8B</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="518" y="342" width="64" height="38" rx="9"/>
+<text class="dg-label" x="550.0" y="366.0" text-anchor="middle" style="font-size:13px">R1</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="592" y="342" width="64" height="38" rx="9"/>
+<text class="dg-label" x="624.0" y="366.0" text-anchor="middle" style="font-size:13px">R2</text>
+<path class="dg-edge" d="M464 296 L502 268" marker-end="url(#f191a)"/>
+<path class="dg-edge" d="M464 312 L502 352" marker-end="url(#f191a)"/>
+<text class="dg-small" x="10" y="428">Si el plano de control cae, el de datos sigue con la última tabla de rutas: no se puede escalar</text>
+<text class="dg-small" x="10" y="446">ni desplegar, pero las requests se siguen atendiendo. Esa propiedad se llama estabilidad estática.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.1.</b> El plano de control publica decisiones (la tabla de rutas, las réplicas que tiene que haber) y lee métricas. El plano de datos solo lee lo último que recibió: no le pregunta nada al de control en cada request.</figcaption>
+      </figure>
+
+      <p>La regla que ordena todo: el plano de datos no depende del plano de control para atender una request. El router guarda en memoria la última tabla de rutas que recibió. Si el servicio de despliegues o el autoscaler caen, la flota sigue sirviendo con lo que tenía: no puede crecer ni cambiar de versión, pero responde. AWS llama a esta propiedad <dfn data-term="estabilidad-estatica">estabilidad estática</dfn> y la usa como principio de diseño de sus propios servicios. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Un router que consulta el registry en cada request convierte una caída del registry en una caída de toda la API. Y un autoscaler que, al dejar de recibir métricas, interpreta "sin datos" como "sin carga" apaga la flota en pleno pico. Ante la duda, el plano de control no hace nada: congela el estado y avisa a una persona.</p>
+      </aside>
+
+      <h2 id="mapa"><span class="sec-num">19.3</span>El mapa de la flota</h2>
+
+      <p>Explora la flota antes de entrar en cada pieza. Arriba está el plano de control; abajo, el camino de una request hasta las réplicas. Reproduce los ocho escenarios: un turno que encuentra su historial en una réplica, una conversación nueva, un prefijo tan pedido que desborda a su réplica, un pico con autoscaling, una réplica que muere a mitad de una respuesta, un aviso de spot, la caída de otra región y el canary de una versión nueva.</p>
+
+      <div data-map="m19-flota"></div>
+
+      <h2 id="registry"><span class="sec-num">19.4</span>Model registry y versiones</h2>
+
+      <p>El <dfn data-term="model-registry">model registry</dfn> es la fuente de verdad de los modelos: qué versiones existen, dónde están sus pesos, con qué checksum, con qué configuración se sirven y en qué estado está cada una. Una versión publicada no se modifica: si cambian los pesos, el tipo de dato o la versión del motor, es otra versión. Así, "¿qué respondía el martes a las 14:00?" tiene una respuesta exacta, y eso importa para investigar una regresión de calidad.</p>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">model_versions</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Replicada entre regiones</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>model</code><span class="key">PK</span></td><td>text</td><td>NOT NULL</td><td>Nombre interno: <code>llama-3.1-70b</code></td></tr>
+              <tr><td><code>version</code><span class="key">PK</span></td><td>text</td><td>NOT NULL</td><td>Fecha o hash: <code>2025-10-07</code></td></tr>
+              <tr><td><code>weights_uri</code></td><td>text</td><td>NOT NULL</td><td>Dónde están los pesos: <code>s3://pesos/llama70b/2025-10-07/</code></td></tr>
+              <tr><td><code>sha256</code></td><td>text</td><td>NOT NULL</td><td>Cada réplica lo verifica antes de declararse lista</td></tr>
+              <tr><td><code>dtype</code>, <code>tp_size</code></td><td>text, int</td><td>NOT NULL</td><td>BF16 en 4 GPUs: define qué nodos sirven</td></tr>
+              <tr><td><code>engine</code></td><td>text</td><td>NOT NULL</td><td>Versión exacta del motor: cambiarla también cambia las respuestas</td></tr>
+              <tr><td><code>max_context</code></td><td>int</td><td>NOT NULL</td><td>El router rechaza antes de llegar a una réplica lo que no entra</td></tr>
+              <tr><td><code>state</code></td><td>text</td><td>staged, canary, ga, deprecated</td><td>El ciclo de vida de la versión</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>Los nombres que ven los clientes son alias. OpenAI documenta las dos formas: un alias como <code>gpt-4o</code> apunta a un snapshot que puede cambiar con el tiempo, y un snapshot con fecha, como <code>gpt-4o-2024-08-06</code>, queda fijo para quien necesita que el comportamiento no cambie. <span class="badge badge--doc">Documentado</span> En el registry, un alias es una fila que apunta a una versión, y moverlo es una decisión del plano de control.</p>
+
+      <h3 id="registry-canary">Cambiar de versión sin apagar nada</h3>
+
+      <ol class="steps">
+        <li><span class="step-title">Registrar</span>La versión entra como <code>staged</code>, con los resultados de sus evaluaciones offline.</li>
+        <li><span class="step-title">Arrancar réplicas</span>Con la versión nueva, mientras la anterior sigue corriendo entera.</li>
+        <li><span class="step-title">Canary</span>La tabla de rutas le da un 1 a 5&#8239;% del tráfico (M11).</li>
+        <li><span class="step-title">Comparar</span>Errores, TTFT, TPOT, largo de las respuestas y evaluaciones online de calidad, contra la versión estable.</li>
+        <li><span class="step-title">Subir o volver</span>Por escalones de horas, o de vuelta al 0&#8239;% en segundos.</li>
+      </ol>
+
+      <p>El router asigna la versión por un hash de la organización o del usuario, no por request. Así una conversación no cambia de modelo entre un turno y el siguiente, y el prefix caching no se reparte entre dos versiones: el KV cache de una no sirve para la otra, porque los pesos son distintos.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Mantener la versión anterior entera durante el canary cuesta GPUs: con 125 réplicas, un canary del 5&#8239;% necesita 7 réplicas más, y la cuenta crece con cada escalón. La alternativa es ir reemplazando réplicas de la versión vieja por la nueva. Ahorra GPUs, pero hace lento el rollback: volver atrás obliga a recargar pesos durante minutos, justo cuando algo anda mal.</p>
+      </aside>
+
+      <h2 id="elegir"><span class="sec-num">19.5</span>Elegir réplica</h2>
+
+      <p>El router decide en capas. El modelo lo pide el cliente; la versión sale de la tabla de rutas; la región, de dónde llegó la request y de cuánta capacidad queda. Esas tres son reglas. La última capa, la réplica, es el problema interesante.</p>
+
+      <p>El M03 recomendaba, para requests de duración variable, elegir la réplica con menos requests en curso o usar power of two choices, nunca round robin. En un LLM ni siquiera contar requests alcanza, porque dos requests pueden diferir mil veces en trabajo. Cada señal mide una parte:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Señal</th><th>Qué mide</th><th>Qué no ve</th></tr></thead>
+          <tbody>
+            <tr><td>Requests en curso y en cola</td><td>La carga gruesa</td><td>El tamaño: diez requests de 100&#8239;000 tokens no son diez de 300</td></tr>
+            <tr><td>Uso de KV cache</td><td>La memoria comprometida y cuánto falta para que el motor empiece a pausar requests</td><td>Cuánto prefill espera su turno</td></tr>
+            <tr><td>Tokens de prefill pendientes</td><td>El trabajo que falta antes del próximo primer token</td><td>El decode en curso</td></tr>
+            <tr><td>TTFT y TPOT recientes</td><td>Lo que siente el usuario</td><td>El presente: miden lo que ya pasó</td></tr>
+            <tr><td>Prefijo en caché</td><td>El trabajo que se puede ahorrar</td><td>La carga</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El Gateway API Inference Extension de Kubernetes, por ejemplo, elige réplica con un componente que lee de cada servidor el uso de KV cache, el largo de la cola y los adaptadores LoRA que tiene cargados. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Las métricas llegan con retraso: cada réplica las publica cada 100 a 500 ms. Si veinte routers ven la misma réplica vacía en el mismo instante, los veinte le mandan requests y la saturan. Dos defensas lo evitan. Cada router suma a la métrica lo que él mismo mandó desde la última lectura. Y cuando dos réplicas empatan, elige entre dos al azar en lugar de ir siempre a la "mejor".</p>
+
+      <h2 id="prefijo"><span class="sec-num">19.6</span>Routing consciente del prefijo</h2>
+
+      <p>El prefix caching del M15 guarda el KV cache de los prefijos que se repiten y se saltea su prefill, pero solo funciona si la request llega a la réplica que lo tiene. En una conversación, cada turno repite todo el anterior:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f192t f192d">
+<title id="f192t">Cuánto prefill ahorra cada réplica según lo que tiene en su KV cache</title>
+<desc id="f192d">Llega el turno 6 de una conversación: 3 000 tokens de prompt de sistema, 5 200 de historial y 300 del mensaje nuevo, 8 500 en total. La réplica 1 tiene en su KV cache solo el prompt de sistema: calcula 5 500 tokens, unos 390 ms. La réplica 2 atendió los turnos anteriores y tiene el prompt de sistema y el historial: calcula solo los 300 tokens nuevos, unos 21 ms. La réplica 3 no tiene nada: calcula los 8 500, unos 610 ms. Los tiempos suponen un 70B en 4 H100 al 50 por ciento de utilización.</desc>
+<text class="sim-label" x="178" y="37" text-anchor="end">La request</text>
+<rect x="190.0" y="20" width="195.6" height="26" rx="3" class="hb-b"/>
+<text class="dg-tiny" x="288.8" y="37" text-anchor="middle">Prompt de sistema: 3&#8239;000</text>
+<rect x="387.6" y="20" width="340.6" height="26" rx="3" class="hb-b"/>
+<text class="dg-tiny" x="558.9" y="37" text-anchor="middle">Historial de la conversación: 5&#8239;200</text>
+<rect x="730.2" y="20" width="17.8" height="26" rx="3" class="hb-b"/>
+<text class="dg-tiny" x="750" y="64" text-anchor="end">nuevo: 300 tokens</text>
+<path class="dg-feedback" d="M740 52 V48"/>
+<text class="sim-label" x="178" y="113" text-anchor="end">Réplica 1</text>
+<rect x="190" y="96" width="195.6" height="24" rx="3" fill="var(--l-cache)"/>
+<rect x="387.6" y="96" width="360.4" height="24" rx="3" class="hb-a"/>
+<text class="dg-tiny" x="190" y="138">tiene el prompt de sistema: calcula 5&#8239;500 tokens, ~390 ms</text>
+<text class="sim-label" x="178" y="179" text-anchor="end">Réplica 2</text>
+<rect x="190" y="162" width="538.2" height="24" rx="3" fill="var(--l-cache)"/>
+<rect x="730.2" y="162" width="17.8" height="24" rx="3" class="hb-a"/>
+<text class="dg-tiny" x="190" y="204">atendió los turnos anteriores: calcula 300 tokens, ~21 ms</text>
+<text class="sim-label" x="178" y="245" text-anchor="end">Réplica 3</text>
+<rect x="190.0" y="228" width="558.0" height="24" rx="3" class="hb-a"/>
+<text class="dg-tiny" x="190" y="270">no tiene nada: calcula los 8&#8239;500 tokens, ~610 ms</text>
+<rect x="190" y="290" width="14" height="10" rx="2" fill="var(--l-cache)"/>
+<text class="dg-tiny" x="210" y="300">ya está en el KV cache de la réplica</text>
+<rect x="480" y="290" width="14" height="10" rx="2" class="hb-a"/>
+<text class="dg-tiny" x="500" y="300">hay que calcularlo (prefill)</text>
+<text class="dg-small" x="10" y="338">Mandar este turno a la réplica 2 ahorra el 96&#8239;% del prefill. Mandarlo a la réplica 3 lo cuesta todo.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.2.</b> La misma request cuesta 21 ms o 610 ms de prefill según la réplica que la reciba. La diferencia no está en la réplica: está en lo que tiene en su KV cache.</figcaption>
+      </figure>
+
+      <p>Con 125 réplicas y round robin, el turno siguiente cae en la misma réplica una vez cada 125. Hay tres formas de mejorar eso:</p>
+      <ul>
+        <li><b>Afinidad por conversación:</b> hashear el id de la conversación. Simple y aprovecha el historial, pero no mira la carga.</li>
+        <li><b>Hash del prefijo inicial:</b> hashear los primeros tokens del prompt. Agrupa por prompt de sistema, pero un prompt popular satura su réplica.</li>
+        <li><b>Un índice de prefijos:</b> el router sabe qué bloques tiene cada réplica y elige la que tiene más, sin pasarse de un techo de carga.</li>
+      </ul>
+
+      <p>Elegir según lo que cada réplica tiene en su caché se llama <dfn data-term="routing-prefijo">routing consciente del prefijo</dfn>.</p>
+
+      <h3 id="prefijo-indice">Cómo sabe el router qué tiene cada réplica</h3>
+
+      <p>Como en el M15, el prompt se divide en bloques de 16 tokens y cada bloque se identifica por un hash que incluye el del bloque anterior: dos prompts comparten el hash del bloque <i>n</i> solo si comparten todo hasta ahí. Hay dos formas de mantener el índice:</p>
+      <ul>
+        <li><b>El router recuerda lo que mandó.</b> El router de SGLang guarda, por réplica, un árbol aproximado de los prefijos que le envió. En su publicación de la versión 0.4, con prefijos largos compartidos, la tasa de aciertos subió del 20 al 75&#8239;% y el throughput 1.9 veces frente a su balanceador anterior. <span class="badge badge--doc">Documentado</span> No ve lo que la réplica expulsó: el índice se equivoca hacia el optimismo.</li>
+        <li><b>Las réplicas avisan.</b> Cada réplica publica un evento cuando guarda o expulsa bloques, y el índice refleja lo que de verdad hay. Así lo hacen llm-d con los eventos de KV cache de vLLM y el router de NVIDIA Dynamo. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+<pre data-lang="python"><code>BLOCK = 16
+
+def block_hashes(tokens):
+    """Un hash por bloque completo; cada uno encadena con el anterior."""
+    h, out = b"", []
+    for i in range(0, len(tokens) - len(tokens) % BLOCK, BLOCK):
+        h = sha256(h + encode(tokens[i:i + BLOCK])).digest()
+        out.append(h)
+    return out
+
+def match(index, hashes, replicas):
+    """Cuántos bloques iniciales seguidos tiene cada réplica en su KV cache."""
+    hits = {}
+    for r in replicas:
+        n = 0
+        while n &lt; len(hashes) and r in index.get(hashes[n], ()):
+            n += 1
+        hits[r] = n
+    return hits</code></pre>
+
+      <p>El índice es una pista, no una fuente de verdad. Si dice que una réplica tiene un prefijo que ya expulsó, la request paga el prefill completo y la respuesta es igual de correcta. Por eso puede vivir en la memoria de cada router, sin replicación ni consenso.</p>
+
+      <h3 id="carga-acotada">Afinidad con carga acotada</h3>
+
+      <p>Afinidad pura y balanceo puro son los dos extremos. El punto medio viene de un trabajo de Google de 2016: en el <dfn data-term="bounded-load">hashing consistente con carga acotada</dfn>, cada servidor acepta hasta (1 + ε) veces la carga promedio, y si el servidor que le toca a una clave está lleno, la clave pasa al siguiente. Vimeo lo implementó en HAProxy, con la opción <code>hash-balance-factor</code>, y redujo casi 8 veces el ancho de banda entre sus cachés. <span class="badge badge--doc">Documentado</span> El router de este módulo aplica la misma idea al prefijo: entre las réplicas con menos de 1.25 veces la carga promedio, la que tiene el prefijo más largo.</p>
+
+      <p>Compara las políticas con las mismas conversaciones: ocho réplicas, cuatro apps con prompts de sistema de distinto largo y conversaciones de varios turnos.</p>
+
+      <div data-sim="router"></div>
+
+      <p>Con la carga al 85&#8239;% y 250&#8239;000 tokens de KV cache libre por réplica:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Política</th><th class="r">Prompt reutilizado</th><th class="r">TTFT p50</th><th class="r">TTFT p95</th><th class="r">Más cargada ÷ promedio</th></tr></thead>
+          <tbody>
+            <tr><td>Round robin</td><td class="r">34&#8239;%</td><td class="r">1.75 s</td><td class="r">8.97 s</td><td class="r">1.11</td></tr>
+            <tr><td>La menos cargada</td><td class="r">34&#8239;%</td><td class="r">2.08 s</td><td class="r">7.67 s</td><td class="r">1.02</td></tr>
+            <tr><td>Hash del prefijo inicial</td><td class="r">54&#8239;%</td><td class="r">69.3 s</td><td class="r">5.9 min</td><td class="r">6.58</td></tr>
+            <tr><td>Afinidad por conversación</td><td class="r">87&#8239;%</td><td class="r">62.9 ms</td><td class="r">2.83 s</td><td class="r">1.26</td></tr>
+            <tr><td>Prefijo con carga acotada</td><td class="r">89&#8239;%</td><td class="r">58.6 ms</td><td class="r">705 ms</td><td class="r">1.07</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul>
+        <li><b>Round robin y la menos cargada</b> solo reutilizan el prompt de sistema: cada turno vuelve a calcular el historial entero. La menos cargada reparte más parejo y aun así tiene peor mediana, porque iguala la cantidad de requests sin ver que unas traen 400 tokens por calcular y otras 9&#8239;000.</li>
+        <li><b>El hash del prefijo inicial</b> manda cada app a una sola réplica. La app con el 40&#8239;% del tráfico satura una réplica de ocho: su cola no deja de crecer, mientras otras réplicas quedan casi vacías.</li>
+        <li><b>La afinidad por conversación</b> acierta casi todo, pero cuando varias conversaciones activas coinciden en una réplica, nadie las mueve. Al 100&#8239;% de carga, su p95 llega a 9.78 s.</li>
+        <li><b>El prefijo con carga acotada</b> conserva los aciertos de la afinidad y no deja que una réplica se pase del techo: al 100&#8239;% de carga, su p95 es de 2.29 s, contra 16.9 s de la menos cargada.</li>
+        <li><b>La memoria también es capacidad de routing.</b> Con 100&#8239;000 tokens libres por réplica, la mejor política baja al 62&#8239;% de aciertos: el router no puede aprovechar lo que la réplica ya expulsó.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los prompts de sistema de las apps grandes terminan en el KV cache de casi todas las réplicas, así que el routing por prefijo gana sobre todo con el historial de las conversaciones y con documentos largos que se consultan varias veces. Mide el prompt reutilizado por la flota entera, no por réplica: es la métrica que dice si el router hace su trabajo.</p>
+      </aside>
+
+      <h2 id="autoscaling"><span class="sec-num">19.7</span>Autoscaling: qué medir y con cuánta anticipación</h2>
+
+      <p>El <dfn data-term="autoscaling">autoscaling</dfn> ajusta la cantidad de réplicas a la demanda. La primera decisión es la métrica, y la más obvia es la equivocada. La utilización de GPU que reporta <code>nvidia-smi</code> es la fracción del tiempo en que algún kernel estaba corriendo, no cuánto de la GPU se usa. <span class="badge badge--doc">Documentado</span> Una réplica con una request y otra con 64 marcan casi lo mismo. Sirven mejor:</p>
+      <ul>
+        <li><b>El uso de KV cache:</b> dice cuánto falta para que el motor empiece a pausar requests.</li>
+        <li><b>Las requests en cola por réplica:</b> la señal más directa de que falta capacidad.</li>
+        <li><b>El TTFT p90 contra su SLO:</b> mide lo que importa, pero tarde.</li>
+      </ul>
+
+      <p>El Horizontal Pod Autoscaler de Kubernetes calcula <code>deseadas = ceil(actuales × métrica / objetivo)</code>, ignora las diferencias menores al 10&#8239;% y, para bajar, toma la recomendación más alta de los últimos 300 segundos. <span class="badge badge--doc">Documentado</span> Con 100 réplicas, un uso de KV cache del 92&#8239;% y un objetivo del 75&#8239;%: ceil(100 × 0.92 / 0.75) = 123 réplicas.</p>
+
+      <p>La fórmula responde cuántas réplicas, pero no cuándo llegan. Si la réplica nueva tarda casi nueve minutos en estar lista, la demanda sigue subiendo mientras tanto:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 344" role="img" aria-labelledby="f193t f193d">
+<title id="f193t">La demanda sube mientras las réplicas nuevas arrancan</title>
+<desc id="f193d">Eje horizontal: minutos. La demanda se mantiene en 75 réplicas hasta el minuto 10 y después crece un 3 por ciento por minuto. La capacidad es de 100 réplicas. En el minuto 20 la demanda llega a 100 y el autoscaler pide réplicas, pero tardan 8.7 minutos en estar listas: hasta el minuto 29 la demanda supera la capacidad y la diferencia se acumula en colas y en TTFT alto. Con un colchón de 30 réplicas ya corriendo, la capacidad de 130 cubre la demanda hasta que llegan las nuevas.</desc>
+<line class="sim-grid" x1="56" x2="750" y1="280.0" y2="280.0"/>
+<text class="sim-axis" x="50" y="284.0" text-anchor="end">60</text>
+<line class="sim-grid" x1="56" x2="750" y1="230.8" y2="230.8"/>
+<text class="sim-axis" x="50" y="234.8" text-anchor="end">80</text>
+<line class="sim-grid" x1="56" x2="750" y1="181.6" y2="181.6"/>
+<text class="sim-axis" x="50" y="185.6" text-anchor="end">100</text>
+<line class="sim-grid" x1="56" x2="750" y1="132.4" y2="132.4"/>
+<text class="sim-axis" x="50" y="136.4" text-anchor="end">120</text>
+<line class="sim-grid" x1="56" x2="750" y1="83.2" y2="83.2"/>
+<text class="sim-axis" x="50" y="87.2" text-anchor="end">140</text>
+<line class="sim-grid" x1="56" x2="750" y1="34.0" y2="34.0"/>
+<text class="sim-axis" x="50" y="38.0" text-anchor="end">160</text>
+<text class="sim-axis" x="56.0" y="298" text-anchor="middle">0</text>
+<text class="sim-axis" x="171.7" y="298" text-anchor="middle">6</text>
+<text class="sim-axis" x="287.3" y="298" text-anchor="middle">12</text>
+<text class="sim-axis" x="403.0" y="298" text-anchor="middle">18</text>
+<text class="sim-axis" x="518.7" y="298" text-anchor="middle">24</text>
+<text class="sim-axis" x="634.3" y="298" text-anchor="middle">30</text>
+<text class="sim-axis" x="750.0" y="298" text-anchor="middle">36</text>
+<text class="sim-axis" x="403.0" y="316" text-anchor="middle">minutos</text>
+<text class="sim-axis" x="12" y="16">réplicas</text>
+<path d="M436.4 181.6 L436.4 181.6 L440.6 180.0 L444.8 178.4 L448.9 176.8 L453.1 175.2 L457.3 173.6 L461.5 172.0 L465.7 170.3 L469.8 168.7 L474.0 167.0 L478.2 165.3 L482.4 163.6 L486.6 161.9 L490.8 160.2 L494.9 158.5 L499.1 156.8 L503.3 155.0 L507.5 153.3 L511.7 151.5 L515.8 149.7 L520.0 147.9 L524.2 146.2 L528.4 144.3 L532.6 142.5 L536.7 140.7 L540.9 138.8 L545.1 137.0 L549.3 135.1 L553.5 133.2 L557.6 131.3 L561.8 129.4 L566.0 127.5 L570.2 125.6 L574.4 123.6 L578.5 121.7 L582.7 119.7 L586.9 117.7 L591.1 115.7 L595.3 113.7 L599.5 111.7 L603.6 109.7 L603.6 181.6 Z" class="hb-lost"/>
+<path d="M56.0 181.6 H603.6 V74.4 H750.0" fill="none" stroke="var(--l-gpu)" stroke-width="2"/>
+<path d="M56.0 107.8 H750.0" fill="none" stroke="var(--l-gpu)" stroke-width="2" stroke-dasharray="6 4"/>
+<path d="M56.0 243.1 L60.8 243.1 L65.6 243.1 L70.5 243.1 L75.3 243.1 L80.1 243.1 L84.9 243.1 L89.7 243.1 L94.6 243.1 L99.4 243.1 L104.2 243.1 L109.0 243.1 L113.8 243.1 L118.7 243.1 L123.5 243.1 L128.3 243.1 L133.1 243.1 L137.9 243.1 L142.8 243.1 L147.6 243.1 L152.4 243.1 L157.2 243.1 L162.0 243.1 L166.8 243.1 L171.7 243.1 L176.5 243.1 L181.3 243.1 L186.1 243.1 L190.9 243.1 L195.8 243.1 L200.6 243.1 L205.4 243.1 L210.2 243.1 L215.0 243.1 L219.9 243.1 L224.7 243.1 L229.5 243.1 L234.3 243.1 L239.1 243.1 L244.0 243.1 L248.8 243.1 L253.6 241.7 L258.4 240.4 L263.2 239.0 L268.1 237.6 L272.9 236.2 L277.7 234.7 L282.5 233.3 L287.3 231.9 L292.2 230.4 L297.0 228.9 L301.8 227.5 L306.6 226.0 L311.4 224.5 L316.2 223.0 L321.1 221.5 L325.9 219.9 L330.7 218.4 L335.5 216.9 L340.3 215.3 L345.2 213.7 L350.0 212.1 L354.8 210.5 L359.6 208.9 L364.4 207.3 L369.3 205.7 L374.1 204.0 L378.9 202.4 L383.7 200.7 L388.5 199.0 L393.4 197.3 L398.2 195.6 L403.0 193.9 L407.8 192.1 L412.6 190.4 L417.5 188.6 L422.3 186.9 L427.1 185.1 L431.9 183.3 L436.7 181.5 L441.6 179.6 L446.4 177.8 L451.2 176.0 L456.0 174.1 L460.8 172.2 L465.7 170.3 L470.5 168.4 L475.3 166.5 L480.1 164.5 L484.9 162.6 L489.8 160.6 L494.6 158.7 L499.4 156.7 L504.2 154.6 L509.0 152.6 L513.8 150.6 L518.7 148.5 L523.5 146.5 L528.3 144.4 L533.1 142.3 L537.9 140.2 L542.8 138.0 L547.6 135.9 L552.4 133.7 L557.2 131.5 L562.0 129.3 L566.9 127.1 L571.7 124.9 L576.5 122.6 L581.3 120.4 L586.1 118.1 L591.0 115.8 L595.8 113.5 L600.6 111.2 L605.4 108.8 L610.2 106.5 L615.1 104.1 L619.9 101.7 L624.7 99.3 L629.5 96.8 L634.3 94.4 L639.2 91.9 L644.0 89.4 L648.8 86.9 L653.6 84.4 L658.4 81.8 L663.2 79.3 L668.1 76.7 L672.9 74.1 L677.7 71.5 L682.5 68.8 L687.3 66.2 L692.2 63.5 L697.0 60.8 L701.8 58.1 L706.6 55.3 L711.4 52.5 L716.3 49.8 L721.1 47.0 L725.9 44.1 L730.7 41.3 L735.5 38.4 L740.4 35.5 L745.2 34.0 L750.0 34.0" fill="none" stroke="var(--label)" stroke-width="2"/>
+<path class="dg-feedback" d="M436.4 185.6 V265.2"/>
+<text class="dg-tiny" x="430.4" y="255.4" text-anchor="end">el autoscaler pide réplicas</text>
+<path class="dg-feedback" d="M603.6 185.6 V265.2"/>
+<text class="dg-tiny" x="609.6" y="255.4">llegan, 8.7 min después</text>
+<path class="dg-feedback" d="M434.4 139.8 L528.3 166.8"/>
+<text class="dg-tiny" x="430.4" y="143.8" text-anchor="end">demanda sin atender: cola y TTFT alto</text>
+<text class="dg-tiny" x="75.3" y="99.8">con un colchón de 30 réplicas ya corriendo</text>
+<text class="dg-tiny" x="75.3" y="173.6">capacidad: 100 réplicas</text>
+<text class="dg-tiny" x="75.3" y="235.1">demanda</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.3.</b> La demanda crece un 3&#8239;% por minuto. El autoscaler reacciona en el minuto 20, pero las réplicas llegan en el minuto 29: la zona roja es demanda que espera en cola o recibe un 503. Con 30 réplicas de colchón ya corriendo, la capacidad nunca queda por debajo.</figcaption>
+      </figure>
+
+      <p>Hay tres formas de cerrar esa brecha, y se combinan:</p>
+      <ul>
+        <li><b>Colchón:</b> réplicas corriendo de más, dimensionadas para cubrir lo que crece la demanda durante un arranque.</li>
+        <li><b>Arranques más cortos:</b> la sección siguiente.</li>
+        <li><b>Escalar por calendario:</b> el tráfico de un chat tiene un patrón diario muy predecible. Subir 20 minutos antes del pico de cada mañana es más barato que reaccionar.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Bajar también cuesta. Apagar una réplica tira su KV cache, y volver a prenderla diez minutos después cuesta un arranque completo. Por eso se baja despacio, con la ventana de estabilización, y drenando la réplica antes de apagarla (sección 19.9).</p>
+      </aside>
+
+      <h2 id="cold-start"><span class="sec-num">19.8</span>Cold start y carga de pesos</h2>
+
+      <p>El cold start de una réplica de LLM no se parece al de una función serverless (M28). Tiene cuatro partes, y cada una se ataca distinto:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f194t f194d">
+<title id="f194t">De qué está hecho el cold start de una réplica</title>
+<desc id="f194d">Tres barras de tiempo para una réplica de un 70B con 141 GB de pesos. Nodo nuevo: 300 segundos para conseguir y arrancar el nodo, 90 para bajar la imagen, 70 para cargar los pesos desde almacenamiento de objetos a 2 GB/s y 60 para inicializar el motor: 520 segundos. Nodo listo con los pesos en NVMe local: 24 segundos de pesos a 6 GB/s y 60 de motor: 84 segundos. Pool precalentado, con los pesos en la RAM del host y el motor con caché de compilación: 7 segundos de pesos y 20 de motor: 27 segundos.</desc>
+<line class="sim-grid" x1="210.0" x2="210.0" y1="14" y2="196"/>
+<text class="sim-axis" x="210.0" y="214" text-anchor="middle">0</text>
+<line class="sim-grid" x1="267.8" x2="267.8" y1="14" y2="196"/>
+<text class="sim-axis" x="267.8" y="214" text-anchor="middle">60</text>
+<line class="sim-grid" x1="325.6" x2="325.6" y1="14" y2="196"/>
+<text class="sim-axis" x="325.6" y="214" text-anchor="middle">120</text>
+<line class="sim-grid" x1="383.3" x2="383.3" y1="14" y2="196"/>
+<text class="sim-axis" x="383.3" y="214" text-anchor="middle">180</text>
+<line class="sim-grid" x1="441.1" x2="441.1" y1="14" y2="196"/>
+<text class="sim-axis" x="441.1" y="214" text-anchor="middle">240</text>
+<line class="sim-grid" x1="498.9" x2="498.9" y1="14" y2="196"/>
+<text class="sim-axis" x="498.9" y="214" text-anchor="middle">300</text>
+<line class="sim-grid" x1="556.7" x2="556.7" y1="14" y2="196"/>
+<text class="sim-axis" x="556.7" y="214" text-anchor="middle">360</text>
+<line class="sim-grid" x1="614.4" x2="614.4" y1="14" y2="196"/>
+<text class="sim-axis" x="614.4" y="214" text-anchor="middle">420</text>
+<line class="sim-grid" x1="672.2" x2="672.2" y1="14" y2="196"/>
+<text class="sim-axis" x="672.2" y="214" text-anchor="middle">480</text>
+<line class="sim-grid" x1="730.0" x2="730.0" y1="14" y2="196"/>
+<text class="sim-axis" x="730.0" y="214" text-anchor="middle">540</text>
+<text class="sim-axis" x="470.0" y="232" text-anchor="middle">segundos</text>
+<text class="sim-label" x="198" y="49" text-anchor="end">Nodo nuevo</text>
+<rect x="210.0" y="30" width="286.9" height="28" rx="3" fill="var(--l-service)"/>
+<text x="354.4" y="49" text-anchor="middle" class="dg-tiny" style="fill:var(--bg)">nodo</text>
+<rect x="498.9" y="30" width="84.7" height="28" rx="3" fill="var(--l-queue)"/>
+<text x="542.2" y="49" text-anchor="middle" class="dg-tiny" style="fill:var(--bg)">imagen</text>
+<rect x="585.6" y="30" width="65.9" height="28" rx="3" fill="var(--l-db)"/>
+<text x="619.5" y="49" text-anchor="middle" class="dg-tiny" style="fill:var(--bg)">pesos</text>
+<rect x="653.4" y="30" width="55.8" height="28" rx="3" fill="var(--l-gpu)"/>
+<text x="682.3" y="49" text-anchor="middle" class="dg-tiny" style="fill:var(--bg)">motor</text>
+<text class="dg-label" x="719.2" y="49" style="font-size:13px">8.7 min</text>
+<text class="sim-label" x="198" y="107" text-anchor="end">Nodo listo, pesos en NVMe</text>
+<rect x="210.0" y="88" width="20.6" height="28" rx="3" fill="var(--l-db)"/>
+<rect x="232.6" y="88" width="55.8" height="28" rx="3" fill="var(--l-gpu)"/>
+<text x="261.5" y="107" text-anchor="middle" class="dg-tiny" style="fill:var(--bg)">motor</text>
+<text class="dg-label" x="298.4" y="107" style="font-size:13px">84 s</text>
+<text class="sim-label" x="198" y="165" text-anchor="end">Pool precalentado</text>
+<rect x="210.0" y="146" width="4.8" height="28" rx="3" fill="var(--l-db)"/>
+<rect x="216.8" y="146" width="17.3" height="28" rx="3" fill="var(--l-gpu)"/>
+<text class="dg-label" x="244.0" y="165" style="font-size:13px">27 s</text>
+<rect x="210" y="252" width="14" height="10" rx="2" fill="var(--l-service)"/>
+<text class="dg-tiny" x="230" y="262">conseguir el nodo</text>
+<rect x="346" y="252" width="14" height="10" rx="2" fill="var(--l-queue)"/>
+<text class="dg-tiny" x="366" y="262">bajar la imagen</text>
+<rect x="482" y="252" width="14" height="10" rx="2" fill="var(--l-db)"/>
+<text class="dg-tiny" x="502" y="262">cargar los pesos</text>
+<rect x="618" y="252" width="14" height="10" rx="2" fill="var(--l-gpu)"/>
+<text class="dg-tiny" x="638" y="262">inicializar el motor</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.4.</b> En un nodo nuevo, la mayor parte del arranque es conseguir el nodo. Con un nodo listo, dominan los pesos y el motor. Un pool precalentado los reduce a segundos.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Conseguir el nodo.</b> Minutos si hay que pedirlo a la nube, y a veces no hay. Cero si ya hay un nodo libre esperando.</li>
+        <li><b>Bajar la imagen.</b> Una imagen con CUDA, PyTorch y el motor pesa 10 GB o más. Se evita con imágenes ya presentes en el nodo.</li>
+        <li><b>Cargar los pesos.</b> 141 GB: unos 70 s a 2 GB/s desde almacenamiento de objetos, 24 s a 6 GB/s desde un NVMe local y unos 7 s desde la RAM del host. El formato safetensors permite mapear los tensores en memoria sin deserializarlos, y vLLM acepta <code>--load-format runai_streamer</code>, que lee los tensores con muchos hilos, desde disco o desde S3, y los copia a la GPU mientras sigue leyendo. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Inicializar el motor.</b> Perfilar la memoria, reservar el KV cache, compilar y capturar los CUDA graphs: de decenas de segundos a minutos. Se acorta guardando la caché de compilación entre arranques.</li>
+      </ul>
+
+      <p>Un <dfn data-term="warm-pool">pool precalentado</dfn> junta todo eso: nodos con GPU encendidos, con la imagen bajada y los pesos en la RAM, que solo esperan el arranque del motor. También cuesta: un nodo esperando cobra lo mismo que uno sirviendo. Calcula cuánto colchón necesita cada forma de arrancar:</p>
+
+      <div data-calc="coldstart"></div>
+
+      <p>Con 100 réplicas en el pico y un crecimiento del 3&#8239;% por minuto: un nodo nuevo tarda 8.7 minutos y necesita 30 réplicas de colchón, 350&#8239;400 dólares por mes; con los pesos en NVMe, 84 s y 5 réplicas, 58&#8239;400 dólares; con un pool precalentado, 27 s y 2 réplicas, 23&#8239;360 dólares. Acortar el arranque se paga solo, y lo que más pesa es no depender de conseguir un nodo en el momento del pico.</p>
+
+      <h2 id="spot"><span class="sec-num">19.9</span>Preemption, spot y drenaje</h2>
+
+      <p>La capacidad se va de tres maneras: por una falla, sin aviso; por una interrupción de la nube, con un aviso corto; y por decisión propia, en un despliegue o al bajar réplicas. Las tres terminan igual, con requests en curso que hay que salvar.</p>
+
+      <p>La <dfn data-term="spot">capacidad spot</dfn> son GPUs que la nube vende con descuento a cambio de poder recuperarlas. AWS avisa dos minutos antes; Google Cloud y Azure, 30 segundos. <span class="badge badge--doc">Documentado</span> Para un chat alcanza, porque la mayoría de las respuestas dura segundos. Para un agente que genera 8&#8239;000 tokens a 30 ms por token, no: son cuatro minutos.</p>
+
+      <h3 id="spot-drenar">Drenar sin cortar</h3>
+
+      <ol class="steps">
+        <li><span class="step-title">Dejar de recibir</span>La readiness probe falla a propósito, el router saca la réplica de su lista y el índice de prefijos la olvida.</li>
+        <li><span class="step-title">Dejar terminar</span>Las respuestas cortas terminan donde están.</li>
+        <li><span class="step-title">Continuar las largas</span>Antes del corte, el router las sigue en otra réplica.</li>
+        <li><span class="step-title">Apagar</span>Sin streams abiertos.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 444" role="img" aria-labelledby="f195t f195d">
+<title id="f195t">Drenar una réplica antes de que la apaguen</title>
+<desc id="f195d">La nube avisa que va a recuperar el nodo spot en dos minutos. El agente del nodo marca la réplica A como drenando y el router deja de mandarle requests nuevas. Las respuestas cortas terminan en A. Diez segundos antes del corte, a las que siguen generando, el router las continúa en la réplica B: le manda el prompt más los tokens ya generados, B hace el prefill de todo eso y sigue generando en el mismo stream. El cliente ve una pausa, no un error. Después se corta el nodo.</desc>
+<defs><marker id="f195-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f195-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f195-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f195-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Nube</text>
+<path class="dg-frame" d="M70.0 40 V434"/>
+<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">Agente del nodo</text>
+<path class="dg-frame" d="M227.5 40 V434"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Router</text>
+<path class="dg-frame" d="M385.0 40 V434"/>
+<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">Réplica A (spot)</text>
+<path class="dg-frame" d="M542.5 40 V434"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica B</text>
+<path class="dg-frame" d="M700.0 40 V434"/>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M73.0 72 L222.5 72" marker-end="url(#f195-q)"/>
+<rect x="103.15" y="55" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="66" text-anchor="middle">aviso: 2 min</text>
+<path class="dg-edge" d="M230.5 106 L380.0 106" marker-end="url(#f195-a)"/>
+<rect x="263.95" y="89" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="100" text-anchor="middle">A: drenando</text>
+<rect x="395.0" y="126" width="216" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="142">no manda requests nuevas a A</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M539.5 174 L390.0 174" marker-end="url(#f195-r)"/>
+<rect x="358.75" y="157" width="210.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="168" text-anchor="middle">terminan las respuestas cortas</text>
+<rect x="281.5" y="194" width="251" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="291.5" y="210">T − 10 s: quedan 3 streams largos</text>
+<path class="dg-edge" d="M388.0 242 L537.5 242" marker-end="url(#f195-a)"/>
+<rect x="398.35" y="225" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="236" text-anchor="middle">cancelar 3 streams</text>
+<path class="dg-edge" d="M388.0 276 L695.0 276" marker-end="url(#f195-a)"/>
+<rect x="444.1" y="259" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="270" text-anchor="middle">prompt + tokens ya generados</text>
+<rect x="439.0" y="296" width="251" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="449.0" y="312">prefill de todo y sigue generando</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 344 L390.0 344" marker-end="url(#f195-r)"/>
+<rect x="447.4" y="327" width="190.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="338" text-anchor="middle">tokens nuevos, mismo stream</text>
+<path d="M20 376 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="365" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="380" text-anchor="middle" style="fill:var(--fail)">la nube apaga el nodo de A</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.5.</b> El drenaje convierte un corte en una pausa. Los streams largos se continúan antes de que la nube apague el nodo, no después.</figcaption>
+      </figure>
+
+      <p>Kubernetes, al apagar un pod, le manda <code>SIGTERM</code> y espera <code>terminationGracePeriodSeconds</code>, 30 segundos por defecto, antes de matarlo. <span class="badge badge--doc">Documentado</span> Para un servidor de inferencia, ese valor tiene que cubrir la respuesta más larga que estés dispuesto a esperar, y el servidor tiene que tomar el <code>SIGTERM</code> como "dejar de aceptar", no como "terminar ya". Es el connection draining del M03, con conexiones que duran minutos.</p>
+
+      <h3 id="spot-continuar">Continuar una respuesta en otra réplica</h3>
+
+      <p>El router reenvía cada token al cliente, así que conoce el prompt y todo lo que ya se generó. Para continuar, manda a otra réplica el prompt más los tokens generados como comienzo de la respuesta, con <code>max_tokens</code> reducido en lo que ya salió. La réplica nueva hace el prefill de todo, unos 0.6 s para 8&#8239;700 tokens, y sigue generando en el mismo stream. El cliente ve una pausa, no un error. El mismo mecanismo salva una réplica que muere sin aviso: el escenario "Muere una réplica a mitad del decode" del mapa.</p>
+
+      <p>No hay que confundirlo con el stream reanudable del M17, en el que el cliente se reconecta. Acá el cliente no se entera de nada. Tres detalles cambian el resultado:</p>
+      <ul>
+        <li><b>Con temperatura mayor que cero,</b> el resto de la respuesta es coherente con lo ya enviado, pero no es el que habría salido en la réplica original.</li>
+        <li><b>Con salidas estructuradas,</b> el motor tiene que reconstruir el estado de la gramática a partir de los tokens ya generados antes de seguir (M17).</li>
+        <li><b>La facturación</b> cuenta los tokens que recibió el cliente, no los que se recalcularon.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Para continuar streams, el router guarda los tokens de cada uno mientras dura. Son pocos datos (2&#8239;400 streams de unos miles de tokens caben en decenas de MB), pero el router deja de ser intercambiable: si él mismo cae, esos streams se cortan. Se acepta porque un router falla mucho menos que una réplica de 4 GPUs.</p>
+      </aside>
+
+      <h2 id="fallback"><span class="sec-num">19.10</span>Fallback entre modelos y entre regiones</h2>
+
+      <p>Cuando la capacidad no alcanza, hay cinco salidas, de la más barata a la más cara para el usuario: esperar en una cola acotada, recortar el tráfico de menor prioridad (M18), contestar con un modelo más chico, mandar la request a otra región, o rechazarla con un 503.</p>
+
+      <p>El <dfn data-term="fallback-modelo">fallback de modelo</dfn> funciona bien cuando el producto lo admite. OpenAI documenta que, en el plan gratuito de ChatGPT, al llegar al límite de mensajes de un modelo, la conversación sigue con una versión mini. <span class="badge badge--doc">Documentado</span> En una API, en cambio, un fallback silencioso rompe el contrato: el cliente pidió un modelo. Lo honesto es devolver un error o aceptar una lista de modelos alternativos que el cliente elige, y decir siempre en la respuesta qué modelo contestó.</p>
+
+      <h3 id="fallback-regiones">Cuánto sobra para perder una región</h3>
+
+      <p>Con R regiones, cada una al uso u, la caída de una deja a las demás en u × R / (R − 1). Para absorberla sin recortar, u ≤ (R − 1) / R: el 50&#8239;% con dos regiones, el 67&#8239;% con tres, el 75&#8239;% con cuatro. Con GPUs eso es caro: con tres regiones, un tercio de la flota está parada en un día normal. Muchos equipos eligen otra cosa: trabajan más cargados y deciden de antemano a quién recortan.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 318" role="img" aria-labelledby="f196t f196d">
+<title id="f196t">Una región cae y las otras dos absorben su tráfico</title>
+<desc id="f196d">Tres regiones al 70 por ciento de uso, con el tráfico dividido en pago y gratuito. Cuando cae una, sus requests se reparten entre las otras dos, que quedan al 105 por ciento: no alcanza. Se recorta el tráfico gratuito hasta que cada región sobreviviente queda al 100 por ciento; el tráfico pago no se toca.</desc>
+<text class="dg-group" x="10" y="22">Antes</text>
+<text class="sim-label" x="188" y="51" text-anchor="end">Región A</text>
+<rect x="200" y="34" width="207.4" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="409.4" y="34" width="87.7" height="24" rx="3" fill="var(--l-edge)"/>
+<text class="dg-label" x="680" y="51" style="font-size:13px">70&#8239;%</text>
+<text class="sim-label" x="188" y="83" text-anchor="end">Región B</text>
+<rect x="200" y="66" width="207.4" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="409.4" y="66" width="87.7" height="24" rx="3" fill="var(--l-edge)"/>
+<text class="dg-label" x="680" y="83" style="font-size:13px">70&#8239;%</text>
+<text class="sim-label" x="188" y="115" text-anchor="end">Región C</text>
+<rect x="200" y="98" width="207.4" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="409.4" y="98" width="87.7" height="24" rx="3" fill="var(--l-edge)"/>
+<text class="dg-label" x="680" y="115" style="font-size:13px">70&#8239;%</text>
+<text class="dg-group" x="10" y="150">Cae la región C y se recorta el tráfico gratuito</text>
+<text class="sim-label" x="188" y="179" text-anchor="end">Región A</text>
+<rect x="200" y="162" width="312.0" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="514.0" y="162" width="111.2" height="24" rx="3" fill="var(--l-edge)"/>
+<rect x="627.3" y="162" width="19.4" height="24" rx="3" class="hb-lost"/>
+<text class="dg-label" x="680" y="179" style="font-size:13px">105 → 100&#8239;%</text>
+<text class="sim-label" x="188" y="211" text-anchor="end">Región B</text>
+<rect x="200" y="194" width="312.0" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="514.0" y="194" width="111.2" height="24" rx="3" fill="var(--l-edge)"/>
+<rect x="627.3" y="194" width="19.4" height="24" rx="3" class="hb-lost"/>
+<text class="dg-label" x="680" y="211" style="font-size:13px">105 → 100&#8239;%</text>
+<text class="sim-label" x="188" y="243" text-anchor="end">Región C</text>
+<rect x="200" y="226" width="425.3" height="24" rx="3" class="hb-lost"/>
+<text class="dg-tiny dg-fail-text" x="413.6" y="242" text-anchor="middle">región caída</text>
+<path d="M627.3 28 V254" stroke="var(--label)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="627.3" y="270" text-anchor="middle">capacidad de la región</text>
+<rect x="200" y="288" width="14" height="10" rx="2" fill="var(--l-service)"/>
+<text class="dg-tiny" x="220" y="298">pago</text>
+<rect x="320" y="288" width="14" height="10" rx="2" fill="var(--l-edge)"/>
+<text class="dg-tiny" x="340" y="298">gratuito</text>
+<rect x="440" y="288" width="14" height="10" rx="2" class="hb-lost"/>
+<text class="dg-tiny" x="460" y="298">recortado</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.6.</b> Tres regiones al 70&#8239;% no sobreviven a la caída de una sin recortar: las otras dos quedan al 105&#8239;%. Recortar una sexta parte del tráfico gratuito deja el pago intacto.</figcaption>
+      </figure>
+
+      <p>Desbordar a otra región tiene dos costos: suma la ida y vuelta entre regiones, de 70 a 150 ms entre continentes, y pierde el KV cache, porque la conversación paga el prefill completo en la región nueva. Y a veces no se puede: OpenAI ofrece residencia de datos en Europa para su API, con las requests procesadas en la región. <span class="badge badge--doc">Documentado</span> El tráfico de esos clientes no puede desbordarse fuera de la región aunque haya GPUs libres del otro lado.</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Un failover que no se ensaya no funciona el día que hace falta (M08). Ensaya sacar una región con tráfico real, en un horario tranquilo, y mide cuánto tarda el DNS en mover el tráfico, cuánto suben el TTFT y la tasa de 503, y si el recorte por prioridad hizo lo que decía el diseño.</p>
+      </aside>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m19"></div>
+
+      <div data-exercise="m19-flota"></div>
+
+      <div data-checkpoint="m19"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m19.data.js"></script>
+<script src="../assets/js/data/exercises/m19.data.js"></script>
+<script src="../assets/js/data/maps/m19-flota.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-router.js"></script>
+</body>
+</html>

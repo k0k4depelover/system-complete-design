@@ -118,7 +118,7 @@ SD.defineExercise('m06-contador', {
         'No: hay que prohibir que se quite el "me gusta".'
       ],
       answer: 1,
-      explain: 'Con un contador por región, el mismo usuario sumaría dos veces. Modelado como conjunto, "a lo sumo uno por usuario" se mantiene sin coordinar, porque agregar un elemento es idempotente. Distinto es "como máximo 5 000 me gusta en total": ese invariante sí necesita coordinar (M18).'
+      explain: 'Con un contador por región, el mismo usuario sumaría dos veces. Modelado como conjunto, "a lo sumo uno por usuario" se mantiene sin coordinar, porque agregar un elemento es idempotente. Distinto es "como máximo 5&#8239;000 me gusta en total": ese invariante sí necesita coordinar (M18).'
     }
   ],
   solution: '<ul><li><b>Garantía:</b> eventual para el número visible, más read-your-writes para el propio "me gusta" de cada usuario.</li><li><b>Estructura:</b> por publicación, un conjunto CRDT de usuarios (se puede partir por región para que cada una solo agregue y quite sus elementos) y un contador derivado, que puede ser un contador CRDT por región para leerlo barato.</li><li><b>Replicación:</b> asíncrona entre regiones, combinando estados con el merge del CRDT; el orden y los duplicados no importan.</li><li><b>Lo que no se hace:</b> last-write-wins sobre un número, ni coordinación entre continentes por cada "me gusta".</li><li><b>Dónde sí coordinar:</b> en invariantes globales, como un límite total, que no son confluentes y necesitan un dueño único o escrow (M18).</li></ul>'
@@ -438,7 +438,7 @@ SD.defineExercise('m06-planificador', {
     },
     {
       id: 'retomar', type: 'single',
-      prompt: 'El job muere después de crear 500 de 2 000 facturas, y otra instancia lo retoma. ¿Cómo evitas facturas duplicadas?',
+      prompt: 'El job muere después de crear 500 de 2&#8239;000 facturas, y otra instancia lo retoma. ¿Cómo evitas facturas duplicadas?',
       options: [
         'Borrando las 500 y empezando de cero.',
         'Con una clave única (cliente, período) en la tabla de facturas y un INSERT … ON CONFLICT DO NOTHING: rehacer una factura que ya existe no hace nada.',

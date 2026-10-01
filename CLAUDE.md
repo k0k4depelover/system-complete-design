@@ -36,7 +36,7 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - **Números:** punto decimal (`99.9`), miles con espacio fino (`128 000`; `SD.fmt.num` lo hace solo) y `&#8239;` antes de `%` (`99.9&#8239;%`).
 - **Honestidad:** toda afirmación sobre una empresa o un producto real lleva `<span class="badge badge--doc">Documentado</span>` si tiene fuente pública, o `<span class="badge badge--ref">Diseño de referencia</span>` si es una reconstrucción razonada. Las cifras se verifican y los ejemplos resueltos se comprueban con un cálculo.
 - El código de ejemplo va en Python en la Parte II; también se usan bloques JSON, HTTP, SSE y SQL.
-- **Cada módulo trae:** objetivos, secciones numeradas, quiz (se aprueba con 70 %), ejercicio de diseño con solución plegable y checkpoint.
+- **Cada módulo trae:** objetivos, secciones numeradas, quiz (se aprueba con 70 %), ejercicio de diseño con solución plegable (estático o guiado) y checkpoint.
 
 ### De diseño (Apple HIG)
 - Tipografía del sistema. El modo claro u oscuro sigue al sistema, sin interruptor propio.
@@ -60,7 +60,7 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
      "css":["map.css"], "data":["data/maps/xx.data.js"], "scripts":["widgets/sim-x.js"], "quiz":true} -->
    ```
 
-   `css`, `data`, `scripts` y `quiz` son opcionales. `<!--INCLUDE figura.svg-->` inserta un archivo relativo al fragmento.
+   `css`, `data`, `scripts` y `quiz` son opcionales; `"exercises": true` carga `data/exercises/<id>.data.js` y `core/exercise.js` para los ejercicios guiados. `<!--INCLUDE figura.svg-->` inserta un archivo relativo al fragmento.
 
 2. **Página.** Genérala con `python tools/mkpage.py fragmento.html`, que escribe `modules/<file>`. Desde ese momento, la página en `modules/` es la fuente de verdad y se edita directamente.
 3. **Quiz.** Créalo en `assets/js/data/quizzes/<id>.data.js`.
@@ -224,6 +224,28 @@ La tarjeta de definición completa (`callout--def`) suma `p.def-term` (con `span
 </details>
 ```
 
+### Ejercicio guiado
+
+Un escenario de diseño que se resuelve decisión por decisión: cada decisión es una pregunta con el formato del quiz, muestra su explicación al responderla y la siguiente aparece cuando el lector quiere seguir. Al final aparecen el puntaje y la solución de referencia, que también se puede abrir en cualquier momento. No cuenta para el checkpoint ni se guarda en el progreso.
+
+```html
+<div data-exercise="m06-planificador"></div>   <!-- dentro de una sección, o al final en lugar del ejercicio estático -->
+```
+
+```js
+// assets/js/data/exercises/m06.data.js
+SD.defineExercise('m06-planificador', {
+  title: 'un planificador de tareas sin duplicados',    // se muestra como "Ejercicio guiado: …"
+  scenario: '<p>Enunciado con números.</p>',            // HTML
+  steps: [ /* preguntas como las del quiz: single, multi u order, con explain */ ],
+  solution: '<ul><li>…</li></ul>'                        // HTML
+});
+```
+
+- Los scripts: `data/exercises/<id>.data.js` después de los datos del quiz, y `core/exercise.js` después de `core/quiz.js` (usa `SD.quizKit`). Con `mkpage.py`, alcanza con `"exercises": true` en el META; en una página existente se agregan a mano (así está en M18).
+- El glosario no enlaza dentro de `[data-exercise]`: los términos se explican en el texto del módulo.
+- Ejercicios publicados: siete en M06, uno en M18 y uno en M19.
+
 ### Quiz y checkpoint
 
 ```html
@@ -244,7 +266,7 @@ SD.defineQuiz('m17', {
 
 - Las opciones se barajan; `fixed: true` conserva el orden (por ejemplo, si son números).
 - `explain` dice por qué la respuesta es esa y adónde volver a leer. El `prompt` admite HTML.
-- Los módulos de las Partes I y II tienen 8 o 9 preguntas; los casos de estudio, entre 16 y 20, y el Checkpoint A, 20.
+- Los módulos de las Partes I y II tienen 8 o 9 preguntas (el M06, ampliado, tiene 18); los casos de estudio, entre 16 y 20, y el Checkpoint A, 20.
 
 ### Término del glosario
 
@@ -276,6 +298,7 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="stampede"` | `widgets/sim-cache.js` | Cache stampede y sus mitigaciones (M04) |
 | `data-sim="isolation"`, `"quorum"`, `"ring"` | `widgets/sim-db.js` | Aislamiento, quórum y hashing consistente (M05) |
 | `data-sim="raft"` | `widgets/sim-raft.js` | Elecciones, log y particiones de Raft (M06) |
+| `data-sim="lin"` | `widgets/sim-lin.js` | ¿Es linealizable? Historias editables y verificador exhaustivo, linealizable y secuencial; lógica en `SD.linCore` (M06) |
 | `data-sim="kafka"` | `widgets/sim-kafka.js` | Particiones, consumer group, lag y rebalanceo (M07) |
 | `data-sim="bucket"`, `"retry"` | `widgets/sim-resil.js` | Token bucket y tormenta de reintentos (M08) |
 | `data-sim="signurl"` | `widgets/sim-signurl.js` | URL firmada SigV4; expone `SD.crypto` (SHA-256 y HMAC en JS puro) (M09) |
@@ -286,6 +309,9 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="quant"` | `widgets/sim-quant.js` | Cuantización de pesos (M14) |
 | `data-sim="batching"`, `data-calc="speculative"` | `widgets/sim-engine.js` | Static y continuous batching, speculative decoding (M15) |
 | `data-sim="context"`, `data-calc="convcost"` | `widgets/sim-context.js` | Estrategias de contexto y costo de una conversación (M16) |
+| `data-sim="sse"`, `data-calc="streamcap"` | `widgets/sim-sse.js` | Un stream SSE evento por evento en tres formatos, y streams abiertos con la ley de Little (M17) |
+| `data-sim="reserve"`, `"tenants"`, `data-calc="escrow"` | `widgets/sim-quota.js` | Reservar y reconciliar tokens, cuatro clientes sobre una flota, y contador central contra escrow; lógica en `SD.quotaCore` (M18) |
+| `data-sim="router"`, `data-calc="coldstart"` | `widgets/sim-router.js` | Cinco políticas de routing con prefix caching y carga, y cold start con colchón de réplicas; lógica en `SD.routerCore` (M19) |
 | `data-calc="bom" data-preset="m27\|m28\|m29"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
 
 Para escribir un widget nuevo:
@@ -322,7 +348,10 @@ Una página está lista cuando las pruebas dan cero errores de consola, cero té
 - **Node en Windows:** los `import` de ESM aceptan rutas relativas o URLs `file://`, no `C:/…`.
 - **Figuras en el teléfono:** a 390 px se desplazan dentro de su marco. El texto más chico de una figura de 770 px de ancho queda cerca de 9.6 px, así que no bajes de `dg-tiny` (11.5 px).
 - **Etiquetas de aristas en los mapas:** se pisan fácilmente. Mídelo con capturas y acomoda con `labelAt` o `bend`.
-- **Alias del glosario:** los alias ambiguos generan enlaces falsos. Así pasó con "latencia de cola" usado como espera en una cola, y con "estampida" en M03. `links.mjs` los muestra.
+- **Alias del glosario:** los alias ambiguos generan enlaces falsos. Así pasó con "latencia de cola" usado como espera en una cola, y con "estampida" en M03. `links.mjs` los muestra. Por eso "liveness" no es alias de nada (M03 habla de liveness probes) y "máquina de estados" tampoco (M27 la usa para pagos).
+- **Barras invertidas:** el heredoc del Bash tool convierte `\\n` en `\n`. Para cualquier texto con barras invertidas (Python que genera SVG, regex, JS), usa Write o Edit en lugar de un heredoc.
+- **Gráficos de widgets en el teléfono:** los SVG de `.sim` se achican al ancho disponible. Si las etiquetas importan, dale un `min-width` al SVG dentro de `.sim-scroll`, como `.lin-chart svg { min-width: 560px; }`, y el gráfico se desplaza en su marco.
+- **Probar un ejercicio guiado de punta a punta:** `shots.mjs` con un paso `eval:` que, para cada decisión, hace clic en `.opt[data-idx="<respuesta>"]` (y en `.q-check` si es multi) y después en `.gx-next`; al final, `.gx-score` dice cuántas coinciden.
 
 ## Estructura
 
@@ -336,6 +365,7 @@ ia-system-desing
 │   index.html
 │   PLAN.md
 │   PROGRESO.md
+│   Referencias.md
 │
 ├───.github
 │   └───workflows
@@ -353,6 +383,7 @@ ia-system-desing
 │   │
 │   └───js
 │       ├───core
+│       │       exercise.js
 │       │       glossary.js
 │       │       nav.js
 │       │       progress.js
@@ -364,10 +395,16 @@ ia-system-desing
 │       │   │   glossary.data.js
 │       │   │   llm.data.js
 │       │   │
+│       │   ├───exercises
+│       │   │       m06.data.js
+│       │   │       m18.data.js
+│       │   │       m19.data.js
+│       │   │
 │       │   ├───maps
 │       │   │       m01-request.data.js
 │       │   │       m04-cache.data.js
 │       │   │       m09-objetos.data.js
+│       │   │       m19-flota.data.js
 │       │   │       m27-pagos.data.js
 │       │   │       m28-cloudflare.data.js
 │       │   │       m29-whatsapp.data.js
@@ -391,6 +428,10 @@ ia-system-desing
 │       │           m14.data.js
 │       │           m15.data.js
 │       │           m16.data.js
+│       │           m17.data.js
+│       │           m18.data.js
+│       │           m19.data.js
+│       │           m20.data.js
 │       │           m27.data.js
 │       │           m28.data.js
 │       │           m29.data.js
@@ -413,12 +454,16 @@ ia-system-desing
 │               sim-jwt.js
 │               sim-kafka.js
 │               sim-lb.js
+│               sim-lin.js
 │               sim-llm.js
 │               sim-obs.js
 │               sim-quant.js
+│               sim-quota.js
 │               sim-raft.js
 │               sim-resil.js
+│               sim-router.js
 │               sim-signurl.js
+│               sim-sse.js
 │
 ├───modules
 │       checkpoint-a.html
@@ -439,6 +484,10 @@ ia-system-desing
 │       m14-cuantizacion.html
 │       m15-motores-inferencia.html
 │       m16-context-windows.html
+│       m17-api-streaming.html
+│       m18-cuotas-tokens.html
+│       m19-router-flota.html
+│       m20-producto-chatgpt.html
 │       m27-pagos-stripe.html
 │       m28-cloudflare.html
 │       m29-whatsapp.html
@@ -464,10 +513,10 @@ ia-system-desing
 | `assets/css/layout.css` | Barra superior, sidebar, índice lateral y responsive |
 | `assets/css/components.css` | Todos los componentes del contenido y de los widgets |
 | `assets/css/map.css` | Motor de mapas |
-| `assets/js/core/` | `sd.js` (espacio de nombres y utilidades), `progress.js`, `nav.js`, `glossary.js` y `quiz.js` |
+| `assets/js/core/` | `sd.js` (espacio de nombres y utilidades), `progress.js`, `nav.js`, `glossary.js`, `quiz.js` y `exercise.js` (ejercicios guiados) |
 | `assets/js/map/` | `map-engine.js` (pan, zoom, minimapa, panel de 5 pestañas) y `flow-sim.js` (escenarios animados) |
 | `assets/js/widgets/` | Calculadoras y simuladores; uno o dos widgets por archivo |
-| `assets/js/data/` | `course.data.js` (estructura y estado de cada módulo), `glossary.data.js`, `llm.data.js` (modelos y GPUs), `maps/` y `quizzes/` |
+| `assets/js/data/` | `course.data.js` (estructura y estado de cada módulo), `glossary.data.js`, `llm.data.js` (modelos y GPUs), `maps/`, `quizzes/` y `exercises/` |
 | `tools/mkpage.py` | Genera la página de un módulo a partir de un fragmento con `<!--META-->` |
 | `tools/seqdiag.py` | Genera diagramas de secuencia en SVG con las clases del curso |
 | `tools/test/` | Arnés de pruebas con Chrome headless por DevTools Protocol |

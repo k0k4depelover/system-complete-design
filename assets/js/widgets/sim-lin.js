@@ -106,7 +106,7 @@
       });
       chips.appendChild(b);
     });
-    var chart = h('div', { class: 'sim-scroll' });
+    var chart = h('div', { class: 'sim-scroll lin-chart' });
     var controls = h('div', { class: 'sim-controls lin-controls' });
     var verdict = h('div', { class: 'lin-verdict', 'aria-live': 'polite' });
     var note = h('p', { class: 'sim-note' });

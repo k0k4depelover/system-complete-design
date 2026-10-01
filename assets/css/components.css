@@ -481,6 +481,8 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-sub); line
 @media (prefers-reduced-motion: reduce) { .sse-caret { animation: none; } }
 
 /* Verificador de linealizabilidad (M06) */
+.lin-chart svg,
+.router-chart svg { min-width: 560px; }   /* en el teléfono se desplaza en lugar de achicar las etiquetas */
 .lin-controls { margin: var(--s-3) 0 0; }
 .lin-verdict { display: grid; gap: 6px; margin: var(--s-3) 0 0; }
 .lin-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; margin: 0 !important; padding: 10px 14px; border-radius: var(--radius-s); font-size: var(--fs-sub); max-width: none !important; }

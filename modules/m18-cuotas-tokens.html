@@ -512,6 +512,8 @@ async def reconciliar_cuota(claves, uso_real, planes, org, proyecto):
         <p>Si Redis se cae entero, cada gateway pasa a su límite local conservador para los clientes que pagan y rechaza a los del plan gratis y a las cuentas nuevas, que son las que concentran el abuso. Stripe recomienda que el limitador falle abierto (si su almacén se cae, las requests siguen pasando) y que cada limitador nuevo se lance primero en modo "oscuro": calculando qué bloquearía, sin bloquear nada, hasta confirmar que los umbrales son razonables. <span class="badge badge--doc">Documentado</span> Esa decisión, como la del M00 sobre fail-open, se toma antes del incidente y se escribe en el runbook.</p>
       </aside>
 
+      <div data-exercise="m18-limitador"></div>
+
       <h2 id="cliente"><span class="sec-num">18.9</span>Del otro lado: un cliente que respeta las cuotas</h2>
 
       <p>Todo este diseño funciona mejor si los clientes colaboran, y los clientes bien hechos lo hacen:</p>
@@ -561,10 +563,12 @@ async def reconciliar_cuota(claves, uso_real, planes, org, proyecto):
 <script src="../assets/js/data/course.data.js"></script>
 <script src="../assets/js/data/glossary.data.js"></script>
 <script src="../assets/js/data/quizzes/m18.data.js"></script>
+<script src="../assets/js/data/exercises/m18.data.js"></script>
 <script src="../assets/js/core/progress.js"></script>
 <script src="../assets/js/core/nav.js"></script>
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
 <script src="../assets/js/widgets/sim-quota.js"></script>
 </body>
 </html>

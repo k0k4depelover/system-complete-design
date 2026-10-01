@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M20. El producto ChatGPT</title>
+<meta name="description" content="Lo que rodea al modelo en un producto de chat: el esquema de datos, los mensajes como árbol (regenerar y editar crean ramas), un turno de punta a punta con streaming reanudable, archivos y RAG, herramientas en sandbox, memoria, moderación y feedback.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m20">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>El producto ChatGPT</h1>
+        <p class="lead">El modelo es una parte del producto. Alrededor hay una base de datos que guarda conversaciones con ramas, un turno que tiene que sobrevivir a una conexión que se corta, archivos que se convierten en índices, código ajeno que corre aislado y un pipeline que revisa lo que entra y lo que sale.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M20</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>80 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M09, M16, M17</dd></div>
+          <div><dt>Estado</dt><dd data-status="m20">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Diseñar el esquema de un producto de chat, con las conversaciones particionadas por id y los mensajes guardados como árbol.</li>
+    <li>Explicar por qué regenerar y editar crean ramas nuevas en lugar de pisar mensajes, y cómo se arma el contexto desde la rama visible.</li>
+    <li>Seguir un turno de punta a punta: idempotencia del envío, streaming reanudable y qué se guarda si el cliente se va.</li>
+    <li>Armar el pipeline de archivos: subida con signed URL, parsing, chunking, embeddings y la búsqueda en una base de datos vectorial.</li>
+    <li>Aislar la ejecución de código y ubicar la moderación y el feedback sin agregar latencia al stream.</li>
+  </ul>
+</section>
+
+<h2 id="producto"><span class="sec-num">20.1</span>Qué hay alrededor del modelo</h2>
+
+<p>Los módulos anteriores construyeron la parte que genera tokens: el motor (M15), la API con streaming (M17), las cuotas (M18) y la flota (M19). Un producto de chat agrega lo que el usuario ve: conversaciones que se guardan, se retoman y se comparten, archivos, herramientas y memoria. Casi todo eso es backend clásico; lo nuevo es la forma de los datos.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Pieza</th><th>Qué hace</th><th>Dónde se vio</th></tr></thead>
+    <tbody>
+      <tr><td>API de chat</td><td>Recibe el turno, arma el contexto, llama a inferencia y reenvía el stream</td><td>M17</td></tr>
+      <tr><td>Base de conversaciones</td><td>Usuarios, conversaciones y mensajes como árbol</td><td>M05, esta sección</td></tr>
+      <tr><td>Buffer de streams</td><td>Guarda los eventos de cada turno para reanudar tras una desconexión</td><td>M07, 20.4</td></tr>
+      <tr><td>Archivos y RAG</td><td>Subida, parsing, chunking, embeddings, búsqueda</td><td>M09, M16, 20.5</td></tr>
+      <tr><td>Sandbox de código</td><td>Corre el Python que escribe el modelo, aislado</td><td>M28, 20.6</td></tr>
+      <tr><td>Moderación y feedback</td><td>Revisa entradas y salidas; recoge los votos</td><td>20.8</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Para dimensionar: OpenAI informó en octubre de 2025 más de 800 millones de usuarios semanales de ChatGPT. <span class="badge badge--doc">Documentado</span> Si cada uno tiene 3 conversaciones por semana de 8 turnos (16 mensajes), son 2&#8239;400 millones de conversaciones y 38&#8239;400 millones de mensajes por semana: unas 4&#8239;000 conversaciones nuevas y 63&#8239;500 mensajes escritos por segundo en promedio, y con 2&#8239;KB por mensaje, 77&#8239;TB nuevos por semana. <span class="badge badge--ref">Diseño de referencia</span> Esos números piden particionar desde el primer día, y la clave natural es la conversación: casi toda lectura y escritura toca una sola.</p>
+
+<h2 id="esquema"><span class="sec-num">20.2</span>El esquema de datos</h2>
+
+<p>Usuarios y organizaciones son tablas chicas y relacionales: cambian poco y se leen con caché. Las conversaciones y los mensajes son el volumen grande. Una conversación guarda su dueño, su título (que genera un modelo chico después del primer turno) y el <code>current_node</code>: el último mensaje de la rama que el usuario está viendo.</p>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">conversations</code>
+    <span class="schema-chip">PostgreSQL particionado</span>
+    <span class="schema-chip">Partición: <b>id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code><span class="key">PK</span></td><td>uuid</td><td>UUIDv7, ordenado por tiempo</td><td>Clave de partición; el orden por tiempo mantiene los índices compactos</td></tr>
+        <tr><td><code>user_id</code><span class="key key--fk">FK</span></td><td>uuid</td><td>not null</td><td>Dueño; índice <code>(user_id, updated_at desc)</code> para el historial lateral</td></tr>
+        <tr><td><code>org_id</code><span class="key key--fk">FK</span></td><td>uuid</td><td>null en cuentas personales</td><td>Políticas del espacio de trabajo: retención, modelos permitidos</td></tr>
+        <tr><td><code>title</code></td><td>text</td><td></td><td>Lo genera un modelo chico, de forma asíncrona</td></tr>
+        <tr><td><code>current_node</code></td><td>uuid</td><td>mensaje de esta conversación</td><td>Hoja de la rama visible</td></tr>
+        <tr><td><code>updated_at</code></td><td>timestamptz</td><td>not null</td><td>Orden del historial</td></tr>
+        <tr><td><code>deleted_at</code></td><td>timestamptz</td><td>null</td><td>Borrado lógico; un job borra de verdad después del plazo de retención</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>El historial lateral ("mis conversaciones") se consulta por usuario, pero las conversaciones se particionan por id. Un índice global por <code>user_id</code> obliga a consultar todas las particiones; la salida habitual es una tabla aparte, particionada por usuario, que guarda solo id, título y fecha, y se actualiza con cada turno. Es una desnormalización: dos escrituras por turno a cambio de una lectura que toca una sola partición.</p>
+</aside>
+
+<h2 id="arbol"><span class="sec-num">20.3</span>Los mensajes son un árbol</h2>
+
+<p>Una conversación parece una lista, pero no lo es. Si el usuario pide "regenerar", el producto no borra la respuesta anterior: agrega otra respuesta al mismo mensaje, y las flechas "2 / 2" permiten volver a la primera. Si edita un mensaje viejo, el original queda y la edición es un hermano con su propia continuación. Por eso cada mensaje guarda su padre, y la conversación es un <dfn data-term="arbol-mensajes">árbol de mensajes</dfn>.</p>
+
+<p>El formato con el que ChatGPT exporta los datos del usuario lo muestra: cada conversación trae un <code>mapping</code> de nodos con <code>parent</code> y <code>children</code>, y un <code>current_node</code>. <span class="badge badge--doc">Documentado</span></p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 340" role="img" aria-labelledby="f201t f201d">
+<title id="f201t">Una conversación guardada como árbol de mensajes</title>
+<desc id="f201d">Cada mensaje apunta a su padre. El primer mensaje del usuario tiene dos respuestas hermanas: la primera versión y una regenerada. Debajo de la regenerada, el usuario escribió una pregunta y después la editó: la edición es un mensaje hermano, con su propia respuesta. La conversación guarda cuál es el último nodo visible; la rama que se muestra y que se manda al modelo es el camino desde la raíz hasta ese nodo.</desc>
+<defs><marker id="f201a" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="dg-edge" d="M140 150.0 C156 150.0, 154 150.0, 168 150.0" fill="none" marker-end="url(#f201a)" style="stroke: var(--l-service); stroke-width: 2.5"/>
+<path class="dg-edge" d="M290 150.0 C306 150.0, 304 80.0, 318 80.0" fill="none" marker-end="url(#f201a)"/>
+<path class="dg-edge" d="M290 150.0 C306 150.0, 304 210.0, 318 210.0" fill="none" marker-end="url(#f201a)" style="stroke: var(--l-service); stroke-width: 2.5"/>
+<path class="dg-edge" d="M440 80.0 C456 80.0, 454 80.0, 468 80.0" fill="none" marker-end="url(#f201a)"/>
+<path class="dg-edge" d="M590 80.0 C606 80.0, 604 80.0, 618 80.0" fill="none" marker-end="url(#f201a)"/>
+<path class="dg-edge" d="M440 210.0 C456 210.0, 454 210.0, 468 210.0" fill="none" marker-end="url(#f201a)"/>
+<path class="dg-edge" d="M590 210.0 C606 210.0, 604 210.0, 618 210.0" fill="none" marker-end="url(#f201a)"/>
+<path class="dg-edge" d="M440 210.0 C456 210.0, 454 280.0, 468 280.0" fill="none" marker-end="url(#f201a)" style="stroke: var(--l-service); stroke-width: 2.5"/>
+<path class="dg-edge" d="M590 280.0 C606 280.0, 604 280.0, 618 280.0" fill="none" marker-end="url(#f201a)" style="stroke: var(--l-service); stroke-width: 2.5"/>
+<rect class="dg-box dg-box--em" x="20" y="128" width="120" height="44" rx="8"/>
+<text class="dg-label" x="80.0" y="147" text-anchor="middle">Sistema</text>
+<text class="dg-tiny" x="80.0" y="163" text-anchor="middle">instrucciones</text>
+<rect class="dg-box dg-box--em" x="170" y="128" width="120" height="44" rx="8"/>
+<text class="dg-label" x="230.0" y="147" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="230.0" y="163" text-anchor="middle">plan de viaje</text>
+<rect class="dg-box" x="320" y="58" width="120" height="44" rx="8"/>
+<text class="dg-label" x="380.0" y="77" text-anchor="middle">Asistente</text>
+<text class="dg-tiny" x="380.0" y="93" text-anchor="middle">primera versión</text>
+<rect class="dg-box dg-box--em" x="320" y="188" width="120" height="44" rx="8"/>
+<text class="dg-label" x="380.0" y="207" text-anchor="middle">Asistente</text>
+<text class="dg-tiny" x="380.0" y="223" text-anchor="middle">regenerada</text>
+<rect class="dg-box" x="470" y="58" width="120" height="44" rx="8"/>
+<text class="dg-label" x="530.0" y="77" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="530.0" y="93" text-anchor="middle">¿y en tren?</text>
+<rect class="dg-box" x="620" y="58" width="120" height="44" rx="8"/>
+<text class="dg-label" x="680.0" y="77" text-anchor="middle">Asistente</text>
+<text class="dg-tiny" x="680.0" y="93" text-anchor="middle">respuesta</text>
+<rect class="dg-box" x="470" y="188" width="120" height="44" rx="8"/>
+<text class="dg-label" x="530.0" y="207" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="530.0" y="223" text-anchor="middle">¿y en avión?</text>
+<rect class="dg-box" x="620" y="188" width="120" height="44" rx="8"/>
+<text class="dg-label" x="680.0" y="207" text-anchor="middle">Asistente</text>
+<text class="dg-tiny" x="680.0" y="223" text-anchor="middle">respuesta</text>
+<rect class="dg-box dg-box--em" x="470" y="258" width="120" height="44" rx="8"/>
+<text class="dg-label" x="530.0" y="277" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="530.0" y="293" text-anchor="middle">editado: ¿en bus?</text>
+<rect class="dg-box dg-box--em" x="620" y="258" width="120" height="44" rx="8"/>
+<text class="dg-label" x="680.0" y="277" text-anchor="middle">Asistente</text>
+<text class="dg-tiny" x="680.0" y="293" text-anchor="middle">respuesta</text>
+<text class="dg-tiny" x="380" y="40" text-anchor="middle">regenerar: otra respuesta al mismo mensaje</text>
+<text class="dg-tiny" x="530" y="322" text-anchor="middle">editar: otro mensaje hermano</text>
+<text class="dg-small" x="680" y="322" text-anchor="middle" style="font-weight:600">current_node</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 20.1.</b> Regenerar agrega una respuesta hermana y editar agrega un mensaje hermano. Lo que se muestra, y lo que se manda al modelo, es el camino desde la raíz hasta <code>current_node</code> (resaltado).</figcaption>
+</figure>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">messages</code>
+    <span class="schema-chip">PostgreSQL particionado</span>
+    <span class="schema-chip">Partición: <b>conversation_id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>conversation_id</code><span class="key">PK</span></td><td>uuid</td><td>primera parte de la PK</td><td>Todos los mensajes de una conversación viven en la misma partición</td></tr>
+        <tr><td><code>id</code><span class="key">PK</span></td><td>uuid</td><td>lo genera el cliente para los mensajes del usuario</td><td>Hace idempotente el envío (20.4)</td></tr>
+        <tr><td><code>parent_id</code></td><td>uuid</td><td>null solo en la raíz</td><td>La arista del árbol</td></tr>
+        <tr><td><code>role</code></td><td>text</td><td>system, user, assistant, tool</td><td>Quién habla</td></tr>
+        <tr><td><code>content</code></td><td>jsonb</td><td></td><td>Partes: texto, imágenes, llamadas a herramientas y sus resultados</td></tr>
+        <tr><td><code>model</code></td><td>text</td><td>solo en respuestas</td><td>Qué versión contestó (M19)</td></tr>
+        <tr><td><code>status</code></td><td>text</td><td>in_progress, complete, interrupted</td><td>Una respuesta cortada queda guardada como tal</td></tr>
+        <tr><td><code>created_at</code></td><td>timestamptz</td><td>not null</td><td>Orden entre hermanos</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<h3 id="arbol-contexto">Armar el contexto desde la rama</h3>
+
+<p>Para cada turno, la API camina desde el padre del mensaje nuevo hasta la raíz y da vuelta la lista. Como todos los mensajes de la conversación están en la misma partición, alcanza con traerlos todos (unas decenas de filas) y caminar en memoria; una consulta recursiva hace lo mismo en la base:</p>
+
+<pre data-lang="sql"><code>WITH RECURSIVE rama AS (
+  SELECT * FROM messages
+   WHERE conversation_id = $1 AND id = $2          -- el padre del mensaje nuevo
+  UNION ALL
+  SELECT m.* FROM messages m
+    JOIN rama r ON m.conversation_id = r.conversation_id AND m.id = r.parent_id
+)
+SELECT role, content FROM rama ORDER BY created_at;</code></pre>
+
+<pre data-lang="python"><code>def armar_contexto(mensajes, hoja_id, max_tokens):
+    por_id = {m.id: m for m in mensajes}
+    rama, nodo = [], por_id[hoja_id]
+    while nodo is not None:
+        rama.append(nodo)
+        nodo = por_id.get(nodo.parent_id)
+    rama.reverse()                       # de la raíz a la hoja
+    return recortar(rama, max_tokens)    # M16: resumir o descartar lo más viejo</code></pre>
+
+<p>El árbol tiene una consecuencia para el <dfn data-term="prefix-caching">prefix caching</dfn>: dos ramas hermanas comparten todo el prefijo hasta el punto donde se separan. Regenerar una respuesta reutiliza el KV cache del prompt completo si la request cae en la misma réplica (M19).</p>
+
+<h2 id="turno"><span class="sec-num">20.4</span>Un turno de punta a punta</h2>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 478" role="img" aria-labelledby="f202t f202d">
+<title id="f202t">Un turno de chat de punta a punta</title>
+<desc id="f202d">El cliente manda el mensaje con un id generado en el navegador. La API lo guarda en Postgres; si el id ya existía, devuelve el turno que ya estaba en curso. Arma el contexto recorriendo la rama, pide la respuesta al servicio de inferencia y reenvía los tokens por SSE mientras los copia a un buffer en Redis. Si el cliente se desconecta, al volver lee el buffer desde el último evento que recibió. Al terminar, la API guarda la respuesta completa y mueve el current_node.</desc>
+<defs><marker id="f202-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f202-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f202-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f202-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M70.0 40 V468"/>
+<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">API de chat</text>
+<path class="dg-frame" d="M227.5 40 V468"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Postgres</text>
+<path class="dg-frame" d="M385.0 40 V468"/>
+<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">Redis</text>
+<path class="dg-frame" d="M542.5 40 V468"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Inferencia</text>
+<path class="dg-frame" d="M700.0 40 V468"/>
+<path class="dg-edge" d="M73.0 72 L222.5 72" marker-end="url(#f202-a)"/>
+<rect x="47.05000000000001" y="55" width="203.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="66" text-anchor="middle">POST mensaje (id del cliente)</text>
+<path class="dg-edge" d="M230.5 106 L380.0 106" marker-end="url(#f202-a)"/>
+<rect x="214.45" y="89" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="100" text-anchor="middle">INSERT mensaje del usuario</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 140 L232.5 140" marker-end="url(#f202-r)"/>
+<rect x="240.85" y="123" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="134" text-anchor="middle">rama: raíz → padre</text>
+<path class="dg-edge" d="M230.5 174 L695.0 174" marker-end="url(#f202-a)"/>
+<rect x="381.85" y="157" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="168" text-anchor="middle">contexto + herramientas</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 208 L232.5 208" marker-end="url(#f202-r)"/>
+<rect x="437.95" y="191" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="202" text-anchor="middle">tokens</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M230.5 242 L537.5 242" marker-end="url(#f202-q)"/>
+<rect x="299.8" y="225" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">XADD al buffer del turno</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M224.5 276 L75.0 276" marker-end="url(#f202-r)"/>
+<rect x="106.45" y="259" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="270" text-anchor="middle">SSE: tokens</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">el cliente pierde la conexión</text>
+<path class="dg-edge" d="M73.0 344 L222.5 344" marker-end="url(#f202-a)"/>
+<rect x="47.05000000000001" y="327" width="203.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="338" text-anchor="middle">GET stream, Last-Event-ID: 41</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M539.5 378 L232.5 378" marker-end="url(#f202-r)"/>
+<rect x="316.3" y="361" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">eventos desde el 42</text>
+<path class="dg-edge" d="M230.5 412 L380.0 412" marker-end="url(#f202-a)"/>
+<rect x="201.25" y="395" width="210.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="406" text-anchor="middle">INSERT respuesta, current_node</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 20.2.</b> El mensaje se guarda antes de llamar al modelo, los tokens se copian a un buffer mientras se reenvían, y la respuesta completa se guarda al final. Una desconexión no pierde nada: el cliente reanuda desde el último evento.</figcaption>
+</figure>
+
+<ol class="steps">
+  <li><span class="step-title">Guardar el mensaje con el id del cliente</span>El navegador genera el id del mensaje. Si la red falla y reintenta, el <code>INSERT</code> choca con la PK y la API devuelve el turno que ya está en curso, sin generar dos respuestas. Es la idempotency key del M02 sin tabla aparte.</li>
+  <li><span class="step-title">Crear la respuesta vacía</span>Un mensaje <code>assistant</code> con <code>status = in_progress</code>. Si el servidor muere a mitad, queda una marca visible en lugar de un hueco.</li>
+  <li><span class="step-title">Armar el contexto y llamar a inferencia</span>La rama, los archivos relevantes (20.5), la memoria (20.7) y las herramientas disponibles.</li>
+  <li><span class="step-title">Reenviar y copiar cada evento</span>Cada evento SSE lleva un id creciente y se agrega a un stream de Redis con la clave del mensaje (<code>XADD</code>), con un TTL de minutos.</li>
+  <li><span class="step-title">Cerrar el turno</span>Al terminar, una sola escritura guarda el contenido, <code>status = complete</code> y mueve <code>current_node</code>. Si el usuario canceló, se guarda lo generado con <code>status = interrupted</code>.</li>
+</ol>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>Un teléfono que cambia de antena corta el SSE a mitad de una respuesta de 40 segundos. Sin buffer, hay dos opciones malas: cancelar la generación (y cobrar los tokens igual) o seguir generando sin nadie que escuche. Con el buffer, el cliente reconecta con <code>Last-Event-ID</code> y recibe lo que se perdió; la generación nunca se enteró. Por eso la generación no depende de la conexión del cliente: corre hasta terminar o hasta que el usuario la cancele de forma explícita.</p>
+</aside>
+
+<h2 id="archivos"><span class="sec-num">20.5</span>Archivos y RAG</h2>
+
+<p>Un usuario sube un PDF de 200 páginas y pregunta por la cláusula de rescisión. El archivo no entra entero en cada turno: se convierte en un índice y en cada pregunta se buscan los fragmentos relevantes. Es el <dfn data-term="rag">RAG</dfn> del M16, ahora como pipeline.</p>
+
+<ol class="steps">
+  <li><span class="step-title">Subir directo al almacenamiento</span>La API devuelve una <dfn data-term="signed-url">signed URL</dfn> y el navegador sube el archivo a S3 sin pasar por los servidores de la API (M09). ChatGPT acepta archivos de hasta 512&#8239;MB. <span class="badge badge--doc">Documentado</span></li>
+  <li><span class="step-title">Parsear</span>Un worker toma el evento de "archivo subido" de una cola y extrae el texto: PDF, Word, planillas. Las páginas escaneadas necesitan OCR. Es CPU, no GPU, y puede tardar minutos: va asíncrono, con el estado visible en la interfaz.</li>
+  <li><span class="step-title">Partir en fragmentos</span>El <dfn data-term="chunking">chunking</dfn> corta el texto en fragmentos solapados. El file search de la API de OpenAI usa por defecto fragmentos de 800 tokens con 400 de solapamiento. <span class="badge badge--doc">Documentado</span></li>
+  <li><span class="step-title">Calcular embeddings</span>Cada fragmento pasa por un modelo de <dfn data-term="embedding">embeddings</dfn>: solo prefill, en lotes grandes. File search usa <code>text-embedding-3-large</code> con 256 dimensiones. <span class="badge badge--doc">Documentado</span></li>
+  <li><span class="step-title">Indexar</span>Los vectores van a una <dfn data-term="vector-db">base de datos vectorial</dfn>, con un índice aproximado (HNSW o IVF) y el filtro por dueño: una búsqueda nunca tiene que devolver fragmentos de otro usuario.</li>
+</ol>
+
+<p>Los números del ejemplo: 200 páginas a unos 500 tokens por página son 100&#8239;000 tokens. Con fragmentos de 800 que avanzan de a 400, salen unos 250 fragmentos y 200&#8239;000 tokens embebidos; a 0.13 dólares por millón con <code>text-embedding-3-large</code>, 2.6 centavos. Cada vector de 256 dimensiones en float32 ocupa 1&#8239;KB: 250&#8239;KB de vectores para todo el documento. El costo real está en el parsing y en lo que se agrega al prompt de cada pregunta: 10 fragmentos son 8&#8239;000 tokens de entrada por turno.</p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>La búsqueda por embeddings falla con nombres propios, códigos y números ("cláusula 14.3"). Los sistemas reales combinan la búsqueda vectorial con búsqueda por palabras (BM25) y reordenan los candidatos con un modelo chico (reranking) antes de meterlos en el prompt. File search de OpenAI hace las dos búsquedas y reordena. <span class="badge badge--doc">Documentado</span></p>
+</aside>
+
+<h2 id="herramientas"><span class="sec-num">20.6</span>Herramientas y código en sandbox</h2>
+
+<p>Con herramientas, un turno deja de ser una sola llamada al modelo. El modelo pide una herramienta (el <dfn data-term="tool-calling">tool calling</dfn> del M17), la API la ejecuta, agrega el resultado como un mensaje <code>tool</code> y vuelve a llamar al modelo. Un turno con búsqueda web y análisis de datos puede hacer cinco o seis vueltas, y cada vuelta es un mensaje más en el árbol.</p>
+
+<p>La herramienta más delicada corre código que escribió el modelo, con archivos del usuario. Ese código no es confiable: puede intentar leer otros archivos, abrir conexiones o quedarse en un bucle. Un <dfn data-term="sandbox-codigo">sandbox de código</dfn> lo aísla:</p>
+
+<ul>
+  <li><b>Aislamiento del kernel:</b> una <dfn data-term="microvm">microVM</dfn> (Firecracker) o un kernel en espacio de usuario (gVisor), no un contenedor común, que comparte el kernel con el host. <span class="badge badge--ref">Diseño de referencia</span></li>
+  <li><b>Sin red</b> o con una lista cerrada de destinos, para que el código no saque datos.</li>
+  <li><b>Límites</b> de CPU, memoria, disco y tiempo por ejecución.</li>
+  <li><b>Una sesión por conversación,</b> con los archivos subidos montados, que se destruye tras un rato sin uso. En la API de OpenAI, el code interpreter cobra 0.03 dólares por sesión y cada sesión dura una hora. <span class="badge badge--doc">Documentado</span></li>
+</ul>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>Arrancar una microVM tarda del orden de cien milisegundos; instalar pandas en ella, segundos. Por eso se usa una imagen con las librerías ya instaladas y un pool de sandboxes precalentados, como el pool de réplicas del M19. Mantener una sesión viva entre turnos guarda las variables del usuario, pero ocupa memoria mientras el usuario lee.</p>
+</aside>
+
+<h2 id="memoria"><span class="sec-num">20.7</span>Memoria entre conversaciones</h2>
+
+<p>ChatGPT puede recordar datos del usuario entre conversaciones: memorias guardadas que el usuario ve y borra, y referencias al historial de chats. <span class="badge badge--doc">Documentado</span> Para el sistema, la memoria es otra fuente de contexto, como los archivos:</p>
+
+<ul>
+  <li><b>Memorias explícitas:</b> frases cortas ("prefiere respuestas en español") en una tabla por usuario. Son pocas y se agregan enteras al prompt de sistema, al principio, donde el prefix caching las aprovecha.</li>
+  <li><b>Historial:</b> resúmenes o embeddings de conversaciones anteriores, buscados como en el RAG, con el mismo filtro por dueño.</li>
+</ul>
+
+<p>Lo difícil no es guardar sino borrar. Si el usuario borra una memoria o una conversación, tiene que desaparecer también de los índices derivados: el vector de su resumen, los caches. Un borrado que llega a la tabla pero no al índice vectorial sigue apareciendo en las respuestas. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<h2 id="moderacion"><span class="sec-num">20.8</span>Moderación y feedback</h2>
+
+<p>La moderación revisa lo que entra y lo que sale. OpenAI ofrece un endpoint de moderación gratuito, con el modelo <code>omni-moderation-latest</code>, que clasifica texto e imágenes por categoría. <span class="badge badge--doc">Documentado</span> El problema de sistemas es dónde ubicarlo sin sumar latencia:</p>
+
+<ul>
+  <li><b>Entrada:</b> se clasifica el mensaje en paralelo con el armado del contexto. Un clasificador chico tarda decenas de milisegundos, mucho menos que el prefill.</li>
+  <li><b>Salida:</b> el stream no puede esperar a la respuesta completa. Se clasifica por tramos mientras se genera; si un tramo se marca, se corta el stream y se reemplaza lo mostrado. Es un trade-off explícito entre latencia y lo que alcanza a verse.</li>
+  <li><b>Asíncrona:</b> los casos dudosos van a una cola para revisión posterior, sin bloquear al usuario.</li>
+</ul>
+
+<p>El feedback (el pulgar arriba o abajo y la comparación entre dos respuestas) es una tabla más, con el id del mensaje, el modelo que contestó y el voto. Su valor está en lo que se puede reconstruir: el contexto exacto que vio el modelo. Por eso los mensajes guardan qué modelo contestó y el árbol no se pisa.</p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>Las organizaciones que pagan exigen que sus conversaciones no se usen para entrenar y que se borren en un plazo. Eso se resuelve en el esquema, no en un filtro posterior: la política de retención vive en la organización (20.2) y el job de borrado recorre mensajes, archivos, vectores, memorias y feedback.</p>
+</aside>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m20"></div>
+
+<section class="exercise" aria-labelledby="ej-m20">
+  <p class="exercise-title" id="ej-m20">Ejercicio de diseño: "compartir conversación"</p>
+  <p>Hay que agregar un botón que genera un enlace público de solo lectura a una conversación. La conversación tiene un árbol de 40 mensajes con tres ramas, dos archivos subidos y una ejecución de código con un gráfico. El dueño puede seguir escribiendo después de compartir, y puede borrar el enlace. Decide qué se comparte, cómo se guarda y qué pasa cuando el dueño borra la conversación.</p>
+  <details><summary>Ver la solución de referencia</summary>
+    <ul>
+      <li><b>Qué se comparte:</b> la rama visible en el momento de compartir (de la raíz a <code>current_node</code>), no el árbol entero: las otras ramas pueden tener versiones que el usuario descartó.</li>
+      <li><b>Una copia, no una referencia:</b> una tabla <code>shared_links</code> con un id aleatorio largo y una copia de esa rama. Si el dueño sigue escribiendo, el enlace no cambia; si quiere actualizarlo, genera otra copia.</li>
+      <li><b>Archivos:</b> el enlace muestra los nombres pero no da acceso a los archivos subidos; el gráfico generado se copia como imagen a un bucket público con el id del enlace.</li>
+      <li><b>Lecturas:</b> la página compartida es contenido estático: se sirve desde una CDN con caché, sin tocar la base de conversaciones.</li>
+      <li><b>Borrado:</b> borrar el enlace o la conversación borra la copia y purga la CDN. El job de retención de 20.8 incluye <code>shared_links</code>.</li>
+    </ul>
+  </details>
+</section>
+
+<div data-checkpoint="m20"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m20.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+</body>
+</html>
