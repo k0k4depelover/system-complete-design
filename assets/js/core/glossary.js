@@ -19,7 +19,9 @@
     seguridad: 'Seguridad',
     ia: 'IA e inferencia',
     pagos: 'Pagos',
-    edge: 'Edge y CDN'
+    edge: 'Edge y CDN',
+    nube: 'Cómputo en la nube',
+    mensajeria: 'Mensajería en tiempo real'
   };
 
   var here = document.body.getAttribute('data-module');
@@ -126,7 +128,7 @@
 
   /* Dentro de estos elementos no se enlaza texto: encabezados, código, controles, widgets y bloques de datos. */
   var SKIP = 'h1,h2,h3,h4,h5,h6,a,code,pre,kbd,samp,button,label,summary,select,textarea,svg,script,style,' +
-    '.objectives,.title-block,.tb-grid,.toc,.pager,[data-quiz],[data-checkpoint],[data-sim],[data-calc],[data-map],' +
+    '.objectives,.title-block,.tb-grid,.toc,.pager,[data-quiz],[data-checkpoint],[data-exercise],[data-sim],[data-calc],[data-map],' +
     '.ep-head,.schema-head,.schema-chip,.sdm-step-n,.sdm-step-title,.sdm-plabel,.no-autolink';
 
   /* <dfn data-term> y <span data-term> escritos a mano se convierten en enlaces. */

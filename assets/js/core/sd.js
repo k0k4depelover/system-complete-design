@@ -4,7 +4,7 @@
   'use strict';
 
   var SD = window.SD = window.SD || {};
-  SD.data = SD.data || { glossary: {}, quizzes: {}, maps: {} };
+  SD.data = SD.data || { glossary: {}, quizzes: {}, maps: {}, exercises: {} };
 
   SD.ready = function (fn) {
     if (document.readyState !== 'loading') fn();
@@ -60,6 +60,7 @@
   SD.defineGlossary = function (list) { list.forEach(function (t) { SD.data.glossary[t.id] = t; }); };
   SD.defineQuiz = function (id, quiz) { SD.data.quizzes[id] = quiz; };
   SD.defineMap = function (id, map) { SD.data.maps[id] = map; };
+  SD.defineExercise = function (id, ex) { (SD.data.exercises = SD.data.exercises || {})[id] = ex; };
 
   /* ---------------------------------------------------------------------------
      Formato de números: agrupación con espacio fino (convención SI), punto decimal.

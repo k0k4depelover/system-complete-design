@@ -129,7 +129,7 @@
       <p>Los tokens importan porque son la unidad de casi todo lo que la infraestructura mide y cobra:</p>
       <ul>
         <li><b>Costo:</b> las APIs cobran por millón de tokens, con precios distintos para los de entrada y los de salida (12.7).</li>
-        <li><b>Límites:</b> la ventana de contexto se mide en tokens (M16), y las cuotas de uso también, en tokens por minuto (M18).</li>
+        <li><b>Límites:</b> la ventana de contexto se mide en tokens (M16), y las cuotas de uso también, en tokens por minuto (<a href="m18-cuotas-tokens.html#tokens">M18</a>).</li>
         <li><b>Latencia:</b> cada token de salida es una vuelta del bucle. El tiempo de una respuesta crece con su largo en tokens, no con el del prompt.</li>
       </ul>
 
@@ -321,7 +321,7 @@ Una conversación de 8192 tokens:  8192 × 328 kB ≈ 2.7 GB</code></pre>
 
       <p>Con el despliegue de antes: 4 H100 a un precio supuesto de 2.5 USD por GPU y hora son 10 USD por hora. Con 64 usuarios, el límite teórico es de unos 5550 tokens de salida por segundo; un motor real llega a un 60&#8239;%, unos 3300. En una hora son 12 millones de tokens: unos <b>0.83 USD por millón de tokens de salida</b>, solo en GPUs. Faltan el prefill, la capacidad ociosa de las horas tranquilas, la red, el almacenamiento y el equipo.</p>
 
-      <p>El mismo cálculo explica por qué las APIs cobran varias veces más por un token de salida que por uno de entrada. Un prefill procesa miles de tokens por pasada y aprovecha el cómputo; cada token de salida necesita su propio paso de decode, dominado por lecturas de memoria. Y explica dos decisiones de producto que verás más adelante: las APIs batch, con descuento a cambio de esperar horas, que llenan la capacidad ociosa (M17), y el autoscaling agresivo, porque una GPU quieta a las 4 de la mañana cuesta lo mismo que una llena (M19).</p>
+      <p>El mismo cálculo explica por qué las APIs cobran varias veces más por un token de salida que por uno de entrada. Un prefill procesa miles de tokens por pasada y aprovecha el cómputo; cada token de salida necesita su propio paso de decode, dominado por lecturas de memoria. Y explica dos decisiones de producto que verás más adelante: las APIs batch, con descuento a cambio de esperar horas, que llenan la capacidad ociosa (<a href="m17-api-streaming.html#batches">M17</a>), y el autoscaling agresivo, porque una GPU quieta a las 4 de la mañana cuesta lo mismo que una llena (M19).</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 

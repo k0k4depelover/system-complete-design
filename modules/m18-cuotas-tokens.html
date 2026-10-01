@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M18. Rate limiting y cuotas por tokens</title>
+<meta name="description" content="Qué limitar en una API de LLM (requests, tokens de entrada y de salida, concurrencia y gasto), cómo cobrar por adelantado lo que todavía no se sabe con reservar, consumir y reconciliar, algoritmos para tokens, cuotas por niveles, reparto justo de una flota sobrevendida, admission control y el limitador como problema distribuido: invariantes, CAP y PACELC, escrow y leases, Redis Cluster, relojes y reconciliación exactamente una vez.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m18">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Rate limiting y cuotas por tokens</h1>
+        <p class="lead">Un límite de requests por minuto no sirve para un LLM: una request puede costar 50 tokens o 200 000, y durar un segundo o tres minutos. Este módulo diseña las cuotas de una API de LLM: qué se mide, cómo se cobra por adelantado lo que todavía no se sabe, cómo se reparte la flota entre clientes que no se conocen y qué hacer cuando la demanda la supera. Y termina con el problema de fondo: un contador compartido por decenas de gateways es un problema de sistemas distribuidos de verdad.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M18</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>75 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M06, M08, M12, M17</dd></div>
+          <div><dt>Estado</dt><dd data-status="m18">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir qué limitar (requests, tokens de entrada y de salida, concurrencia, gasto) y en qué nivel (organización, proyecto, clave).</li>
+          <li>Implementar reservar, consumir y reconciliar, y saber qué pasa cuando una request muere a la mitad.</li>
+          <li>Repartir una flota sobrevendida entre clientes con reparto justo, prioridades y admission control.</li>
+          <li>Analizar un limitador distribuido con las herramientas del M06: invariantes, CAP, PACELC, leases, relojes y replicación.</li>
+          <li>Diseñar lo que ve el cliente: headers, códigos de error y cómo reintentar.</li>
+        </ul>
+      </section>
+
+      <h2 id="tokens"><span class="sec-num">18.1</span>Por qué contar tokens y no requests</h2>
+
+      <p>Un rate limiter clásico cuenta requests (M08). En una API de LLM, dos requests pueden diferir mil veces en lo que cuestan:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Request</th><th class="r">Entrada</th><th class="r">Salida</th><th>Qué ocupa en la GPU</th></tr></thead>
+          <tbody>
+            <tr><td>Pregunta corta</td><td class="r">300</td><td class="r">150</td><td>Un prefill instantáneo y unos 3 s de decode</td></tr>
+            <tr><td>Chat con historial</td><td class="r">8 000</td><td class="r">400</td><td>Un prefill mediano y unos 8 s de decode</td></tr>
+            <tr><td>Resumen de un contrato</td><td class="r">100 000</td><td class="r">1 000</td><td>Más de 10 s de prefill y mucha memoria de KV cache (M16)</td></tr>
+            <tr><td>Tarea de un agente</td><td class="r">30 × 20 000</td><td class="r">30 × 300</td><td>Minutos de ocupación, en ráfagas (M25)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La GPU gasta tres recursos distintos, y cada uno pide su propio límite: cómputo para el prefill, que crece con los tokens de entrada; tiempo de decode, que crece con los tokens de salida; y memoria de KV cache durante toda la vida de la request, que se traduce en cuántas requests pueden correr a la vez (M12, M15). Por eso una API de LLM limita varias dimensiones a la vez:</p>
+      <ul>
+        <li><b>Requests por minuto:</b> el costo fijo de cada request y la primera defensa contra el abuso.</li>
+        <li><b>Tokens por minuto</b>, juntos o separados en entrada y salida: el trabajo real.</li>
+        <li><b>Concurrencia:</b> cuántas requests en curso a la vez, porque un stream de tres minutos ocupa memoria aunque genere poco.</li>
+        <li><b>Por día y por mes:</b> el gasto total.</li>
+      </ul>
+
+      <p>OpenAI mide <dfn data-term="tpm">RPM, TPM</dfn> y sus versiones diarias, por organización y por proyecto, y algunas familias de modelos comparten el mismo límite. <span class="badge badge--doc">Documentado</span> Anthropic separa los tokens de entrada (ITPM) de los de salida (OTPM), porque cuestan distinto, y para la mayoría de sus modelos no cuenta en el ITPM los tokens leídos del prompt caching: con un límite de 2 millones de ITPM y un 80&#8239;% de aciertos en el caché, se procesan 10 millones de tokens de entrada por minuto. <span class="badge badge--doc">Documentado</span> El límite premia lo que le ahorra trabajo a la flota.</p>
+
+      <p>Una cuota por minuto tampoco se aplica por minuto calendario. Anthropic avisa que un límite de 60 requests por minuto puede aplicarse como una por segundo, así que una ráfaga corta falla aunque el minuto no se haya agotado. <span class="badge badge--doc">Documentado</span> Una request atraviesa varias capas de límites antes de llegar a una GPU:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 452" role="img" aria-labelledby="f181t f181d">
+<title id="f181t">Las capas de límites de una API de LLM</title>
+<desc id="f181d">Una request atraviesa cinco capas. Primero el tope de gasto del mes, que responde 429 sin Retry-After porque reintentar no sirve hasta que cambie el mes o el tope. Después los límites de tasa por organización, proyecto y modelo: requests, tokens de entrada y tokens de salida por minuto, con 429 y Retry-After. Después el límite de concurrencia, que cuenta las requests en curso y frena los streams largos. Después el admission control de la flota, que mira la espera estimada y la memoria de KV cache y responde 503 o 529 cuando la capacidad total no alcanza. Al final, dentro de cada réplica, el scheduler del motor decide quién entra al batch en cada iteración.</desc>
+<defs><marker id="f181a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="14" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="40.0" text-anchor="middle" style="font-size:13.5px">Tope de gasto del mes</text>
+<text class="dg-tiny" x="230.0" y="56.0" text-anchor="middle">cuánto puede gastar la organización o el proyecto</text>
+<text class="dg-label" x="482" y="39" style="font-size:13px">429 sin Retry-After</text>
+<text class="dg-tiny" x="482" y="58">reintentar no sirve: cambia el mes o el tope</text>
+<path class="dg-feedback" d="M452 43 H476"/>
+<path class="dg-edge" d="M230 73 V93" marker-end="url(#f181a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="96" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="122.0" text-anchor="middle" style="font-size:13.5px">Límites de tasa</text>
+<text class="dg-tiny" x="230.0" y="138.0" text-anchor="middle">requests, tokens de entrada y de salida por minuto</text>
+<text class="dg-label" x="482" y="121" style="font-size:13px">429 con Retry-After</text>
+<text class="dg-tiny" x="482" y="140">por organización, proyecto y modelo</text>
+<path class="dg-feedback" d="M452 125 H476"/>
+<path class="dg-edge" d="M230 155 V175" marker-end="url(#f181a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="178" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="204.0" text-anchor="middle" style="font-size:13.5px">Límite de concurrencia</text>
+<text class="dg-tiny" x="230.0" y="220.0" text-anchor="middle">requests en curso a la vez, por cliente</text>
+<text class="dg-label" x="482" y="203" style="font-size:13px">429 con Retry-After</text>
+<text class="dg-tiny" x="482" y="222">frena los streams largos y los agentes</text>
+<path class="dg-feedback" d="M452 207 H476"/>
+<path class="dg-edge" d="M230 237 V257" marker-end="url(#f181a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="260" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="286.0" text-anchor="middle" style="font-size:13.5px">Admission control de la flota</text>
+<text class="dg-tiny" x="230.0" y="302.0" text-anchor="middle">espera estimada, memoria de KV cache, cola</text>
+<text class="dg-label" x="482" y="285" style="font-size:13px">503 o 529 con Retry-After</text>
+<text class="dg-tiny" x="482" y="304">lo activa la carga de todos los clientes</text>
+<path class="dg-feedback" d="M452 289 H476"/>
+<path class="dg-edge" d="M230 319 V339" marker-end="url(#f181a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="342" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="368.0" text-anchor="middle" style="font-size:13.5px">Scheduler del motor</text>
+<text class="dg-tiny" x="230.0" y="384.0" text-anchor="middle">quién entra al batch en cada iteración (M15)</text>
+<text class="dg-label" x="482" y="367" style="font-size:13px">espera o preemption</text>
+<text class="dg-tiny" x="482" y="386">dentro de cada réplica</text>
+<path class="dg-feedback" d="M452 371 H476"/>
+<text class="dg-small" x="10" y="428">Las tres primeras protegen de un cliente; las dos últimas, de todos a la vez. Un 429 dice "frena tú";</text>
+<text class="dg-small" x="10" y="446">un 503 o un 529 dice "estamos llenos". El cliente tiene que poder distinguirlos.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 18.1.</b> Las tres primeras capas miran a un cliente; las dos últimas, a la flota entera. Por eso responden con códigos distintos: un 429 le pide al cliente que frene, un 503 o un 529 dice que el problema es de capacidad y no suyo.</figcaption>
+      </figure>
+
+      <h2 id="estimar"><span class="sec-num">18.2</span>Cobrar antes de saber cuánto va a costar</h2>
+
+      <p>El limitador decide en la puerta, pero el costo se conoce al final. La entrada se puede contar antes de ejecutar: tokenizándola en el gateway, que es exacto pero cuesta CPU y depende del tokenizer de cada modelo, o estimándola por la cantidad de caracteres, que es lo que documenta OpenAI. <span class="badge badge--doc">Documentado</span> La salida no: solo se sabe que no va a pasar de <code>max_tokens</code>.</p>
+
+      <p>Los dos proveedores grandes resuelven la incógnita en direcciones opuestas: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>OpenAI cobra por adelantado el peor caso:</b> la request cuenta como el máximo entre <code>max_tokens</code> y la estimación de su tamaño. Por eso aconseja fijar <code>max_tokens</code> lo más cerca posible del largo esperado.</li>
+        <li><b>Anthropic cuenta la salida a medida que se produce:</b> estima la entrada al principio y la corrige durante la request, y los tokens de salida se descuentan cuando se generan. <code>max_tokens</code> no entra en la cuenta.</li>
+      </ul>
+
+      <p>La primera nunca deja pasar de más, pero rechaza a clientes que tenían cuota. La segunda aprovecha toda la cuota, pero cuando muchas requests entran juntas, el uso real se pasa del límite antes de que el limitador se entere. Compara las estrategias con el mismo cliente y las mismas requests:</p>
+
+      <div data-sim="reserve"></div>
+
+      <p>Prueba las ráfagas con "Contar al terminar": el uso real llega al 168&#8239;% del límite, porque en la ráfaga entran decenas de requests y ninguna cuenta hasta terminar. Pasa a "Reservar max_tokens" con 16 384: se rechaza el 88&#8239;% de las requests con el uso real por debajo del 20&#8239;%. Las dos estrategias del medio son las que se usan: reservar y devolver lo que sobra, o reservar una estimación y corregir.</p>
+
+      <h2 id="reservar"><span class="sec-num">18.3</span>Reservar, consumir y reconciliar</h2>
+
+      <p>El patrón de <dfn data-term="reserva-cuota">reservar y reconciliar</dfn> trata la cuota como un saldo con retenciones, igual que una tarjeta que retiene el monto de un hotel y cobra lo real al salir:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Reservar</span>Al entrar, se descuenta la entrada más una estimación de la salida en todos los niveles (organización, proyecto, clave), todos o ninguno. Si algún nivel no alcanza, la respuesta es un 429 que dice cuánto esperar.</li>
+        <li><span class="step-title">Consumir</span>Mientras genera, la reserva queda tomada. En respuestas muy largas conviene descontar a medida que salen los tokens, cada tantos cientos, para que el saldo no se aleje de la realidad.</li>
+        <li><span class="step-title">Reconciliar</span>Al terminar, se ajusta a lo real: si se usó menos, se devuelve la diferencia; si se usó más que lo estimado, se descuenta, aunque el saldo quede negativo. Esa deuda frena las requests siguientes hasta que la recarga la cubre.</li>
+        <li><span class="step-title">Vencer</span>Si la request muere a la mitad y nadie reconcilia, la reserva vence sola. Es un lease (M06): un permiso con fecha de vencimiento que no depende de que su dueño siga vivo.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 324" role="img" aria-labelledby="f182t f182d">
+<title id="f182t">Reservar, consumir y reconciliar</title>
+<desc id="f182d">El balde de un cliente tiene 60 000 tokens por minuto. Al entrar, la request reserva 6 096 tokens: 2 000 de entrada más 4 096 de max_tokens, y quedan 53 904 disponibles para las demás requests. Mientras genera, la reserva sigue tomada; a mitad de la respuesta ya se usaron 2 250 tokens y 3 846 siguen reservados sin usar. Al terminar, la respuesta tuvo 500 tokens: el costo real fue 2 500 y se devuelven 3 596 al balde, que queda en 57 500 (sin contar la recarga de ese tiempo).</desc>
+<text class="sim-label" x="158" y="37" text-anchor="end">Antes</text>
+<rect x="170.0" y="20" width="538.5" height="24" rx="3" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="170" y="62">saldo: 60 000</text>
+<text class="sim-label" x="158" y="101" text-anchor="end">1. Reservar</text>
+<rect x="170.0" y="84" width="483.6" height="24" rx="3" fill="var(--fill-2)"/>
+<rect x="655.1" y="84" width="53.4" height="24" rx="3" class="hb-a"/>
+<text class="dg-tiny" x="170" y="126">reserva 2 000 de entrada + 4 096 de max_tokens</text>
+<text class="sim-label" x="158" y="165" text-anchor="end">2. Consumir</text>
+<rect x="170.0" y="148" width="483.6" height="24" rx="3" fill="var(--fill-2)"/>
+<rect x="655.1" y="148" width="18.8" height="24" rx="3" fill="var(--l-service)"/>
+<rect x="675.4" y="148" width="33.1" height="24" rx="3" class="hb-a"/>
+<text class="dg-tiny" x="170" y="190">a mitad de la respuesta: 2 250 usados, 3 846 todavía reservados</text>
+<text class="sim-label" x="158" y="229" text-anchor="end">3. Reconciliar</text>
+<rect x="170.0" y="212" width="516.0" height="24" rx="3" fill="var(--fill-2)"/>
+<rect x="687.5" y="212" width="21.0" height="24" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="170" y="254">salieron 500 tokens: costo real 2 500, vuelven 3 596</text>
+<rect x="170" y="272" width="14" height="10" rx="2" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="190" y="282">disponible para otras requests</text>
+<rect x="390" y="272" width="14" height="10" rx="2" class="hb-a"/>
+<text class="dg-tiny" x="410" y="282">reservado sin usar</text>
+<rect x="550" y="272" width="14" height="10" rx="2" fill="var(--l-service)"/>
+<text class="dg-tiny" x="570" y="282">usado de verdad</text>
+<text class="dg-small" x="10" y="314">Si la request muere a la mitad, nadie reconcilia: la reserva tiene que vencer sola.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 18.2.</b> La reserva protege a la flota mientras la request corre; la <span class="no-autolink">reconciliación</span> le devuelve al cliente lo que no usó. Sin reconciliar, el cliente pagaría 6 096 tokens por una respuesta que costó 2 500.</figcaption>
+      </figure>
+
+      <p>¿Qué estimación usar para la salida? La mejor es el p95 de las respuestas recientes de ese cliente con ese modelo, recalculado cada tanto: casi nunca se queda corta, y cuando se queda corta la deuda es chica. Para un cliente nuevo, sin historia, se usa <code>max_tokens</code> con un tope. Y los streams que duran más que el vencimiento de su reserva la renuevan, como se renueva cualquier lease.</p>
+
+      <h3 id="reservar-codigo">Impleméntalo en Redis</h3>
+
+      <p>Las dos operaciones son scripts de Lua: Redis ejecuta cada script de forma atómica, así que ningún otro gateway ve el saldo a medio actualizar. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<pre><code>-- reservar.lua: reserva `costo` tokens en todos los baldes o en ninguno.
+-- KEYS: los baldes (organización, proyecto…) y al final la clave de la reserva.
+--       Todas llevan el mismo hash tag, {org:42}, para vivir en el mismo slot del cluster.
+-- ARGV: costo, vencimiento de la reserva (s), y por cada balde su capacidad y su recarga por segundo.
+local t = redis.call('TIME')                          -- el reloj de Redis, no el de cada gateway
+local ahora = tonumber(t[1]) + tonumber(t[2]) / 1e6
+local costo, ttl = tonumber(ARGV[1]), tonumber(ARGV[2])
+local n, saldos = #KEYS - 1, {}
+for i = 1, n do
+  local cap, recarga = tonumber(ARGV[1 + 2 * i]), tonumber(ARGV[2 + 2 * i])
+  local b = redis.call('HMGET', KEYS[i], 'saldo', 't')
+  local saldo = tonumber(b[1]) or cap
+  local desde = tonumber(b[2]) or ahora
+  saldo = math.min(cap, saldo + (ahora - desde) * recarga)
+  if saldo &lt; costo then
+    return {0, i, math.ceil((costo - saldo) / recarga)}   -- 429: qué nivel y cuántos segundos esperar
+  end
+  saldos[i] = saldo
+end
+for i = 1, n do
+  redis.call('HSET', KEYS[i], 'saldo', saldos[i] - costo, 't', ahora)
+end
+redis.call('SET', KEYS[#KEYS], costo, 'EX', ttl)      -- si nadie reconcilia, la reserva vence sola
+return {1}</code></pre>
+
+<pre><code>-- reconciliar.lua: ajusta la reserva al uso real, una sola vez por request.
+-- KEYS: los mismos baldes y la reserva. ARGV: uso real, y por cada balde su capacidad.
+local reservado = tonumber(redis.call('GET', KEYS[#KEYS]))
+if not reservado then return 0 end                    -- ya se reconcilió, o la reserva venció
+local diferencia = reservado - tonumber(ARGV[1])      -- positiva: se devuelve; negativa: deuda
+for i = 1, #KEYS - 1 do
+  local cap = tonumber(ARGV[1 + i])
+  local saldo = tonumber(redis.call('HGET', KEYS[i], 'saldo')) or cap
+  redis.call('HSET', KEYS[i], 'saldo', math.min(cap, saldo + diferencia))
+end
+redis.call('DEL', KEYS[#KEYS])                        -- sin la reserva, un reintento no devuelve dos veces
+return 1</code></pre>
+
+<pre data-lang="python"><code>import redis.asyncio as redis
+
+r = redis.Redis(host="cuotas.interno")               # en producción, redis.asyncio.RedisCluster
+reservar = r.register_script(open("reservar.lua").read())
+reconciliar = r.register_script(open("reconciliar.lua").read())
+
+async def reservar_cuota(org, proyecto, req_id, entrada, max_tokens, planes):
+    tag = f"{{org:{org}}}"                            # hash tag: todos los baldes de la org en un slot
+    claves = [f"{tag}:tpm", f"{tag}:proy:{proyecto}:tpm", f"{tag}:resv:{req_id}"]
+    costo = entrada + min(max_tokens, planes.p95_salida(org))
+    args = [costo, 900]                               # la reserva vence a los 15 minutos
+    for lim in (planes.org(org), planes.proyecto(proyecto)):
+        args += [lim.capacidad, lim.por_minuto / 60]
+    res = await reservar(keys=claves, args=args)
+    if res[0] == 0:
+        raise LimiteSuperado(nivel=res[1], retry_after=res[2])   # se responde 429 con Retry-After
+    return claves
+
+async def reconciliar_cuota(claves, uso_real, planes, org, proyecto):
+    caps = [planes.org(org).capacidad, planes.proyecto(proyecto).capacidad]
+    await reconciliar(keys=claves, args=[uso_real, *caps])</code></pre>
+
+      <p>Cuatro decisiones de este código vuelven en la sección 18.8, porque son decisiones de sistemas distribuidos disfrazadas de detalles. El hash tag pone todos los baldes de una organización en el mismo shard, para que el script pueda tocarlos juntos. El tiempo sale de <code>TIME</code>, el reloj de Redis, y no del reloj de cada gateway. Borrar la reserva en el mismo script hace idempotente a la <span class="no-autolink">reconciliación</span>. Y cuando una reserva vence sin reconciliar, los tokens no vuelven: el error queda a favor de la flota, que nunca deja pasar de más. Una variante guarda las reservas en un sorted set con su vencimiento y las devuelve al vencer, a cambio de un script más largo.</p>
+
+      <h2 id="algoritmos"><span class="sec-num">18.4</span>Algoritmos para tokens</h2>
+
+      <p>El token bucket del M08 sirve tal cual, con una diferencia: cada request descuenta un costo variable, no una unidad. La capacidad del balde decide cuánto se puede gastar de golpe; la recarga, el ritmo sostenido.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Algoritmo</th><th>Qué guarda por clave</th><th>Ráfagas</th><th>Cuándo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Token bucket con costo</b></td><td>Saldo y hora de la última recarga</td><td>Hasta la capacidad</td><td>El caso general</td></tr>
+            <tr><td><b><dfn data-term="gcra">GCRA</dfn></b></td><td>Un solo timestamp: cuándo vuelve a estar lleno el balde</td><td>Igual que el token bucket</td><td>Lo mismo con menos estado; lo implementa, por ejemplo, el módulo redis-cell <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td><b>Ventana deslizante con contadores</b></td><td>Dos contadores por ventana</td><td>Aproximadas</td><td>Límites "por minuto" fáciles de explicar al cliente</td></tr>
+            <tr><td><b>Límite de concurrencia</b></td><td>Requests en curso</td><td>No aplica</td><td>Streams largos y agentes, que ocupan memoria sin gastar muchos tokens</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Dos detalles separan un limitador de juguete de uno de producción. El primero es el saldo negativo: con reservas estimadas, una request puede terminar costando más de lo reservado, y el balde queda en deuda. El límite se respeta en promedio, porque la deuda frena a las siguientes, y el exceso instantáneo queda acotado por lo que las requests en curso consumen por encima de su estimación. El segundo es la concurrencia. Por la ley de Little, un cliente que manda 2 requests por segundo de 90 segundos cada una tiene 180 streams abiertos, cada uno con su KV cache en alguna GPU, aunque sus tokens por minuto sean modestos. Stripe, con la misma lógica, limita por separado las requests en curso de cada cliente. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="jerarquia"><span class="sec-num">18.5</span>Cuotas por niveles</h2>
+
+      <p>Las cuotas se anidan: una organización tiene proyectos, un proyecto tiene claves y una clave atiende a los usuarios del cliente. Cada request pasa por todos los niveles que le corresponden, y la reserva tiene que ser atómica en todos (el script de 18.3): si se descuenta del proyecto y después falla la organización, el proyecto pierde cuota por una request que nunca corrió.</p>
+
+      <p>Anthropic permite fijar límites por workspace por debajo de los de la organización, y los de la organización se aplican siempre, aunque la suma de los workspaces sea mayor. OpenAI informa en headers aparte el límite del proyecto. <span class="badge badge--doc">Documentado</span> Lo que el cliente ve en cada respuesta:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Header</th><th>Qué dice</th></tr></thead>
+          <tbody>
+            <tr><td><code>x-ratelimit-limit-tokens</code>, <code>x-ratelimit-remaining-tokens</code>, <code>x-ratelimit-reset-tokens</code></td><td>OpenAI: límite, lo que queda y cuánto falta para que el balde vuelva a estar lleno (hay versiones para requests y para el proyecto)</td></tr>
+            <tr><td><code>anthropic-ratelimit-input-tokens-remaining</code>, <code>…-output-tokens-remaining</code></td><td>Anthropic: lo que queda de cada dimensión, redondeado al millar, y la hora de recarga completa en RFC 3339</td></tr>
+            <tr><td><code>anthropic-ratelimit-tokens-*</code></td><td>El límite más restrictivo que se está aplicando en ese momento</td></tr>
+            <tr><td><code>Retry-After</code></td><td>Cuántos segundos esperar antes de reintentar. No viene cuando el problema es el tope de gasto</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--doc">Documentado</span></p>
+
+      <p>Los límites no son fijos por cliente: suben por <dfn data-term="usage-tier">niveles de uso</dfn> a medida que la cuenta acumula pagos e historia. Anthropic arranca a las organizaciones nuevas en un nivel de evaluación, con límites más bajos, como parte de su prevención de fraude, y además aplica <dfn data-term="acceleration-limit">límites de aceleración</dfn>: una organización cuyo uso sube de golpe puede recibir 429 aunque esté dentro de su límite, y la recomendación es subir el tráfico de a poco. <span class="badge badge--doc">Documentado</span> Una cuota también es una herramienta contra el abuso: una clave robada que empieza a gastar al máximo no debería poder hacerlo el primer día.</p>
+
+      <p>Por encima de todo está el <dfn data-term="spend-limit">tope de gasto</dfn> del mes. Al alcanzar el tope de su nivel, Anthropic responde 429 con <code>enforced_spend_limit_reached</code> y sin <code>retry-after</code>; si el tope lo fijó el cliente, responde 400. OpenAI usa 429 con <code>organization_spend_limit_exceeded</code> o <code>project_spend_limit_exceeded</code>. <span class="badge badge--doc">Documentado</span> El tope de gasto se lleva con el metering (M21), no con el rate limiter: se mide en dinero, se acumula durante un mes y tiene que ser exacto.</p>
+
+      <h2 id="justicia"><span class="sec-num">18.6</span>Repartir la flota entre clientes</h2>
+
+      <p>Si la flota tuviera capacidad para la suma de todas las cuotas, estaría vacía casi siempre. Las cuotas se venden con <dfn data-term="sobresuscripcion">sobresuscripción</dfn>: suman varias veces la capacidad, porque los clientes no usan todo a la vez, igual que un proveedor de internet o una aerolínea. Funciona mientras los picos no coinciden, y coinciden: el lunes a las 9, en un lanzamiento viral o cuando un cliente grande corre su proceso mensual.</p>
+
+      <p>Cuando coinciden, las cuotas ya no alcanzan para proteger a nadie: cada cliente está dentro de la suya y la flota igual está saturada. Aparece el <dfn data-term="noisy-neighbor">vecino ruidoso</dfn>, el cliente cuyo tráfico legítimo arruina la latencia de todos los demás. La respuesta viene de las redes: <dfn data-term="fair-queuing">fair queuing</dfn>, una cola por cliente y un planificador que reparte la capacidad según un peso. Los algoritmos clásicos son el weighted fair queuing (1989) y el deficit round robin (1995), pensados para repartir un enlace entre flujos de paquetes; acá los paquetes son tokens. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f183t f183d">
+<title id="f183t">Una cola por cliente y un reparto por peso</title>
+<desc id="f183d">Cada cliente tiene su propia cola: el cliente pro con peso 3 y dos requests esperando, la empresa con peso 3 y tres, el script con peso 2 y una cola larguísima, y el plan gratis con peso 1 y cuatro requests chicas. El scheduler da cada lugar libre del batch al cliente que menos recibió en proporción a su peso. Con los cuatro activos, la flota se reparte tres novenos, tres novenos, dos novenos y un noveno, aunque el script tenga veinte veces más trabajo en cola. Si un cliente no usa su parte, la reparten los demás.</desc>
+<defs><marker id="f183a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="10" y="45" style="font-size:13px">Cliente pro</text>
+<text class="dg-tiny" x="10" y="63">peso 3</text>
+<rect x="100" y="30" width="330" height="36" rx="8" fill="none" stroke="var(--separator-strong)"/>
+<rect x="390" y="37" width="30" height="22" rx="4" fill="var(--l-service)"/>
+<rect x="342" y="37" width="44" height="22" rx="4" fill="var(--l-service)"/>
+<path class="dg-edge" d="M432 48 C470 48 470 150 496 150" marker-end="url(#f183a)"/>
+<text class="dg-label" x="10" y="107" style="font-size:13px">Empresa</text>
+<text class="dg-tiny" x="10" y="125">peso 3</text>
+<rect x="100" y="92" width="330" height="36" rx="8" fill="none" stroke="var(--separator-strong)"/>
+<rect x="368" y="99" width="52" height="22" rx="4" fill="var(--l-db)"/>
+<rect x="324" y="99" width="40" height="22" rx="4" fill="var(--l-db)"/>
+<rect x="260" y="99" width="60" height="22" rx="4" fill="var(--l-db)"/>
+<path class="dg-edge" d="M432 110 C470 110 470 150 496 150" marker-end="url(#f183a)"/>
+<text class="dg-label" x="10" y="169" style="font-size:13px">Script</text>
+<text class="dg-tiny" x="10" y="187">peso 2</text>
+<rect x="100" y="154" width="330" height="36" rx="8" fill="none" stroke="var(--separator-strong)"/>
+<rect x="360" y="161" width="60" height="22" rx="4" fill="var(--l-edge)"/>
+<rect x="298" y="161" width="58" height="22" rx="4" fill="var(--l-edge)"/>
+<rect x="232" y="161" width="62" height="22" rx="4" fill="var(--l-edge)"/>
+<rect x="172" y="161" width="56" height="22" rx="4" fill="var(--l-edge)"/>
+<rect x="108" y="161" width="60" height="22" rx="4" fill="var(--l-edge)"/>
+<text class="dg-tiny" x="104" y="207">y cientos más: el exceso espera en su propia cola</text>
+<path class="dg-edge" d="M432 172 C470 172 470 150 496 150" marker-end="url(#f183a)"/>
+<text class="dg-label" x="10" y="231" style="font-size:13px">Plan gratis</text>
+<text class="dg-tiny" x="10" y="249">peso 1</text>
+<rect x="100" y="216" width="330" height="36" rx="8" fill="none" stroke="var(--separator-strong)"/>
+<rect x="408" y="223" width="12" height="22" rx="4" fill="var(--l-queue)"/>
+<rect x="394" y="223" width="10" height="22" rx="4" fill="var(--l-queue)"/>
+<rect x="376" y="223" width="14" height="22" rx="4" fill="var(--l-queue)"/>
+<rect x="360" y="223" width="12" height="22" rx="4" fill="var(--l-queue)"/>
+<path class="dg-edge" d="M432 234 C470 234 470 150 496 150" marker-end="url(#f183a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="500" y="110" width="110" height="80" rx="9"/>
+<text class="dg-label" x="555" y="138" text-anchor="middle" style="font-size:13.5px">Scheduler</text>
+<text class="dg-tiny" x="555" y="160" text-anchor="middle">al que menos</text>
+<text class="dg-tiny" x="555" y="175" text-anchor="middle">recibió ÷ peso</text>
+<path class="dg-edge" d="M612 150 H640" marker-end="url(#f183a)"/>
+<text class="dg-label" x="703" y="84" text-anchor="middle" style="font-size:13px">Batch</text>
+<rect x="646" y="96" width="32" height="28" rx="4" fill="var(--l-service)"/>
+<rect x="684" y="96" width="32" height="28" rx="4" fill="var(--l-service)"/>
+<rect x="722" y="96" width="32" height="28" rx="4" fill="var(--l-service)"/>
+<rect x="646" y="130" width="32" height="28" rx="4" fill="var(--l-db)"/>
+<rect x="684" y="130" width="32" height="28" rx="4" fill="var(--l-db)"/>
+<rect x="722" y="130" width="32" height="28" rx="4" fill="var(--l-db)"/>
+<rect x="646" y="164" width="32" height="28" rx="4" fill="var(--l-edge)"/>
+<rect x="684" y="164" width="32" height="28" rx="4" fill="var(--l-edge)"/>
+<rect x="722" y="164" width="32" height="28" rx="4" fill="var(--l-queue)"/>
+<text class="dg-tiny" x="703" y="214" text-anchor="middle">3 + 3 + 2 + 1</text>
+<text class="dg-tiny" x="703" y="229" text-anchor="middle">novenos</text>
+<text class="dg-small" x="10" y="292">El script tiene veinte veces más trabajo en cola y recibe dos novenos de la flota, ni más ni menos.</text>
+<text class="dg-small" x="10" y="310">Si un cliente no usa su parte, la reparten los demás: la flota nunca queda ociosa con trabajo esperando.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 18.3.</b> Cada lugar libre del batch va al cliente que menos recibió en proporción a su peso. Nadie recibe más de su parte mientras otros esperan, y nadie la desperdicia: lo que un cliente no usa lo reparten los demás.</figcaption>
+      </figure>
+
+      <div data-sim="tenants"></div>
+
+      <p>Con "Sin límites", el script del minuto uno llena la flota y el cliente pro espera más de dos minutos en el p95. Las cuotas cortan el script, pero la espera del pro sigue en 12 segundos, porque la cola es una sola y los demás clientes también están en su pico. Con reparto justo, la espera del pro baja a menos de medio segundo: la espera se queda con quien pide más de lo que le toca. Y el admission control acota esas colas, convirtiendo esperas largas en rechazos rápidos.</p>
+
+      <p>Dos decisiones completan el diseño. La prioridad estricta (el plan empresa siempre primero) puede dejar al plan gratis sin servicio para siempre, así que se combina con pesos o con un piso garantizado. Y el reparto se hace en dos lugares: en el router, que tiene una cola por cliente delante de la flota (M19), y dentro de cada motor, que puede ordenar su propia cola por prioridad. vLLM lo hace si se arranca con <code>--scheduling-policy priority</code>: cada request trae una prioridad, y un número menor pasa antes. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="admision"><span class="sec-num">18.7</span>Admission control: cuando la flota no alcanza</h2>
+
+      <p>El <dfn data-term="admission-control">admission control</dfn> decide si una request entra según el estado de la flota, no según la cuota del cliente. Mira señales que el limitador no ve: la espera estimada en la cola (los tokens pendientes divididos por el throughput), la ocupación del KV cache, la tasa de preemptions de los motores (M15) y el TTFT reciente.</p>
+
+      <p>Rechazar a tiempo es mejor que aceptar y fallar tarde. Por la teoría de colas del M08, en una cola al 95&#8239;% de ocupación cada request pasa en el sistema 20 veces su tiempo de servicio, y una request que va a vencer su timeout esperando ocupa lugar para nada. Por eso la regla que funciona compara la espera estimada con el plazo de la request, y la rechaza con un 503 y un <code>Retry-After</code> si no va a llegar a tiempo. Antes de rechazar hay opciones de degradación (M08): mandar a otra región (M19), bajar a un modelo más chico o recortar <code>max_tokens</code> en el plan gratis.</p>
+
+      <p>Los proveedores venden la capacidad en varios niveles de servicio, que son exactamente políticas de admisión: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Prioridad:</b> Anthropic tiene un Priority Tier con sus propios límites y headers, y OpenAI acepta <code>service_tier: "priority"</code>. Se paga por no ser lo primero que se descarta.</li>
+        <li><b>Flex:</b> OpenAI ofrece procesamiento más barato a cambio de respuestas más lentas y de rechazos ocasionales con un 429 cuando no hay capacidad, que no se cobran. Es capacidad ociosa vendida con descuento.</li>
+        <li><b>Batch:</b> con su propio límite de requests en cola, llena los valles de la noche (M17).</li>
+      </ul>
+
+      <p>Stripe describió en 2017 cuatro limitadores que encajan con esta capa. Además de los de tasa y de concurrencia por cliente, tiene un load shedder de la flota que reserva una fracción de la capacidad, un 20&#8239;% en su ejemplo, para las operaciones críticas, y otro que descarta tráfico de baja prioridad cuando los workers se saturan. <span class="badge badge--doc">Documentado</span> En una API de LLM, lo crítico es el tráfico con prioridad contratada, y lo primero que se descarta es el plan gratis.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Un 429 y un 503 le piden al cliente cosas distintas. El 429 dice que el cliente superó su cuota y tiene que frenar; reintentar enseguida es un error. El 503 o el 529 dice que el cliente está dentro de su cuota y el que no da abasto es el proveedor; reintentar después, en otra región o con otro modelo, es lo correcto. Si todo sale como 429, los clientes bien hechos se frenan por un problema que no es suyo, y los mal hechos reintentan igual.</p>
+      </aside>
+
+      <h2 id="distribuido"><span class="sec-num">18.8</span>El limitador como problema distribuido</h2>
+
+      <p>Hasta acá el contador parecía un número en Redis. En producción, decenas de gateways en varias regiones leen y descuentan el mismo saldo, miles de veces por segundo, con redes que se cortan, relojes que difieren y réplicas que se caen. Todo el M06 aparece acá.</p>
+
+      <h3 id="invariante">Un invariante que exige coordinar</h3>
+
+      <p>La regla "el consumo no pasa del límite" es un invariante sobre un estado compartido. Bailis y otros formalizaron en 2015 cuándo un invariante se puede mantener sin coordinación: si dos réplicas aplican cada una operaciones que son válidas según lo que ven, ¿el estado combinado sigue cumpliendo el invariante? Lo llamaron <dfn data-term="i-confluencia">confluencia de invariantes</dfn>. <span class="badge badge--doc">Documentado</span> Para un saldo que no puede quedar negativo y que se descuenta, la respuesta es no. Dos gateways ven 5 000 tokens disponibles y admiten 4 000 cada uno; los dos tenían razón según lo que veían, y el saldo combinado queda en −3 000.</p>
+
+      <p>No hay algoritmo que lo evite: un límite global exige una de tres cosas. Coordinar en cada request, tolerar un exceso acotado o repartir el saldo por adelantado para que cada gateway gaste solo lo suyo. No existe una cuarta opción, y cada limitador distribuido real es una de estas tres, o una mezcla.</p>
+
+      <h3 id="tres-formas">Tres formas de repartir un límite</h3>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Contador central</th><th>Contadores locales que se sincronizan</th><th>Escrow: préstamos de cuota</th></tr></thead>
+          <tbody>
+            <tr><td><b>Cómo funciona</b></td><td>Cada request reserva contra un único contador, linealizable</td><td>Cada gateway cuenta lo suyo y cada Δ segundos se entera de lo de los demás</td><td>Un coordinador presta a cada gateway un pedazo del saldo; el gateway lo gasta sin preguntar y pide más cuando se le acaba</td></tr>
+            <tr><td><b>Exceso</b></td><td>Cero</td><td>Hasta la tasa de llegada × Δ</td><td>Cero</td></tr>
+            <tr><td><b>Cuota desperdiciada</b></td><td>Ninguna</td><td>Ninguna</td><td>La que queda prestada a gateways que no la usan</td></tr>
+            <tr><td><b>Latencia</b></td><td>Una ida y vuelta al contador por request</td><td>Ninguna</td><td>Una ida y vuelta cada tanto, no por request</td></tr>
+            <tr><td><b>Si el contador no responde</b></td><td>Hay que elegir: dejar pasar o rechazar</td><td>Se sigue admitiendo con información vieja</td><td>Cada gateway gasta lo que tiene prestado hasta que vence</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los contadores locales son un <dfn data-term="crdt">CRDT</dfn>: cada gateway solo incrementa su propia entrada, la combinación toma el máximo de cada entrada y el total es la suma, así que las réplicas convergen sin coordinar, en cualquier orden. <span class="badge badge--doc">Documentado</span> Convergen, pero tarde: cuentan bien lo que pasó, no impiden que pase. El <dfn data-term="escrow">escrow</dfn> es la idea de O'Neil (1986) para cuentas bancarias, que después se llevó a los CRDT como "contadores acotados" (Balegas y otros, 2015): partir el saldo en derechos, repartirlos y dejar que cada réplica gaste los suyos sin coordinar. <span class="badge badge--doc">Documentado</span> YouTube lo construyó para su infraestructura con Doorman: los clientes piden capacidad con un RPC, reciben un lease con vencimiento y un intervalo de renovación, y si el servidor no responde eligen entre no usar nada, usar todo o usar una capacidad "segura" configurada; los servidores forman un árbol, con hojas por región y una raíz global, para repartir sin un punto caliente único. <span class="badge badge--doc">Documentado</span></p>
+
+      <div data-calc="escrow"></div>
+
+      <p>Con los valores de ejemplo, sincronizar cada 2 segundos deja pasar hasta un 9&#8239;% de más en una ráfaga, y prestar el 1&#8239;% del límite a cada uno de 20 gateways puede dejar varado un 20&#8239;% sin pedirle a Redis más de 1.5 operaciones por segundo. Achicar el préstamo baja la cuota varada y sube la coordinación: la perilla es el tamaño del préstamo, y el valor bueno depende de cuántos gateways atienden a cada cliente.</p>
+
+      <h3 id="cap-cuotas">CAP y PACELC aplicados a una cuota</h3>
+
+      <p>Cuando un gateway pierde contacto con el contador central, está en la situación del teorema CAP (M06): puede seguir admitiendo sin saber si el cliente tiene saldo (disponibilidad) o rechazar hasta saberlo (consistencia). Rechazar deja sin servicio a clientes que pagan por un problema interno; dejar pasar todo abre la puerta a un abuso sin límite. La salida del medio es un límite local conservador: cada gateway admite como mucho el límite dividido por la cantidad de gateways. Con eso, el total nunca supera el límite, aunque el cliente con tráfico desparejo reciba menos de lo que paga. Es escrow estático: un reparto fijo, sin préstamos que se muevan.</p>
+
+      <p>El escrow con préstamos cambia la pregunta. Durante una partición, cada gateway sigue gastando su préstamo hasta que vence: es disponible y no deja pasar de más, y el precio es cuota varada, no exceso. CAP obliga a elegir entre disponibilidad y consistencia para una operación que necesita el estado global; el escrow logra que la operación deje de necesitarlo, dentro de lo prestado.</p>
+
+      <p>PACELC recuerda el costo de todos los días, sin particiones: un contador global linealizable entre regiones suma una ida y vuelta intercontinental, unos 70 ms, a cada request. Nadie lo hace. Lo que se hace es un contador por región y escrow entre regiones: cada región recibe una parte del límite global, proporcional a su demanda reciente, y un coordinador la rebalancea cada pocos segundos. Es el árbol de Doorman: la consistencia fuerte vive dentro de cada región, donde es barata, y entre regiones solo viajan préstamos.</p>
+
+      <h3 id="redis-cluster">Lo que Redis Cluster garantiza y lo que no</h3>
+
+      <p>Redis Cluster reparte las claves en 16 384 slots, y una operación de varias claves, incluido un script de Lua, solo funciona si todas caen en el mismo slot. Los hash tags lo fuerzan: de <code>{org:42}:tpm</code> solo se usa <code>org:42</code> para elegir el slot. <span class="badge badge--doc">Documentado</span> Es lo que permite reservar en todos los niveles con un solo script. La consecuencia es que todos los baldes de una organización viven en el mismo shard: un cliente enorme se vuelve un hot key (M04). La solución es partir su balde en N sub-baldes con un N-ésimo del límite cada uno y elegir uno al azar por request, que es escrow otra vez, ahora entre shards.</p>
+
+      <p>La replicación de Redis es asincrónica: el primario confirma la escritura antes de que llegue a las réplicas. Si muere en ese momento y una réplica toma su lugar, la escritura confirmada se pierde. <span class="badge badge--doc">Documentado</span> Para un limitador, eso significa que el saldo retrocede: los descuentos de los últimos instantes desaparecen, y el cliente puede gastarlos de nuevo. El exceso queda acotado por la tasa de consumo multiplicada por el retraso de la replicación: con 20 000 tokens por segundo y medio segundo de retraso, 10 000 tokens. El comando <code>WAIT</code> achica esa ventana, pero la documentación de Redis aclara que no lo vuelve fuertemente consistente. <span class="badge badge--doc">Documentado</span> Para un limitador es un exceso aceptable. Para dinero no lo es, y por eso la facturación sale de otro lado.</p>
+
+      <p>En una partición, el primario que quedó del lado de la minoría sigue aceptando escrituras durante el tiempo de detección de fallas del cluster, y después las rechaza. <span class="badge badge--doc">Documentado</span> Los gateways de ese lado ven primero escrituras que después se pierden y después errores, y ahí se aplica la política de falla que decidiste antes.</p>
+
+      <h3 id="reloj-balde">El reloj del balde</h3>
+
+      <p>La recarga depende del tiempo transcurrido. Si cada gateway calcula la recarga con su propio reloj y escribe el resultado, un gateway con el reloj 2 segundos adelantado le regala al cliente 2 segundos de recarga, y uno atrasado calcula un tiempo negativo. Con NTP, la diferencia suele ser de milisegundos, pero una corrección brusca del reloj o una máquina virtual pausada existen (M06). La solución del script de 18.3 es que haya un solo reloj por clave: el de Redis, leído con <code>TIME</code> dentro del script. Redis lo permite porque replica los efectos de un script y no el script (por defecto desde la versión 5, y como única opción desde la 7), así que una réplica no vuelve a leer su propio reloj. <span class="badge badge--doc">Documentado</span> En el gateway, las duraciones se miden con un reloj monotónico, nunca con la hora del sistema.</p>
+
+      <h3 id="una-vez">Reconciliar exactamente una vez</h3>
+
+      <p>La <span class="no-autolink">reconciliación</span> es un mensaje que puede llegar dos veces, porque el gateway reintentó, o ninguna, porque el gateway murió. Son los dos problemas de entrega del M07, y cada uno tiene su solución en el diseño de 18.3:</p>
+      <ul>
+        <li><b>Duplicada:</b> el script borra la reserva en la misma operación atómica en que devuelve la diferencia. Un reintento no encuentra la reserva y no hace nada. El efecto es de exactamente una vez sobre una entrega de al menos una vez, como con una idempotency key (M02).</li>
+        <li><b>Perdida:</b> la reserva vence sola. Los tokens reservados no vuelven, así que el error favorece a la flota: el cliente pierde cuota por un rato, pero nunca pasa de más.</li>
+      </ul>
+
+      <p>La consecuencia de fondo es que el limitador es aproximado a propósito: rápido, en memoria, con excesos acotados y errores a favor de la flota. Lo exacto es el metering (M21), que se calcula después con el log de eventos de uso. Son dos niveles de consistencia para los mismos números: el limitador responde en un milisegundo con un valor aproximado, y la factura se calcula en horas con el valor exacto. Si se desvían, el metering corrige los contadores del limitador, nunca al revés.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 350" role="img" aria-labelledby="f184t f184d">
+<title id="f184t">El limitador distribuido</title>
+<desc id="f184d">Tres gateways atienden las requests. Cada uno pide a Redis un préstamo de cuota, por ejemplo el 5 por ciento del balde de un cliente, y lo gasta localmente sin consultar a Redis en cada request; cuando se le acaba, pide otro, y devuelve lo que sobra. Redis Cluster guarda los baldes repartidos en shards por la clave organización, proyecto y modelo, y hace cada reserva y cada <span class="no-autolink">reconciliación</span> con un script Lua atómico que toma la hora del propio Redis. Un servicio de configuración publica los límites de cada plan a los gateways. Los eventos de uso reales van a Kafka, de ahí al metering y a una conciliación que corrige los contadores si hubo desvíos.</desc>
+<defs><marker id="f184a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="12" y="60" width="170" height="56" rx="9"/>
+<text class="dg-label" x="97.0" y="85.0" text-anchor="middle" style="font-size:13.5px">Gateway 1</text>
+<text class="dg-tiny" x="97.0" y="101.0" text-anchor="middle">préstamo local: 5 % del balde</text>
+<path class="dg-edge" d="M184 88 H300" marker-end="url(#f184a)" marker-start="url(#f184a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="12" y="134" width="170" height="56" rx="9"/>
+<text class="dg-label" x="97.0" y="159.0" text-anchor="middle" style="font-size:13.5px">Gateway 2</text>
+<text class="dg-tiny" x="97.0" y="175.0" text-anchor="middle">préstamo local: 5 % del balde</text>
+<path class="dg-edge" d="M184 162 H300" marker-end="url(#f184a)" marker-start="url(#f184a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="12" y="208" width="170" height="56" rx="9"/>
+<text class="dg-label" x="97.0" y="233.0" text-anchor="middle" style="font-size:13.5px">Gateway 3</text>
+<text class="dg-tiny" x="97.0" y="249.0" text-anchor="middle">préstamo local: 5 % del balde</text>
+<path class="dg-edge" d="M184 236 H300" marker-end="url(#f184a)" marker-start="url(#f184a)"/>
+<text class="dg-tiny" x="242" y="64" text-anchor="middle">pedir o devolver</text>
+<text class="dg-tiny" x="242" y="79" text-anchor="middle">un préstamo</text>
+<rect class="dg-frame" x="304" y="50" width="204" height="210" rx="10"/>
+<text class="dg-group" x="316" y="70">Redis Cluster</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="316" y="82" width="180" height="46" rx="9"/>
+<text class="dg-label" x="406.0" y="102.0" text-anchor="middle" style="font-size:13px">Shard 1</text>
+<text class="dg-tiny" x="406.0" y="118.0" text-anchor="middle">baldes por org:proyecto:modelo</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="316" y="140" width="180" height="46" rx="9"/>
+<text class="dg-label" x="406.0" y="160.0" text-anchor="middle" style="font-size:13px">Shard 2</text>
+<text class="dg-tiny" x="406.0" y="176.0" text-anchor="middle">baldes por org:proyecto:modelo</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="316" y="198" width="180" height="46" rx="9"/>
+<text class="dg-label" x="406.0" y="218.0" text-anchor="middle" style="font-size:13px">Shard 3</text>
+<text class="dg-tiny" x="406.0" y="234.0" text-anchor="middle">baldes por org:proyecto:modelo</text>
+<text class="dg-tiny" x="406" y="278" text-anchor="middle">reservar y reconciliar: script Lua</text>
+<text class="dg-tiny" x="406" y="293" text-anchor="middle">atómico, con la hora de Redis</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="560" y="56" width="196" height="56" rx="9"/>
+<text class="dg-label" x="658.0" y="81.0" text-anchor="middle" style="font-size:13.5px">Configuración</text>
+<text class="dg-tiny" x="658.0" y="97.0" text-anchor="middle">límites por plan y cliente</text>
+<path class="dg-edge" d="M658 54 V24 H97 V56" marker-end="url(#f184a)"/>
+<text class="dg-tiny" x="406" y="40" text-anchor="middle">se publica a los gateways</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="560" y="166" width="196" height="56" rx="9"/>
+<text class="dg-label" x="658.0" y="191.0" text-anchor="middle" style="font-size:13.5px">Kafka</text>
+<text class="dg-tiny" x="658.0" y="207.0" text-anchor="middle">eventos de uso reales</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="560" y="262" width="196" height="56" rx="9"/>
+<text class="dg-label" x="658.0" y="287.0" text-anchor="middle" style="font-size:13px">Metering y conciliación</text>
+<text class="dg-tiny" x="658.0" y="303.0" text-anchor="middle">corrige los contadores (M21)</text>
+<path class="dg-edge" d="M658 224 V258" marker-end="url(#f184a)"/>
+<path class="dg-edge" d="M97 278 V326 H534 V194 H556" marker-end="url(#f184a)"/>
+<text class="dg-tiny" x="315" y="320" text-anchor="middle">uso real al terminar cada request</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 18.4.</b> Los gateways gastan préstamos locales y solo le hablan a Redis para pedir o devolver. Redis garantiza atomicidad dentro de un slot, no durabilidad perfecta; los eventos de uso reales van por otro camino y corrigen lo que el limitador aproximó.</figcaption>
+      </figure>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Si Redis se cae entero, cada gateway pasa a su límite local conservador para los clientes que pagan y rechaza a los del plan gratis y a las cuentas nuevas, que son las que concentran el abuso. Stripe recomienda que el limitador falle abierto (si su almacén se cae, las requests siguen pasando) y que cada limitador nuevo se lance primero en modo "oscuro": calculando qué bloquearía, sin bloquear nada, hasta confirmar que los umbrales son razonables. <span class="badge badge--doc">Documentado</span> Esa decisión, como la del M00 sobre fail-open, se toma antes del incidente y se escribe en el runbook.</p>
+      </aside>
+
+      <h2 id="cliente"><span class="sec-num">18.9</span>Del otro lado: un cliente que respeta las cuotas</h2>
+
+      <p>Todo este diseño funciona mejor si los clientes colaboran, y los clientes bien hechos lo hacen:</p>
+      <ul>
+        <li><b>Leen los headers y se frenan solos.</b> Un token bucket del lado del cliente, alimentado con <code>remaining</code> y <code>reset</code>, evita casi todos los 429.</li>
+        <li><b>Respetan <code>Retry-After</code></b>, y cuando no viene, esperan con backoff exponencial y jitter (M08). OpenAI recuerda que las requests fallidas también cuentan para el límite por minuto: reintentar sin pausa no sirve. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Piden un <code>max_tokens</code> realista</b>, porque en algunos proveedores se reserva entero.</li>
+        <li><b>Usan prompt caching</b>, que en Anthropic además de abaratar sube el throughput efectivo, porque las lecturas del caché no cuentan para el ITPM. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Mandan a la Batch API lo que puede esperar</b>, que tiene límites propios y no consume los del tráfico interactivo (M17).</li>
+        <li><b>Suben el tráfico de a poco</b> antes de un lanzamiento, para no disparar los límites de aceleración.</li>
+        <li><b>Distinguen el tope de gasto</b> de los demás 429, y avisan a una persona en lugar de reintentar.</li>
+      </ul>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m18"></div>
+
+      <section class="exercise" aria-labelledby="ej-m18">
+        <p class="exercise-title" id="ej-m18">Ejercicio de diseño: tres planes y una flota fija</p>
+        <p>Una API de LLM tiene una flota que sostiene 10 millones de tokens de salida por minuto. Vende tres planes: gratis (100 000 cuentas, 2 000 tokens de salida por minuto cada una), pro (5 000 cuentas, 20 000) y empresa (20 contratos, 300 000 cada uno, con prioridad contratada). En la hora pico están activas el 3&#8239;% de las cuentas gratis, el 10&#8239;% de las pro y el 60&#8239;% de las empresas, y cada cuenta activa usa en promedio el 30&#8239;%, el 40&#8239;% y el 70&#8239;% de su cuota. Los gateways corren en dos regiones.</p>
+        <p>Calcula la sobresuscripción y la demanda del pico, y diseña las cuotas, el reparto de la flota, el admission control y el limitador distribuido.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Sobresuscripción:</b> las cuotas suman 200 millones (gratis) + 100 millones (pro) + 6 millones (empresa) = 306 millones de tokens por minuto, 30 veces la flota. Es normal: lo que importa es la demanda real.</li>
+            <li><b>Demanda del pico:</b> gratis, 100 000 × 3&#8239;% × 30&#8239;% × 2 000 = 1.8 millones; pro, 5 000 × 10&#8239;% × 40&#8239;% × 20 000 = 4 millones; empresa, 20 × 60&#8239;% × 70&#8239;% × 300 000 = 2.52 millones. En total, 8.32 millones: el 83&#8239;% de la flota, sin margen para un pico correlacionado.</li>
+            <li><b>Garantía para empresa:</b> si las 20 empresas usan todo, son 6 millones, el 60&#8239;% de la flota. Se les garantiza esa capacidad con prioridad, pero con reparto work-conserving: lo que no usan lo aprovechan los demás, así que en el pico normal quedan 7.48 millones para pro y gratis, que piden 5.8.</li>
+            <li><b>Reparto entre pro y gratis:</b> pesos de 3 a 1, y el plan gratis es lo primero que descarta el admission control cuando la flota pasa del 90&#8239;%: 503 con <code>Retry-After</code>, o un modelo más chico.</li>
+            <li><b>Dimensiones:</b> requests, tokens de entrada y de salida por minuto, y concurrencia por cuenta (los agentes del plan pro pueden abrir cientos de streams). Estimación de la salida con el p95 de cada cuenta y <span class="no-autolink">reconciliación</span> al terminar.</li>
+            <li><b>Distribuido:</b> un Redis Cluster por región, con los baldes de cada organización bajo un mismo hash tag, y el límite global repartido entre las dos regiones por escrow, rebalanceado cada pocos segundos según la demanda. Las empresas grandes tienen sus baldes partidos en sub-baldes para no calentar un shard. Si Redis cae: límite local conservador para pro y empresa, rechazo para gratis.</li>
+            <li><b>Cliente:</b> headers de límite restante y de recarga, 429 con <code>Retry-After</code> por cuota, 503 por capacidad y el tope de gasto sin <code>Retry-After</code>.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m18"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m18.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-quota.js"></script>
+</body>
+</html>

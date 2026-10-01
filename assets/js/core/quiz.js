@@ -291,6 +291,9 @@
     window.addEventListener('sd:progress', render);
   }
 
+  /* Las preguntas sueltas también las usan los ejercicios guiados (core/exercise.js) */
+  SD.quizKit = { choice: choiceQuestion, order: orderQuestion, html: html };
+
   SD.ready(function () {
     document.querySelectorAll('[data-quiz]').forEach(function (el) { renderQuiz(el, el.getAttribute('data-quiz')); });
     document.querySelectorAll('[data-checkpoint]').forEach(renderCheckpoint);

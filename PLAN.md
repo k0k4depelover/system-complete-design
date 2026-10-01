@@ -1,6 +1,6 @@
 # Plan — Curso de System Design para sistemas reales e IA
 
-Curso web interactivo (HTML/CSS/JS vanilla, sin build) que va desde fundamentos de backend distribuido hasta el diseño técnico completo de una infraestructura tipo ChatGPT, más casos de estudio de Stripe y Cloudflare. WhatsApp, Twitter y Google Docs van en la Fase 2.
+Curso web interactivo (HTML/CSS/JS vanilla, sin build) que va desde fundamentos de backend distribuido hasta el diseño técnico completo de una infraestructura tipo ChatGPT, más casos de estudio de Stripe, Cloudflare y WhatsApp, cada uno con una sección final para armarlo sobre AWS. Twitter y Google Docs van en la Fase 2.
 
 ## Decisiones tomadas en la entrevista
 
@@ -9,7 +9,7 @@ Curso web interactivo (HTML/CSS/JS vanilla, sin build) que va desde fundamentos 
 | Nivel de partida | Backend intermedio: ya sabes hacer APIs REST, SQL y Docker |
 | Mapas | Canvas SVG con pan/zoom infinito, nodos clicables y simulación animada de requests |
 | Casos de estudio (Fase 1) | LLM serving / ChatGPT, pagos tipo Stripe, Cloudflare |
-| Casos de estudio (Fase 2) | WhatsApp, Twitter/X, Google Docs |
+| Casos de estudio (Fase 2) | Twitter/X, Google Docs (WhatsApp pasó a la Parte III como M29) |
 | Checkpoints | Progreso guardado en localStorage y un quiz por módulo |
 | Stack | Vanilla multi-archivo, que funciona con doble clic (`file://`) sin servidor |
 | Idioma | Español, con los términos técnicos en inglés y su definición la primera vez |
@@ -36,7 +36,7 @@ ia-system-desing/
 ├── index.html                  Portada: mapa del curso, progreso global, continuar donde quedaste
 ├── glosario.html               Glosario completo con buscador
 ├── modules/
-│   ├── m00-metodo.html … m28-cloudflare.html
+│   ├── m00-metodo.html … m29-whatsapp.html
 │   └── checkpoint-a.html, checkpoint-b.html, checkpoint-c.html
 ├── maps/
 │   ├── chatgpt.html            Mapa gigante explorable (pantalla completa)
@@ -144,13 +144,13 @@ Los datos van en archivos `.js` que se registran en `window.SD`. No uso JSON con
 |---|---|---|---|
 | M27 | **Pagos tipo Stripe** | Máquina de estados de un PaymentIntent, endpoints completos, **idempotency keys** implementadas de principio a fin (tabla, lock, fingerprint del body, respuesta cacheada, TTL, requests concurrentes con la misma key), **ledger de doble entrada** (esquema), dinero como enteros + moneda, flujo con redes de tarjetas (authorize → capture → settle), **webhooks** (firma HMAC, reintentos, dedupe del receptor, desorden), sagas y compensación, reconciliación diaria, tokenización y alcance PCI DSS, detección de fraude | Pago normal · doble clic del usuario · timeout después de que el banco cobró · webhook duplicado y desordenado · el banco no responde · reembolso parcial |
 | M28 | **Cloudflare** | Anycast + BGP, PoPs, DNS autoritativo, terminación TLS, WAF, mitigación DDoS L3/L4/L7, caché por niveles (tiered cache), Workers (V8 isolates vs contenedores), Workers KV (eventual), Durable Objects (un solo escritor), R2, propagación de configuración global, Argo smart routing, Zero Trust | Cache hit en el edge · miss → tier superior → origen · SYN flood · un PoP cae (BGP withdraw) · push de config global · Worker + Durable Object |
+| M29 | **WhatsApp** | Conexiones persistentes y gateways, registro de sesiones (dónde está cada usuario), buzones y store-and-forward, ACKs (enviado / entregado / leído), grupos con Sender Keys, cifrado E2E (Signal: X3DH, double ratchet), multidispositivo, media con URLs firmadas, push, tormentas de reconexión y despliegue con draining, más una sección final para armarlo sobre AWS |
 | **CP-C** | **Checkpoint C** | Examen final de la Fase 1 + diseñar la plataforma de pagos para el producto de IA del M21 | — |
 
 ### Fase 2 (después de terminar la Fase 1)
 
 | # | Módulo | Contenido clave |
 |---|---|---|
-| M29 | WhatsApp | Conexiones persistentes (WebSocket / MQTT-like), presencia, entrega y ACKs (enviado / entregado / leído), cifrado E2E (Signal protocol: X3DH, double ratchet), mensajes offline, grupos, media con signed URLs |
 | M30 | Twitter/X | Fan-out on write vs on read, timeline híbrido para celebridades, IDs Snowflake, contadores distribuidos, trending topics (streaming), búsqueda |
 | M31 | Google Docs | OT vs CRDT, servidor de sesión por documento, cursores y presencia, historial de versiones, comentarios, permisos |
 | CP-D | Checkpoint D | Examen + diseñar un Slack |
@@ -176,7 +176,7 @@ En cada checkpoint **me detengo** para que abras el sitio en el navegador y lo r
 | **CP7** | **Stripe** (módulo + mapa) | Los 6 escenarios, incluida la carrera de idempotencia |
 | **CP8** | **Cloudflare** (módulo + mapa) + **Checkpoint C** | Los 6 escenarios |
 | **CP9** | Pulido: búsqueda global, glosario completo, móvil, accesibilidad, revisión técnica cruzada | Lighthouse ≥ 90 en accesibilidad; el sitio funciona en el móvil |
-| **CP10–12** | Fase 2: WhatsApp, Twitter, Google Docs + Checkpoint D | — |
+| **CP10–12** | Fase 2: Twitter, Google Docs + Checkpoint D (WhatsApp ya está como M29) | — |
 
 ---
 

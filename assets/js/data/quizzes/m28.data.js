@@ -122,6 +122,91 @@ SD.defineQuiz('m28', {
       ],
       answer: 1,
       explain: 'Si la IP del origen se filtra, un atacante puede ir directo contra él. Con un túnel saliente, el origen no acepta conexiones de nadie.'
+    },
+    {
+      id: 'unimog', type: 'single',
+      prompt: 'Un servidor del PoP sale de rotación. ¿Cómo evita Unimog cortar sus conexiones abiertas?',
+      options: [
+        'No lo evita: las conexiones se cortan y los clientes reconectan.',
+        'El conductor lo pasa a la segunda ranura de sus buckets: no recibe conexiones nuevas, pero los paquetes de las que ya tenía siguen llegándole (segundo salto) hasta que terminan.',
+        'Copia el estado de cada conexión a otro servidor antes de sacarlo.',
+        'El router deja de repartir paquetes al PoP entero.'
+      ],
+      answer: 1,
+      explain: 'Cada bucket guarda el servidor actual y el anterior. El primer salto atiende los SYN y las conexiones que tiene; si no tiene el socket, pasa el paquete al segundo. Así se drena un servidor sin mover estado.'
+    },
+    {
+      id: 'k8s-workers', type: 'single',
+      prompt: '¿Qué diferencia hay entre desplegar un Deployment de Kubernetes con 6 réplicas y desplegar un Worker?',
+      options: [
+        'Ninguna: un Worker es un pod que Cloudflare escala solo.',
+        'En Kubernetes eliges cuántas réplicas hay y en qué nodos, y el scheduler las ubica antes de que llegue tráfico; en un Worker el código va a todos los servidores de todos los PoPs y el isolate se crea en el servidor al que llega cada request.',
+        'Los Workers corren solo en una región elegida por el cliente.',
+        'Los Workers usan una máquina virtual por cliente.'
+      ],
+      answer: 1,
+      explain: 'La decisión de dónde corre el código, que en Kubernetes toma el scheduler al desplegar, en Workers la toma anycast request por request. A cambio, el código corre en un isolate con límites de memoria y CPU, sin estado local.'
+    },
+    {
+      id: 'cold-start', type: 'single',
+      prompt: '¿Cómo evitan los Workers que el arranque en frío se note?',
+      options: [
+        'Mantienen todos los Workers cargados siempre en todos los servidores.',
+        'Empiezan a cargar el Worker cuando llega el primer mensaje del handshake TLS (que trae el nombre del sitio), y para los Workers pesados o poco usados dirigen las requests al servidor de casa del PoP, que ya los tiene calientes.',
+        'Cachean las respuestas del Worker en el navegador.',
+        'Reservan CPU para cada Worker aunque no reciba tráfico.'
+      ],
+      answer: 1,
+      explain: 'El isolate se prepara mientras el handshake termina, escondido detrás de un viaje de ida y vuelta que igual había que hacer. Cuando los Workers crecieron y perdían esa carrera, se sumó el reenvío al servidor de casa con hashing consistente, que cuesta menos de 1 ms.'
+    },
+    {
+      id: 'nov2025', type: 'multi',
+      prompt: 'El 18 de noviembre de 2025, un archivo generado automáticamente (características de bots) duplicó su tamaño, superó un límite del proxy y provocó errores 5xx. ¿Qué medidas evitarían algo parecido en tu sistema?',
+      options: [
+        'Validar los archivos generados por otros sistemas (tamaño, forma, cantidad de entradas) antes de distribuirlos, igual que una entrada de usuario.',
+        'Que un módulo que no puede leer su configuración nueva siga con la última versión buena en lugar de terminar el proceso.',
+        'Interruptores globales para apagar una función al instante y despliegue por etapas también de lo generado.',
+        'Regenerar el archivo con más frecuencia.',
+        'Quitar los límites de tamaño del proxy.'
+      ],
+      answer: [0, 1, 2],
+      explain: 'La configuración generada por una máquina es una entrada no confiable. Un error de datos no debería tumbar el proceso, y una función debería poder apagarse rápido. Regenerar más seguido o quitar límites solo habría propagado o empeorado el problema.'
+    },
+    {
+      id: 'containers', type: 'single',
+      prompt: 'Tu Worker necesita convertir video con FFmpeg. ¿Qué haces?',
+      options: [
+        'Compilas FFmpeg a JavaScript y lo corres dentro del Worker sin límites.',
+        'Derivas el trabajo a un contenedor que el Worker pide por ID: arranca bajo demanda en unos segundos, se apaga tras un tiempo sin uso, y el Worker atiende lo liviano.',
+        'Usas Workers KV para procesar el video.',
+        'Mantienes un clúster de Kubernetes con réplicas fijas en cada PoP.'
+      ],
+      answer: 1,
+      explain: 'Lo que no entra en un isolate (binarios nativos, más memoria) va a un contenedor, controlado desde el Worker. El costo es el arranque de segundos, así que el diseño natural es que el Worker responda rápido a lo que puede y derive solo lo que necesita.'
+    },
+    {
+      id: 'do-quorum', type: 'single',
+      prompt: 'Un Durable Object con almacenamiento SQLite confirma una escritura cuando...',
+      options: [
+        'La escribió en el disco de su máquina.',
+        'Al menos tres de los cinco seguidores, en centros de datos distintos, confirmaron haber guardado el log de la transacción: un quórum.',
+        'Todos los PoPs del mundo la recibieron.',
+        'Pasó un segundo desde la escritura.'
+      ],
+      answer: 1,
+      explain: 'Es el mismo principio de Raft (M06): con una mayoría que lo guardó, el dato sobrevive a la pérdida de una máquina o de un centro de datos. Las output gates impiden que alguien vea una respuesta antes de que la escritura sea durable.'
+    },
+    {
+      id: 'aws-anycast', type: 'single',
+      prompt: 'Quieres IPs anycast para tu clon en AWS sin operar BGP ni tener tu propio número de sistema autónomo. ¿Qué usas?',
+      options: [
+        'Route 53 con registros de latencia: son IPs anycast.',
+        'Global Accelerator: dos IPs anycast estáticas que llevan al usuario por la red de AWS hasta el endpoint sano más cercano.',
+        'Una Elastic IP por región.',
+        'CloudFront con el origen en un solo servidor.'
+      ],
+      answer: 1,
+      explain: 'Route 53 responde con la IP de una región (DNS, con TTL); una Elastic IP vive en una región. Global Accelerator anuncia sus IPs desde los bordes de AWS y hace el failover sin depender de TTL de DNS.'
     }
   ]
 });

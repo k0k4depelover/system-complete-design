@@ -313,7 +313,7 @@
       <p>Cuatro conclusiones salen de esta tabla y guían el resto de la Parte II:</p>
       <ul>
         <li><b>La entrada pesa más que la salida.</b> Se procesan ~7 veces más tokens de entrada que de salida, porque el historial se reenvía en cada turno. Por eso existen el prompt caching y el prefix caching (M15, M16).</li>
-        <li><b>El sobre pesa más que la carta.</b> Un token son ~4 bytes de texto, pero el evento SSE que lo transporta ronda los 150 bytes. El envoltorio multiplica el tráfico por ~35, y agrupar varios tokens por evento lo reduce (M17).</li>
+        <li><b>El sobre pesa más que la carta.</b> Un token son ~4 bytes de texto, pero el evento SSE que lo transporta ronda los 150 bytes, y pasa de 250 con el relleno contra canales laterales. El envoltorio multiplica el tráfico por 35 o más, y agrupar varios tokens por evento lo reduce (<a href="m17-api-streaming.html#sse-infra">M17</a>).</li>
         <li><b>42&#8239;000 conexiones abiertas</b> no es un problema de cómputo sino de memoria por conexión, timeouts de los balanceadores y reconexiones (M03).</li>
         <li><b>El almacenamiento es barato; la GPU no.</b> 438 TB al año es poco al lado de 2&#8239;100 GPUs. Casi todas las decisiones de la Parte II buscan exprimir más tokens por GPU.</li>
       </ul>

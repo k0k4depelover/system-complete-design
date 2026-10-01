@@ -3,7 +3,26 @@
 > Archivo de continuidad. Se actualiza al terminar cada módulo. Si la sesión se corta, una sesión nueva puede
 > retomar leyendo este archivo, `PLAN.md` (currículo completo) y una página ya hecha como plantilla (`modules/m00-metodo.html`).
 
-**Última actualización:** 2026-09-28. M16 terminado, M27 y M28 publicados. Parte II en pausa desde el M17; el trabajo está detenido esperando la revisión del usuario.
+**Última actualización:** 2026-09-30.
+
+**Pedidos vigentes del usuario (2026-09-30, segunda parte):**
+1. "Implementa el M17 y M18": **terminado.** M17 (API del LLM y streaming, 10 secciones, visor SSE y calculadora de streams) y M18 (cuotas por tokens, 9 secciones, dos simuladores y la calculadora de escrow, con la sección 18.8 de teoría distribuida aplicada al limitador) están publicados y probados.
+2. `CLAUDE.md` en la raíz, con reglas, catálogo de componentes y la estructura de `tree /f`: **hecho.** Se regenera la sección de estructura con `tree /f` al agregar archivos.
+3. "Profundiza mucho más en la teoría distribuida, eso es lo que más me interesa": **en curso.** Plan: ampliar el M06 en profundidad (secciones nuevas y más detalle en las actuales).
+4. "Agrega más ejercicios con solución como el del planificador de tareas, como quizzes interactivos con respuestas ya hechas": **en curso.** Plan: un componente de ejercicio guiado (`data-exercise`, escenario, decisiones con explicación y solución de referencia al final) que no cuenta para el checkpoint; primero en el M06 y el M18.
+
+**Pedido anterior del usuario (2026-09-30), terminado:**
+1. **M28 Cloudflare:** cómo corren los Workers comparados con Kubernetes, Lambda/microVMs y contenedores (sección 28.8, figura y tabla), más Unimog, Traffic Manager, Pingora, Durable Objects por dentro, Quicksilver y las caídas de 2019 y 2025.
+2. **M27 y M28, más profundidad:** M27 pasó de 12 a 18 secciones (3D Secure, límites de tasa, ISO 8583, ledger a fondo, disputas, payouts, migraciones y regiones, observabilidad); M28 pasó de 10 a 12.
+3. **M29 WhatsApp**, nuevo, en la Parte III: gateways de conexión, registro de sesiones, buzones, grupos, E2EE, multidispositivo, medios, push, tormenta de reconexión y despliegues.
+4. **Sección final "Impleméntalo tú mismo"** en los tres casos: tabla de servicios e instancias de AWS, figura de la arquitectura, orden de construcción y una calculadora de la factura mensual (`widgets/sim-infra.js`); el M29 suma otra calculadora para dimensionar la flota de gateways.
+5. **Arreglo de espaciado de Stripe:** el mapa del M27 y las figuras 27.2 quedaron sin avisos en la medición.
+
+**Revisión visual (2026-09-30):** las 21 figuras de M27 (9), M28 (6) y M29 (6) se capturaron en modo oscuro a 1440 px y a 390 px. En oscuro se ven bien todas (las figuras usan solo tokens `var(--…)`, sin colores fijos). En 390 px ninguna página desborda; las figuras se desplazan dentro de su marco (`min-width: 640px`, como en todo el sitio) y el texto más chico queda en 9,6 px (9,1 px en los ejes de la figura 29.5). Único arreglo: en la figura 27.2 la etiqueta "medio de pago" flotaba 37 px sobre su flecha; ahora tiene una guía punteada, como "captura manual".
+
+**Datos verificados en fuentes públicas (2026-09-30):** blogs de ingeniería de Cloudflare y Stripe, documentación de ambos, el documento técnico de cifrado de WhatsApp (feb. 2026), el artículo de multidispositivo de Meta, las charlas de escala de WhatsApp de 2012 y 2014, y precios y límites de AWS. Los precios del widget son de lista en us-east-1 y se pueden editar en pantalla.
+
+**Pedido anterior (2026-09-28):** M16 terminado, M27 y M28 publicados. Parte II en pausa desde el M17.
 **Pedido vigente del usuario (2026-09-28):** terminar lo que hubiera quedado a medias (era el M16) y, en lugar de seguir la Parte II, **implementar los casos de estudio M27 (pagos tipo Stripe) y M28 (Cloudflare)**. El resto de la Parte II (M17–M26, el mapa de ChatGPT y el Checkpoint B) queda **en pausa** hasta nuevo aviso.
 
 **Pedido anterior (2026-09-27, en pausa):** "Implementa CP-B": toda la Parte II de corrido.
@@ -22,9 +41,9 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 ## Dónde quedó el trabajo
 
 - **CP3 completo:** M06 a M11 y el Checkpoint A publicados, más el rediseño Apple y los enlaces automáticos a términos.
-- **Parte II:** M12 a M16 publicados; M17 a M26, el mapa y el CP-B en pausa.
-- **Casos de estudio:** M27 y M28 publicados. Falta el Checkpoint C, que no se pidió todavía.
-- **Siguiente:** esperar indicaciones del usuario (retomar la Parte II en el M17, o el Checkpoint C).
+- **Parte II:** M12 a M18 publicados; M19 a M26, el mapa y el CP-B en pausa.
+- **Casos de estudio:** M27 (Stripe), M28 (Cloudflare) y M29 (WhatsApp) publicados, con sus mapas embebidos. Falta el Checkpoint C, que no se pidió todavía.
+- **Siguiente:** esperar indicaciones del usuario (retomar la Parte II en el M17, el Checkpoint C, o la Fase 2: Twitter y Google Docs).
 
 ---
 
@@ -86,8 +105,8 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - [x] M14, cuantización: simulador que cuantiza 64 pesos a INT8, INT4, FP8 o FP4 por tensor o por grupo (`widgets/sim-quant.js`); tabla de impacto para el 70B.
 - [x] M15, motores de inferencia: simulador de static contra continuous batching y calculadora de speculative decoding (`widgets/sim-engine.js`); PagedAttention, prefix caching, chunked prefill, desagregación, paralelismo y configuración de vLLM.
 - [x] M16, context windows: estrategias de contexto sobre una conversación que no entra y calculadora del costo de una conversación con y sin prompt caching (`widgets/sim-context.js`).
-- [ ] M17, API del LLM y streaming SSE (visor de stream)
-- [ ] M18, rate limiting y cuotas por tokens (simulador TPM)
+- [x] M17, diseño de la API del LLM: endpoints y esquemas (chat, Responses, Messages, embeddings, archivos y batches), SSE a fondo con los tres formatos, infraestructura del streaming, cancelación hasta la GPU, streams reanudables, tool calling, salidas estructuradas, errores y un endpoint de referencia en Python. Visor de streams evento por evento y calculadora de streams abiertos (`widgets/sim-sse.js`), 6 figuras (`svg_m17.py` en el scratchpad), quiz de 9 y 6 términos nuevos; `sse` ahora apunta a `m17#sse`.
+- [x] M18, rate limiting y cuotas por tokens: dimensiones, estimar antes de saber, reservar y reconciliar con scripts de Lua, algoritmos, cuotas por niveles y headers, reparto justo, admission control y el limitador como problema distribuido (confluencia de invariantes, contador central, CRDT y escrow, CAP y PACELC, Redis Cluster, relojes, reconciliación exactamente una vez). Simuladores de reservas y de cuatro clientes sobre una flota, y calculadora de escrow (`widgets/sim-quota.js`, con la lógica en `SD.quotaCore`), 4 figuras (`svg_m18.py`), quiz de 9 y 13 términos nuevos.
 - [ ] M19, router y flota GPU
 - [ ] M20, el producto ChatGPT (árbol de mensajes)
 - [ ] M21, metering y facturación por uso
@@ -100,9 +119,12 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - [ ] Checkpoint B (`modules/checkpoint-b.html`)
 - [ ] Pasada final de la Parte II
 
-### Casos de estudio (M27 y M28 hechos el 2026-09-28)
+### Casos de estudio (M27 y M28 el 2026-09-28; ampliados y M29 el 2026-09-30)
 - [x] M27, pagos tipo Stripe: módulo de 12 secciones y mapa embebido `data/maps/m27-pagos.data.js` (16 nodos con sus 5 pestañas, 6 escenarios: pago, doble clic, timeout después de la aprobación, webhook duplicado y desordenado, emisor caído, reembolso parcial). Idempotency keys de referencia en Python, ledger con asientos verificados, webhooks, sagas, conciliación y PCI DSS; 13 términos nuevos en el glosario.
 - [x] M28, Cloudflare: módulo de 10 secciones y mapa embebido `data/maps/m28-cloudflare.data.js` (18 nodos con sus 5 pestañas, 6 escenarios: cache hit, miss con nivel superior, SYN flood, un PoP que cae, cambio de configuración global, Worker con Durable Object). Anycast y BGP, DDoS por capa, caché por niveles, isolates, KV contra Durable Objects contra R2 con PACELC, Quicksilver y Zero Trust; 11 términos nuevos y `deep` actualizado para `anycast`, `pop` y `cdn`.
+- [x] **Ampliación del 2026-09-30.** M27: 18 secciones y 10 escenarios (se suman 3D Secure, flash sale con límites, liquidación y contracargo); figuras de 3D Secure, capas de límites, disputas, migraciones y arquitectura en AWS. M28: 12 secciones y 8 escenarios (se suman el despliegue de un Worker y un Worker con un contenedor), nodo Contenedor en el mapa, mapa reacomodado con pasillos de 150 px; figuras de Unimog, Kubernetes contra Workers y la red de borde en AWS. Cada uno termina con "Impleméntalo tú mismo".
+- [x] **M29, WhatsApp:** módulo de 14 secciones, mapa `data/maps/m29-whatsapp.data.js` (14 nodos con sus 5 pestañas y 8 escenarios: mensaje con destinatario conectado, sin conexión, grupo de 256, primer mensaje con prekeys, foto, teléfono y computadora, caída de un gateway y despliegue con draining), 6 figuras, quiz de 16 preguntas y 10 términos nuevos (categoría "Mensajería en tiempo real"). Pasó de la Fase 2 a la Parte III en `course.data.js`.
+- [x] **Herramientas nuevas:** `widgets/sim-infra.js` (factura mensual estimada con presets m27, m28 y m29, y dimensionamiento de gateways), estilos `.bom-*` en `components.css`, y `tools/seqdiag.py` ahora angosta las cajas de los actores cuando hay más de cinco.
 
 ### Después (según PLAN.md)
 - Al retomar la Parte II: poner `deep` a los términos que se expliquen a fondo en M17–M26. (Los `deep` de `ledger`, `anycast`, `cdn` y `pop` ya apuntan a M27 y M28.)
@@ -110,7 +132,7 @@ enlazado** a su sección a fondo o al glosario (sin enlazar lo básico, como cac
 - CP5: M17–M22.
 - CP6: mapa gigante de ChatGPT (`maps/chatgpt.html`, 7 escenarios) y Checkpoint B.
 - CP7: Stripe. CP8: Cloudflare y Checkpoint C. CP9: pulido (búsqueda global, glosario, accesibilidad).
-- Fase 2: WhatsApp, Twitter y Google Docs, más el Checkpoint D.
+- Fase 2: Twitter y Google Docs, más el Checkpoint D (WhatsApp ya está como M29).
 
 ---
 

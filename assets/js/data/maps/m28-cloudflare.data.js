@@ -5,14 +5,15 @@ SD.defineMap('m28-cloudflare', {
   intro: 'Un usuario en Lisboa visita una tienda cuyo origen está en Virginia. Todo lo que ve pasa primero por el PoP de Cloudflare más cercano, donde cada servidor corre todos los servicios: DNS, filtro de paquetes, TLS, WAF, caché y Workers.',
   start: 'proxy',
   groups: [
-    { id: 'g-users', label: 'Internet', x: 20, y: 40, w: 230, h: 560 },
-    { id: 'g-pop', label: 'PoP de Lisboa: cada servidor corre todos los servicios', x: 280, y: 40, w: 840, h: 560 },
-    { id: 'g-far', label: 'Otros PoPs', x: 1150, y: 40, w: 290, h: 560 },
-    { id: 'g-origin', label: 'Origen del cliente (Virginia)', x: 1470, y: 40, w: 260, h: 560 },
-    { id: 'g-ctrl', label: 'Plano de control', x: 280, y: 630, w: 840, h: 170 }
+    { id: 'g-madrid', label: 'PoP de Madrid, el siguiente más cercano', x: 470, y: 40, w: 970, h: 150 },
+    { id: 'g-users', label: 'Internet', x: 20, y: 260, w: 300, h: 520 },
+    { id: 'g-pop', label: 'PoP de Lisboa: cada servidor corre todos los servicios', x: 470, y: 260, w: 970, h: 520 },
+    { id: 'g-far', label: 'Otros PoPs', x: 1590, y: 260, w: 300, h: 520 },
+    { id: 'g-origin', label: 'Origen del cliente (Virginia)', x: 2040, y: 260, w: 300, h: 520 },
+    { id: 'g-ctrl', label: 'Plano de control', x: 470, y: 860, w: 970, h: 170 }
   ],
   nodes: [
-    { id: 'user', layer: 'client', label: 'Usuario en Lisboa', sub: 'navegador', x: 135, y: 200,
+    { id: 'user', layer: 'client', label: 'Usuario en Lisboa', sub: 'navegador', x: 170, y: 400,
       info: {
         resp: '<p>Abre <code>tienda.example</code>. No sabe que hay una red de borde en el medio: resuelve el nombre, recibe una IP y se conecta a ella como a cualquier servidor.</p>',
         api: '<pre data-lang="http"><code>GET /catalogo.js HTTP/2\nHost: tienda.example\n\nHTTP/2 200\ncf-cache-status: HIT\ncf-ray: 8c3f2a1b9d0e4f5a-LIS\nage: 1843</code></pre>',
@@ -20,15 +21,15 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Si el PoP de Lisboa cae, la conexión abierta se corta y la siguiente llega sola a otro PoP (escenario "Un PoP deja de responder").</p>',
         nums: '<ul><li>Hasta el PoP: unos 8 ms de ida y vuelta. Hasta el origen en Virginia: más de 80 ms.</li></ul>'
       } },
-    { id: 'botnet', layer: 'external', label: 'Botnet', sub: 'miles de máquinas infectadas', x: 135, y: 440,
+    { id: 'botnet', layer: 'external', label: 'Botnet', sub: 'miles de máquinas infectadas', x: 170, y: 650,
       info: {
         resp: '<p>Dispositivos comprometidos (cámaras, routers, servidores mal configurados) que mandan tráfico al mismo destino a la vez: paquetes SYN falsos, UDP amplificado o requests HTTP que parecen legítimas.</p>',
         api: '<p>No pide nada útil: busca agotar el ancho de banda, las tablas de conexiones o la CPU del destino.</p>',
         data: '<p>Direcciones de origen falsificadas en los ataques de capa 3 y 4; direcciones reales, rotando, en los de capa 7.</p>',
         fail: '<p>El peligro es la concentración: contra un solo datacenter, un ataque de varios Tbps satura sus enlaces antes de llegar a los servidores.</p>',
-        nums: '<ul><li>Cloudflare ha reportado ataques récord de más de 7 Tbps en 2025. <span class="badge badge--doc">Documentado</span></li></ul>'
+        nums: '<ul><li>El récord publicado es de 31.4 Tbps, en el cuarto trimestre de 2025: duró 35 segundos y se mitigó sin intervención humana. En la primera mitad de 2026, 935 ataques de red superaron 1 Tbps. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'dns', layer: 'edge', label: 'DNS autoritativo', sub: 'responde una IP anycast', x: 420, y: 120,
+    { id: 'dns', layer: 'edge', label: 'DNS autoritativo', sub: 'responde una IP anycast', x: 615, y: 340,
       info: {
         resp: '<p>Responde las consultas DNS de los dominios de los clientes. Para un sitio protegido no devuelve la IP del origen sino una IP de Cloudflare, que es anycast: existe en todos los PoPs a la vez. El propio servicio DNS también es anycast.</p>',
         api: '<pre><code>$ dig +short tienda.example\n104.16.132.229\n104.16.133.229</code></pre>',
@@ -36,31 +37,31 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Esconder la IP del origen es parte de la protección: si se filtra, un atacante puede saltarse la red y atacarlo directo. Por eso el origen solo acepta tráfico de Cloudflare, o se conecta con un túnel saliente.</p>',
         nums: '<ul><li>TTL corto en las respuestas; responder desde el PoP más cercano tarda unos pocos milisegundos.</li></ul>'
       } },
-    { id: 'router', layer: 'edge', label: 'Router de borde', sub: 'anuncia el prefijo por BGP', x: 420, y: 300,
+    { id: 'router', layer: 'edge', label: 'Router de borde', sub: 'anuncia el prefijo por BGP', x: 615, y: 520,
       info: {
         resp: '<p>Anuncia por BGP los mismos prefijos IP que todos los demás PoPs. Cada red de internet manda los paquetes a la ruta que considera más corta, así que cada usuario llega a un PoP cercano sin que nadie elija por él. Cloudflare opera en más de 330 ciudades. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>anuncio BGP:  104.16.0.0/13  origen AS13335\n(el mismo anuncio sale de Lisboa, Madrid, Fráncfort, Ashburn…)</code></pre>',
         data: '<p>Tablas de rutas y sesiones BGP con los proveedores de tránsito y las redes con las que intercambia tráfico directo.</p>',
-        fail: '<p>Si el PoP tiene problemas, deja de anunciar el prefijo (BGP withdraw) y el tráfico converge hacia otro PoP en segundos. El reverso: un anuncio equivocado puede atraer tráfico que no debería, o hacerlo desaparecer.</p>',
-        nums: '<ul><li>La convergencia de BGP tras un withdraw tarda de segundos a unos pocos minutos según la red.</li></ul>'
+        fail: '<p>Si el PoP tiene problemas, deja de anunciar el prefijo (BGP withdraw) y el tráfico converge hacia otro PoP en segundos. El reverso: un anuncio equivocado puede atraer tráfico que no debería, o hacerlo desaparecer.</p><p>Anycast tampoco mira la carga: por eso Traffic Manager mide la CPU de cada PoP y, si pasa su umbral máximo, retira algunas rutas o reenvía un porcentaje de las conexiones a PoPs vecinos con capacidad (Plurimog y Duomog). <span class="badge badge--doc">Documentado</span></p>',
+        nums: '<ul><li>La convergencia de BGP tras un withdraw tarda de segundos a unos pocos minutos según la red.</li><li>Traffic Manager usa tres umbrales de CPU por PoP: máximo (empieza a actuar), objetivo (al que quiere volver) y aceptable (bajo el cual puede recibir tráfico de otros).</li></ul>'
       } },
-    { id: 'l4', layer: 'edge', label: 'Balanceo L4 y filtro', sub: 'XDP: descarta en el driver', x: 420, y: 480,
+    { id: 'l4', layer: 'edge', label: 'Balanceo L4 y filtro', sub: 'XDP: descarta en el driver', x: 615, y: 700,
       info: {
-        resp: '<p>Reparte las conexiones entre los servidores del PoP y descarta el tráfico de ataque. El balanceador L4 de Cloudflare, Unimog, corre en XDP (eBPF en el driver de red) en los mismos servidores que atienden requests, y usa hashing consistente para que todos los paquetes de una conexión lleguen al mismo servidor. <span class="badge badge--doc">Documentado</span></p>',
-        api: '<pre><code>programa XDP por paquete:\n  si coincide con una huella de ataque  → XDP_DROP\n  si es parte de una conexión           → servidor = tabla[hash(5-tupla)]\n  si no                                 → pila de red normal (SYN cookies bajo ataque)</code></pre>',
-        data: '<p>La tabla de servidores sanos del PoP y las reglas de descarte vigentes, publicadas por la detección de DDoS.</p>',
-        fail: '<p>Si un servidor sale de servicio, el hashing consistente solo mueve las conexiones de ese servidor: las demás siguen donde estaban.</p>',
-        nums: '<ul><li>XDP procesa millones de paquetes por segundo por núcleo: descartar en el driver cuesta mucho menos que dejar que el kernel arme la conexión.</li></ul>'
+        resp: '<p>Reparte las conexiones entre los servidores del PoP y descarta el tráfico de ataque. El balanceador L4 de Cloudflare, Unimog, corre en XDP (eBPF en el driver de red) en los mismos servidores que atienden requests: no hay una capa de balanceadores aparte. Cada conexión cae en un bucket de una tabla de reenvío según el hash de su 4-tupla; el bucket tiene dos ranuras, el servidor que recibe las conexiones nuevas y el anterior, que sigue atendiendo las ya abiertas. <span class="badge badge--doc">Documentado</span></p>',
+        api: '<pre><code>programa XDP por paquete:\n  si coincide con una huella de ataque  → XDP_DROP\n  si no                                 → bucket = tabla[hash(4-tupla)]\n     primer salto  = bucket.actual   (encapsula con GUE y le manda el paquete)\n     el primer salto atiende si es un SYN o si tiene el socket;\n     si no, lo pasa a bucket.anterior (segundo salto)</code></pre>',
+        data: '<p>La tabla de reenvío (más de 100 veces más buckets que servidores), igual en todos los servidores del PoP, y las reglas de descarte vigentes, publicadas por la detección de DDoS. Un proceso de control, el conductor, ajusta la tabla según la salud (Consul) y la CPU (Prometheus) de cada servidor.</p>',
+        fail: '<p>Si un servidor sale de servicio, el conductor lo pasa a la segunda ranura de sus buckets: no recibe conexiones nuevas, pero sigue atendiendo las que tenía hasta que terminan. Intercambiar las dos ranuras de un bucket nunca corta una conexión establecida.</p>',
+        nums: '<ul><li>XDP procesa millones de paquetes por segundo por núcleo: descartar en el driver cuesta mucho menos que dejar que el kernel arme la conexión.</li><li>El segundo salto lo necesitan normalmente menos del 1 % de los paquetes. El encapsulado agrega 36 bytes: un paquete de 1500 pasa a 1536, así que dentro del centro de datos se usan jumbo frames.</li></ul>'
       } },
-    { id: 'proxy', layer: 'service', label: 'Proxy HTTP', sub: 'TLS, WAF, caché, Workers', x: 700, y: 300,
+    { id: 'proxy', layer: 'service', label: 'Proxy HTTP', sub: 'TLS, WAF, caché, Workers', x: 940, y: 520,
       info: {
-        resp: '<p>Termina TLS, parsea la request HTTP y la hace pasar por la cadena de productos: WAF y bots, reglas del cliente, caché y Workers, y si hace falta la reenvía al nivel superior o al origen. Cloudflare reemplazó su proxy basado en NGINX por Pingora, un framework propio escrito en Rust. <span class="badge badge--doc">Documentado</span></p>',
+        resp: '<p>Termina TLS, parsea la request HTTP y la hace pasar por la cadena de productos: WAF y bots, reglas del cliente, caché y Workers, y si hace falta la reenvía al nivel superior o al origen. Cloudflare reemplazó su proxy basado en NGINX por Pingora, un framework propio escrito en Rust, con hilos que comparten un pool de conexiones hacia los orígenes: para un cliente grande, la reutilización pasó del 87.1 % al 99.92 %. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>cadena de una request:\n  TLS → reglas de seguridad (WAF, rate limiting, bots) → reglas del cliente\n      → Worker de la ruta (si hay) → caché → nivel superior → origen</code></pre>',
         data: '<p>La configuración de todas las zonas, leída de la réplica local de Quicksilver: ninguna request consulta un servicio central.</p>',
-        fail: '<p>Un error en la configuración o el código del proxy llega a todos los servidores del mundo a la vez: es el componente con mayor radio de impacto (escenario "Un cambio de configuración global").</p>',
-        nums: '<ul><li>Cloudflare atiende del orden de decenas de millones de requests HTTP por segundo en promedio.</li></ul>'
+        fail: '<p>Un error en la configuración o el código del proxy llega a todos los servidores del mundo a la vez: es el componente con mayor radio de impacto (escenario "Un cambio de configuración global"). El 18 de noviembre de 2025, un archivo de características de bots que duplicó su tamaño superó el límite de 200 que el proxy había reservado, y el módulo falló en lugar de ignorar el archivo nuevo: errores 5xx durante unas tres horas. <span class="badge badge--doc">Documentado</span></p>',
+        nums: '<ul><li>Cloudflare atiende del orden de 10 millones de requests HTTP por segundo en promedio (más de un billón, 10¹², por día). <span class="badge badge--doc">Documentado</span></li><li>Pingora usa cerca de 70 % menos CPU y 67 % menos memoria que el proxy anterior con el mismo tráfico.</li></ul>'
       } },
-    { id: 'waf', layer: 'service', label: 'WAF y bots', sub: 'reglas y puntaje de bots', x: 700, y: 120,
+    { id: 'waf', layer: 'service', label: 'WAF y bots', sub: 'reglas y puntaje de bots', x: 940, y: 340,
       info: {
         resp: '<p>Evalúa cada request contra reglas administradas (inyección SQL, XSS, vulnerabilidades conocidas), reglas del cliente y un puntaje de bot. Decide si deja pasar, bloquea, pide un desafío o limita la tasa.</p>',
         api: '<pre><code>regla del cliente (lenguaje de expresiones):\n  (http.request.uri.path eq "/login" and cf.bot_management.score lt 30)\n  → acción: managed_challenge</code></pre>',
@@ -68,7 +69,7 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>El 2 de julio de 2019, una regla nueva del WAF con una expresión regular de backtracking catastrófico se publicó en todo el mundo en segundos y agotó la CPU de los servidores durante 27 minutos. <span class="badge badge--doc">Documentado</span> Desde entonces, el motor de expresiones regulares limita el costo y las reglas se despliegan por etapas.</p>',
         nums: '<ul><li>La evaluación completa tiene que costar microsegundos: se hace en cada request.</li></ul>'
       } },
-    { id: 'cache', layer: 'cache', label: 'Caché del PoP', sub: 'SSD en cada servidor', x: 700, y: 480,
+    { id: 'cache', layer: 'cache', label: 'Caché del PoP', sub: 'SSD en cada servidor', x: 940, y: 700,
       info: {
         resp: '<p>Guarda las respuestas cacheables por su clave (host, ruta y los parámetros que el cliente elija) en los discos de los servidores del PoP. Si varias requests piden a la vez un objeto que no está, se hace un solo pedido hacia arriba y las demás esperan esa respuesta (request coalescing, M04).</p>',
         api: '<pre data-lang="http"><code>HTTP/2 200\ncache-control: public, max-age=3600, stale-while-revalidate=60\ncf-cache-status: MISS</code></pre>',
@@ -76,15 +77,15 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Una purga global vacía la caché de un objeto en todo el mundo en segundos; una purga de todo el sitio manda todo el tráfico al origen a la vez. Por eso se purga por URL o por etiqueta, no todo.</p>',
         nums: '<ul><li>Un HIT se sirve en milisegundos desde el PoP; un MISS suma el viaje al nivel superior o al origen.</li></ul>'
       } },
-    { id: 'worker', layer: 'service', label: 'Workers', sub: 'V8 isolates', x: 980, y: 300,
+    { id: 'worker', layer: 'service', label: 'Workers', sub: 'V8 isolates', x: 1265, y: 520,
       info: {
-        resp: '<p>Ejecuta el código JavaScript o WebAssembly del cliente en cada request de las rutas que elija. Cada Worker corre en un isolate de V8, el mismo mecanismo que aísla pestañas en Chrome: miles de isolates comparten un proceso, y arrancar uno cuesta milisegundos, no los cientos de milisegundos de un contenedor. <span class="badge badge--doc">Documentado</span></p>',
+        resp: '<p>Ejecuta el código JavaScript, TypeScript o WebAssembly del cliente en cada request de las rutas que elija. Cada Worker corre en un isolate de V8, el mismo mecanismo que aísla pestañas en Chrome: miles de isolates comparten un proceso del runtime (workerd), y arrancar uno cuesta milisegundos, no los cientos de milisegundos o los segundos de un contenedor. No hay réplicas, nodos ni autoscaling: el código está en todos los servidores de todos los PoPs y corre donde llega cada request. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>export default {\n  async fetch(request, env) {\n    const sala = env.SALAS.get(env.SALAS.idFromName("sala-42"));\n    return sala.fetch(request);        // al Durable Object de esa sala\n  },\n};</code></pre>',
-        data: '<p>Sin estado propio entre requests: usa KV, Durable Objects, R2 u otros servicios a través de <code>env</code>.</p>',
-        fail: '<p>Límites de CPU y memoria por request: un Worker que se pasa se corta, sin afectar a los demás isolates del proceso.</p>',
-        nums: '<ul><li>Cloudflare precalienta el isolate durante el handshake TLS, así el arranque en frío no se nota. <span class="badge badge--doc">Documentado</span></li></ul>'
+        data: '<p>Sin estado propio entre requests: usa KV, Durable Objects, R2 u otros servicios a través de <code>env</code>. Cada despliegue es una versión inmutable con sus bindings; con despliegues graduales, dos versiones reciben tráfico a la vez.</p>',
+        fail: '<p>Límites de CPU y memoria por request: un Worker que se pasa se corta, sin afectar a los demás isolates del proceso. El aislamiento entre clientes es por capas (sandbox de V8, procesos separados por nivel de confianza, sandbox del sistema operativo y defensas contra Spectre), y en 2026 se sumaron el V8 Sandbox y las claves de protección de memoria tras un ataque Spectre remoto demostrado por investigadores. <span class="badge badge--doc">Documentado</span></p>',
+        nums: '<ul><li>128 MB de memoria por isolate; CPU por request de 10 ms (plan gratuito) a 30 s por defecto (plan pago, hasta 5 minutos). <span class="badge badge--doc">Documentado</span></li><li>Cloudflare precalienta el isolate durante el handshake TLS y, para los Workers poco usados, dirige las requests al servidor de casa de cada Worker dentro del PoP: la tasa de requests atendidas en caliente pasó del 99.9 % al 99.99 %. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'kv', layer: 'db', label: 'Workers KV', sub: 'lecturas locales, eventual', x: 980, y: 480,
+    { id: 'kv', layer: 'db', label: 'Workers KV', sub: 'lecturas locales, eventual', x: 1265, y: 700,
       info: {
         resp: '<p>Almacenamiento clave-valor pensado para muchas lecturas y pocas escrituras: configuración, feature flags, redirecciones. Las lecturas se sirven desde el PoP; las escrituras van a un almacén central y se propagan. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>const flags = await env.CONFIG.get("flags", "json");\nawait env.CONFIG.put("flags", JSON.stringify(nuevos));</code></pre>',
@@ -92,7 +93,15 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Consistencia eventual: un cambio puede tardar un minuto o más en verse en otros lugares del mundo. <span class="badge badge--doc">Documentado</span> No sirve para contadores ni para nada que exija leer lo último que se escribió: para eso existen los Durable Objects.</p>',
         nums: '<ul><li>En PACELC es un sistema PA/EL: disponible y rápido, a costa de consistencia (M06).</li></ul>'
       } },
-    { id: 'madrid', layer: 'edge', label: 'PoP de Madrid', sub: 'toma el tráfico si Lisboa cae', x: 1295, y: 120,
+    { id: 'container', layer: 'service', label: 'Contenedor', sub: 'imagen propia, en segundos', x: 1265, y: 340,
+      info: {
+        resp: '<p>Cloudflare Containers: una imagen de contenedor normal (un binario nativo, FFmpeg, un lenguaje que no corre en isolates, más memoria) que corre en la red de Cloudflare. No hay clúster ni réplicas que declarar: el código de un Worker pide una instancia por un ID, la controla un Durable Object y se apaga tras un tiempo sin requests. Para cada ID distinto, Cloudflare crea una instancia nueva y le manda las requests. <span class="badge badge--doc">Documentado</span></p>',
+        api: '<pre><code>export class Conversor extends Container {\n  defaultPort = 8080;\n  sleepAfter = "10m";              // se apaga tras 10 minutos sin requests\n}\n\nexport default {\n  async fetch(request, env) {\n    const c = getContainer(env.CONVERSOR, "video-881");   // una instancia por ID\n    return c.fetch(request);                               // la arranca si estaba dormida\n  },\n};</code></pre>',
+        data: '<p>Disco efímero: se pierde cuando la instancia se apaga. Lo que importa se guarda en R2, KV o Durable Objects.</p>',
+        fail: '<p>Arrancar una instancia toma unos segundos, no milisegundos, así que la primera request tras un rato sin uso es lenta. En el lanzamiento (2025) no había autoscaling ni ruteo por latencia: la cantidad de instancias la decide el código del Worker. <span class="badge badge--doc">Documentado</span></p>',
+        nums: '<ul><li>Tres tamaños al lanzarse, de 256 MiB con 1/16 de vCPU a 4 GiB con 1/2 vCPU. <span class="badge badge--doc">Documentado</span></li><li>Se paga por el tiempo que la instancia está encendida: el <code>sleepAfter</code> es una decisión de costo.</li></ul>'
+      } },
+    { id: 'madrid', layer: 'edge', label: 'PoP de Madrid', sub: 'toma el tráfico si Lisboa cae', x: 630, y: 115,
       info: {
         resp: '<p>Otro PoP completo, con los mismos servicios y los mismos prefijos anycast. Para un usuario de Lisboa es la segunda opción: cuando Lisboa deja de anunciar sus rutas, sus paquetes llegan acá.</p>',
         api: '<p>La misma interfaz que cualquier PoP: nada que configurar para que tome el tráfico.</p>',
@@ -100,7 +109,7 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Si los dos PoPs cercanos caen, el tráfico sigue viajando al siguiente: la red degrada latencia, no disponibilidad.</p>',
         nums: '<ul><li>De Lisboa a Madrid, unos 10 ms más de ida y vuelta.</li></ul>'
       } },
-    { id: 'tier', layer: 'cache', label: 'Caché de nivel superior', sub: 'cerca del origen (Ashburn)', x: 1295, y: 300,
+    { id: 'tier', layer: 'cache', label: 'Caché de nivel superior', sub: 'cerca del origen (Ashburn)', x: 1740, y: 520,
       info: {
         resp: '<p>Con tiered cache, los PoPs no le piden al origen directamente: le piden a un PoP de nivel superior, elegido cerca del origen. Muchos PoPs comparten así una misma copia, la tasa de aciertos sube y al origen llega una fracción de las requests. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>PoP de Lisboa (MISS) → nivel superior en Ashburn (HIT o MISS) → origen en Virginia</code></pre>',
@@ -108,15 +117,15 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Si el nivel superior no responde, el PoP va directo al origen: la caché por niveles es una optimización, no una dependencia dura.</p>',
         nums: '<ul><li>Para contenido de cola larga, pasar de cientos de PoPs pidiendo al origen a unos pocos niveles superiores reduce las requests al origen en órdenes de magnitud.</li></ul>'
       } },
-    { id: 'dobj', layer: 'db', label: 'Durable Object', sub: 'un solo escritor, Fráncfort', x: 1295, y: 480,
+    { id: 'dobj', layer: 'db', label: 'Durable Object', sub: 'un solo escritor, Fráncfort', x: 1740, y: 700,
       info: {
-        resp: '<p>Una instancia única en el mundo por cada ID, con su propio almacenamiento transaccional. Todas las requests para "sala-42" llegan al mismo objeto, que las procesa de a una. Sirve para lo que KV no puede: contadores, salas de chat, sesiones colaborativas, rate limiting exacto. <span class="badge badge--doc">Documentado</span></p>',
+        resp: '<p>Una instancia única en el mundo por cada ID, con su propio almacenamiento transaccional. Todas las requests para "sala-42" llegan al mismo objeto, que las procesa de a una. Sirve para lo que KV no puede: contadores, salas de chat, sesiones colaborativas, rate limiting exacto. Las input gates impiden que otra request se intercale mientras el objeto espera al almacenamiento, y las output gates retienen las respuestas hasta que las escrituras previas son durables. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>export class Sala {\n  async fetch(request) {\n    const n = (await this.ctx.storage.get("mensajes")) ?? 0;\n    await this.ctx.storage.put("mensajes", n + 1);    // sin carreras: un solo hilo\n    return new Response(String(n + 1));\n  }\n}</code></pre>',
-        data: '<p>Almacenamiento propio del objeto, fuertemente consistente, persistido en el lugar donde vive.</p>',
-        fail: '<p>Vive en un solo lugar, cerca de donde se creó: un usuario lejano paga la distancia en cada request. Y un objeto muy cargado es un cuello de botella: se diseña con muchos objetos chicos (uno por sala), no uno global.</p>',
-        nums: '<ul><li>En PACELC es PC/EC: consistente siempre, a costa de latencia para quien está lejos (M06).</li></ul>'
+        data: '<p>Una base SQLite propia del objeto, en el mismo hilo que su código. Cada transacción confirmada se envía como log a cinco seguidores en otros centros de datos y se confirma cuando tres respondieron (un quórum). Con puntos de recuperación se puede volver a cualquier momento de los últimos 30 días. <span class="badge badge--doc">Documentado</span></p>',
+        fail: '<p>Vive en un solo lugar, cerca de donde se creó: un usuario lejano paga la distancia en cada request. Y un objeto muy cargado es un cuello de botella: se diseña con muchos objetos chicos (uno por sala), no uno global. Si su máquina cae, el objeto se vuelve a crear en otra, y sus requests esperan mientras tanto.</p>',
+        nums: '<ul><li>En PACELC es PC/EC: consistente siempre, a costa de latencia para quien está lejos (M06).</li><li>Una consulta a su SQLite local cuesta microsegundos; el viaje hasta el objeto, lo que tarde la red hasta su centro de datos.</li></ul>'
       } },
-    { id: 'origin', layer: 'external', label: 'Origen', sub: 'servidores de la tienda', x: 1600, y: 300,
+    { id: 'origin', layer: 'external', label: 'Origen', sub: 'servidores de la tienda', x: 2190, y: 520,
       info: {
         resp: '<p>Los servidores del cliente, donde vive la aplicación. Con la red delante, recibe solo lo que la caché no resolvió y lo que el WAF dejó pasar.</p>',
         api: '<p>HTTP normal. Recomendado: aceptar solo conexiones desde Cloudflare (listas de IPs o certificados de origen), o conectarse con Cloudflare Tunnel, que abre una conexión saliente y deja al origen sin ninguna IP pública. <span class="badge badge--doc">Documentado</span></p>',
@@ -124,7 +133,7 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Si el origen cae, la red puede seguir sirviendo contenido vencido de la caché (<code>stale-if-error</code>) mientras se recupera.</p>',
         nums: '<ul><li>Con buena caché, el origen recibe una fracción mínima del tráfico total del sitio.</li></ul>'
       } },
-    { id: 'r2', layer: 'db', label: 'R2', sub: 'objetos, sin costo de salida', x: 1600, y: 480,
+    { id: 'r2', layer: 'db', label: 'R2', sub: 'objetos, sin costo de salida', x: 2190, y: 700,
       info: {
         resp: '<p>Almacenamiento de objetos con API compatible con S3 y sin cargos por transferencia de salida. Se usa como origen de archivos grandes o como respaldo persistente de la caché. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>PUT https://&lt;cuenta&gt;.r2.cloudflarestorage.com/medios/video.mp4   (firmado con SigV4, M09)</code></pre>',
@@ -132,7 +141,7 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Las mismas prácticas del M09: URLs firmadas, claves con prefijos repartidos, ciclo de vida.</p>',
         nums: '<ul><li>Sin costo de salida, servir un archivo muy descargado cuesta lo mismo que guardarlo.</li></ul>'
       } },
-    { id: 'api', layer: 'service', label: 'API y panel', sub: 'cambios de configuración', x: 420, y: 715,
+    { id: 'api', layer: 'service', label: 'API y panel', sub: 'cambios de configuración', x: 615, y: 945,
       info: {
         resp: '<p>Donde los clientes cambian su configuración: registros DNS, reglas del WAF, rutas de Workers, purgas de caché. Valida cada cambio y lo escribe en el almacén de configuración.</p>',
         api: '<pre data-lang="http"><code>POST /client/v4/zones/{zone_id}/rulesets/{ruleset_id}/rules HTTP/1.1\nHost: api.cloudflare.com\nAuthorization: Bearer …\n\n{"expression": "http.request.uri.path eq \\"/login\\"", "action": "managed_challenge"}</code></pre>',
@@ -140,21 +149,21 @@ SD.defineMap('m28-cloudflare', {
         fail: '<p>Si el plano de control cae, los clientes no pueden cambiar nada, pero el tráfico sigue funcionando con la última configuración: el plano de datos no depende de él en cada request.</p>',
         nums: '<ul><li>Millones de zonas y una cantidad enorme de cambios de configuración por día.</li></ul>'
       } },
-    { id: 'qs', layer: 'db', label: 'Quicksilver', sub: 'config en cada servidor', x: 700, y: 715,
+    { id: 'qs', layer: 'db', label: 'Quicksilver', sub: 'config en cada servidor', x: 940, y: 945,
       info: {
-        resp: '<p>El sistema de Cloudflare que distribuye la configuración: un almacén clave-valor replicado en cada servidor de cada PoP, que recibe los cambios en segundos. Cada servidor lee su copia local, sin consultar a nadie en cada request. <span class="badge badge--doc">Documentado</span></p>',
-        api: '<pre><code>escritura: plano de control → raíz de replicación → PoPs → cada servidor\nlectura:   el proxy lee la clave de la zona en su réplica local (microsegundos)</code></pre>',
+        resp: '<p>El sistema de Cloudflare que distribuye la configuración: un almacén clave-valor replicado en cada servidor de cada PoP, que recibe los cambios en segundos. Cada servidor lee su copia local (en una base embebida: RocksDB en la versión actual, LMDB en la primera), sin consultar a nadie en cada request. <span class="badge badge--doc">Documentado</span></p>',
+        api: '<pre><code>escritura: plano de control → nodos raíz (centros de datos grandes)\n           → nodos intermedios (centros más chicos) → hojas (cada servidor)\n           replicación asíncrona: un servidor lento no frena a los demás\nlectura:   el proxy lee la clave de la zona en su réplica local (microsegundos)</code></pre>',
         data: '<p>Toda la configuración de todas las zonas, en cada servidor.</p>',
         fail: '<p>Su virtud es su riesgo: un cambio malo también llega a todo el mundo en segundos. La defensa está antes (validación, despliegue por etapas) y después (rollback rápido y un interruptor para apagar la función nueva).</p>',
         nums: '<ul><li>Segundos para que un cambio llegue a todos los servidores del mundo.</li></ul>'
       } },
-    { id: 'dosd', layer: 'service', label: 'Detección de DDoS', sub: 'muestras y reglas automáticas', x: 980, y: 715,
+    { id: 'dosd', layer: 'service', label: 'Detección de DDoS', sub: 'muestras y reglas automáticas', x: 1265, y: 945,
       info: {
-        resp: '<p>Muestrea el tráfico que llega a cada servidor, busca patrones comunes en los paquetes de ataque (puertos, flags, tamaños, campos de cabecera) y genera una huella que se convierte en una regla de descarte en XDP, sin intervención humana. En Cloudflare corre en cada servidor, con una vista global además. <span class="badge badge--doc">Documentado</span></p>',
-        api: '<pre><code>muestra de paquetes → huella: tcp.flags == SYN &amp;&amp; ip.ttl in [52..58] &amp;&amp; pkt.len == 60\n                    → regla XDP_DROP publicada al PoP (o a todo el mundo)</code></pre>',
+        resp: '<p>Muestrea el tráfico que llega a cada servidor, busca patrones comunes en los paquetes de ataque (puertos, flags, tamaños, campos de cabecera) y genera una huella que se convierte en una regla de descarte en XDP, sin intervención humana. En Cloudflare son dos sistemas: dosd corre en cada servidor y decide por su cuenta, sin consenso central; Gatebot corre en el centro de datos principal, recibe muestras de todos los PoPs y manda reglas a todos, con prioridad sobre las de dosd. <span class="badge badge--doc">Documentado</span></p>',
+        api: '<pre><code>muestra de paquetes → huella: tcp.flags == SYN &amp;&amp; ip.ttl in [52..58] &amp;&amp; pkt.len == 60\n                    → regla XDP_DROP publicada al PoP (dosd) o a todo el mundo (Gatebot)</code></pre>',
         data: '<p>Muestras recientes de paquetes y el historial de huellas por destino.</p>',
-        fail: '<p>Una huella demasiado amplia descarta tráfico legítimo: las reglas se prueban contra el tráfico reciente y se ajustan antes de endurecerse.</p>',
-        nums: '<ul><li>De la detección a la mitigación, segundos.</li></ul>'
+        fail: '<p>Una huella demasiado amplia descarta tráfico legítimo: las reglas se prueban contra el tráfico reciente y se ajustan antes de endurecerse. Para redes protegidas con Magic Transit, donde el tráfico de ida y de vuelta viaja por caminos distintos, flowtrackd sigue el estado de las conexiones TCP y descarta las que no encajan.</p>',
+        nums: '<ul><li>De la detección a la mitigación, segundos, sin intervención humana. <span class="badge badge--doc">Documentado</span></li></ul>'
       } }
   ],
   edges: [
@@ -167,14 +176,15 @@ SD.defineMap('m28-cloudflare', {
     { id: 'e7', from: 'proxy', to: 'cache', both: true },
     { id: 'e8', from: 'proxy', to: 'worker', both: true },
     { id: 'e9', from: 'worker', to: 'kv', both: true },
-    { id: 'e10', from: 'worker', to: 'dobj', both: true, label: 'al objeto sala-42' },
+    { id: 'e10', from: 'worker', to: 'dobj', both: true, label: 'objeto sala-42' },
     { id: 'e11', from: 'cache', to: 'tier', both: true, label: 'MISS' },
     { id: 'e12', from: 'tier', to: 'origin', both: true },
-    { id: 'e13', from: 'user', to: 'madrid', both: true, bend: -120, label: 'tras el withdraw' },
+    { id: 'e13', from: 'user', to: 'madrid', both: true, label: 'tras el withdraw' },
     { id: 'e14', from: 'api', to: 'qs', async: true, label: 'cambio' },
-    { id: 'e15', from: 'qs', to: 'proxy', async: true, bend: -150, label: 'réplica en segundos' },
+    { id: 'e15', from: 'qs', to: 'proxy', async: true, bend: 308, label: 'réplica en segundos', labelAt: 0.27 },
     { id: 'e16', from: 'l4', to: 'dosd', both: true, async: true, label: 'muestras y reglas' },
-    { id: 'e17', from: 'tier', to: 'r2', both: true, bend: 30 }
+    { id: 'e17', from: 'tier', to: 'r2', both: true, bend: 30 },
+    { id: 'e18', from: 'worker', to: 'container', both: true, label: 'trabajo pesado' }
   ],
   scenarios: [
     {
@@ -200,7 +210,7 @@ SD.defineMap('m28-cloudflare', {
       steps: [
         { from: 'proxy', to: 'cache', kind: 'req', tag: 'GET /producto/88.jpg', ms: 0.5, title: 'Busca en la caché', text: '' },
         { from: 'cache', to: 'proxy', kind: 'fail', tag: 'MISS', ms: 0.5, title: 'No está en Lisboa', text: 'Si llegan otras requests por el mismo objeto mientras tanto, esperan esta misma búsqueda: un solo pedido hacia arriba.' },
-        { from: 'cache', to: 'tier', kind: 'req', tag: '¿lo tenés?', ms: 40, title: 'Pregunta al nivel superior', text: 'Un PoP en Ashburn, elegido por su cercanía al origen. La conexión entre PoPs ya está abierta: no hay handshakes que pagar.' },
+        { from: 'cache', to: 'tier', kind: 'req', tag: '¿lo tienes?', ms: 40, title: 'Pregunta al nivel superior', text: 'Un PoP en Ashburn, elegido por su cercanía al origen. La conexión entre PoPs ya está abierta: no hay handshakes que pagar.' },
         { at: 'tier', kind: 'fail', ms: 0.5, title: 'MISS también arriba', text: 'Es la primera request por este objeto en toda la región.' },
         { from: 'tier', to: 'origin', kind: 'req', tag: 'GET', ms: 2, title: 'El nivel superior pide al origen', text: 'Desde Ashburn, el origen en Virginia está a un par de milisegundos.' },
         { from: 'origin', to: 'tier', kind: 'res', tag: '200 · 180 kB', ms: 30, title: 'El origen responde', text: 'El nivel superior guarda una copia.' },
@@ -264,6 +274,40 @@ SD.defineMap('m28-cloudflare', {
         { from: 'dobj', to: 'worker', kind: 'res', tag: 'mensaje 1337', ms: 25, title: 'Responde con el número del mensaje', text: 'Y avisa a los demás miembros conectados por WebSocket, que también están conectados a este objeto.' },
         { from: 'worker', to: 'proxy', kind: 'res', tag: '201', ms: 0.2, title: 'El Worker responde', text: '' },
         { from: 'router', to: 'user', kind: 'res', tag: '201', ms: 4, title: 'Mensaje enviado', text: 'Unos 60 ms: la mayoría es el viaje a Fráncfort. El precio de un solo escritor es la distancia.' }
+      ]
+    },
+    {
+      id: 'deploy-worker', title: 'Despliegue de un Worker',
+      desc: 'Un cliente sube una versión nueva de su Worker. No hay réplicas que programar ni nodos que elegir: el código llega a todos los servidores y se carga cuando llega la primera request.',
+      steps: [
+        { at: 'api', kind: 'info', ms: 400, title: 'wrangler deploy', text: 'Empaqueta el código con sus dependencias y lo sube junto con su configuración: rutas, bindings y fecha de compatibilidad. No hay imagen de contenedor ni sistema operativo que empaquetar.' },
+        { from: 'api', to: 'qs', kind: 'async', tag: 'versión 42', ms: 50, title: 'Guarda una versión inmutable', text: 'Con despliegues graduales, la versión nueva puede recibir un porcentaje del tráfico mientras la anterior atiende el resto.' },
+        { from: 'qs', to: 'proxy', kind: 'async', tag: 'réplica', ms: 3000, title: 'Llega a cada servidor en segundos', text: 'La misma réplica de configuración que usa el WAF. Nadie decide en qué servidores va a correr el código: va a todos.' },
+        { at: 'proxy', kind: 'info', ms: 0.01, title: 'Todavía no corre nada', text: 'El servidor solo sabe que la ruta tiene un Worker y qué versión le toca. El isolate se crea cuando hace falta.' },
+        { from: 'user', to: 'router', kind: 'req', tag: 'SYN', ms: 4, title: 'Llega la primera request', text: 'Un usuario de Lisboa. Para este servidor, es la primera vez que ve este Worker.' },
+        { from: 'router', to: 'l4', kind: 'req', tag: '', ms: 0.05, title: 'Al servidor de la conexión', text: '' },
+        { from: 'l4', to: 'proxy', kind: 'req', tag: 'ClientHello (SNI)', ms: 4, title: 'El primer mensaje TLS trae el nombre del sitio', text: 'El SNI dice qué sitio quiere el usuario, antes de que la request exista.' },
+        { from: 'proxy', to: 'worker', kind: 'req', tag: 'precalentar', ms: 5, title: 'Crea el isolate mientras el handshake termina', text: 'Carga y compila el código en un isolate nuevo. El arranque en frío queda escondido detrás de un viaje de ida y vuelta que igual había que hacer.' },
+        { at: 'proxy', kind: 'info', ms: 1, title: 'Si el Worker es pesado o poco usado', text: 'Cuando el arranque no cabe dentro del handshake, el servidor reenvía la request a su servidor de casa dentro del PoP, elegido con un anillo de hashing consistente sobre el Worker, que ya lo tiene caliente. Cuesta menos de 1 ms.' },
+        { from: 'proxy', to: 'worker', kind: 'req', tag: 'fetch', ms: 0.5, title: 'Llega la request al isolate', text: 'Ya cargado. Los isolates que no se usan se desalojan cuando hace falta memoria, así que el estado no puede vivir acá.' },
+        { from: 'worker', to: 'proxy', kind: 'res', tag: '200', ms: 1, title: 'El Worker responde', text: '' },
+        { from: 'router', to: 'user', kind: 'res', tag: '200', ms: 4, title: 'El usuario no notó el arranque', text: 'El despliegue llegó a todo el mundo en segundos, sin réplicas ni autoscaling. Comparado con Kubernetes: sin scheduler, sin descarga de imagen, sin readiness probe.' }
+      ]
+    },
+    {
+      id: 'container', title: 'Worker con un contenedor',
+      desc: 'Un usuario pide convertir un video. El Worker atiende lo rápido y deriva el trabajo pesado a un contenedor, que arranca bajo demanda.',
+      steps: [
+        { from: 'user', to: 'router', kind: 'req', tag: 'POST /convertir', ms: 4, title: 'Llega la request', text: '' },
+        { from: 'router', to: 'l4', kind: 'req', tag: '', ms: 0.05, title: 'Al servidor de la conexión', text: '' },
+        { from: 'l4', to: 'proxy', kind: 'req', tag: 'HTTP', ms: 0.2, title: 'El proxy ve una ruta con Worker', text: '' },
+        { from: 'proxy', to: 'worker', kind: 'req', tag: 'fetch', ms: 0.5, title: 'Corre el Worker', text: 'Valida la sesión y el tamaño del archivo en milisegundos.' },
+        { from: 'worker', to: 'container', kind: 'req', tag: 'getContainer("video-881")', ms: 5, title: 'Pide la instancia por su ID', text: 'No elige región ni tamaño de clúster. Si no hay una instancia con ese ID, Cloudflare la crea en una ubicación donde ya tiene contenedores preparados.' },
+        { at: 'container', kind: 'fail', ms: 3000, title: 'Arranque en frío: segundos', text: 'Una imagen de contenedor no es un isolate: arrancarla toma segundos. Por eso el Worker responde rápido a lo liviano y solo deriva lo que necesita el contenedor.' },
+        { from: 'container', to: 'worker', kind: 'res', tag: 'video convertido', ms: 800, title: 'El contenedor termina', text: 'Las siguientes requests con el mismo ID van a la misma instancia mientras siga encendida.' },
+        { from: 'worker', to: 'proxy', kind: 'res', tag: '200', ms: 0.2, title: 'El Worker responde', text: '' },
+        { from: 'router', to: 'user', kind: 'res', tag: '200', ms: 4, title: 'El usuario recibe el resultado', text: 'La primera vez tardó unos 4 segundos; las siguientes, lo que tarde la conversión.' },
+        { at: 'container', kind: 'info', ms: 1, title: 'sleepAfter: se apaga', text: 'Tras 10 minutos sin requests, la instancia se apaga y deja de cobrar. Su disco es efímero: lo que importe ya estaba en R2.' }
       ]
     }
   ]

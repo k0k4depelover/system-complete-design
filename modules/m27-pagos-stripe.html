@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M27. Pagos tipo Stripe</title>
-<meta name="description" content="Caso de estudio completo de un procesador de pagos: dinero como enteros, máquina de estados del PaymentIntent, API, idempotency keys de principio a fin, ledger de doble entrada, autorizar, capturar y liquidar con la red de tarjetas, webhooks, sagas, conciliación, PCI DSS y fraude, con un mapa explorable de seis escenarios.">
+<meta name="description" content="Caso de estudio completo de un procesador de pagos: dinero como enteros, máquina de estados del PaymentIntent, 3D Secure, API y límites de tasa, idempotency keys de principio a fin, ledger de doble entrada, mensajes ISO 8583, webhooks, sagas, disputas, pagos a comercios, conciliación, PCI DSS, fraude, migraciones sin cortes y cómo armarlo en AWS, con un mapa explorable de diez escenarios.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -38,11 +38,11 @@
 
       <header class="title-block">
         <h1>Pagos tipo Stripe</h1>
-        <p class="lead">En casi todo el software, un error se arregla con un deploy. En pagos, un error cobra dos veces a alguien, o le paga a un comercio dinero que nunca llegó. Este caso de estudio arma un procesador de pagos al estilo de Stripe pieza por pieza, y muestra qué hace cada una cuando algo falla a mitad de camino.</p>
+        <p class="lead">En casi todo el software, un error se arregla con un deploy. En pagos, un error cobra dos veces a alguien, o le paga a un comercio dinero que nunca llegó. Este caso de estudio arma un procesador de pagos al estilo de Stripe pieza por pieza, muestra qué hace cada una cuando algo falla a mitad de camino, y termina con cómo lo construirías tú sobre AWS y cuánto costaría.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M27</dd></div>
           <div><dt>Parte</dt><dd>III. Casos de estudio</dd></div>
-          <div><dt>Duración</dt><dd>120 min</dd></div>
+          <div><dt>Duración</dt><dd>210 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M02, M05, M07, M08</dd></div>
           <div><dt>Estado</dt><dd data-status="m27">Sin empezar</dd></div>
         </dl>
@@ -51,11 +51,15 @@
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
           <li>Recorrer un pago con tarjeta de punta a punta y decir quién interviene y cuándo se mueve el dinero.</li>
-          <li>Representar dinero sin errores y modelar un pago como una máquina de estados.</li>
+          <li>Representar dinero sin errores y modelar un pago como una máquina de estados, con 3D Secure incluido.</li>
+          <li>Proteger una API de pagos con límites de tasa, de concurrencia y descarte por prioridad.</li>
           <li>Implementar idempotency keys completas: fingerprint, lock, respuesta guardada, recuperación y vencimiento.</li>
-          <li>Diseñar un ledger de doble entrada y una conciliación diaria que lo mantenga honesto.</li>
+          <li>Diseñar un ledger de doble entrada con saldos pendientes y disponibles, sin cuentas calientes.</li>
+          <li>Leer un mensaje ISO 8583 y explicar qué hace cada campo en una autorización, una reversa y una disputa.</li>
           <li>Recibir webhooks duplicados y desordenados sin romper nada, y coordinar pasos con sagas.</li>
-          <li>Reducir el alcance de PCI DSS con tokenización y entender dónde entra el fraude.</li>
+          <li>Manejar disputas, pagos a comercios y una conciliación diaria que mantenga honesto al ledger.</li>
+          <li>Reducir el alcance de PCI DSS, detectar fraude y migrar datos sin cortar el servicio.</li>
+          <li>Armar tu propio procesador sobre AWS: con qué servicios e instancias, y cuánto costaría.</li>
         </ul>
       </section>
 
@@ -113,14 +117,16 @@
         <figcaption><b>Figura 27.1.</b> El <dfn data-term="emisor-adquirente">emisor</dfn> es el banco del titular de la tarjeta y el adquirente es el banco del lado del comercio. Casi todos los problemas de diseño de este módulo vienen de que la autorización y el dinero están separados en el tiempo.</figcaption>
       </figure>
 
+      <p>Para tener la escala en la cabeza: Stripe informó 1.4 billones de dólares de volumen procesado en 2024, y su ledger recibe del orden de cinco mil millones de eventos por día. <span class="badge badge--doc">Documentado</span> Un procesador mediano, de 100 pagos por segundo en promedio y 500 en el pico, ya toca seis o siete sistemas por pago, escribe más de una docena de filas en varias bases y no puede perder ninguna. Los números concretos aparecen en la sección 27.16.</p>
+
       <aside class="callout callout--def">
         <p class="callout-label">Qué es documentado y qué no</p>
-        <p>La API de Stripe, su comportamiento con las idempotency keys, sus webhooks y sus estados de pago están documentados públicamente, y los usamos como contrato: llevan la etiqueta <span class="badge badge--doc">Documentado</span>. Su arquitectura interna no lo está: los servicios, tablas y flujos internos de este módulo son una reconstrucción razonada de cómo se construye un sistema así, un <span class="badge badge--ref">Diseño de referencia</span>.</p>
+        <p>La API de Stripe, su comportamiento con las idempotency keys, sus límites de tasa, sus webhooks y sus estados de pago están documentados públicamente, y los usamos como contrato: llevan la etiqueta <span class="badge badge--doc">Documentado</span>. También lo están varias piezas de su ingeniería que Stripe contó en su blog: los cuatro limitadores de tasa, el versionado de la API por fecha, el Ledger, la base DocDB y las migraciones en línea. Su arquitectura interna completa no lo está: los servicios, tablas y flujos de este módulo son una reconstrucción razonada de cómo se construye un sistema así, un <span class="badge badge--ref">Diseño de referencia</span>.</p>
       </aside>
 
       <h2 id="mapa"><span class="sec-num">27.2</span>El mapa completo</h2>
 
-      <p>Explora el sistema antes de entrar en cada pieza. Cada nodo tiene su responsabilidad, su interfaz, su esquema, sus fallas y sus números; cada escenario muestra un pago viajando paso a paso, incluidos los que salen mal.</p>
+      <p>Explora el sistema antes de entrar en cada pieza. Cada nodo tiene su responsabilidad, su interfaz, su esquema, sus fallas y sus números; cada escenario muestra un pago viajando paso a paso, incluidos los que salen mal: un doble clic, un timeout después de que el banco aprobó, un webhook fuera de orden, un emisor caído, un pago con 3D Secure, una oleada de tráfico, la liquidación del día y un contracargo.</p>
 
       <div data-map="m27-pagos"></div>
 
@@ -129,11 +135,24 @@
       <p>El primer error de cualquier sistema de pagos es guardar el dinero como número de punto flotante. En binario, 0.1 no tiene representación exacta: <code>0.1 + 0.2</code> da <code>0.30000000000000004</code>, y esos restos se acumulan en millones de operaciones. La regla es guardar enteros en <dfn data-term="unidades-menores">unidades menores</dfn>: 49.90 EUR se guardan como <code>4990</code> céntimos, siempre junto a su moneda. Stripe recibe los montos así. <span class="badge badge--doc">Documentado</span></p>
 
       <ul>
-        <li><b>Las monedas no tienen todas dos decimales.</b> El yen japonés no tiene decimales: <code>amount=500</code> son 500 yenes. Algunas, como el dinar kuwaití, tienen tres. La cantidad de decimales es un dato de cada moneda, no una constante del código.</li>
+        <li><b>Las monedas no tienen todas dos decimales.</b> El yen japonés no tiene decimales: <code>amount=500</code> son 500 yenes. El dinar kuwaití tiene tres. La cantidad de decimales es un dato de cada moneda (el exponente de ISO 4217), no una constante del código. Hay casos históricos: Stripe representa la corona islandesa (ISK) y el chelín ugandés (UGX) con dos decimales aunque no tienen fracciones, así que <code>amount=500</code> son 5 ISK. <span class="badge badge--doc">Documentado</span></li>
         <li><b>Un monto sin moneda no es un monto.</b> Toda columna de dinero va acompañada de su moneda, y nunca se suman importes de monedas distintas.</li>
-        <li><b>Los redondeos se deciden y se documentan.</b> Repartir 100 céntimos entre 3 da 33 + 33 + 34: el resto se asigna explícitamente a alguien. Una comisión del 1.5&#8239;% + 0.25 EUR sobre 4990 son 99.85 céntimos: el sistema define si cobra 99 o 100 y lo aplica siempre igual.</li>
+        <li><b>Hay mínimos y máximos.</b> Stripe exige un mínimo por cobro para que su comisión no supere el monto (0.50 USD o EUR, 0.30 GBP, 50 JPY), y en tarjetas admite hasta 12 dígitos. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Los redondeos se deciden y se documentan.</b> Repartir 100 céntimos entre 3 da 34 + 33 + 33: el resto se asigna explícitamente. Una comisión del 1.5&#8239;% + 0.25 EUR sobre 4990 son 99.85 céntimos: el sistema define si cobra 99 o 100 y lo aplica siempre igual.</li>
         <li><b>Las conversiones guardan todo.</b> Monto original, moneda original, tasa usada, monto convertido y la hora de la tasa: sin eso, la conciliación no puede explicar diferencias.</li>
       </ul>
+
+<pre data-lang="python"><code>def repartir(total: int, partes: int) -> list[int]:
+    """Reparte `total` unidades menores sin perder ni inventar ninguna."""
+    base, resto = divmod(total, partes)
+    return [base + (1 if i &lt; resto else 0) for i in range(partes)]
+
+def comision(monto: int, porcentaje_milesimas: int = 15, fija: int = 25) -> int:
+    """1.5 % + 0.25 EUR, con redondeo explícito: mitades hacia arriba."""
+    return (monto * porcentaje_milesimas + 500) // 1000 + fija
+
+assert repartir(100, 3) == [34, 33, 33] and sum(repartir(100, 3)) == 100
+assert comision(4990) == 100          # 74.85 redondea a 75, más 25</code></pre>
 
       <h2 id="paymentintent"><span class="sec-num">27.4</span>La máquina de estados del PaymentIntent</h2>
 
@@ -141,7 +160,7 @@
 
       <figure class="figure">
         <div class="figure-frame">
-<svg viewBox="0 0 770 330" role="img" aria-labelledby="f272t f272d">
+<svg viewBox="0 0 770 350" role="img" aria-labelledby="f272t f272d">
 <title id="f272t">Estados de un PaymentIntent</title>
 <desc id="f272d">Un PaymentIntent nace en requires_payment_method. Con un medio de pago pasa a requires_confirmation, y al confirmarse puede ir a requires_action si el banco pide 3D Secure, o a processing. De processing termina en succeeded, en requires_capture si la captura es manual, o vuelve a requires_payment_method si el pago falla. Desde requires_capture se captura a succeeded o se cancela. Se puede cancelar mientras no haya terminado.</desc>
 <defs><marker id="f272a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
@@ -160,31 +179,32 @@
 <rect class="dg-box" x="540" y="170" width="210" height="46" rx="23"/>
 <text class="dg-label" x="645.0" y="190" text-anchor="middle" style="font-family: var(--f-mono); font-size: 12.5px">requires_capture</text>
 <text class="dg-tiny" x="645.0" y="206" text-anchor="middle">autorizado, sin capturar</text>
-<rect class="dg-ok" x="540" y="270" width="210" height="46" rx="23"/>
-<text class="dg-label" x="645.0" y="290" text-anchor="middle" style="font-family: var(--f-mono); font-size: 12.5px">succeeded</text>
-<text class="dg-tiny" x="645.0" y="306" text-anchor="middle">cobrado</text>
-<rect class="dg-bad" x="20" y="270" width="210" height="46" rx="23"/>
-<text class="dg-label" x="125.0" y="290" text-anchor="middle" style="font-family: var(--f-mono); font-size: 12.5px">canceled</text>
-<text class="dg-tiny" x="125.0" y="306" text-anchor="middle">anulado</text>
+<rect class="dg-ok" x="540" y="290" width="210" height="46" rx="23"/>
+<text class="dg-label" x="645.0" y="310" text-anchor="middle" style="font-family: var(--f-mono); font-size: 12.5px">succeeded</text>
+<text class="dg-tiny" x="645.0" y="326" text-anchor="middle">cobrado</text>
+<rect class="dg-bad" x="20" y="290" width="210" height="46" rx="23"/>
+<text class="dg-label" x="125.0" y="310" text-anchor="middle" style="font-family: var(--f-mono); font-size: 12.5px">canceled</text>
+<text class="dg-tiny" x="125.0" y="326" text-anchor="middle">anulado</text>
 <path class="dg-edge" d="M233 83 H277" marker-end="url(#f272a)"/>
-<text class="dg-tiny" x="255" y="50" text-anchor="middle">medio de pago</text>
+<text class="dg-tiny" x="255" y="46" text-anchor="middle">medio de pago</text>
+<path class="dg-feedback" d="M255 52 V81"/>
 <path class="dg-edge" d="M385 108 V167" marker-end="url(#f272a)"/>
 <text class="dg-tiny" x="392" y="142" text-anchor="start">confirmar</text>
 <path class="dg-edge" d="M493 83 H537" marker-end="url(#f272a)"/>
 <path class="dg-edge" d="M645 108 C 648 138, 485 138, 472 167" marker-end="url(#f272a)"/>
 <text class="dg-tiny" x="612" y="150" text-anchor="start">autenticó</text>
 <path class="dg-edge" d="M493 193 H537" marker-end="url(#f272a)"/>
-<text class="dg-tiny" x="515" y="236" text-anchor="middle">captura manual</text>
-<path class="dg-feedback" d="M515 226 V200"/>
-<path class="dg-edge" d="M645 218 V267" marker-end="url(#f272a)"/>
-<text class="dg-tiny" x="652" y="248" text-anchor="start">capturar</text>
-<path class="dg-edge" d="M440 218 C 470 252, 492 285, 537 292" marker-end="url(#f272a)"/>
-<text class="dg-tiny" x="430" y="264" text-anchor="end">captura automática</text>
+<text class="dg-tiny" x="515" y="242" text-anchor="middle">captura manual</text>
+<path class="dg-feedback" d="M515 230 V200"/>
+<path class="dg-edge" d="M645 218 V287" marker-end="url(#f272a)"/>
+<text class="dg-tiny" x="652" y="258" text-anchor="start">capturar</text>
+<path class="dg-edge" d="M440 218 C 470 262, 492 305, 537 312" marker-end="url(#f272a)"/>
+<text class="dg-tiny" x="430" y="278" text-anchor="end">captura automática</text>
 <path class="dg-edge" d="M277 186 C 212 186, 190 150, 190 110" marker-end="url(#f272a)"/>
 <text class="dg-tiny" x="180" y="150" text-anchor="end">el pago falla</text>
-<path class="dg-edge" d="M80 108 V268" marker-end="url(#f272a)"/>
-<text class="dg-tiny" x="88" y="200">cancelar</text>
-<text class="dg-tiny" x="20" y="30">Nombres de estado de la API de Stripe</text>
+<path class="dg-edge" d="M80 108 V288" marker-end="url(#f272a)"/>
+<text class="dg-tiny" x="88" y="206">cancelar</text>
+<text class="dg-tiny" x="20" y="22">Nombres de estado de la API de Stripe</text>
 </svg>
         </div>
         <figcaption><b>Figura 27.2.</b> Cada transición la dispara alguien concreto: el comercio (crear, confirmar, capturar, cancelar), el titular (3D Secure) o el banco (aprobar o rechazar). Ninguna transición salta estados ni vuelve de <code>succeeded</code>.</figcaption>
@@ -195,7 +215,100 @@
         <li><b>Cada transición es un <code>UPDATE</code> condicionado al estado anterior</b> (<code>WHERE status = 'processing'</code>) o a una versión, para que dos procesos no apliquen transiciones incompatibles a la vez (concurrencia optimista, M02 y M05).</li>
         <li><b>Autorizar y capturar pueden separarse.</b> Con captura manual, el emisor retiene el dinero y el comercio lo cobra al enviar el pedido. Una autorización no se retiene para siempre: Stripe cancela los PaymentIntents sin capturar a los 7 días en pagos con tarjeta online. <span class="badge badge--doc">Documentado</span></li>
         <li><b><code>requires_action</code> existe por regulación.</b> En Europa, la autenticación reforzada (<dfn data-term="3ds">3D Secure</dfn>, exigida por PSD2) obliga a que el titular confirme muchos pagos en la app de su banco. El pago queda esperando esa acción, que puede no llegar nunca si el usuario cierra la pestaña.</li>
+        <li><b>Los estados los definen las acciones pendientes, no los resultados.</b> <code>requires_payment_method</code>, <code>requires_confirmation</code>, <code>requires_action</code> y <code>requires_capture</code> dicen quién tiene que hacer algo. Un cliente sabe qué tocar sin adivinar.</li>
       </ul>
+
+      <h3 id="sca">3D Secure y autenticación reforzada</h3>
+
+      <p>Desde la directiva PSD2, los pagos online con tarjetas europeas necesitan autenticación reforzada del cliente (SCA): dos factores entre algo que sabe, algo que tiene y algo que es. La forma de cumplirla con tarjetas es 3D Secure 2, un protocolo entre tres partes: el procesador (que actúa como servidor 3DS), la red de tarjetas (que aloja el servidor de directorio) y el banco (que tiene el servidor de control de acceso, ACS). <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 614" role="img" aria-labelledby="f275t f275d">
+<title id="f275t">Un pago con 3D Secure</title>
+<desc id="f275d">El navegador confirma con la tarjeta. El procesador manda una solicitud de autenticación (AReq) con los datos del pago y del dispositivo a la red, que la lleva al servidor del banco (ACS). El banco decide pedir un desafío y responde (ARes). El procesador deja el pago en requires_action y el navegador muestra el desafío. El titular aprueba en la app del banco; el banco confirma la autenticación al navegador (CRes) con un valor de autenticación. El navegador avisa al procesador, que pide la autorización con ese valor y el indicador ECI 05. El banco aprueba y el pago pasa a succeeded.</desc>
+<defs><marker id="f275-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f275-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f275-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f275-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Navegador</text>
+<path class="dg-frame" d="M70.0 40 V604"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Procesador</text>
+<path class="dg-frame" d="M280.0 40 V604"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Red</text>
+<path class="dg-frame" d="M490.0 40 V604"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Banco (ACS)</text>
+<path class="dg-frame" d="M700.0 40 V604"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f275-a)"/>
+<rect x="89.80000000000001" y="55" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">confirmar con la tarjeta</text>
+<path class="dg-edge" d="M283.0 106 L485.0 106" marker-end="url(#f275-a)"/>
+<rect x="299.8" y="89" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">AReq: pago y dispositivo</text>
+<path class="dg-edge" d="M493.0 140 L695.0 140" marker-end="url(#f275-a)"/>
+<rect x="575.8" y="123" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="134" text-anchor="middle">AReq</text>
+<rect x="467.0" y="160" width="223" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="477.0" y="176">riesgo medio: pide un desafío</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 208 L495.0 208" marker-end="url(#f275-r)"/>
+<rect x="546.1" y="191" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="202" text-anchor="middle">ARes: desafío</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 242 L285.0 242" marker-end="url(#f275-r)"/>
+<rect x="336.1" y="225" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">ARes: desafío</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 276 L75.0 276" marker-end="url(#f275-r)"/>
+<rect x="119.5" y="259" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="270" text-anchor="middle">requires_action</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">el titular aprueba en la app del banco</text>
+<path class="dg-edge" d="M73.0 344 L695.0 344" marker-end="url(#f275-a)"/>
+<rect x="283.3" y="327" width="203.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">CReq: aprobado por el titular</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 378 L75.0 378" marker-end="url(#f275-r)"/>
+<rect x="299.8" y="361" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">CRes: autenticado (CAVV)</text>
+<path class="dg-edge" d="M73.0 412 L275.0 412" marker-end="url(#f275-a)"/>
+<rect x="112.9" y="395" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="406" text-anchor="middle">continuar el pago</text>
+<path class="dg-edge" d="M283.0 446 L485.0 446" marker-end="url(#f275-a)"/>
+<rect x="299.8" y="429" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="440" text-anchor="middle">autorizar (CAVV, ECI 05)</text>
+<path class="dg-edge" d="M493.0 480 L695.0 480" marker-end="url(#f275-a)"/>
+<rect x="575.8" y="463" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="474" text-anchor="middle">0100</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 514 L495.0 514" marker-end="url(#f275-r)"/>
+<rect x="532.9" y="497" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="508" text-anchor="middle">0110: 00 aprobado</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 548 L285.0 548" marker-end="url(#f275-r)"/>
+<rect x="349.3" y="531" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="542" text-anchor="middle">succeeded</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 27.3.</b> El banco recibe más de cien datos del pago y del dispositivo y decide. Si el riesgo es bajo, autentica sin que el titular haga nada (frictionless); si no, pide un desafío. Con la autenticación completa, la autorización lleva un valor de prueba (CAVV) y el indicador ECI 05.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Liability shift:</b> cuando el pago se autenticó, la responsabilidad por el fraude pasa del comercio al banco emisor. Si después el titular disputa el cobro alegando que no lo autorizó, el comercio tiene una defensa fuerte (27.12). El indicador ECI 05 (Visa) o 02 (Mastercard) marca la autenticación completa.</li>
+        <li><b>Un desafío cuesta conversión.</b> Cada paso extra hace que parte de los clientes abandone, así que se busca autenticar solo cuando hace falta.</li>
+        <li><b>El pago se queda esperando.</b> Mientras el titular no actúa, el PaymentIntent está en <code>requires_action</code>. El comercio no debe cumplir el pedido, y debe decidir qué hace si el titular nunca vuelve.</li>
+      </ul>
+
+      <p>Las exenciones permiten evitar el desafío en ciertos casos. Son una petición: el banco puede exigir la autenticación igual, con un rechazo suave (soft decline) que pide reintentar el mismo pago autenticado.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Exención</th><th>Condición</th><th>Quién la aplica</th></tr></thead>
+          <tbody>
+            <tr><td><b>Bajo valor</b></td><td>Pagos de menos de 30 EUR, con un tope de 5 seguidos o 100 EUR acumulados sin autenticar</td><td>El adquirente o el emisor</td></tr>
+            <tr><td><b>Análisis de riesgo (TRA)</b></td><td>Hasta 100 EUR si la tasa de fraude del adquirente es menor a 0.13&#8239;%; hasta 250 EUR si es menor a 0.06&#8239;%; hasta 500 EUR si es menor a 0.01&#8239;%</td><td>El adquirente, según su tasa de fraude</td></tr>
+            <tr><td><b>Recurrentes y pagos iniciados por el comercio</b></td><td>El titular autenticó el primer pago y acordó los siguientes (suscripciones)</td><td>El comercio, con el acuerdo guardado</td></tr>
+            <tr><td><b>Beneficiario de confianza</b></td><td>El titular agregó al comercio a una lista de confianza en su banco</td><td>El banco</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Umbrales del reglamento europeo sobre autenticación reforzada (PSD2). <span class="badge badge--doc">Documentado</span></p>
 
       <h2 id="api"><span class="sec-num">27.5</span>La API</h2>
 
@@ -233,7 +346,7 @@ amount=4990&amp;currency=eur&amp;capture_method=automatic&amp;metadata[order_id]
             <li><span class="st st--4xx">400</span><span>Parámetros inválidos, o la misma idempotency key con otros parámetros (<code>idempotency_error</code>).</span></li>
             <li><span class="st st--4xx">402</span><span>Los parámetros eran válidos pero el pago falló, por ejemplo una tarjeta rechazada (<code>card_declined</code>).</span></li>
             <li><span class="st st--4xx">409</span><span>Otra request con la misma clave está en curso.</span></li>
-            <li><span class="st st--4xx">429</span><span>Demasiadas requests: esperar y reintentar con backoff.</span></li>
+            <li><span class="st st--4xx">429</span><span>Demasiadas requests, o un objeto bloqueado por otra operación (<code>lock_timeout</code>): esperar y reintentar con backoff.</span></li>
             <li><span class="st st--5xx">500</span><span>Error del servidor: reintentar con la misma clave.</span></li>
           </ul>
         </div>
@@ -247,19 +360,148 @@ amount=4990&amp;currency=eur&amp;capture_method=automatic&amp;metadata[order_id]
             <tr><td><code>POST /v1/payment_intents/{id}/capture</code></td><td>Captura lo autorizado, total o parcialmente, cuando la captura es manual.</td></tr>
             <tr><td><code>POST /v1/payment_intents/{id}/cancel</code></td><td>Anula el pago y libera la retención en la tarjeta.</td></tr>
             <tr><td><code>POST /v1/refunds</code></td><td>Reembolsa un pago, total o parcialmente; admite varios reembolsos hasta el monto cobrado.</td></tr>
+            <tr><td><code>POST /v1/disputes/{id}</code></td><td>Adjunta la evidencia para responder a un contracargo (27.12).</td></tr>
+            <tr><td><code>POST /v1/payouts</code></td><td>Manda el saldo disponible al banco del comercio (27.13).</td></tr>
             <tr><td><code>GET /v1/events</code></td><td>Lista los eventos: sirve para recuperar lo que los webhooks no entregaron.</td></tr>
           </tbody>
         </table>
       </div>
 
-      <h2 id="idempotencia"><span class="sec-num">27.6</span>Idempotency keys de principio a fin</h2>
+      <h3 id="api-diseno">Decisiones de diseño de la API</h3>
+
+      <ul>
+        <li><b>Tres tipos de claves.</b> La secreta (<code>sk_</code>) opera todo desde el servidor; la publicable (<code>pk_</code>) solo puede tokenizar y confirmar desde el navegador; la restringida (<code>rk_</code>) tiene permisos acotados por recurso, para dársela a un servicio que solo necesita leer. Tres claves con tres alcances hacen que perder una sea un incidente contenido. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Versionado por fecha.</b> Cada versión lleva la fecha en que salió (por ejemplo <code>2024-06-20</code>) y agrupa un puñado de cambios incompatibles. La primera request de una cuenta la fija a la versión más reciente, y desde entonces todas sus llamadas usan esa versión, a menos que mande el header <code>Stripe-Version</code> o suba la versión desde el panel. El código de un comercio no se rompe porque Stripe cambie algo. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Cada cambio incompatible es un módulo.</b> Internamente la respuesta se genera siempre con la versión más nueva, y luego se "camina hacia atrás en el tiempo", aplicando un módulo por cada cambio posterior a la versión de la cuenta, cada uno con su documentación, su transformación y los recursos que afecta. Como cada módulo es declarativo, el changelog y la documentación de la API se generan solos. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Errores tipados.</b> Todo error trae un objeto con <code>type</code> (<code>card_error</code>, <code>invalid_request_error</code>, <code>idempotency_error</code>, <code>api_error</code>), un <code>code</code> estable para programar contra él y un <code>message</code> para humanos. En un rechazo de tarjeta, además, <code>decline_code</code>. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Paginación por cursor.</b> Las listas usan <code>limit</code> y <code>starting_after</code>, con <code>has_more</code> (M02). Una lista que cambia mientras se recorre no repite ni salta filas, como pasaría con <code>offset</code>.</li>
+        <li><b><code>metadata</code> para unir con tu sistema.</b> Un mapa de claves y valores propios (el <code>order_id</code>) que viaja en el pago y en sus eventos, para no tener que guardar el ID del procesador en todos lados.</li>
+      </ul>
+
+<pre data-lang="python"><code>import stripe
+
+try:
+    pi = stripe.PaymentIntent.create(
+        amount=4990, currency="eur",
+        metadata={"order_id": "ord_8812"},
+        idempotency_key="ord_8812-pago",                # la misma en cada reintento
+        stripe_version="2024-06-20",                    # fija la versión por request
+    )
+except stripe.CardError as e:                           # 402: el banco rechazó
+    print(e.code, e.decline_code)                       # card_declined, insufficient_funds
+except stripe.RateLimitError:                           # 429: reintentar con backoff y jitter
+    ...
+except stripe.IdempotencyError:                         # misma clave, otros parámetros: bug propio
+    raise
+except stripe.APIConnectionError:                       # sin respuesta: reintentar con la MISMA clave
+    ...</code></pre>
+
+      <p>Ese último caso es el que justifica todo el diseño: si la conexión se corta antes de la respuesta, el cliente no sabe si el pago se creó. La única salida segura es repetir con la misma clave (27.7).</p>
+
+      <h2 id="limites"><span class="sec-num">27.6</span>Límites de tasa y protección de la API</h2>
+
+      <p>Una API de pagos tiene que seguir aceptando pagos cuando un comercio lanza una oferta, cuando un cliente escribe un bucle infinito o cuando una parte de la flota se degrada. Stripe contó públicamente que usa cuatro mecanismos, del más suave al más duro: <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 362" role="img" aria-labelledby="f276t f276d">
+<title id="f276t">Capas de límites de una API de pagos</title>
+<desc id="f276d">Cada request pasa por cuatro capas, de la más suave a la más dura. Primero el limitador de tasa por cuenta, un token bucket que responde 429. Después el limitador de concurrencia, que cuenta las requests en curso y también responde 429. Después el load shedder de la flota, que reserva capacidad para las operaciones críticas y descarta las demás con un 503. Al final el load shedder por utilización de workers, el último recurso en un incidente, que descarta por prioridad: métodos críticos, POST, GET y tráfico de prueba.</desc>
+<defs><marker id="f276a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="14" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="40.0" text-anchor="middle" style="font-size:13px">Limitador de tasa por cuenta</text>
+<text class="dg-tiny" x="230.0" y="56.0" text-anchor="middle">token bucket en Redis: acepta ráfagas, corta la tasa sostenida</text>
+<text class="dg-label" x="482" y="39" style="font-size:13px">429 · global-rate</text>
+<text class="dg-tiny" x="482" y="58">lo activa una cuenta</text>
+<path class="dg-feedback" d="M452 43 H476"/>
+<path class="dg-edge" d="M230 73 V93" marker-end="url(#f276a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="96" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="122.0" text-anchor="middle" style="font-size:13px">Limitador de concurrencia</text>
+<text class="dg-tiny" x="230.0" y="138.0" text-anchor="middle">cuenta las requests en curso, para endpoints caros</text>
+<text class="dg-label" x="482" y="121" style="font-size:13px">429 · concurrency</text>
+<text class="dg-tiny" x="482" y="140">lo activa una cuenta</text>
+<path class="dg-feedback" d="M452 125 H476"/>
+<path class="dg-edge" d="M230 155 V175" marker-end="url(#f276a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="178" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="204.0" text-anchor="middle" style="font-size:13px">Load shedder de la flota</text>
+<text class="dg-tiny" x="230.0" y="220.0" text-anchor="middle">reserva capacidad para lo crítico, descarta lo demás</text>
+<text class="dg-label" x="482" y="203" style="font-size:13px">503 a lo no crítico</text>
+<text class="dg-tiny" x="482" y="222">lo activa el total de la flota</text>
+<path class="dg-feedback" d="M452 207 H476"/>
+<path class="dg-edge" d="M230 237 V257" marker-end="url(#f276a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="260" width="440" height="58" rx="9"/>
+<text class="dg-label" x="230.0" y="286.0" text-anchor="middle" style="font-size:13px">Load shedder por utilización</text>
+<text class="dg-tiny" x="230.0" y="302.0" text-anchor="middle">último recurso: descarta por prioridad, gradualmente</text>
+<text class="dg-label" x="482" y="285" style="font-size:13px">503 por prioridad</text>
+<text class="dg-tiny" x="482" y="304">lo activa la saturación de workers</text>
+<path class="dg-feedback" d="M452 289 H476"/>
+<text class="dg-small" x="10" y="352">La cuarta capa clasifica en cuatro prioridades: métodos críticos, POST, GET y tráfico de prueba. Crear un pago es lo último que se descarta.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 27.4.</b> Los dos primeros limitan a una cuenta por lo que hace; los dos últimos protegen a la flota entera por lo que está pasando. Ninguno mira el contenido de la request: miran cuánto cuesta y qué tan crítica es.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">Limitador de tasa por cuenta</span>Un <dfn data-term="token-bucket">token bucket</dfn> por cuenta en un clúster de Redis: cada request saca una ficha y el balde se rellena a ritmo fijo. Permite ráfagas breves (una oferta relámpago) y corta la tasa sostenida. Es el que más se activa, sobre todo con tráfico del modo de prueba. Responde 429.</li>
+        <li><span class="step-title">Limitador de concurrencia</span>Cuenta cuántas requests de una cuenta están en curso a la vez, no cuántas por segundo. Protege la CPU cuando un cliente lanza muchos listados caros y reintenta los que se demoran, lo que empeora todo. La solución del lado del cliente es procesar con N trabajadores, no lanzar todo junto.</li>
+        <li><span class="step-title">Load shedder de la flota</span>Reserva una parte de la capacidad para las operaciones críticas (crear un cargo) y descarta primero las no críticas (listar cargos) cuando el uso total pasa un umbral. Responde 503, y usa Redis para contar.</li>
+        <li><span class="step-title">Load shedder por utilización de workers</span>El último recurso durante un incidente. Clasifica el tráfico en cuatro prioridades (métodos críticos, POST, GET y modo de prueba) y descarta desde la más baja, de forma gradual, con tasas de descarte y de recuperación afinadas para que no oscile entre saturado y vacío. Casi nunca se activa, y cuando se activa, salva el día.</li>
+      </ol>
+
+      <p>Los números públicos de hoy ponen un límite global de 100 requests por segundo por cuenta en modo live (25 en sandbox), 25 por segundo por endpoint salvo que se indique otro, y 1000 actualizaciones por hora por PaymentIntent. Las lecturas tienen además un presupuesto: en promedio 500 por transacción en una ventana de 30 días. Cada 429 trae un header <code>Stripe-Rate-Limited-Reason</code> que dice cuál límite se superó (<code>global-rate</code>, <code>endpoint-rate</code>, <code>global-concurrency</code>…). Y hay un 429 de otra naturaleza, <code>lock_timeout</code>: dos operaciones sobre el mismo objeto se estorbaron; la respuesta es serializar las modificaciones del mismo objeto. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Una implementación de referencia del primer limitador, con un script Lua para que la lectura y la escritura del balde sean una sola operación atómica en Redis:</p>
+
+<pre data-lang="python"><code>import redis
+
+r = redis.Redis()
+
+TOKEN_BUCKET = r.register_script("""
+local t      = redis.call('TIME')
+local now    = t[1] + t[2] / 1000000            -- reloj de Redis, no del cliente
+local rate   = tonumber(ARGV[1])                -- fichas por segundo
+local burst  = tonumber(ARGV[2])                -- capacidad del balde
+local costo  = tonumber(ARGV[3])
+local s      = redis.call('HMGET', KEYS[1], 'fichas', 'ts')
+local fichas = tonumber(s[1]) or burst
+local ts     = tonumber(s[2]) or now
+fichas = math.min(burst, fichas + (now - ts) * rate)
+local ok = fichas >= costo
+if ok then fichas = fichas - costo end
+redis.call('HSET', KEYS[1], 'fichas', fichas, 'ts', now)
+redis.call('EXPIRE', KEYS[1], math.ceil(burst / rate) * 2)
+return ok and 1 or 0
+""")
+
+def permitir(cuenta: str, ruta: str, rate: int = 100, burst: int = 200) -> bool:
+    try:
+        return TOKEN_BUCKET(keys=[f"rl:{cuenta}:{ruta}"], args=[rate, burst, 1]) == 1
+    except redis.RedisError:
+        return True          # fail-open: el limitador protege, no decide si el pago es correcto</code></pre>
+
+      <p>Cuatro decisiones de esa implementación valen más que el código:</p>
+      <ul>
+        <li><b>El reloj es el de Redis</b>, no el de cada servidor de la API: relojes distintos harían que el mismo balde se rellene a velocidades distintas.</li>
+        <li><b>Una clave por cuenta y ruta</b>, así el balde de una ruta cara no gasta las fichas de otra, y Redis reparte las claves entre sus nodos.</li>
+        <li><b>Fail-open.</b> Si Redis no responde, se deja pasar: es la decisión opuesta a la del almacén de idempotencia (27.7), y por la misma regla: cuál error es más barato. Rechazar todos los pagos porque falló el limitador sería peor que no limitar unos minutos.</li>
+        <li><b>Se estrena a oscuras.</b> Stripe describió que cada limitador se lanzó primero en modo "dark launch": registra qué bloquearía sin bloquear, se revisan los resultados, se ajustan los umbrales y recién entonces se activa, con un interruptor para apagarlo. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Un límite bajo protege a todos pero castiga a quien tiene un pico legítimo, que pierde ventas. Por eso los límites son un "máximo" y no la capacidad normal, se piden aumentos con anticipación (para grandes subidas, con semanas), y el modo de prueba tiene límites más bajos. Y por eso Stripe desaconseja hacer pruebas de carga contra el sandbox: sus límites y su latencia no se parecen a los del modo live. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <h2 id="idempotencia"><span class="sec-num">27.7</span>Idempotency keys de principio a fin</h2>
 
       <p>El M02 presentó la idea: el cliente manda una <dfn data-term="idempotency-key">idempotency key</dfn> y el servidor garantiza que la operación se ejecuta una sola vez aunque llegue varias. Stripe documenta el contrato con precisión: <span class="badge badge--doc">Documentado</span></p>
       <ul>
         <li>La primera respuesta para una clave se guarda y se devuelve igual en cada repetición, sea un éxito o un error, incluidos los 500.</li>
         <li>La misma clave con parámetros distintos da un error: es un bug del cliente, no un reintento.</li>
         <li>Mientras la primera request se está ejecutando, otra con la misma clave recibe un conflicto.</li>
-        <li>Las claves se pueden borrar pasadas al menos 24 horas: un reintento del día siguiente es una operación nueva.</li>
+        <li>Solo se guarda el resultado cuando el endpoint empezó a ejecutarse. Si los parámetros no pasan la validación, o hay un conflicto con otra request en curso, no se guarda nada y la request se puede reintentar.</li>
+        <li>Las claves tienen hasta 255 caracteres (se sugieren UUID v4, sin datos sensibles) y se pueden borrar pasadas al menos 24 horas: un reintento del día siguiente es una operación nueva.</li>
+        <li>Todas las requests <code>POST</code> aceptan la clave; <code>GET</code> y <code>DELETE</code> ya son idempotentes por definición.</li>
       </ul>
 
       <p>Cumplir ese contrato es fácil mientras todo funciona. El trabajo está en que un proceso puede morir en cualquier línea, y una de esas líneas llama a un banco, un efecto que ningún rollback deshace:</p>
@@ -328,10 +570,24 @@ amount=4990&amp;currency=eur&amp;capture_method=automatic&amp;metadata[order_id]
 <text class="dg-tiny" x="148.75" y="508" text-anchor="middle">200: un solo cobro</text>
 </svg>
         </div>
-        <figcaption><b>Figura 27.3.</b> El reintento no vuelve a autorizar: retoma desde el último punto de recuperación guardado y pregunta por el número del intento que ya se había enviado.</figcaption>
+        <figcaption><b>Figura 27.5.</b> El reintento no vuelve a autorizar: retoma desde el último punto de recuperación guardado y pregunta por el número del intento que ya se había enviado.</figcaption>
       </figure>
 
       <p>La implementación de referencia divide cada operación en fases atómicas. Cada fase hace cambios locales en una transacción que además avanza el <code>recovery_point</code>; entre fases están las llamadas externas, cada una con un identificador propio que el otro lado reconoce (el número de intento en la red de tarjetas, una idempotency key hacia otro servicio). Un ingeniero de Stripe publicó una versión de este diseño sobre PostgreSQL. <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th><code>recovery_point</code></th><th>Qué se hace, en una transacción local</th><th>Llamada externa que sigue</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>started</code></td><td>Se crea la fila de la clave y se toma el lock</td><td>Ninguna</td></tr>
+            <tr><td><code>intent_creado</code></td><td>Se inserta el PaymentIntent y se avanza el punto</td><td>Ninguna</td></tr>
+            <tr><td><code>autorizacion_enviada</code></td><td>Se guarda el STAN que se va a usar, <b>antes</b> de salir</td><td>Autorizar en la red (0100)</td></tr>
+            <tr><td><code>autorizado</code></td><td>Se guarda el resultado, el estado del pago, los asientos y el evento</td><td>Ninguna</td></tr>
+            <tr><td><code>finished</code></td><td>Se guarda la respuesta y se libera el lock</td><td>Ninguna</td></tr>
+          </tbody>
+        </table>
+      </div>
 
 <pre data-lang="python"><code>import hashlib, json
 from datetime import datetime, timedelta, timezone
@@ -374,9 +630,11 @@ def con_idempotencia(conn, cuenta, clave, metodo, ruta, params, ejecutar):
         <p>Los errores clásicos, y lo que cuestan: generar la clave al azar en cada reintento (no protege nada: <a href="#scenario=doble-clic">escenario "Doble clic"</a>); guardar la respuesta solo si fue exitosa (un reintento de un 500 vuelve a ejecutar la mitad que sí ocurrió); no comparar la huella de la request (un bug que reutiliza claves devuelve el pago de otro pedido); reintentar la llamada al banco en lugar de consultar por su número (dos retenciones en la tarjeta del cliente: <a href="#scenario=timeout-banco">escenario "Timeout del banco"</a>); y seguir procesando sin protección si el almacén de claves no responde. Ese almacén es fail-closed: sin él, la API rechaza escrituras.</p>
       </aside>
 
-      <h2 id="ledger"><span class="sec-num">27.7</span>El ledger de doble entrada</h2>
+      <h2 id="ledger"><span class="sec-num">27.8</span>El ledger de doble entrada</h2>
 
-      <p>Guardar "el saldo del comercio" en una columna y sumarle o restarle funciona hasta el primer bug, y después no hay forma de saber qué pasó. Los sistemas de dinero usan un <dfn data-term="ledger">ledger de doble entrada</dfn>: cada movimiento es una transacción de asientos que suman cero, porque el dinero no aparece ni desaparece, se mueve de una cuenta a otra. Los saldos no se guardan: se derivan sumando asientos. Nada se edita ni se borra; un error se corrige con asientos nuevos que lo compensan. Stripe describió públicamente su ledger interno como la herramienta con la que verifica que cada movimiento de dinero cuadre. <span class="badge badge--doc">Documentado</span></p>
+      <p>Guardar "el saldo del comercio" en una columna y sumarle o restarle funciona hasta el primer bug, y después no hay forma de saber qué pasó. Los sistemas de dinero usan un <dfn data-term="ledger">ledger de doble entrada</dfn>: cada movimiento es una transacción de asientos que suman cero, porque el dinero no aparece ni desaparece, se mueve de una cuenta a otra. Los saldos no se guardan: se derivan sumando asientos. Nada se edita ni se borra; un error se corrige con asientos nuevos que lo compensan.</p>
+
+      <p>Stripe describió públicamente su Ledger con las mismas ideas: las cuentas son "baldes de dinero" distinguidos por un tipo y propiedades, y los eventos mueven dinero entre ellas. El sistema codifica una máquina de estados de cada sistema que produce movimientos y la modela como un flujo de fondos. Lo que se publica en el Ledger no se puede borrar ni modificar, así que se puede reconstruir el estado en cualquier momento anterior. Recibe cinco mil millones de eventos por día, y el 99.99&#8239;% del volumen en dólares se ingiere y verifica en cuatro días. <span class="badge badge--doc">Documentado</span></p>
 
       <p>La vida de un pago de 49.90 EUR con 1.00 EUR de comisión y un reembolso parcial de 19.90, en céntimos (débitos positivos, créditos negativos):</p>
 
@@ -400,24 +658,68 @@ def con_idempotencia(conn, cuenta, clave, metodo, ruta, params, ejecutar):
 
       <p>Cada bloque suma cero. Al final, "por cobrar al adquirente" y "reembolsos por pagar" vuelven a cero, el comercio recibió 29.00 EUR (49.90 − 1.00 − 19.90), el procesador se quedó con su comisión de 1.00 y en su banco quedaron exactamente esos 100 céntimos. Si alguna cuenta transitoria no vuelve a cero cuando debería, hay dinero sin explicar, y es exactamente lo que busca la conciliación.</p>
 
+      <p>Los saldos cambian paso a paso. Así se ve el mismo ejemplo por cuenta, con el saldo acumulado después de cada movimiento:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Después de…</th><th class="r">Por cobrar al adquirente</th><th class="r">Reembolsos por pagar</th><th class="r">Pendiente del comercio</th><th class="r">Comisiones</th><th class="r">Banco</th></tr></thead>
+          <tbody>
+            <tr><td>Captura</td><td class="r">+4990</td><td class="r">0</td><td class="r">−4890</td><td class="r">−100</td><td class="r">0</td></tr>
+            <tr><td>Reembolso parcial</td><td class="r">+4990</td><td class="r">−1990</td><td class="r">−2900</td><td class="r">−100</td><td class="r">0</td></tr>
+            <tr><td>Liquidación</td><td class="r">0</td><td class="r">0</td><td class="r">−2900</td><td class="r">−100</td><td class="r">+3000</td></tr>
+            <tr><td>Pago al comercio</td><td class="r">0</td><td class="r">0</td><td class="r">0</td><td class="r">−100</td><td class="r">+100</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Los créditos figuran negativos. Cada fila suma cero por dentro: 4990 − 1990 − 2900 − 100 + 0 = 0, y la última, −100 + 100 = 0.</p>
+
 <pre data-lang="sql"><code>CREATE TABLE ledger_accounts (
   id        text PRIMARY KEY,        -- 'comercio:acct_9:pendiente', 'adquirente:por_cobrar', …
   currency  char(3) NOT NULL
 );
+CREATE TABLE ledger_transactions (
+  id          uuid PRIMARY KEY,
+  source_ref  text NOT NULL UNIQUE,  -- pi_3Q…:captura, re_1Q…, lote de liquidación: un evento, una sola vez
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE ledger_entries (
   id              bigserial PRIMARY KEY,
-  transaction_id  uuid    NOT NULL,          -- agrupa los asientos de un movimiento
+  transaction_id  uuid    NOT NULL REFERENCES ledger_transactions (id),
   account_id      text    NOT NULL REFERENCES ledger_accounts (id),
   amount          bigint  NOT NULL,          -- débito +, crédito −
   currency        char(3) NOT NULL,
-  source_ref      text    NOT NULL,          -- pi_3Q…, re_1Q…, lote de liquidación
-  created_at      timestamptz NOT NULL DEFAULT now()
+  effective_at    timestamptz NOT NULL       -- cuándo ocurrió; created_at es cuándo se registró
 );
--- Invariante, verificada al escribir cada transacción y en auditorías periódicas:
-SELECT transaction_id FROM ledger_entries
- GROUP BY transaction_id, currency HAVING SUM(amount) &lt;&gt; 0;   -- debe volver vacío</code></pre>
 
-      <h2 id="red"><span class="sec-num">27.8</span>Autorizar, capturar y liquidar</h2>
+-- La invariante se verifica al confirmar cada transacción, no en la aplicación:
+CREATE FUNCTION verificar_suma_cero() RETURNS trigger AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM ledger_entries WHERE transaction_id = NEW.transaction_id
+              GROUP BY currency HAVING SUM(amount) &lt;&gt; 0) THEN
+    RAISE EXCEPTION 'la transacción % no suma cero', NEW.transaction_id;
+  END IF;
+  RETURN NULL;
+END $$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER suma_cero AFTER INSERT ON ledger_entries
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION verificar_suma_cero();</code></pre>
+
+      <h3 id="ledger-diseno">Cinco decisiones que el ejemplo no muestra</h3>
+
+      <ol class="steps">
+        <li><span class="step-title">Registrar un evento una sola vez</span>La columna <code>source_ref</code> es única: si el consumidor que escribe el ledger repite un mensaje (al menos una vez, M07), el segundo <code>INSERT</code> falla y no se duplica ningún asiento. La idempotencia del ledger es independiente de la de la API.</li>
+        <li><span class="step-title">Leer un saldo sin sumar la historia</span>Sumar millones de asientos en cada consulta no escala. Se guarda una foto periódica (<code>cuenta, hasta el asiento N, saldo</code>) y el saldo actual es la foto más la suma de los asientos posteriores. Los saldos que se muestran a los comercios salen de proyecciones (M07), no de consultas al ledger.</li>
+        <li><span class="step-title">Evitar las cuentas calientes</span>La cuenta "ingresos por comisiones" recibe un asiento por cada pago: una sola fila que todas las transacciones quieren bloquear a la vez. Se reparte en N subcuentas (<code>comisiones:0</code> a <code>comisiones:31</code>), se escribe en la que dice <code>hash(pago) % 32</code> y se suman todas al leer. Las cuentas de los comercios con mucho volumen reciben el mismo tratamiento.</li>
+        <li><span class="step-title">Separar lo pendiente de lo disponible</span>El dinero de un comercio pasa por estados: pendiente (cobrado, todavía sin liquidar), disponible (se puede pagar) y en tránsito (ya salió hacia su banco). Se modelan como cuentas distintas, y un movimiento que puede fallar se hace en dos fases: una transferencia pendiente reserva el monto, y después se confirma (post) o se anula (void), incluso con vencimiento. Es el mismo patrón que autorizar y capturar, y lo implementan bases pensadas para ledgers, como TigerBeetle. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Distinguir cuándo ocurrió y cuándo se supo</span>Una liquidación que llega tarde se registra hoy con la fecha efectiva de ayer (<code>effective_at</code>). Los cierres contables y las conciliaciones se hacen sobre la fecha efectiva; las auditorías, sobre la fecha de registro.</li>
+      </ol>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Stripe mide la calidad de los datos del Ledger con tres métricas: si el flujo de fondos se completó correctamente (<i>clearing</i>: créditos y débitos balanceados), si los datos llegaron a tiempo (<i>timeliness</i>), y si se tiene una representación completa del sistema de origen (<i>completeness</i>, con detección de anomalías). Con ellas informa una explicabilidad del movimiento de dinero superior al 99.9999&#8239;% aunque el volumen de datos creció diez veces. <span class="badge badge--doc">Documentado</span> La idea sirve en cualquier escala: el ledger no solo se escribe, se audita con métricas.</p>
+      </aside>
+
+      <h2 id="red"><span class="sec-num">27.9</span>Autorizar, capturar y liquidar</h2>
 
       <p>Por debajo de la API, el procesador habla con la red de tarjetas en <dfn data-term="iso8583">ISO 8583</dfn>, un formato de mensajes de los años ochenta que sigue siendo el idioma de las autorizaciones. El ciclo tiene tres tiempos:</p>
 
@@ -455,7 +757,7 @@ SELECT transaction_id FROM ledger_entries
 <text class="dg-small" x="385" y="186" text-anchor="middle">El ledger registra cada paso con sus propios asientos: el saldo del comercio pasa de pendiente a disponible y después a pagado.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 27.4.</b> La <dfn data-term="ciclo-tarjeta">autorización y la liquidación</dfn> están separadas por días. Mientras tanto, el dinero es una promesa, y el ledger lo registra como tal: saldo pendiente, no disponible.</figcaption>
+        <figcaption><b>Figura 27.6.</b> La <dfn data-term="ciclo-tarjeta">autorización y la liquidación</dfn> están separadas por días. Mientras tanto, el dinero es una promesa, y el ledger lo registra como tal: saldo pendiente, no disponible.</figcaption>
       </figure>
 
       <div class="table-wrap">
@@ -467,18 +769,72 @@ SELECT transaction_id FROM ledger_entries
             <tr><td>Respuesta 91</td><td>Emisor no disponible: reintentable más tarde.</td></tr>
             <tr><td>Sin respuesta</td><td>El adquirente envía una <dfn data-term="reversa">reversa</dfn> (mensaje 0400) para anular una posible aprobación. Nunca reenvía la autorización a ciegas. <a href="#scenario=timeout-banco">Escenario "Timeout del banco"</a>.</td></tr>
             <tr><td>Emisor caído</td><td>La red puede aprobar en su nombre con reglas acordadas: <dfn data-term="stand-in">stand-in processing</dfn>. <a href="#scenario=emisor-caido">Escenario "Emisor caído"</a>.</td></tr>
-            <tr><td>El titular disputa el cobro</td><td>Semanas después llega un <dfn data-term="contracargo">contracargo</dfn>: la red devuelve el dinero al emisor, y el comercio lo recupera solo si presenta pruebas y gana la disputa. Los plazos para disputar llegan a unos 120 días.</td></tr>
+            <tr><td>El titular disputa el cobro</td><td>Semanas después llega un <dfn data-term="contracargo">contracargo</dfn>: la red devuelve el dinero al emisor, y el comercio lo recupera solo si presenta pruebas y gana la disputa (27.12).</td></tr>
           </tbody>
         </table>
       </div>
 
-      <h2 id="webhooks"><span class="sec-num">27.9</span>Webhooks: la parte que implementa el comercio</h2>
+      <h3 id="iso8583">Un mensaje ISO 8583 por dentro</h3>
+
+      <p>Un mensaje ISO 8583 empieza con un tipo de mensaje de cuatro dígitos (MTI) y un mapa de bits de 64 posiciones. Cada bit encendido dice que el campo de ese número, llamado elemento de datos (DE), viene en el mensaje. Por eso los mensajes son compactos y cada red puede agregar campos propios. Una autorización de 49.90 EUR se ve así, con los campos que importan:</p>
+
+<pre data-lang="text"><code>MTI    0100                         solicitud de autorización
+bitmap 7238 4000 08C0 8000          bits 2, 3, 4, 7, 11, 12, 13, 18, 37, 41, 42 y 49 encendidos
+DE   2  16 4111 1111 1111 1111      PAN (nunca se guarda ni se loguea completo)
+DE   3  000000                      compra
+DE   4  000000004990                monto en unidades menores
+DE   7  0930143005                  fecha y hora de transmisión (MMDDhhmmss, GMT)
+DE  11  004211                      STAN: número de auditoría del intento
+DE  12  143005   DE 13  0930        hora y fecha locales
+DE  18  5942                        categoría del comercio (MCC)
+DE  37  427409004211                RRN: referencia de recuperación, une el resto del ciclo
+DE  41  WEB00001  DE 42  MERCH0000000123   terminal y comercio
+DE  49  978                         moneda (EUR en ISO 4217 numérico)
+
+MTI    0110                         respuesta: agrega DE 38 (código de aprobación) y DE 39
+DE  39  00                          aprobado</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Campo o mensaje</th><th>Para qué sirve</th></tr></thead>
+          <tbody>
+            <tr><td><b>STAN</b> (DE 11)</td><td>Identifica el intento dentro de una sesión con la red. Un reenvío de la misma autorización (existe un tipo de mensaje de repetición) lleva el mismo STAN, y así la red puede detectar el duplicado; una reversa se refiere al intento original por él. Es la clave de la recuperación del escenario "Timeout del banco".</td></tr>
+            <tr><td><b>RRN</b> (DE 37)</td><td>Identifica la transacción para siempre: el archivo de liquidación, el contracargo y la conciliación la llaman por este número.</td></tr>
+            <tr><td><b>0400 / 0410</b></td><td>Reversa y su respuesta. Lleva en el DE 90 los datos del mensaje original (tipo, STAN, fecha) para que la red sepa qué anular.</td></tr>
+            <tr><td><b>0800 / 0810</b></td><td>Mensajes de gestión de red: inicio de sesión y "eco" periódico para saber si el otro lado sigue vivo. Sin ellos, una conexión colgada no se nota.</td></tr>
+            <tr><td><b>DE 39</b></td><td>Código de respuesta: 00 aprobado; 05 no autorizar; 14 número inválido; 51 fondos insuficientes; 54 tarjeta vencida; 91 emisor no disponible. Se traduce a los <code>decline_code</code> que ve el comercio.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los rechazos se clasifican en duros (tarjeta perdida o robada, número inválido: nunca reintentar) y suaves (fondos insuficientes, emisor no disponible, autenticación requerida: se puede reintentar más tarde o con autenticación). Las redes limitan cuántas veces se puede reintentar una tarjeta rechazada y cobran cargos por el exceso, así que un buen procesador guarda la clasificación y no reintenta a ciegas.</p>
+
+      <h3 id="costos">Quién se queda con qué</h3>
+
+      <p>De los 49.90 EUR que paga el cliente, el comercio recibe menos de lo que parece, y el procesador también. Tres actores cobran:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Concepto</th><th>Quién lo cobra</th><th>Orden de magnitud</th></tr></thead>
+          <tbody>
+            <tr><td><b>Interchange</b></td><td>El banco emisor, a través de la red</td><td>En la UE está limitado por ley a 0.2&#8239;% en débito y 0.3&#8239;% en crédito de consumidores; en otros países no hay tope</td></tr>
+            <tr><td><b>Cuotas de la red</b></td><td>Visa o Mastercard</td><td>Décimas de punto porcentual</td></tr>
+            <tr><td><b>Margen del adquirente y del procesador</b></td><td>El procesador</td><td>Lo que queda de la tarifa que paga el comercio (por ejemplo, 1.5&#8239;% + 0.25 EUR)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En la práctica, el adquirente liquida el monto neto de interchange y cuotas: si esos costos suman 0.19 EUR, la liquidación de este pago es de 49.71, no de 49.90. El ledger registra la diferencia como costo de procesamiento, y la conciliación la explica con reglas de comisiones por marca y tipo de tarjeta; lo que no se explica con reglas es una excepción a investigar.</p>
+
+      <h2 id="webhooks"><span class="sec-num">27.10</span>Webhooks: la parte que implementa el comercio</h2>
 
       <p>El comercio se entera del resultado de un pago por webhooks. El contrato público de Stripe: <span class="badge badge--doc">Documentado</span></p>
       <ul>
-        <li>Cada POST lleva una firma en el header <code>Stripe-Signature</code>: <code>t=</code> (hora) y <code>v1=</code> (HMAC-SHA256 de <code>{t}.{cuerpo}</code> con el secreto del endpoint).</li>
-        <li>Si el endpoint no responde 2xx, se reintenta con backoff exponencial durante hasta 3 días.</li>
-        <li>Los eventos pueden llegar más de una vez y en cualquier orden.</li>
+        <li>Cada POST lleva una firma en el header <code>Stripe-Signature</code>: <code>t=</code> (hora) y <code>v1=</code> (HMAC-SHA256 de <code>{t}.{cuerpo}</code> con el secreto del endpoint). Cada reintento lleva una firma y una hora nuevas.</li>
+        <li>Si el endpoint no responde 2xx, se reintenta con backoff exponencial durante hasta 3 días en modo live (en sandbox, tres veces a lo largo de unas horas).</li>
+        <li>Los eventos pueden llegar más de una vez y en cualquier orden. No hay que ordenar por <code>created</code>, que tiene resolución de segundos: se guardan los IDs procesados y se consulta el objeto actual.</li>
+        <li>Al rotar el secreto, el anterior puede seguir activo hasta 24 horas, y durante ese tiempo cada entrega lleva una firma por secreto.</li>
+        <li>Un evento se puede reenviar a mano desde el panel hasta 15 días después de crearse, y desde la CLI hasta 30.</li>
       </ul>
 
 <pre data-lang="python"><code>import hmac, hashlib, time
@@ -499,7 +855,27 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
         <li><span class="step-title">No confiar en el orden</span>Las transiciones solo avanzan (un pedido reembolsado no vuelve a "pagado"), o se consulta el estado actual del objeto a la API en lugar de confiar en el evento. <a href="#scenario=webhook-dup">Escenario "Webhook duplicado y desordenado"</a>.</li>
       </ol>
 
-      <h2 id="sagas"><span class="sec-num">27.10</span>Sagas y compensación</h2>
+      <h3 id="webhooks-envio">El otro lado: el servicio que envía los webhooks</h3>
+
+      <p>Entregar bien a millones de endpoints ajenos, la mayoría con errores, es un problema propio. Un diseño de referencia:</p>
+      <ul>
+        <li><b>Una cola lógica por endpoint.</b> Un endpoint lento o caído no debe frenar las entregas a los demás (aislamiento, como los bulkheads del M08). Cada endpoint tiene su límite de entregas en paralelo, para no aplastar a quien se está recuperando.</li>
+        <li><b>Reintentos con backoff, tope y jitter.</b> Los reintentos coordinados de miles de eventos serían una estampida contra un endpoint que acaba de volver.</li>
+        <li><b>Interruptor por endpoint.</b> Si un endpoint falla de forma sostenida durante días, se deshabilita y se avisa al comercio, en lugar de seguir insistiendo. Los eventos no se pierden: se recuperan con la API de eventos.</li>
+        <li><b>Eventos delgados.</b> Lo más robusto es que el evento lleve el tipo y el ID del objeto, y que el receptor consulte el estado actual: así no importa el orden ni la versión de la API con que se serializó el evento. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Firmar cada intento</b> con una hora nueva, para que un evento reenviado no falle por antiguo.</li>
+      </ul>
+
+<pre data-lang="python"><code>import random
+
+def proximo_intento(intento: int) -> float:
+    """Segundos hasta el próximo reintento: exponencial, con tope de 8 horas y jitter."""
+    base = min(8 * 3600, 30 * 2 ** intento)       # 30 s, 1 min, 2, 4… hasta 8 h
+    return base * random.uniform(0.5, 1.0)         # el jitter evita las estampidas
+
+# Con este calendario, tres días alcanzan para unas 20 entregas por evento.</code></pre>
+
+      <h2 id="sagas"><span class="sec-num">27.11</span>Sagas y compensación</h2>
 
       <p>Un marketplace cobra al comprador, transfiere su parte al vendedor, se queda una comisión y confirma el envío. Son pasos en sistemas distintos, sin una transacción que los abarque a todos. Una <dfn data-term="saga">saga</dfn> los ejecuta en orden, guarda en qué paso va, y si uno falla ejecuta las compensaciones de los anteriores en orden inverso:</p>
 
@@ -517,7 +893,159 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
 
       <p>Tres reglas hacen que funcione. El estado de la saga vive en una base, no en memoria, para que otra instancia la retome si el orquestador muere. Cada paso y cada compensación usa una idempotency key derivada de la saga y del paso (<code>saga_77-paso-2</code>), porque se van a reintentar. Y las compensaciones no son un rollback: el comprador vio el cobro y después el reembolso, y el ledger registra los dos. Stripe Connect ofrece las piezas para este caso: cargos, transferencias a cuentas conectadas y reversiones de transferencias. <span class="badge badge--doc">Documentado</span></p>
 
-      <h2 id="conciliacion"><span class="sec-num">27.11</span>Conciliación diaria</h2>
+<pre data-lang="python"><code>PASOS = [  # (nombre, acción, compensación); las dos reciben la saga y usan claves derivadas
+    ("cobrar",     lambda s: cobrar(s.comprador, s.total,        clave=f"{s.id}-cobrar"),
+                   lambda s: reembolsar(s.cobro_id,               clave=f"{s.id}-reembolsar")),
+    ("transferir", lambda s: transferir(s.vendedor, s.neto,      clave=f"{s.id}-transferir"),
+                   lambda s: revertir_transferencia(s.transf_id,  clave=f"{s.id}-revertir")),
+    ("reservar",   lambda s: reservar_envio(s.pedido,            clave=f"{s.id}-reservar"),
+                   lambda s: cancelar_reserva(s.reserva_id,       clave=f"{s.id}-cancelar")),
+]
+
+def avanzar(db, saga_id):
+    """Idempotente: se puede llamar de nuevo después de cualquier caída."""
+    s = db.cargar_saga(saga_id)                       # estado, paso_actual, ids ya obtenidos
+    while s.estado == "avanzando" and s.paso_actual &lt; len(PASOS):
+        nombre, accion, _ = PASOS[s.paso_actual]
+        try:
+            s.resultados[nombre] = accion(s)
+        except ErrorDefinitivo:
+            s.estado = "compensando"                  # se guarda ANTES de compensar
+            db.guardar_saga(s)
+            break
+        s.paso_actual += 1
+        db.guardar_saga(s)                            # el progreso queda registrado tras cada paso
+    while s.estado == "compensando" and s.paso_actual > 0:
+        s.paso_actual -= 1
+        PASOS[s.paso_actual][2](s)                    # compensa en orden inverso
+        db.guardar_saga(s)
+    if s.paso_actual == 0 and s.estado == "compensando":
+        s.estado = "revertida"; db.guardar_saga(s)
+    elif s.paso_actual == len(PASOS):
+        s.estado = "completa"; db.guardar_saga(s)</code></pre>
+
+      <h2 id="disputas"><span class="sec-num">27.12</span>Disputas y contracargos</h2>
+
+      <p>Una autorización no es una garantía de que el dinero se quede. Semanas después, el titular puede decirle a su banco que no reconoce el cobro, que no recibió lo que compró o que lo cobraron dos veces. El banco abre un <dfn data-term="contracargo">contracargo</dfn>: la red retira el dinero del adquirente ese mismo día y el comercio tiene un plazo para demostrar que el cobro era legítimo. Si no responde a tiempo, pierde.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 214" role="img" aria-labelledby="f277t f277d">
+<title id="f277t">Ciclo de vida de una disputa</title>
+<desc id="f277d">El día 0 se cobra. Hasta unos 120 días después, el titular disputa el cobro y su banco abre el contracargo. El mismo día el dinero sale del saldo del comercio, con un débito y la tarifa de disputa en el ledger. En pocos días el comercio debe presentar su evidencia. Semanas después decide el emisor; el comercio gana o pierde, y en casos raros hay pre-arbitraje y arbitraje. Si gana, el ledger registra la reversión con asientos nuevos.</desc>
+<line x1="75" x2="695" y1="80" y2="80" stroke="var(--separator-strong)" stroke-width="2"/>
+<circle cx="75" cy="80" r="9" fill="var(--bg)" stroke="var(--l-service)" stroke-width="3"/>
+<text class="dg-label" x="75" y="50" text-anchor="middle" style="font-size:13px">Día 0</text>
+<text class="dg-small" x="75" y="116" text-anchor="middle">cobro</text>
+<text class="dg-tiny" x="75" y="134" text-anchor="middle">autorizado y</text>
+<text class="dg-tiny" x="75" y="149" text-anchor="middle">capturado</text>
+<circle cx="230" cy="80" r="9" fill="var(--bg)" stroke="var(--l-service)" stroke-width="3"/>
+<text class="dg-label" x="230" y="50" text-anchor="middle" style="font-size:13px">Hasta día 120</text>
+<text class="dg-small" x="230" y="116" text-anchor="middle">el titular disputa</text>
+<text class="dg-tiny" x="230" y="134" text-anchor="middle">su banco abre</text>
+<text class="dg-tiny" x="230" y="149" text-anchor="middle">el contracargo</text>
+<circle cx="385" cy="80" r="9" fill="var(--bg)" stroke="var(--fail)" stroke-width="3"/>
+<text class="dg-label" x="385" y="50" text-anchor="middle" style="font-size:13px">Ese mismo día</text>
+<text class="dg-small" x="385" y="116" text-anchor="middle">sale el dinero</text>
+<text class="dg-tiny" x="385" y="134" text-anchor="middle">débito al saldo</text>
+<text class="dg-tiny" x="385" y="149" text-anchor="middle">del comercio</text>
+<circle cx="540" cy="80" r="9" fill="var(--bg)" stroke="var(--l-service)" stroke-width="3"/>
+<text class="dg-label" x="540" y="50" text-anchor="middle" style="font-size:13px">Pocos días</text>
+<text class="dg-small" x="540" y="116" text-anchor="middle">responde el comercio</text>
+<text class="dg-tiny" x="540" y="134" text-anchor="middle">presenta</text>
+<text class="dg-tiny" x="540" y="149" text-anchor="middle">la evidencia</text>
+<circle cx="695" cy="80" r="9" fill="var(--bg)" stroke="var(--l-service)" stroke-width="3"/>
+<text class="dg-label" x="695" y="50" text-anchor="middle" style="font-size:13px">Semanas</text>
+<text class="dg-small" x="695" y="116" text-anchor="middle">decide el emisor</text>
+<text class="dg-tiny" x="695" y="134" text-anchor="middle">gana o pierde;</text>
+<text class="dg-tiny" x="695" y="149" text-anchor="middle">a veces arbitraje</text>
+<text class="dg-small" x="385" y="192" text-anchor="middle">El ledger registra el débito el primer día y, si el comercio gana, una reversión con asientos nuevos.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 27.7.</b> El dinero sale el primer día y vuelve, si vuelve, semanas después. El ledger no espera el resultado para registrar lo que ya pasó con el dinero.</figcaption>
+      </figure>
+
+      <p>El ciclo tiene fases, con nombres que aparecen en la API de Stripe (<code>needs_response</code>, <code>under_review</code>, <code>won</code>, <code>lost</code>, más los avisos tempranos de fraude <code>warning_*</code>): <span class="badge badge--doc">Documentado</span></p>
+      <ol class="steps">
+        <li><span class="step-title">Contracargo (chargeback)</span>El emisor lo abre con un código de motivo: fraude con tarjeta ausente (Visa 10.4), mercadería o servicio no recibido (13.1), no autorizado (Mastercard 4837), cobro duplicado, y otros. Los plazos del titular llegan a unos 120 días desde la transacción.</li>
+        <li><span class="step-title">Respuesta del comercio (representment)</span>Con un plazo de pocos días, el comercio aporta evidencia: prueba de entrega, correos con el cliente, historial de compras anteriores sin disputa, registros de uso del servicio y, si hubo 3D Secure, el resultado de la autenticación.</li>
+        <li><span class="step-title">Decisión del emisor</span>Puede aceptar la evidencia (el comercio gana) o mantener el contracargo. En este segundo caso hay una nueva ronda (pre-arbitraje) y, al final, el arbitraje de la red, que tiene un costo para quien pierda.</li>
+      </ol>
+
+      <p>El ledger registra la disputa desde el primer día. Con una tarifa de disputa ilustrativa de 15.00 EUR:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Momento</th><th>Cuenta</th><th class="r">Asiento</th></tr></thead>
+          <tbody>
+            <tr><td rowspan="4">Contracargo</td><td>Saldo del comercio</td><td class="r">+4990</td></tr>
+            <tr><td>Disputas por pagar a la red</td><td class="r">−4990</td></tr>
+            <tr><td>Saldo del comercio</td><td class="r">+1500</td></tr>
+            <tr><td>Ingresos por tarifas de disputa</td><td class="r">−1500</td></tr>
+            <tr><td rowspan="2">El comercio gana</td><td>Disputas por pagar a la red</td><td class="r">+4990</td></tr>
+            <tr><td>Saldo del comercio</td><td class="r">−4990</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">La tarifa de disputa puede devolverse o no al ganar, según las reglas de la cuenta; aquí se mantiene. Si el saldo del comercio no alcanza para cubrir el débito, queda negativo y se recupera de sus próximas ventas.</p>
+
+      <ul>
+        <li><b>Prevenir cuesta menos que responder.</b> Un descriptor en el extracto que el cliente reconozca (muchas disputas son "no sé qué es este cobro"), reembolsar sin discutir lo dudoso, autenticar con 3D Secure (traslada la responsabilidad al emisor) y responder a las alertas tempranas de fraude, que permiten reembolsar antes de que se abra la disputa.</li>
+        <li><b>La tasa de disputas es una métrica del comercio.</b> Las redes tienen programas que multan y pueden cortar el acceso a comercios que superan un umbral del orden del 1&#8239;%. El procesador la vigila por cuenta, y es parte de su riesgo.</li>
+        <li><b>Automatizar la evidencia.</b> El webhook de disputa llega con la fecha límite; el sistema del comercio arma el paquete a partir de sus propios datos.</li>
+      </ul>
+
+<pre data-lang="python"><code>def al_abrir_disputa(evento):
+    d = evento["data"]["object"]                        # charge.dispute.created
+    pedido = pedido_por_cobro(d["charge"])
+    stripe.Dispute.modify(d["id"], evidence={
+        "customer_email_address": pedido.email,
+        "shipping_tracking_number": pedido.tracking,
+        "service_date": pedido.entregado_en.date().isoformat(),
+        "uncategorized_text": resumen_de_actividad(pedido.cliente),   # compras previas sin disputa
+    })
+    # Se revisa a mano si el monto lo justifica; el envío final (submit=True) es irreversible.
+    if d["amount"] &lt; 2000 or pedido.evidencia_completa:
+        stripe.Dispute.modify(d["id"], submit=True)</code></pre>
+
+      <h2 id="payouts"><span class="sec-num">27.13</span>Pagar a los comercios</h2>
+
+      <p>Cobrar es la mitad del trabajo. La otra mitad es mandar el dinero al banco del comercio. Un <dfn data-term="payout">payout</dfn> mueve saldo disponible a su cuenta bancaria, y tiene estados propios (<code>pending</code>, <code>in_transit</code>, <code>paid</code>, <code>failed</code>, <code>canceled</code>). El saldo de un comercio, además, no es una cifra: tiene al menos dos, el pendiente (cobrado pero sin liquidar) y el disponible, y un pago solo puede salir de este último. <span class="badge badge--doc">Documentado</span></p>
+
+      <ul>
+        <li><b>El calendario depende del país y del riesgo.</b> Los cobros pasan a disponibles unos días después de liquidarse y el pago sale con un calendario diario, semanal o manual. Un comercio nuevo o de alto riesgo tiene una retención (reserva) más larga: el procesador es quien responde si hay contracargos después.</li>
+        <li><b>Un payout puede fallar días después.</b> La cuenta bancaria estaba cerrada o el número era inválido: el banco devuelve el dinero. El ledger revierte el movimiento con asientos nuevos, el saldo vuelve a disponible y se avisa al comercio. Por eso el estado <code>paid</code> no es definitivo hasta pasado un margen.</li>
+        <li><b>Un saldo negativo es normal.</b> Un reembolso o un contracargo mayor que las ventas del día deja el saldo por debajo de cero; se recupera de los próximos cobros o, si el comercio ya no vende, de su cuenta bancaria.</li>
+        <li><b>Crear un payout es una operación con dinero real:</b> lleva idempotency key, y el sistema tiene su propio límite de creaciones por segundo. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <p>El movimiento tiene la misma forma que autorizar y capturar: se reserva primero y se confirma después.</p>
+
+<pre data-lang="python"><code>def crear_payout(conn, cuenta, monto, banco_ext, clave):
+    with conn.transaction():
+        # 1) Reservar: mueve el monto de 'disponible' a 'en_transito' como transferencia PENDIENTE
+        disponible = conn.execute(
+            "SELECT saldo FROM saldos WHERE cuenta_id = %s AND tipo = 'disponible' FOR UPDATE", (cuenta,)).fetchone()[0]
+        if disponible &lt; monto:
+            raise SaldoInsuficiente()
+        fila = conn.execute(
+            "INSERT INTO payouts (cuenta_id, monto, estado, clave) VALUES (%s, %s, 'pending', %s)"
+            " ON CONFLICT (clave) DO NOTHING RETURNING id", (cuenta, monto, clave)).fetchone()
+        if fila is None:                               # la misma clave: ya existe, se devuelve el original
+            return payout_existente(conn, clave)
+        payout_id = fila[0]
+        ledger.pendiente(conn, payout_id, debito=f"{cuenta}:disponible", credito=f"{cuenta}:en_transito", monto=monto)
+
+    # 2) Llamar al banco, con el ID del payout como clave: un reintento no paga dos veces
+    resultado = banco.transferir(banco_ext, monto, referencia=payout_id, idempotency_key=clave)
+
+    # 3) Confirmar o anular
+    if resultado.aceptada:
+        ledger.confirmar(conn, payout_id); marcar(conn, payout_id, "in_transit")
+    else:
+        ledger.anular(conn, payout_id);    marcar(conn, payout_id, "failed")</code></pre>
+
+      <h2 id="conciliacion"><span class="sec-num">27.14</span>Conciliación diaria</h2>
 
       <p>El ledger dice lo que el sistema cree que pasó. La <dfn data-term="conciliacion">conciliación</dfn> lo compara todos los días con lo que dicen los demás: los archivos de liquidación del adquirente, los extractos del banco y los reportes de disputas. Cada diferencia cae en una categoría:</p>
 
@@ -533,12 +1061,26 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
         </table>
       </div>
 
+      <p>Son tres fuentes, no dos. La conciliación completa cruza el <b>ledger</b> (lo que el procesador cree), el <b>archivo del adquirente</b> (lo que la red liquidó) y el <b>extracto del banco</b> (lo que llegó de verdad a la cuenta). El primer cruce encuentra errores del sistema; el segundo, errores de pago o de banco. Cada línea se empareja en cascada: primero por RRN exacto; después por atributos (monto, fecha, últimos cuatro dígitos) para lo que perdió su referencia; después en grupo, para las liquidaciones que juntan muchas transacciones en un solo movimiento del banco; y lo que queda va a una cola de trabajo humano con dueño y fecha.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Etapa</th><th>Cómo empareja</th><th>Lo esperable</th></tr></thead>
+          <tbody>
+            <tr><td>1. Exacta</td><td>Mismo RRN, monto y moneda</td><td>Más del 99&#8239;% de las líneas</td></tr>
+            <tr><td>2. Por atributos</td><td>Monto, fecha, tarjeta enmascarada</td><td>Una fracción de punto porcentual</td></tr>
+            <tr><td>3. En grupo</td><td>Suma de N transacciones contra un movimiento del banco</td><td>Todas las liquidaciones</td></tr>
+            <tr><td>4. Manual</td><td>Una persona con contexto</td><td>Pocas líneas; su edad se mide</td></tr>
+          </tbody>
+        </table>
+      </div>
+
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>La conciliación es la red de seguridad de todo lo anterior: idempotencia, reversas y outbox reducen los errores, y la conciliación encuentra los que igual ocurren. Por eso se mide como un servicio: porcentaje de líneas conciliadas automáticamente, antigüedad de las excepciones abiertas y monto sin explicar, con alertas si crecen.</p>
+        <p>La conciliación es la red de seguridad de todo lo anterior: idempotencia, reversas y outbox reducen los errores, y la conciliación encuentra los que igual ocurren. Por eso se mide como un servicio: porcentaje de líneas conciliadas automáticamente, antigüedad de las excepciones abiertas y monto sin explicar, con alertas si crecen. Son las mismas ideas que las métricas de calidad del Ledger de Stripe: que el dinero se resuelva por completo, que los datos lleguen a tiempo y que no falte nada. <a href="#scenario=liquidacion">Escenario "Liquidación y conciliación del día"</a>.</p>
       </aside>
 
-      <h2 id="pci"><span class="sec-num">27.12</span>Tokenización, PCI DSS y fraude</h2>
+      <h2 id="pci"><span class="sec-num">27.15</span>Tokenización, PCI DSS y fraude</h2>
 
       <p><dfn data-term="pci-dss">PCI DSS</dfn> es el estándar de seguridad que exigen las redes de tarjetas a quien guarda, procesa o transmite números de tarjeta. Su costo depende del alcance: cuantos más sistemas tocan una tarjeta, más sistemas hay que auditar. El diseño entero busca achicarlo:</p>
       <ul>
@@ -547,7 +1089,284 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
         <li><b>Tokens de red:</b> las redes emiten sus propios tokens por comercio y tarjeta, que siguen funcionando cuando el banco reemplaza la tarjeta y valen poco si se filtran.</li>
       </ul>
 
-      <p>El fraude se ataca en capas. Un modelo de puntaje, como Radar, evalúa cada pago con señales de toda la red (una tarjeta que aparece en muchos comercios en pocos minutos es sospechosa) y aplica reglas de cada comercio; los pagos dudosos se mandan a 3D Secure, que además traslada la responsabilidad por fraude al emisor. <span class="badge badge--doc">Documentado</span> El diseño explícito es que si el modelo no responde a tiempo, el pago sigue con el puntaje por defecto (fail-open), mientras que si el almacén de idempotencia no responde, el pago se rechaza (fail-closed): cada componente falla hacia el error menos caro.</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Cuestionario</th><th>Quién lo llena</th><th>Qué toca el comercio</th></tr></thead>
+          <tbody>
+            <tr><td><b>SAQ A</b></td><td>Comercios que tercerizan todo el manejo de tarjetas</td><td>Nada de la tarjeta: iframe o página alojada del procesador</td></tr>
+            <tr><td><b>SAQ A-EP</b></td><td>Comercios cuyo sitio puede afectar cómo se captura la tarjeta</td><td>El script y la página de pago, aunque la tarjeta vaya al procesador</td></tr>
+            <tr><td><b>SAQ D y auditoría completa</b></td><td>Quien almacena, procesa o transmite tarjetas: procesadores, adquirentes</td><td>El entorno de datos de tarjetas (CDE) completo</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">La versión vigente es PCI DSS 4.0.1; los requisitos de fecha futura de la 4.0 pasaron a ser obligatorios el 31 de marzo de 2025. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>El fraude se ataca en capas. Un modelo de puntaje, como Radar, evalúa cada pago con más de mil características, con señales de toda la red (una tarjeta que aparece en muchos comercios en pocos minutos es sospechosa), en menos de 100 ms, y aplica reglas de cada comercio; los pagos dudosos se mandan a 3D Secure, que además traslada la responsabilidad por fraude al emisor. <span class="badge badge--doc">Documentado</span> El diseño explícito es que si el modelo no responde a tiempo, el pago sigue con el puntaje por defecto (fail-open), mientras que si el almacén de idempotencia no responde, el pago se rechaza (fail-closed): cada componente falla hacia el error menos caro.</p>
+
+      <h3 id="card-testing">Un ataque típico: probar tarjetas robadas</h3>
+
+      <p>Un delincuente con una lista de miles de números de tarjeta robados no sabe cuáles siguen activos. Usa un script contra el formulario de pago de un comercio, con montos chicos, para averiguarlo. Es el <i>card testing</i>: pocos pagos aprobados entre muchísimos rechazos, muchas tarjetas distintas desde pocas IPs o dispositivos, y números casi consecutivos. Le cuesta al comercio en comisiones por intento, al procesador en reputación ante la red, y al titular de la tarjeta real.</p>
+      <ul>
+        <li><b>Limitar por señal, no solo por cuenta:</b> intentos fallidos por IP, por dispositivo y por sesión; tarjetas distintas por PaymentIntent.</li>
+        <li><b>Fricción en el lugar justo:</b> un desafío tipo CAPTCHA antes de mostrar el formulario, exigir el código de seguridad y la verificación de dirección, y 3D Secure ante un puntaje elevado.</li>
+        <li><b>Reglas de Radar sobre las señales del ataque:</b> por ejemplo, bloquear cuando una misma IP tuvo más de N tarjetas distintas en una hora.</li>
+        <li><b>Montos mínimos y tiempo de espera</b> entre intentos fallidos consecutivos.</li>
+      </ul>
+
+      <h2 id="escala"><span class="sec-num">27.16</span>Escalar los datos sin parar el servicio</h2>
+
+      <p>Con 100 pagos por segundo en promedio y 500 en el pico, una base única se queda corta en pocos años, y cambiar su forma con el sistema encendido es tan delicado como el propio flujo de pagos. Antes de decidir nada, las cuentas de servilleta (M00):</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Magnitud</th><th>Cuenta</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Escrituras por pago</td><td>Idempotencia 5 + PaymentIntent 4 + intentos 2 + outbox 3 + asientos 3</td><td class="r">unas 17</td></tr>
+            <tr><td>Escrituras por segundo en el pico</td><td>500 pagos/s × 17</td><td class="r">unas 8 500/s</td></tr>
+            <tr><td>Datos permanentes por pago</td><td>PaymentIntent 2 kB + intentos 0.5 + eventos 3 + asientos (8 filas de 120 B) 1</td><td class="r">unos 6.5 kB</td></tr>
+            <tr><td>Datos por año</td><td>100 pagos/s × 31.5 millones de s × 6.5 kB</td><td class="r">unos 20 TB, sin índices</td></tr>
+            <tr><td>Claves de idempotencia vivas</td><td>100/s × 86 400 s × 6 kB, con 24 a 48 h de retención</td><td class="r">50 a 100 GB</td></tr>
+            <tr><td>Webhooks salientes en el pico</td><td>500 pagos/s × 3 eventos × 1.5 endpoints</td><td class="r">unos 2 250/s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Ninguna de esas cifras es imposible para una base moderna, pero juntas piden tres decisiones: repartir por cuenta, separar lo que tiene ciclos de vida distintos y poder mover datos sin apagar nada.</p>
+
+      <ul>
+        <li><b>Repartir por cuenta.</b> Todos los datos de un comercio (sus pagos, sus claves, sus eventos, sus asientos) viven en el mismo lugar, y una tabla de ruteo dice en cuál. Las transacciones locales siguen siendo locales, y una partición caída afecta a sus comercios, no a todos. La versión más completa es la <b>celda</b>: una pila entera (API, bases, bus) que atiende a un subconjunto de cuentas. Un cambio riesgoso se despliega primero en la celda más chica (M08, M11).</li>
+        <li><b>Separar por ciclo de vida.</b> Las claves de idempotencia se borran a las 24 horas, los pagos se conservan años, el ledger se conserva siempre y los eventos se reenvían hasta por 30 días. Mezclarlos en las mismas tablas complica los índices, las copias de seguridad y los borrados. Los datos fríos (pagos de más de un año) pasan a archivos columnares en almacenamiento de objetos, consultables por agregados.</li>
+        <li><b>Poder mover datos.</b> Una cuenta que crece necesita cambiar de celda, y un esquema que evoluciona necesita cambiar de forma, sin cortes.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 272" role="img" aria-labelledby="f278t f278d">
+<title id="f278t">Migrar datos sin cortar el servicio</title>
+<desc id="f278d">Arriba, las cuatro fases para migrar un modelo de datos: escribir en el viejo y el nuevo y rellenar lo antiguo, leer del nuevo, escribir solo en el nuevo y borrar lo viejo. Abajo, los seis pasos para mover un fragmento de datos entre shards: registrar la migración, importar en bloque un snapshot, replicar los cambios posteriores, verificar que los datos son idénticos, cambiar el tráfico en menos de dos segundos y dar de baja el origen.</desc>
+<defs><marker id="f278a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">Cambiar el modelo de datos, en cuatro fases</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="32" width="165" height="54" rx="9"/>
+<text class="dg-label" x="92.5" y="56.0" text-anchor="middle" style="font-size:12.5px">Escribir en los dos</text>
+<text class="dg-tiny" x="92.5" y="72.0" text-anchor="middle">y rellenar lo antiguo</text>
+<path class="dg-edge" d="M177 59 H201" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="205" y="32" width="165" height="54" rx="9"/>
+<text class="dg-label" x="287.5" y="56.0" text-anchor="middle" style="font-size:12.5px">Leer del nuevo</text>
+<text class="dg-tiny" x="287.5" y="72.0" text-anchor="middle">ruta por ruta</text>
+<path class="dg-edge" d="M372 59 H396" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="400" y="32" width="165" height="54" rx="9"/>
+<text class="dg-label" x="482.5" y="56.0" text-anchor="middle" style="font-size:12.5px">Escribir solo en el nuevo</text>
+<text class="dg-tiny" x="482.5" y="72.0" text-anchor="middle">el viejo queda quieto</text>
+<path class="dg-edge" d="M567 59 H591" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="595" y="32" width="165" height="54" rx="9"/>
+<text class="dg-label" x="677.5" y="56.0" text-anchor="middle" style="font-size:12.5px">Borrar lo viejo</text>
+<text class="dg-tiny" x="677.5" y="72.0" text-anchor="middle">y su código</text>
+<text class="dg-group" x="10" y="130">Mover un fragmento entre shards, en seis pasos</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="64.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Registrar</text>
+<text class="dg-tiny" x="64.0" y="182.0" text-anchor="middle">los metadatos</text>
+<path class="dg-edge" d="M120 169 H134" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="136" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="190.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Importar</text>
+<text class="dg-tiny" x="190.0" y="182.0" text-anchor="middle">un snapshot</text>
+<path class="dg-edge" d="M246 169 H260" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="262" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="316.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Replicar</text>
+<text class="dg-tiny" x="316.0" y="182.0" text-anchor="middle">los cambios nuevos</text>
+<path class="dg-edge" d="M372 169 H386" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="388" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="442.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Verificar</text>
+<text class="dg-tiny" x="442.0" y="182.0" text-anchor="middle">datos idénticos</text>
+<path class="dg-edge" d="M498 169 H512" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="514" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="568.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Pasar el tráfico</text>
+<text class="dg-tiny" x="568.0" y="182.0" text-anchor="middle">menos de 2 s</text>
+<path class="dg-edge" d="M624 169 H638" marker-end="url(#f278a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="640" y="142" width="108" height="54" rx="9"/>
+<text class="dg-label" x="694.0" y="166.0" text-anchor="middle" style="font-size:12.5px">Dar de baja</text>
+<text class="dg-tiny" x="694.0" y="182.0" text-anchor="middle">el origen</text>
+<text class="dg-small" x="10" y="232">En ambos casos, el sistema viejo sigue atendiendo hasta el último momento y el paso que corta es corto, verificado y reversible.</text>
+<text class="dg-small" x="10" y="252">Se puede volver atrás en cada fase salvo en la última.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 27.8.</b> Arriba, cómo cambiar el modelo de datos sin apagar el sistema; abajo, cómo mover un fragmento de datos entre shards. En los dos casos, lo que corta el servicio es un paso corto, verificado y reversible.</figcaption>
+      </figure>
+
+      <p>Stripe describió las dos técnicas. Para cambiar el modelo de datos, cuatro fases: escribir en el modelo viejo y en el nuevo a la vez y rellenar lo antiguo; cambiar las lecturas de a una ruta de código hacia el nuevo; cambiar las escrituras para que solo vayan al nuevo; y por último borrar lo viejo. Con este método migraron cientos de millones de suscripciones. <span class="badge badge--doc">Documentado</span> Para mover datos entre shards de su base DocDB (construida sobre MongoDB, con más de 2000 shards y 5 millones de consultas por segundo), una plataforma de movimiento de datos sigue seis pasos por fragmento: registrar la migración en un servicio de metadatos y construir los índices en el destino; importar en bloque un snapshot; replicar de forma asíncrona los cambios posteriores; verificar con una comprobación exhaustiva que ambos lados tienen los mismos datos; cambiar el tráfico, un protocolo que dura menos de dos segundos; y dar de baja el fragmento en el origen. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>La fase de verificar es la que separa una migración segura de una esperanza. Se compara el contenido de origen y destino, no solo la cantidad de filas, y el sistema que corta el tráfico sabe volver atrás si algo aparece después. La replicación asíncrona no tiene por qué ser la última palabra: mientras el origen siga siendo la fuente de verdad, cualquier discrepancia se resuelve a favor del origen.</p>
+      </aside>
+
+      <h3 id="dr">Regiones y recuperación ante desastres</h3>
+
+      <ul>
+        <li><b>Dentro de una región:</b> tres zonas de disponibilidad, con la base repartida de forma síncrona. Si cae una zona, el failover tarda segundos y no se pierde ningún dato (RPO cero).</li>
+        <li><b>Entre regiones:</b> réplica asíncrona con retraso de menos de un segundo en condiciones normales, en modo de espera en caliente. Al promover la región secundaria puede faltar el último segundo de escrituras, así que el procedimiento incluye reconciliar: buscar los pagos que estaban en vuelo (<code>processing</code>, con su punto de recuperación) y resolverlos con el adquirente por su STAN.</li>
+        <li><b>El ensayo es parte del diseño.</b> Un failover que nunca se practicó falla la primera vez que hace falta. Se ejecuta en un ejercicio programado, con tráfico real de una celda chica.</li>
+      </ul>
+
+      <h2 id="observabilidad"><span class="sec-num">27.17</span>Observabilidad de un procesador de pagos</h2>
+
+      <p>Los indicadores de un procesador no son los de un servicio web. Un emisor caído no lanza excepciones: aparece como una caída de la tasa de aprobación de ese banco. Un timeout mal resuelto no da errores 5xx: aparece semanas después como dinero sin explicar. Los indicadores que importan miden el negocio y el dinero, además de la infraestructura (M11):</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Indicador</th><th>Cómo se mide</th><th>Cuándo alerta</th></tr></thead>
+          <tbody>
+            <tr><td><b>Tasa de aprobación</b></td><td>Aprobados sobre intentos, por emisor (BIN), país, marca y comercio</td><td>Caída de más de 3 desviaciones frente a la misma hora de la semana anterior, en un emisor o un comercio</td></tr>
+            <tr><td><b>Latencia de confirmación</b></td><td>p50 y p99 de punta a punta, dividida por fase (Radar, red, base)</td><td>p99 mayor a 4 s durante 5 minutos</td></tr>
+            <tr><td><b>Errores de la API</b></td><td>5xx por endpoint, sin contar 4xx del cliente</td><td>Más de 0.1&#8239;% durante 5 minutos</td></tr>
+            <tr><td><b>Edad del evento más viejo sin publicar</b></td><td>Segundos desde que se creó el evento pendiente más antiguo del outbox</td><td>Más de 5 minutos: se atascó el relay o el bus</td></tr>
+            <tr><td><b>Monto sin explicar</b></td><td>Suma de las excepciones abiertas de la conciliación, y su edad</td><td>Cualquier monto con más de 24 horas</td></tr>
+            <tr><td><b>Invariantes del ledger</b></td><td>Transacciones que no suman cero, cuentas transitorias fuera de rango</td><td>Cualquier violación llama a una persona</td></tr>
+            <tr><td><b>Tasa de disputas</b></td><td>Disputas sobre cobros de los últimos 30 días, por comercio</td><td>Cerca del umbral de la red (del orden del 1&#8239;%)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul>
+        <li><b>Comparar con la semana anterior</b>, no con un umbral fijo: la tasa de aprobación cambia según la hora, el día y el país, y un valor bajo puede ser normal.</li>
+        <li><b>Pagos sintéticos.</b> Un pequeño cobro real y su reembolso con una tarjeta propia, cada pocos minutos y por cada camino (cada adquirente, cada región), demuestran que todo funciona de punta a punta antes de que lo note un cliente.</li>
+        <li><b>El ledger es un instrumento de observación.</b> Cada asiento lleva la referencia de lo que lo causó, así que ante una duda se sigue el dinero de un extremo al otro.</li>
+      </ul>
+
+      <h2 id="implementalo"><span class="sec-num">27.18</span>Impleméntalo tú mismo: tu procesador de pagos en AWS</h2>
+
+      <p>Primero, qué significa "tu propio Stripe". Conectarte directamente a Visa y Mastercard exige ser adquirente o tener uno que te patrocine, pasar la certificación PCI DSS más estricta y firmar contratos con las redes. Casi nadie empieza por ahí. Hay dos caminos:</p>
+      <ul>
+        <li><b>Para aprender:</b> construir todo el procesador, con una red simulada. Un motor ISO 8583 de código abierto como jPOS permite escribir un "banco" de pruebas que aprueba, rechaza, demora y duplica respuestas, y probar contra él las idempotency keys, las reversas y la conciliación. Es la mejor forma de entender este módulo.</li>
+        <li><b>Para vender:</b> orquestar sobre un procesador o un adquirente existente (Stripe, Adyen, un banco). Tu sistema conserva lo que aporta valor: el modelo de pagos propio, los reintentos, el ledger interno, la conciliación y los webhooks hacia tus clientes, y delega la tarjeta, la bóveda y la red.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 430" role="img" aria-labelledby="f279t f279d">
+<title id="f279t">Un procesador de pagos sobre AWS</title>
+<desc id="f279d">Los comercios entran por CloudFront y AWS WAF hasta un Application Load Balancer, que reparte hacia la API y el servicio de pagos, en ECS Fargate dentro de la cuenta core. Esa cuenta tiene un Valkey para límites, un cluster Aurora PostgreSQL para pagos y otro para el ledger, un bus MSK, los webhooks con SQS, la conciliación con archivos de liquidación en S3. Los datos de tarjeta viven en una cuenta aparte, dentro del alcance de PCI DSS: la bóveda en ECS, las claves en KMS y CloudHSM, los tokens en DynamoDB cifrado y el conector del adquirente. Las dos cuentas se hablan por PrivateLink. El conector sale hacia el adquirente por una IP fija de un NAT o por Direct Connect, con mensajes ISO 8583 sobre TLS.</desc>
+<defs><marker id="f279a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="22" y="16" width="170" height="44" rx="9"/>
+<text class="dg-label" x="107.0" y="43.0" text-anchor="middle" style="font-size:12.5px">Comercios y navegadores</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="224" y="16" width="150" height="44" rx="9"/>
+<text class="dg-label" x="299.0" y="35.0" text-anchor="middle" style="font-size:12.5px">CloudFront + WAF</text>
+<text class="dg-tiny" x="299.0" y="51.0" text-anchor="middle">reglas y bots</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="406" y="16" width="150" height="44" rx="9"/>
+<text class="dg-label" x="481.0" y="35.0" text-anchor="middle" style="font-size:12.5px">ALB</text>
+<text class="dg-tiny" x="481.0" y="51.0" text-anchor="middle">TLS, 3 zonas</text>
+<path class="dg-edge" d="M194 38 H222" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M376 38 H404" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M481 62 V76 H241 V116" marker-end="url(#f279a)"/>
+<rect class="dg-frame" x="8" y="88" width="314" height="298" rx="12"/>
+<text class="dg-group" x="20" y="106">Cuenta core</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="22" y="118" width="133" height="44" rx="9"/>
+<text class="dg-label" x="88.5" y="137.0" text-anchor="middle" style="font-size:12.5px">Valkey</text>
+<text class="dg-tiny" x="88.5" y="153.0" text-anchor="middle">límites, r7g.large</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="175" y="118" width="133" height="44" rx="9"/>
+<text class="dg-label" x="241.5" y="137.0" text-anchor="middle" style="font-size:12.5px">API y pagos</text>
+<text class="dg-tiny" x="241.5" y="153.0" text-anchor="middle">ECS Fargate ARM</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="22" y="186" width="133" height="44" rx="9"/>
+<text class="dg-label" x="88.5" y="205.0" text-anchor="middle" style="font-size:12.5px">Aurora ledger</text>
+<text class="dg-tiny" x="88.5" y="221.0" text-anchor="middle">r7g.xlarge ×2</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="175" y="186" width="133" height="44" rx="9"/>
+<text class="dg-label" x="241.5" y="205.0" text-anchor="middle" style="font-size:12.5px">Aurora pagos</text>
+<text class="dg-tiny" x="241.5" y="221.0" text-anchor="middle">r7g.xlarge ×2</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="22" y="254" width="133" height="44" rx="9"/>
+<text class="dg-label" x="88.5" y="273.0" text-anchor="middle" style="font-size:12.5px">Conciliación</text>
+<text class="dg-tiny" x="88.5" y="289.0" text-anchor="middle">Batch + Athena</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="175" y="254" width="133" height="44" rx="9"/>
+<text class="dg-label" x="241.5" y="273.0" text-anchor="middle" style="font-size:12.5px">MSK</text>
+<text class="dg-tiny" x="241.5" y="289.0" text-anchor="middle">eventos, m7g.large</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="22" y="322" width="133" height="44" rx="9"/>
+<text class="dg-label" x="88.5" y="341.0" text-anchor="middle" style="font-size:12.5px">Liquidación</text>
+<text class="dg-tiny" x="88.5" y="357.0" text-anchor="middle">SFTP → S3</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="175" y="322" width="133" height="44" rx="9"/>
+<text class="dg-label" x="241.5" y="341.0" text-anchor="middle" style="font-size:12.5px">Webhooks</text>
+<text class="dg-tiny" x="241.5" y="357.0" text-anchor="middle">ECS + SQS</text>
+<path class="dg-edge" d="M173 140 H157" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M241 164 V184" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M196 164 L130 184" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M88 232 V252" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M241 232 V252" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M241 300 V320" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M88 320 V300" marker-end="url(#f279a)"/>
+<rect class="dg-frame" x="430" y="88" width="332" height="198" rx="12"/>
+<text class="dg-group" x="442" y="106">Cuenta CDE (alcance de PCI DSS)</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="446" y="118" width="133" height="44" rx="9"/>
+<text class="dg-label" x="512.5" y="137.0" text-anchor="middle" style="font-size:12.5px">Bóveda</text>
+<text class="dg-tiny" x="512.5" y="153.0" text-anchor="middle">ECS, sin internet</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="600" y="118" width="148" height="44" rx="9"/>
+<text class="dg-label" x="674.0" y="137.0" text-anchor="middle" style="font-size:12.5px">Claves</text>
+<text class="dg-tiny" x="674.0" y="153.0" text-anchor="middle">KMS + CloudHSM</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="446" y="214" width="133" height="44" rx="9"/>
+<text class="dg-label" x="512.5" y="233.0" text-anchor="middle" style="font-size:12.5px">Conector</text>
+<text class="dg-tiny" x="512.5" y="249.0" text-anchor="middle">jPOS en EC2</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="600" y="214" width="148" height="44" rx="9"/>
+<text class="dg-label" x="674.0" y="233.0" text-anchor="middle" style="font-size:12.5px">Tokens</text>
+<text class="dg-tiny" x="674.0" y="249.0" text-anchor="middle">DynamoDB cifrado</text>
+<path class="dg-edge" d="M581 140 H598" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M581 236 H598" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M310 140 H444" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M310 156 L444 226" marker-end="url(#f279a)"/>
+<text class="dg-tiny" x="376" y="132" text-anchor="middle">PrivateLink</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="430" y="372" width="190" height="40" rx="9"/>
+<text class="dg-label" x="525.0" y="389.0" text-anchor="middle" style="font-size:12.5px">NAT con IP fija</text>
+<text class="dg-tiny" x="525.0" y="405.0" text-anchor="middle">o Direct Connect</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="652" y="372" width="110" height="40" rx="9"/>
+<text class="dg-label" x="707.0" y="397.0" text-anchor="middle" style="font-size:12.5px">Adquirente</text>
+<path class="dg-edge" d="M512 260 V370" marker-end="url(#f279a)"/>
+<path class="dg-edge" d="M622 392 H650" marker-end="url(#f279a)"/>
+<text class="dg-tiny" x="524" y="322">ISO 8583 sobre TLS</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 27.9.</b> Un <span class="badge badge--ref">Diseño de referencia</span> con dos cuentas de AWS. La de datos de tarjeta (CDE) es la única que entra en el alcance más estricto de PCI DSS, y se comunica con el core por PrivateLink.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Con qué la armas en AWS</th><th>Qué tener en cuenta</th></tr></thead>
+          <tbody>
+            <tr><td>Entrada y protección</td><td>CloudFront, AWS WAF con reglas administradas y reglas por tasa, Application Load Balancer en tres zonas</td><td>Las reglas por tasa por IP frenan buena parte del card testing antes de que toque tu código.</td></tr>
+            <tr><td>API y servicio de pagos</td><td>ECS con Fargate sobre ARM (tareas de 1 vCPU y 2 GB, unos 0.04 USD por hora), o EKS si ya operas Kubernetes. Mínimo seis tareas, dos por zona</td><td>Sin estado. Las conexiones a la base pasan por RDS Proxy o PgBouncer.</td></tr>
+            <tr><td>Base de pagos</td><td>Aurora PostgreSQL, db.r7g.xlarge (4 vCPU, 32 GB) con un escritor y un lector en otra zona, por celda</td><td>El almacenamiento guarda seis copias en tres zonas; el failover tarda segundos. Tablas particionadas por mes.</td></tr>
+            <tr><td>Idempotencia</td><td>Un esquema aparte en Aurora, o DynamoDB con escrituras condicionales</td><td>El TTL de DynamoDB borra con retraso de horas o días: el vencimiento de 24 horas se comprueba al leer.</td></tr>
+            <tr><td>Ledger</td><td>Un clúster Aurora propio (r7g.xlarge ×2), o TigerBeetle en tres a seis instancias i4i</td><td>Carga, retención y copias de seguridad distintas del resto: no comparten instancia. Se prueban las restauraciones.</td></tr>
+            <tr><td>Límites de tasa y locks</td><td>ElastiCache para Valkey, cache.r7g.large, con réplica en otra zona</td><td>Fail-open para los límites.</td></tr>
+            <tr><td>Eventos y outbox</td><td>Amazon MSK (3 brokers kafka.m7g.large) con Debezium en MSK Connect, leyendo el outbox de Aurora</td><td>Clave de partición: la cuenta. Replicación 3 y <code>min.insync.replicas</code> 2.</td></tr>
+            <tr><td>Envío de webhooks</td><td>Fargate consumiendo colas SQS por endpoint; EventBridge Scheduler para el próximo intento</td><td>Una cola SQS retrasa un mensaje 15 minutos como máximo: los reintentos de horas o días necesitan un calendario propio.</td></tr>
+            <tr><td>Bóveda y claves</td><td>Cuenta aparte, con ECS sin acceso a internet, KMS con claves propias, CloudHSM (dos HSM en zonas distintas) para las claves maestras y tokens en DynamoDB cifrado. AWS Payment Cryptography si necesitas PIN o EMV</td><td>PrivateLink como única conexión con el core. El alcance de PCI DSS se limita a esta cuenta.</td></tr>
+            <tr><td>Conector del adquirente</td><td>Dos instancias EC2 m7g.xlarge con jPOS, en dos zonas. Salida por un NAT Gateway con Elastic IP, o Direct Connect o VPN</td><td>El adquirente acepta conexiones desde IPs fijas y con certificados de cliente. Mantiene una sesión TCP con TLS y un eco (0800) periódico. Está dentro del alcance de PCI DSS.</td></tr>
+            <tr><td>Conciliación</td><td>AWS Transfer Family (SFTP) hacia S3, AWS Batch o Glue, y Athena</td><td>El formato del archivo lo define cada adquirente.</td></tr>
+            <tr><td>Auditoría y cumplimiento</td><td>CloudTrail, AWS Config, Security Hub con el estándar de PCI DSS, S3 Object Lock en modo de cumplimiento para los registros</td><td>AWS Artifact entrega el certificado de cumplimiento de PCI DSS de AWS. Con la responsabilidad compartida, AWS cubre su parte y tu aplicación sigue siendo tuya.</td></tr>
+            <tr><td>Observabilidad</td><td>CloudWatch con Embedded Metric Format (métricas por emisor), OpenTelemetry y X-Ray</td><td>Las alarmas por emisor y por comercio, no solo globales.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un orden razonable para construirlo, en el que cada paso deja algo que se puede probar:</p>
+      <ol class="steps">
+        <li><span class="step-title">Dinero y ledger</span>Tablas, la invariante de suma cero en la base y pruebas basadas en propiedades: para cualquier secuencia de capturas, reembolsos y liquidaciones, los saldos derivados coinciden con un modelo simple.</li>
+        <li><span class="step-title">PaymentIntent y su máquina de estados</span>Transiciones condicionadas al estado anterior, sobre una base local en un contenedor.</li>
+        <li><span class="step-title">Idempotencia con puntos de recuperación</span>Y una prueba que mata el proceso en cada línea de la operación y comprueba que un reintento deja un solo cobro.</li>
+        <li><span class="step-title">Un banco simulado y el conector</span>Con jPOS: aprobados, rechazos, timeouts, respuestas duplicadas y caídas de la conexión. El conector guarda el STAN antes de salir y envía reversas.</li>
+        <li><span class="step-title">Outbox, bus y webhooks</span>Con firma, backoff y un receptor de ejemplo que deduplica.</li>
+        <li><span class="step-title">Límites, WAF y reglas contra card testing</span>Con el token bucket en Valkey y un ataque simulado contra tu propio formulario.</li>
+        <li><span class="step-title">Conciliación</span>Con archivos de liquidación sintéticos donde inyectas errores: un cobro que falta, un monto distinto, un duplicado.</li>
+        <li><span class="step-title">Segmentar y desplegar</span>La cuenta CDE aparte, celdas y un despliegue canary por celda con rollback automático.</li>
+      </ol>
+
+      <div data-calc="bom" data-preset="m27"></div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Qué no construir</p>
+        <ul>
+          <li><b>Tu propia bóveda de tarjetas</b>, si no eres el procesador: con Elements o Checkout, la tarjeta nunca toca tus servidores y tu alcance de PCI DSS es el más simple.</li>
+          <li><b>Tu propio servidor de 3D Secure.</b> Lo aporta el procesador o el adquirente.</li>
+          <li><b>Un modelo de fraude propio al inicio.</b> Empieza con reglas y las señales del procesador. Un modelo necesita datos de toda una red para ser mejor que unas buenas reglas.</li>
+          <li><b>Un adquirente.</b> Es una empresa regulada, no un servicio.</li>
+        </ul>
+        <p>La factura de arriba no incluye lo que más pesa en un procesador real: las comisiones de la red y del adquirente, las auditorías de PCI DSS y el equipo de guardia.</p>
+      </aside>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 
@@ -562,8 +1381,9 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
           <ul>
             <li><b>Una clave por suscripción y período:</b> <code>sub_123-2026-10</code>. Si el proceso muere y arranca de nuevo, repite requests con las mismas claves y el procesador devuelve el resultado guardado: nadie paga dos veces, aunque se reintente todo el lote.</li>
             <li><b>El estado en la base, no en el proceso:</b> una tabla de facturas (<code>invoice</code> por suscripción y período) con su estado. El job toma facturas pendientes en tandas, y cada factura avanza por su propia máquina de estados: pendiente, cobrando, pagada, fallida.</li>
-            <li><b>Ritmo:</b> 2 millones de cobros a 100 por segundo son unas 5.6 horas. Con un token bucket de 80 por segundo para dejar margen al resto de la API, unas 7 horas: se reparte el día 1 completo, o se escalonan las fechas de renovación.</li>
+            <li><b>Ritmo:</b> 2 millones de cobros a 100 por segundo son unas 5.6 horas. Con un token bucket de 80 por segundo del lado del cliente para dejar margen al resto de la API, unas 7 horas: se reparte el día 1 completo, o se escalonan las fechas de renovación. Un 429 se reintenta con backoff y jitter; no cuenta como intento fallido del cliente.</li>
             <li><b>Fallas:</b> un rechazo reintentable (91, fondos insuficientes) se reprograma a los 3, 5 y 7 días (dunning), con aviso al cliente para actualizar su tarjeta; un rechazo definitivo (tarjeta robada) no se reintenta. Un error del procesador (5xx, timeout) se reintenta con la misma clave, sin contar como intento fallido del cliente.</li>
+            <li><b>Autenticación:</b> los cobros recurrentes son iniciados por el comercio y se apoyan en el acuerdo que el cliente autenticó al suscribirse; si el banco responde con un rechazo suave que pide autenticación, el cliente recibe un aviso para completarla, no una baja.</li>
             <li><b>El acceso depende del webhook y de la factura:</b> se corta solo cuando la factura lleva 15 días fallida, y un pago tardío que llega por webhook la marca pagada y restablece el acceso.</li>
             <li><b>Conciliación:</b> al día siguiente, lo cobrado según el procesador contra las facturas pagadas; cualquier cobro sin factura pagada es la excepción a investigar primero.</li>
           </ul>
@@ -591,5 +1411,6 @@ def firma_valida(cuerpo: bytes, cabecera: str, secreto: str, tolerancia: int = 3
 <script src="../assets/js/core/quiz.js"></script>
 <script src="../assets/js/map/map-engine.js"></script>
 <script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
 </body>
 </html>

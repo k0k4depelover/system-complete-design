@@ -127,7 +127,7 @@ message MessageDelta {
 { "data": { "sendMessage": { "id": "msg_18", "content": "Hola", "conversation": { "title": "Viaje", "unreadCount": 0 } } } }</code></pre>
         </section>
         <section data-tab="SSE">
-          <p>La request es un POST normal; la respuesta queda abierta y trae eventos a medida que ocurren. Es el formato de los LLMs (M17).</p>
+          <p>La request es un POST normal; la respuesta queda abierta y trae eventos a medida que ocurren. Es el formato de los LLMs (<a href="m17-api-streaming.html#sse">M17</a>).</p>
 <pre data-lang="sse"><code>event: message.created
 id: 1
 data: {"message_id": "msg_19", "role": "assistant"}
@@ -408,7 +408,7 @@ If-Match: "v17"
           </tbody>
         </table>
       </div>
-      <p>Las conexiones persistentes cambian la escala del problema: ya no importan tanto las requests por segundo como las <b>conexiones abiertas</b> y la memoria que ocupa cada una. Y aparecen problemas nuevos: un deploy que reinicia servidores desconecta a cientos de miles de clientes a la vez, que reconectan todos juntos (se mitiga con reconexión con jitter y drenaje gradual), y enviar un mensaje a un usuario exige saber en qué servidor está su conexión (un registro de presencia o pub/sub, que verás en WhatsApp, M29).</p>
+      <p>Las conexiones persistentes cambian la escala del problema: ya no importan tanto las requests por segundo como las <b>conexiones abiertas</b> y la memoria que ocupa cada una. Y aparecen problemas nuevos: un deploy que reinicia servidores desconecta a cientos de miles de clientes a la vez, que reconectan todos juntos (se mitiga con reconexión con jitter y drenaje gradual), y enviar un mensaje a un usuario exige saber en qué servidor está su conexión (un registro de presencia o pub/sub, que verás en <a href="m29-whatsapp.html#registro">WhatsApp, M29</a>).</p>
 
       <h2 id="webhooks"><span class="sec-num">2.9</span>Webhooks: tu sistema llamando al de otros</h2>
       <p>Un webhook invierte la dirección: cuando pasa algo (un pago se confirma), tu sistema envía un POST a la URL que registró el cliente. Eso significa depender de un servidor ajeno, que puede estar caído, lento o mal programado. Las reglas, de los dos lados:</p>

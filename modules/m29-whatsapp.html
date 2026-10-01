@@ -1,0 +1,1084 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M29. WhatsApp</title>
+<meta name="description" content="Caso de estudio de una plataforma de mensajería: conexiones persistentes y gateways, registro de sesiones para saber dónde está cada usuario, mensajes que esperan en un buzón, recibos de entrega, grupos, cifrado de extremo a extremo con el protocolo Signal, multidispositivo, medios, notificaciones push, tormentas de reconexión y cómo armar un clon sobre AWS, con un mapa explorable de ocho escenarios.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m29">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>WhatsApp</h1>
+        <p class="lead">Mandar un mensaje parece lo más simple que hace un teléfono, hasta que el destinatario está sin batería, o tiene cuatro dispositivos, o es uno de 1 024 en un grupo, o el servidor que sostenía su conexión se cae. Este caso de estudio construye un sistema de mensajería pieza por pieza: cómo se mantienen cientos de millones de conexiones abiertas, cómo se sabe en qué servidor está cada persona, cómo se garantiza que un mensaje llegue una sola vez aunque todo falle, y qué instancias de AWS usarías para armar tu propio clon.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M29</dd></div>
+          <div><dt>Parte</dt><dd>III. Casos de estudio</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M03, M06, M07, M10</dd></div>
+          <div><dt>Estado</dt><dd data-status="m29">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar por qué una app de mensajería mantiene una conexión persistente y qué cuesta sostener cientos de miles por servidor.</li>
+          <li>Diseñar un registro de sesiones que diga en qué gateway está cada dispositivo, y manejar sus entradas viejas y carreras.</li>
+          <li>Garantizar que un mensaje llegue una sola vez con almacenamiento previo en un buzón, acks e idempotencia del cliente.</li>
+          <li>Repartir un mensaje a un grupo de cientos de personas y calcular su costo.</li>
+          <li>Describir cómo funciona el cifrado de extremo a extremo (prekeys, X3DH, Sender Keys) y qué ve y qué no ve el servidor.</li>
+          <li>Soportar varios dispositivos por cuenta, medios pesados, notificaciones push y llamadas.</li>
+          <li>Sobrevivir a la caída de un gateway y desplegar versiones nuevas sin provocar una tormenta de reconexión.</li>
+          <li>Armar tu propio clon en AWS: con qué instancias y servicios, cuántos gateways hacen falta y cuánto costaría.</li>
+        </ul>
+      </section>
+
+      <h2 id="panorama"><span class="sec-num">29.1</span>Qué se construye y qué lo hace difícil</h2>
+
+      <p>WhatsApp entrega más de 100 000 millones de mensajes por día y tiene más de 3 000 millones de usuarios mensuales. <span class="badge badge--doc">Documentado</span> Sus requisitos se parecen poco a los de un sitio web:</p>
+      <ul>
+        <li><b>Entrega garantizada sin importar el destinatario.</b> Un mensaje a alguien con el teléfono apagado tiene que esperar y llegar, sin repetirse ni perderse.</li>
+        <li><b>Latencia de conversación.</b> Un mensaje a alguien conectado llega en unas pocas decenas de milisegundos de servidor. Eso exige una conexión abierta, no una request por mensaje.</li>
+        <li><b>Miles de millones de conexiones de larga vida,</b> casi todas inactivas casi todo el tiempo, sobre redes móviles que cambian de IP, se cortan y se suspenden.</li>
+        <li><b>Privacidad por diseño.</b> El contenido está cifrado de extremo a extremo: el servidor transporta bytes que no puede leer. Eso cambia cómo funcionan las notificaciones, los grupos, los medios y los dispositivos múltiples.</li>
+        <li><b>Barato por mensaje.</b> Un mensaje de texto pesa cientos de bytes y el servicio se sostiene con muy pocos ingenieros y servidores por usuario.</li>
+      </ul>
+
+      <p>La escala que cuenta Rick Reed, ingeniero de WhatsApp, en una charla de 2014 es la mejor radiografía pública de cómo se vive con esos requisitos: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dato (2014)</th><th class="r">Valor</th></tr></thead>
+          <tbody>
+            <tr><td>Usuarios activos por mes</td><td class="r">465 millones</td></tr>
+            <tr><td>Conexiones simultáneas en el pico</td><td class="r">147 millones</td></tr>
+            <tr><td>Mensajes por día, entrantes y salientes</td><td class="r">19 000 y 40 000 millones</td></tr>
+            <tr><td>Servidores de chat</td><td class="r">unos 150, con cerca de 1 millón de conexiones cada uno</td></tr>
+            <tr><td>Servidores de medios</td><td class="r">unos 250</td></tr>
+            <tr><td>Total de servidores y núcleos</td><td class="r">unos 550 y más de 11 000</td></tr>
+            <tr><td>Fotos y mensajes de voz por día</td><td class="r">600 millones y 200 millones</td></tr>
+            <tr><td>Tecnología</td><td class="r">Erlang y FreeBSD, con bases Mnesia</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Dos cuentas que salen de esa tabla y guían el resto del módulo: 147 millones de conexiones entre 150 servidores son casi un millón por máquina, y 40 000 millones de mensajes salientes por día son unos 460 000 por segundo de promedio. En 2012, una sola máquina había superado los 2 millones de conexiones en una prueba; en 2014 el promedio era la mitad, porque cada conexión hacía más trabajo. Sostener una conexión es barato; lo que cuesta es lo que se hace con ella.</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Qué es documentado y qué no</p>
+        <p>De WhatsApp hay mucho documentado con precisión: su protocolo de cifrado y cómo se distribuyen las claves (el documento técnico que publica), la arquitectura de multidispositivo (un artículo de ingeniería de Meta), los límites de la plataforma y las cifras de escala de sus propios ingenieros. Lo marcamos como <span class="badge badge--doc">Documentado</span>. Su infraestructura actual no se publica: el registro de sesiones, los buzones, el fan-out y todo lo que sigue en el mapa son un <span class="badge badge--ref">Diseño de referencia</span>, el que construirías tú con piezas conocidas y coherente con lo publicado.</p>
+      </aside>
+
+      <h2 id="mapa"><span class="sec-num">29.2</span>El mapa completo</h2>
+
+      <p>Explora el sistema antes de entrar en cada pieza. Hay una fila de teléfonos, una capa de gateways que sostienen las conexiones, un registro que sabe dónde está cada dispositivo y un conjunto de servicios detrás. Reproduce los ocho escenarios: el camino de un mensaje con el destinatario conectado y sin conexión, un grupo, el primer mensaje a alguien nuevo, una foto, un teléfono con una computadora, la caída de un gateway y un despliegue.</p>
+
+      <div data-map="m29-whatsapp"></div>
+
+      <h2 id="conexion"><span class="sec-num">29.3</span>La conexión persistente</h2>
+
+      <p>Una app de mensajería no pregunta al servidor si hay mensajes nuevos cada pocos segundos (polling): gastaría batería y datos sin necesidad, y tardaría hasta un ciclo de polling en enterarse. Mantiene <b>una conexión TCP abierta</b> contra un gateway, por la que el servidor empuja lo que llega. El teléfono se entera del mensaje en el momento en que el servidor lo tiene.</p>
+
+      <p>El canal entre el teléfono y el servidor está cifrado con el protocolo Noise Pipes (Noise Protocol Framework con Curve25519, AES-GCM y SHA-256), elegido para conexiones de larga vida: el handshake es liviano, una conexión se puede retomar rápido y los metadatos de la conexión viajan cifrados. La app se autentica con un par de claves Curve25519: el servidor solo guarda la clave pública, así que si su base de usuarios se filtra no hay credenciales privadas que robar. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 478" role="img" aria-labelledby="f291t f291d">
+<title id="f291t">Vida de una conexión persistente</title>
+<desc id="f291d">El teléfono abre la conexión con un handshake y dice hasta qué mensaje recibió. El gateway anota la sesión en el registro con un epoch y un TTL de 90 segundos, y le entrega los mensajes pendientes. Cada 30 segundos el teléfono manda un ping y el gateway renueva el TTL de todas sus sesiones en un lote. Si el teléfono pierde la red, el ping deja de llegar; el gateway cierra la conexión y borra su entrada solo si el epoch sigue siendo el suyo. Si el gateway muere, las entradas se vencen por su TTL.</desc>
+<defs><marker id="f291-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f291-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f291-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f291-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Teléfono</text>
+<path class="dg-frame" d="M70.0 40 V468"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Gateway</text>
+<path class="dg-frame" d="M385.0 40 V468"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Registro</text>
+<path class="dg-frame" d="M700.0 40 V468"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f291-a)"/>
+<rect x="119.2" y="55" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">handshake + Hello (last_seq 40)</text>
+<path class="dg-edge" d="M388.0 106 L695.0 106" marker-end="url(#f291-a)"/>
+<rect x="434.2" y="89" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="100" text-anchor="middle">SET sesión (epoch 12, TTL 90 s)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 140 L75.0 140" marker-end="url(#f291-r)"/>
+<rect x="158.8" y="123" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">mensajes pendientes</text>
+<path d="M20 172 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="161" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="176" text-anchor="middle" style="fill:var(--fail)">pasan 30 segundos</text>
+<path class="dg-edge" d="M73.0 208 L380.0 208" marker-end="url(#f291-a)"/>
+<rect x="208.3" y="191" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="202" text-anchor="middle">Ping</text>
+<path class="dg-edge" d="M388.0 242 L695.0 242" marker-end="url(#f291-a)"/>
+<rect x="467.2" y="225" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="236" text-anchor="middle">renovar TTL (en lote)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 276 L75.0 276" marker-end="url(#f291-r)"/>
+<rect x="208.3" y="259" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="270" text-anchor="middle">Pong</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">el teléfono entra a un túnel: sin red</text>
+<rect x="395.0" y="330" width="209" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="346">sin ping: cierra a los 75 s</text>
+<path class="dg-edge" d="M388.0 378 L695.0 378" marker-end="url(#f291-a)"/>
+<rect x="470.5" y="361" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="372" text-anchor="middle">borrar si epoch = 12</text>
+<path d="M20 410 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="399" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="414" text-anchor="middle" style="fill:var(--fail)">si el gateway muere sin borrar, el TTL vence a los 90 s</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.1.</b> El teléfono habla con un gateway, y el gateway anota la sesión en el registro. El ping periódico sirve para dos cosas: mantener abierto el camino por los NAT de las operadoras y renovar el TTL de la entrada del registro.</figcaption>
+      </figure>
+
+      <h3 id="anatomia">Qué cuesta una conexión</h3>
+
+      <ul>
+        <li><b>Memoria.</b> El socket del kernel, el estado de TLS o Noise y los buffers de la aplicación suman entre 10 y 50 KB por conexión. Con 400 000 conexiones, entre 4 y 20 GB: la memoria, no la CPU, suele ser el límite de un gateway. En el WhatsApp original cada conexión era un proceso ligero de Erlang, que cuesta unos pocos KB. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Descriptores de archivo y tablas del kernel.</b> Cada conexión es un descriptor; hay que subir el límite del proceso (<code>ulimit -n</code>) y el del sistema, y usar un mecanismo de eventos (epoll en Linux) en lugar de un hilo por conexión (el problema clásico C10K y su versión moderna, C10M).</li>
+        <li><b>Seguimiento de conexiones.</b> En EC2, las conexiones de los grupos de seguridad se siguen una por una y cada tipo de instancia tiene un máximo de conexiones seguidas; superarlo descarta paquetes. La métrica de la interfaz ENA <code>conntrack_allowance_exceeded</code> dice si pasa. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Ancho de banda bajo, pero no nulo.</b> Una conexión inactiva manda un ping de unas decenas de bytes cada medio minuto, que con las cabeceras de TCP, IP y TLS son unos 100 bytes en cada dirección. 400 000 conexiones hacen unos 13 000 pings por segundo: unos 10 Mbps de entrada y otros tantos de salida, una fracción de una interfaz de 10 Gbps. Lo que pesa de verdad son los mensajes, las entregas y las reconexiones.</li>
+        <li><b>El costo de la energía del teléfono.</b> Cada vez que la radio se despierta para un ping gasta batería. El intervalo de ping es un compromiso: más largo ahorra batería, pero los NAT de las operadoras cierran conexiones que callan demasiado (algunas en pocos minutos) y se tarda más en notar un corte.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dato</th><th>Valor</th><th>Fuente</th></tr></thead>
+          <tbody>
+            <tr><td>Conexiones en un servidor, en una prueba de 2012</td><td>Más de 2 millones (2.8 millones en el mejor caso)</td><td><span class="badge badge--doc">Documentado</span> Erlang y FreeBSD</td></tr>
+            <tr><td>Conexiones por servidor de chat en producción, 2014</td><td>Cerca de 1 millón</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td>Un objetivo prudente para tu gateway, en Go, Java, Rust o Elixir</td><td>200 000 a 500 000 en 8 vCPU y 32 GB</td><td><span class="badge badge--ref">Diseño de referencia</span></td></tr>
+            <tr><td>Phoenix (Elixir): conexiones WebSocket en un servidor</td><td>2 millones, en una prueba de 2015 con 40 núcleos y 128 GB</td><td><span class="badge badge--doc">Documentado</span> por sus autores</td></tr>
+            <tr><td>Timeout por inactividad de un Network Load Balancer de AWS</td><td>350 s por defecto, configurable de 60 a 6 000 s</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El último dato importa más de lo que parece: si el ping de la app es más largo que el timeout del balanceador, el balanceador corta conexiones sanas y el registro de sesiones se llena de entradas que mienten. El keepalive siempre se elige más corto que el timeout más corto de todo el camino.</p>
+
+      <h3 id="protocolo">El protocolo dentro de la conexión</h3>
+
+      <p>Sobre la conexión viaja un protocolo binario propio, con mensajes chicos de longitud prefijada. Un diseño de referencia, con los tipos de frame que aparecen en el mapa:</p>
+
+<pre data-lang="text"><code>message Frame {
+  oneof body {
+    Hello     hello   = 1;   // versión, device_id, last_seq: "tengo todo hasta aquí"
+    Send      send    = 2;   // msg_id, destino, un ciphertext por dispositivo destino, tipo
+    ServerAck sack    = 3;   // msg_id: el servidor guardó el mensaje (primer tilde)
+    Deliver   deliver = 4;   // seq, msg_id, emisor, ciphertext
+    DeviceAck dack    = 5;   // seq: "recibí y guardé todo hasta este número"
+    Receipt   receipt = 6;   // msg_id, delivered | read
+    Presence  presence = 7;  // escribiendo…, en línea
+    Ping      ping    = 8;   // y Pong
+  }
+}</code></pre>
+
+      <ul>
+        <li><b>Los identificadores los genera el teléfono.</b> El <code>msg_id</code> lo crea el cliente (un UUID): permite reintentar sin duplicar, que es lo único que se puede hacer cuando no se sabe si un mensaje llegó.</li>
+        <li><b>Los números de secuencia los asigna el servidor, por dispositivo destino.</b> El <code>seq</code> de <code>Deliver</code> es creciente dentro del buzón de ese dispositivo: es el orden de entrega y lo que el <code>DeviceAck</code> confirma de forma acumulativa.</li>
+        <li><b>Hay versión y extensibilidad.</b> Las apps viejas conviven con los servidores nuevos durante años, así que los frames se pueden ampliar sin romper a los clientes antiguos (campos opcionales, como en Protocol Buffers, M02).</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Endpoint HTTPS</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /v1/registro</code> y <code>POST /v1/verificar</code></td><td>El alta: el número de teléfono recibe un código por SMS o llamada, y al verificarlo se crea la cuenta.</td></tr>
+            <tr><td><code>PUT /v1/claves</code></td><td>Sube la identidad, la prekey firmada y un lote de prekeys únicas.</td></tr>
+            <tr><td><code>GET /v1/claves/{usuario}/{dispositivo}</code></td><td>Devuelve un bundle de claves para iniciar una conversación (consume una prekey única).</td></tr>
+            <tr><td><code>POST /v1/grupos</code> y <code>PATCH /v1/grupos/{id}/miembros</code></td><td>Crear grupos y cambiar sus miembros.</td></tr>
+            <tr><td><code>POST /v1/medios/url-subida</code></td><td>Una URL firmada para subir un adjunto cifrado directo al almacenamiento.</td></tr>
+            <tr><td><code>POST /v1/contactos/sincronizar</code></td><td>Cruza la agenda con las cuentas existentes, con hashes y límites, para no filtrar la agenda completa.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="registro"><span class="sec-num">29.4</span>Gateways y registro de sesiones: dónde está cada usuario</h2>
+
+      <p>Si Ana y Beto están conectados a gateways distintos, alguien tiene que saber a cuál llevar el mensaje. La respuesta clásica, y la que sigue este diseño, tiene tres piezas:</p>
+      <ul>
+        <li><b>Muchos gateways,</b> cada uno con cientos de miles de conexiones abiertas. No guardan mensajes ni conocen a los usuarios más allá de sus propias conexiones.</li>
+        <li><b>Un registro de sesiones</b> con una entrada por dispositivo conectado: en qué gateway está ahora.</li>
+        <li><b>Un servicio de mensajes</b> que, para cada destinatario, lee el registro y le manda el mensaje al gateway que corresponde.</li>
+      </ul>
+
+      <p>Los gateways no se hablan entre sí. Uno de ellos escribe la entrada cuando alguien se conecta; otro servicio la lee cuando hay algo para entregar. Esa entrada es el "dónde está cada usuario".</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Cómo se sabe adónde mandar</th><th>Lo bueno</th><th>El costo</th></tr></thead>
+          <tbody>
+            <tr><td><b>Registro central</b></td><td>Una lectura de <code>sess:{usuario}:{dispositivo}</code> en un almacén clave-valor con TTL</td><td>Simple, cualquier servicio puede consultarlo, las entradas viejas vencen solas</td><td>Un salto más por mensaje (un milisegundo); el registro pasa a ser crítico y hay que repartirlo y replicarlo</td></tr>
+            <tr><td><b>Nodo de origen por hash</b></td><td>El hash del usuario dice qué nodo es su "casa"; todas las conexiones de ese usuario terminan allí o se reenvían allí</td><td>Sin registro externo; la ubicación es una cuenta, no una consulta</td><td>Cambiar la cantidad de nodos obliga a mover usuarios; el tráfico de una conexión puede cruzar nodos</td></tr>
+            <tr><td><b>Publicar en un canal por usuario</b></td><td>Cada gateway se suscribe al canal de los usuarios que tiene; el servicio publica en el canal del destinatario</td><td>No hay consulta previa; un mensaje llega a todos los dispositivos que escuchan</td><td>Una suscripción por conexión en el broker; si nadie escucha, el mensaje se pierde, así que igual hace falta el buzón</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El WhatsApp original se parece a la segunda estrategia: los servicios se partían en entre 2 y 32 particiones y se comunicaban con grupos de procesos distribuidos de Erlang, sobre bases Mnesia, y cada conexión era un proceso al que se le podía mandar un mensaje sabiendo a qué partición pertenecía el usuario. <span class="badge badge--doc">Documentado</span> La primera estrategia es la que se arma con piezas de una nube pública, y es la que sigue el resto de este módulo.</p>
+
+      <h3 id="registro-detalle">El registro por dentro</h3>
+
+      <ul>
+        <li><b>Una clave por dispositivo,</b> no por usuario: una cuenta tiene un teléfono y hasta cuatro dispositivos vinculados, y cada uno tiene su conexión (29.9).</li>
+        <li><b>TTL corto renovado por el gateway.</b> La entrada vence a los 90 segundos si nadie la renueva. El gateway renueva todas sus sesiones en un lote cada 30 segundos, lo que tolera dos renovaciones perdidas. Así, cuando un gateway muere sin poder limpiar, sus entradas desaparecen solas.</li>
+        <li><b>Un epoch que crece con cada conexión del dispositivo.</b> Es lo que permite resolver las carreras sin un lock: una entrada nueva siempre gana sobre una vieja, y un gateway solo puede borrar su propia entrada.</li>
+        <li><b>Repartido por hash del usuario,</b> con réplicas. Para 30 millones de conexiones simultáneas son del orden de 5 a 10 GB en memoria (unos 100 bytes por entrada más la sobrecarga de la base).</li>
+      </ul>
+
+<pre data-lang="python"><code>import json, redis
+r = redis.Redis()
+
+# Solo registra si el epoch es mayor que el que ya está: la conexión más nueva gana.
+REGISTRAR = r.register_script("""
+local actual = redis.call('GET', KEYS[1])
+if actual and cjson.decode(actual).epoch >= tonumber(ARGV[2]) then return 0 end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[3]))
+return 1
+""")
+
+# Solo borra si la entrada sigue siendo la de este gateway y esta conexión.
+BORRAR_SI = r.register_script("""
+local actual = redis.call('GET', KEYS[1])
+if actual and cjson.decode(actual).epoch == tonumber(ARGV[1]) then return redis.call('DEL', KEYS[1]) end
+return 0
+""")
+
+def clave(usuario: str, dispositivo: str) -> str:
+    return f"sess:{usuario}:{dispositivo}"
+
+def al_conectar(usuario, dispositivo, mi_gateway, ttl=90):
+    epoch = r.incr(f"epoch:{usuario}:{dispositivo}")          # crece con cada conexión del dispositivo
+    valor = json.dumps({"gw": mi_gateway, "epoch": epoch})
+    REGISTRAR(keys=[clave(usuario, dispositivo)], args=[valor, epoch, ttl])
+    return epoch
+
+def al_cerrar(usuario, dispositivo, mi_epoch):
+    BORRAR_SI(keys=[clave(usuario, dispositivo)], args=[mi_epoch])
+
+def heartbeat(mis_sesiones, ttl=90):                          # una vez cada 30 s, en un solo viaje
+    p = r.pipeline(transaction=False)
+    for usuario, dispositivo in mis_sesiones:
+        p.expire(clave(usuario, dispositivo), ttl)
+    p.execute()
+
+def donde_estan(usuario, dispositivos):                       # para el servicio de mensajes
+    valores = r.mget([clave(usuario, d) for d in dispositivos])
+    return {d: json.loads(v) if v else None for d, v in zip(dispositivos, valores)}</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Problema</th><th>Qué puede pasar</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td>Un gateway muere y su entrada sigue viva hasta 90 s</td><td>El mensaje se manda a un gateway que no responde</td><td>El mensaje ya está en el buzón. El servicio usa un timeout corto, borra la entrada con compare-and-delete y pide un push.</td></tr>
+            <tr><td>El teléfono reconecta en otro gateway antes de que el viejo cierre</td><td>El cierre tardío del viejo borra la entrada nueva y el usuario queda "desconectado" estando conectado</td><td>El epoch: el borrado del viejo falla porque el epoch ya no es el suyo.</td></tr>
+            <tr><td>El mismo dispositivo con dos conexiones (un zombi y una nueva)</td><td>Mensajes duplicados o perdidos</td><td>Al registrar un epoch mayor, se avisa al gateway anterior que cierre su conexión.</td></tr>
+            <tr><td>El registro se cae</td><td>No se sabe dónde está nadie</td><td>Se degrada a "sin conexión": buzón y push. Nada se pierde; hay más notificaciones y más latencia.</td></tr>
+            <tr><td>Un mensaje a un grupo de 1 024 miembros</td><td>1 024 consultas</td><td>Lecturas en lote (<code>MGET</code> por shard) y llamadas agrupadas por gateway.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Ningún mecanismo de este tipo es exacto: el registro siempre sabe algo que dejó de ser cierto hace unos segundos. El diseño lo acepta y hace que el costo de equivocarse sea bajo: lo que el registro dice se trata como una pista para entregar rápido, y la garantía de entrega vive en el buzón. Es la misma idea que las cachés con TTL (M04): tolerar el dato viejo a cambio de no consultar a la fuente de verdad en cada mensaje.</p>
+      </aside>
+
+      <h2 id="mensaje"><span class="sec-num">29.5</span>El camino de un mensaje: guardar, confirmar, entregar</h2>
+
+      <p>La decisión más importante de todo el sistema cabe en una frase: <b>el servidor confirma el mensaje solo después de haberlo guardado en un buzón durable</b>. Es <dfn data-term="store-and-forward">store-and-forward</dfn>. Lo demás (buscar al destinatario, entregar, avisar) son optimizaciones para que llegue rápido; si fallan, el mensaje sigue esperando donde debe.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 580" role="img" aria-labelledby="f292t f292d">
+<title id="f292t">Camino de un mensaje entre dos gateways distintos</title>
+<desc id="f292d">Ana envía el mensaje a su gateway, que lo pasa al servicio de mensajes. El servicio lo guarda en el buzón de Beto y confirma a Ana con el primer tilde. Después pregunta al registro dónde está Beto, que responde con el gateway B. El servicio entrega el mensaje a ese gateway, que lo escribe en la conexión de Beto. Beto guarda el mensaje, confirma con un DeviceAck y el servicio lo borra del buzón y avisa a Ana que se entregó, con el segundo tilde.</desc>
+<defs><marker id="f292-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f292-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f292-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f292-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="21.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Ana</text>
+<path class="dg-frame" d="M70.0 40 V570"/>
+<rect class="dg-box" x="126.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="175.0" y="29" text-anchor="middle" style="font-size:13.5px">Gateway A</text>
+<path class="dg-frame" d="M175.0 40 V570"/>
+<rect class="dg-box" x="231.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Mensajes</text>
+<path class="dg-frame" d="M280.0 40 V570"/>
+<rect class="dg-box" x="336.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Registro</text>
+<path class="dg-frame" d="M385.0 40 V570"/>
+<rect class="dg-box" x="441.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Buzón</text>
+<path class="dg-frame" d="M490.0 40 V570"/>
+<rect class="dg-box" x="546.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="595.0" y="29" text-anchor="middle" style="font-size:13.5px">Gateway B</text>
+<path class="dg-frame" d="M595.0 40 V570"/>
+<rect class="dg-box" x="651.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Beto</text>
+<path class="dg-frame" d="M700.0 40 V570"/>
+<path class="dg-edge" d="M73.0 72 L170.0 72" marker-end="url(#f292-a)"/>
+<rect x="80.2" y="55" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="122.5" y="66" text-anchor="middle">Send m_7f3a</text>
+<path class="dg-edge" d="M178.0 106 L275.0 106" marker-end="url(#f292-a)"/>
+<rect x="208.3" y="89" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="100" text-anchor="middle">Send</text>
+<path class="dg-edge" d="M283.0 140 L485.0 140" marker-end="url(#f292-a)"/>
+<rect x="355.9" y="123" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">PutItem</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 174 L285.0 174" marker-end="url(#f292-r)"/>
+<rect x="342.7" y="157" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="168" text-anchor="middle">ok · seq 41</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 208 L75.0 208" marker-end="url(#f292-r)"/>
+<rect x="126.1" y="191" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="202" text-anchor="middle">ServerAck (✓)</text>
+<path class="dg-edge" d="M283.0 242 L380.0 242" marker-end="url(#f292-a)"/>
+<rect x="303.4" y="225" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="332.5" y="236" text-anchor="middle">¿dónde?</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 276 L285.0 276" marker-end="url(#f292-r)"/>
+<rect x="296.8" y="259" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="332.5" y="270" text-anchor="middle">gateway B</text>
+<path class="dg-edge" d="M283.0 310 L590.0 310" marker-end="url(#f292-a)"/>
+<rect x="398.5" y="293" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="304" text-anchor="middle">Deliver 41</text>
+<path class="dg-edge" d="M598.0 344 L695.0 344" marker-end="url(#f292-a)"/>
+<rect x="608.5" y="327" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="647.5" y="338" text-anchor="middle">Deliver 41</text>
+<rect x="551.0" y="364" width="139" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="561.0" y="380">guarda y descifra</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 412 L600.0 412" marker-end="url(#f292-r)"/>
+<rect x="601.9" y="395" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="647.5" y="406" text-anchor="middle">DeviceAck 41</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M592.0 446 L285.0 446" marker-end="url(#f292-r)"/>
+<rect x="391.9" y="429" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="440" text-anchor="middle">DeviceAck 41</text>
+<path class="dg-edge" d="M283.0 480 L485.0 480" marker-end="url(#f292-a)"/>
+<rect x="346.0" y="463" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="474" text-anchor="middle">DeleteItem</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 514 L75.0 514" marker-end="url(#f292-r)"/>
+<rect x="93.10000000000001" y="497" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="508" text-anchor="middle">Receipt: entregado (✓✓)</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.2.</b> Dos confirmaciones distintas: el primer tilde significa "el servidor lo tiene"; el segundo, "el dispositivo del destinatario lo tiene". Entre ellos, el mensaje puede esperar horas.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">Enviar con un ID propio</span>El teléfono cifra y manda <code>Send</code> con un <code>msg_id</code> que generó él. Hasta no recibir el <code>ServerAck</code>, el mensaje está "pendiente" y se reintenta con el mismo ID.</li>
+        <li><span class="step-title">Guardar en el buzón de cada dispositivo destino</span>El servicio de mensajes escribe una entrada por dispositivo de Beto, de forma condicional, para que dos veces el mismo <code>msg_id</code> no genere dos entradas. La escritura recibe un número de secuencia por dispositivo.</li>
+        <li><span class="step-title">Confirmar al emisor</span><code>ServerAck</code>: primer tilde. Desde este instante, el mensaje sobrevive a cualquier falla del resto del camino.</li>
+        <li><span class="step-title">Buscar y entregar</span>Lee el registro y llama al gateway de Beto. Si no hay sesión, o el gateway no responde a tiempo, pide un push.</li>
+        <li><span class="step-title">Confirmar la recepción</span>El teléfono de Beto guarda el mensaje en su base local y manda <code>DeviceAck</code> con el número de secuencia. Un solo ack acumulativo cubre todo lo anterior.</li>
+        <li><span class="step-title">Borrar y avisar</span>El servicio borra las entradas confirmadas y le manda a Ana un recibo de entrega: segundo tilde.</li>
+      </ol>
+
+      <p>Con esos pasos, las garantías salen de dos reglas simples. El servidor entrega <b>al menos una vez</b>: si no recibe el <code>DeviceAck</code>, reenvía. El cliente <b>descarta los duplicados</b> por <code>msg_id</code>. La suma es un efecto único para la persona, aunque por debajo haya reenvíos (M02, M07).</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde falla</th><th>Qué ve Ana</th><th>Qué pasa</th></tr></thead>
+          <tbody>
+            <tr><td>La conexión se corta antes de llegar al gateway</td><td>Sin tilde, con un reloj</td><td>La app reintenta con el mismo <code>msg_id</code> al reconectar.</td></tr>
+            <tr><td>El servicio guardó el mensaje y murió antes de confirmar</td><td>Sin tilde</td><td>El reintento choca con la condición del buzón, se detecta el duplicado y se devuelve el mismo ack.</td></tr>
+            <tr><td>El gateway de Beto muere con el mensaje "en vuelo"</td><td>Un tilde</td><td>El mensaje sigue en el buzón; se entrega cuando Beto reconecte.</td></tr>
+            <tr><td>El <code>DeviceAck</code> de Beto se pierde</td><td>Un tilde</td><td>El servidor reenvía; Beto descarta el duplicado por <code>msg_id</code> y vuelve a confirmar.</td></tr>
+            <tr><td>Beto no vuelve a conectarse</td><td>Un tilde</td><td>A los 30 días el mensaje se borra sin entregarse. <span class="badge badge--doc">Documentado</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="buzon">El buzón</h3>
+
+      <p>El buzón es una cola durable por dispositivo: muchas escrituras, lecturas casi siempre del final de la cola y un borrado al confirmar. Con 500 000 mensajes por segundo en el pico y 1.5 dispositivos por destino, son unas 750 000 escrituras y otros tantos borrados por segundo, sobre datos que casi todos viven segundos. Las dos opciones de base para un clon en AWS:</p>
+      <ul>
+        <li><b>DynamoDB:</b> sin operar nada, escala sola, cobra por operación. Es lo más simple para empezar y para el tamaño de un clon mediano. A gran escala, el costo por escritura y por borrado pesa (29.14).</li>
+        <li><b>ScyllaDB o Cassandra en instancias con disco NVMe local (i4i):</b> más baratos por operación a escala, con un modelo de particiones que encaja (clave de partición: el dispositivo; clave de orden: el número de secuencia), pero hay que operarlos.</li>
+      </ul>
+
+      <p>El número de secuencia necesita un contador atómico por dispositivo, y la deduplicación una condición sobre el <code>msg_id</code>. En DynamoDB, las dos cosas juntas son una transacción con dos escrituras:</p>
+
+<pre data-lang="python"><code>import boto3
+from boto3.dynamodb.types import TypeSerializer
+
+cliente = boto3.client("dynamodb")
+S = TypeSerializer().serialize
+TTL_30_DIAS = 30 * 24 * 3600
+
+def poner(dispositivo: str, msg_id: str, emisor: str, blob: bytes, ahora: int) -> bool:
+    """True si el mensaje es nuevo; False si ya estaba (un reintento del cliente)."""
+    # 1) Numerar. Puede dejar huecos si algo falla después; no importa, el ack es acumulativo.
+    seq = cliente.update_item(
+        TableName="buzones", Key={"pk": S(dispositivo), "sk": S("meta")},
+        UpdateExpression="ADD seq :uno", ExpressionAttributeValues={":uno": S(1)},
+        ReturnValues="UPDATED_NEW")["Attributes"]["seq"]["N"]
+    # 2) Guardar el mensaje y su marca de deduplicación, las dos o ninguna.
+    try:
+        cliente.transact_write_items(TransactItems=[
+            {"Put": {"TableName": "buzones",
+                     "Item": {"pk": S(dispositivo), "sk": S(f"id#{msg_id}"), "ttl": S(ahora + 3600)},
+                     "ConditionExpression": "attribute_not_exists(pk)"}},
+            {"Put": {"TableName": "buzones",
+                     "Item": {"pk": S(dispositivo), "sk": S(f"q#{int(seq):012d}"), "msg_id": S(msg_id),
+                              "emisor": S(emisor), "ciphertext": S(blob), "ttl": S(ahora + TTL_30_DIAS)}}}])
+        return True
+    except cliente.exceptions.TransactionCanceledException:
+        return False                      # la marca ya existía: es un duplicado
+
+def pendientes(dispositivo: str, desde: int, limite: int = 100):
+    r = cliente.query(TableName="buzones",
+                      KeyConditionExpression="pk = :d AND sk BETWEEN :a AND :b",
+                      ExpressionAttributeValues={":d": S(dispositivo), ":a": S(f"q#{desde + 1:012d}"), ":b": S("q#~")},
+                      Limit=limite)
+    return r["Items"]</code></pre>
+
+      <p>Una transacción de DynamoDB cuesta el doble de unidades de escritura que una escritura simple. A gran escala se mueve la deduplicación a una caché con TTL de minutos (los reintentos del cliente ocurren en esa ventana) o se diseña la clave del buzón para que sea naturalmente única. El ejemplo favorece la claridad: el sistema correcto primero, el optimizado después.</p>
+
+      <h3 id="recibos">Recibos y estados efímeros</h3>
+
+      <ul>
+        <li><b>Los recibos son mensajes.</b> Un tilde, dos tildes y los tildes azules (leído) son tres eventos que viajan por el mismo camino, en sentido contrario. Cada mensaje de texto genera hasta dos recibos: el tráfico total de un chat es el triple de mensajes de lo que parece. En grupos, los recibos se agregan para no multiplicar por el tamaño del grupo.</li>
+        <li><b>"Escribiendo…" y "en línea" no se guardan.</b> Son estados efímeros, tolerantes a pérdida: si se pierde uno no pasa nada, porque llega otro pronto. No pasan por el buzón; solo se mandan si el destinatario está conectado (una consulta al registro) y solo a quien tiene abierta esa conversación. Mandarlos a todos los contactos de todos los conectados multiplicaría el tráfico por cientos.</li>
+        <li><b>La frecuencia se limita en el cliente.</b> "Escribiendo" se manda una vez cada pocos segundos mientras se escribe, no con cada tecla.</li>
+        <li><b>"Última vez" es un dato grueso.</b> Se actualiza al desconectarse o con el heartbeat, con granularidad de minuto, y se respeta la configuración de privacidad del usuario.</li>
+      </ul>
+
+      <h2 id="offline"><span class="sec-num">29.6</span>Sin conexión: el buzón y las notificaciones push</h2>
+
+      <p>Casi todos los teléfonos pasan casi todo el tiempo sin una conexión abierta: el sistema operativo suspende las apps en segundo plano, el teléfono entra en un túnel o está apagado. Para el servidor, "no conectado" es el estado normal. Por eso el camino de un mensaje a un destinatario sin sesión es el mismo de siempre, más un paso: pedir un push.</p>
+
+      <ol class="steps">
+        <li><span class="step-title">El mensaje ya está en el buzón</span>Se guardó antes de confirmar (29.5). Que el destinatario no esté conectado no cambia el primer tilde.</li>
+        <li><span class="step-title">El registro no tiene sesión</span>La entrada no existe o venció. El servicio de mensajes deja una tarea en una cola y sigue con lo suyo: no espera a Apple ni a Google.</li>
+        <li><span class="step-title">El servicio de push avisa al sistema operativo</span>Toma la tarea y le pide un push a APNs (iOS) o FCM (Android), con el token del dispositivo.</li>
+        <li><span class="step-title">El teléfono despierta la app</span>El sistema muestra una notificación o despierta a la app unos segundos. La app abre la conexión, manda <code>Hello</code> con su último número de secuencia y descarga lo que espera.</li>
+      </ol>
+
+      <h3 id="push">Lo que se puede y no se puede poner en un push</h3>
+
+      <p>Un push es un mensaje aparte, entregado por Apple o Google por su propia conexión persistente con el teléfono. El servidor no controla cuándo llega: puede demorarse por ahorro de batería o perderse. Por eso <b>nunca es la garantía de entrega</b>; la garantía es el buzón. El push solo reduce el tiempo de espera.</p>
+
+      <ul>
+        <li><b>El contenido está cifrado de extremo a extremo,</b> así que el servidor no puede escribir el texto de la notificación. Una forma de resolverlo es un push sin contenido que despierta la app para que se conecte y descargue; otra es incluir el mensaje cifrado en el push (con un límite de 4 KB en APNs y en FCM) y descifrarlo en el teléfono con una extensión del sistema. En ambas, el servidor no conoce el texto. <span class="badge badge--doc">Documentado</span> (el límite de 4 KB)</li>
+        <li><b>Prioridad y colapso.</b> Un push de alta prioridad despierta al teléfono de inmediato y consume batería; uno de baja prioridad puede esperar. Si llegan 50 mensajes a un teléfono apagado se manda un solo aviso, con una clave de colapso (<code>apns-collapse-id</code> en APNs, <code>collapse_key</code> en FCM): el usuario no necesita 50 notificaciones.</li>
+        <li><b>Vencimiento.</b> Si el teléfono sigue apagado, Apple y Google guardan el último aviso un tiempo limitado y después lo descartan (FCM, como máximo cuatro semanas). Cuando el teléfono vuelve, la app igual se conecta al abrirse y descarga todo del buzón.</li>
+        <li><b>Higiene de tokens.</b> Un token caduca cuando se reinstala la app o se cambia de teléfono. APNs responde 410 a un token inválido y FCM, un error <code>UNREGISTERED</code>; en ambos hay que borrar el token, o el servicio seguirá mandando avisos a la nada.</li>
+      </ul>
+
+      <h3 id="drenaje">Descargar lo pendiente</h3>
+
+      <p>Un teléfono que vuelve tras un fin de semana puede tener cientos de mensajes esperando. Cómo entregarlos sin ahogar la conexión ni al servidor:</p>
+      <ul>
+        <li><b>Por lotes y en orden.</b> El servicio lee el buzón desde el <code>last_seq</code> del <code>Hello</code> de a 100 y los manda como una ventana; el teléfono confirma cada lote con un <code>DeviceAck</code> acumulativo y el servidor pide el siguiente (control de flujo).</li>
+        <li><b>Borrar solo lo confirmado.</b> Si la conexión se corta a mitad, el <code>last_seq</code> del próximo <code>Hello</code> dice hasta dónde llegó.</li>
+        <li><b>Lo reciente primero,</b> cuando hay mucho: un teléfono con 5 000 mensajes pendientes puede mostrar primero los últimos de cada chat y sincronizar el resto en segundo plano.</li>
+      </ul>
+
+      <h2 id="grupos"><span class="sec-num">29.7</span>Grupos: un mensaje, muchos destinos</h2>
+
+      <p>Un mensaje a un grupo es el caso que multiplica todo. Ana escribe una vez y el servidor tiene que dejarle el mensaje a cada miembro: en el buzón de cada uno de sus dispositivos. En WhatsApp el cifrado se hace una sola vez, con una Sender Key, y <b>el servidor reparte ese mismo ciphertext</b> a todos (fan-out en el servidor). <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f294t f294d">
+<title id="f294t">Reparto de un mensaje a un grupo</title>
+<desc id="f294d">El teléfono de Ana cifra el mensaje una sola vez con su Sender Key y lo manda al servicio de mensajes. El servicio consulta los dispositivos del grupo, 311 en este ejemplo, y escribe el mismo ciphertext en el buzón de cada uno. De esos, unos 240 están conectados y reciben la entrega por su gateway; los otros 71 reciben un push.</desc>
+<defs><marker id="f294a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="94" width="140" height="56" rx="9"/>
+<text class="dg-label" x="80.0" y="119.0" text-anchor="middle" style="font-size:12.5px">Teléfono de Ana</text>
+<text class="dg-tiny" x="80.0" y="135.0" text-anchor="middle">cifra una sola vez</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="200" y="94" width="160" height="56" rx="9"/>
+<text class="dg-label" x="280.0" y="119.0" text-anchor="middle" style="font-size:12.5px">Servicio de mensajes</text>
+<text class="dg-tiny" x="280.0" y="135.0" text-anchor="middle">lee los miembros</text>
+<path class="dg-edge" d="M152 122 H198" marker-end="url(#f294a)"/>
+<text class="dg-tiny" x="175" y="112" text-anchor="middle">×1</text>
+<text class="dg-group" x="420" y="30">Buzones: 311 entradas con el mismo ciphertext</text>
+<rect x="420" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="452" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="484" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="516" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="548" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="580" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="612" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="644" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="676" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="708" y="48" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="420" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="452" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="484" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="516" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="548" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="580" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="612" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="644" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="676" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="708" y="72" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="420" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="452" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="484" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="516" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="548" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="580" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="612" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="644" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="676" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="708" y="96" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="420" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="452" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="484" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="516" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="548" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="580" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="612" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="644" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="676" y="120" width="24" height="16" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<rect x="708" y="120" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="420" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="452" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="484" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="516" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="548" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="580" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="612" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="644" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="676" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="708" y="144" width="24" height="16" rx="4" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<path class="dg-edge" d="M362 122 C 390 122, 390 60, 416 60" marker-end="url(#f294a)"/>
+<path class="dg-edge" d="M362 122 C 390 122, 390 86, 416 86" marker-end="url(#f294a)"/>
+<path class="dg-edge" d="M362 122 C 390 122, 390 112, 416 112" marker-end="url(#f294a)"/>
+<path class="dg-edge" d="M362 122 C 390 122, 390 138, 416 138" marker-end="url(#f294a)"/>
+<text class="dg-tiny" x="420" y="186">Cada cuadro son unos 6 dispositivos.</text>
+<rect x="420" y="196" width="20" height="12" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)"/>
+<text class="dg-tiny" x="448" y="206">unos 240 conectados: entrega por su gateway</text>
+<rect x="420" y="216" width="20" height="12" rx="3" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<text class="dg-tiny" x="448" y="226">unos 71 sin conexión: un push cada uno</text>
+<text class="dg-small" x="10" y="262">Un mensaje se convierte en 311 escrituras de buzón, 311 lecturas del registro y hasta 311 borrados.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.3.</b> El costo de un grupo no está en el teléfono, que manda un solo mensaje, sino en el servidor: una escritura de buzón por cada dispositivo destino, una lectura del registro, una entrega o un push, y un borrado.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Miembros</th><th class="r">Dispositivos destino (×1.3)</th><th class="r">Escrituras de buzón por mensaje</th><th class="r">Lecturas del registro</th><th class="r">Borrados al confirmar</th></tr></thead>
+          <tbody>
+            <tr><td>Chat de 2 personas</td><td class="r">1.3</td><td class="r">1.3</td><td class="r">1.3</td><td class="r">1.3</td></tr>
+            <tr><td>10</td><td class="r">12</td><td class="r">12</td><td class="r">12</td><td class="r">12</td></tr>
+            <tr><td>256</td><td class="r">331</td><td class="r">331</td><td class="r">331</td><td class="r">331</td></tr>
+            <tr><td>1 024 (el máximo)</td><td class="r">1 330</td><td class="r">1 330</td><td class="r">1 330</td><td class="r">1 330</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Esa amplificación domina la carga del sistema aunque la mayoría de los mensajes sean de a dos. Si el 30&#8239;% de los mensajes son de grupos de 30 personas en promedio y el resto, de a dos, cada mensaje genera en promedio 0.3 × 29 × 1.3 + 0.7 × 1.3 ≈ 12 escrituras de buzón, contra 1.3 si todo fuera de a dos: casi diez veces más escrituras por los grupos, que son la minoría.</p>
+
+      <h3 id="sender-keys">Sender Keys</h3>
+
+      <p>Cifrar un mensaje para cada uno de 256 miembros con la clave de su conversación individual (lo que se hace con los dispositivos de una persona) costaría 256 cifrados por mensaje en el teléfono y 256 ciphertexts distintos que subir. En su lugar, los grupos usan Sender Keys del protocolo Signal: <span class="badge badge--doc">Documentado</span></p>
+      <ol class="steps">
+        <li><span class="step-title">La primera vez que Ana escribe en el grupo,</span>genera una Sender Key (una clave de cadena de 32 bytes y un par de claves de firma) y la cifra <b>por separado para cada dispositivo miembro</b>, con la sesión individual que ya tiene con cada uno. Es un costo único por emisor y por grupo.</li>
+        <li><span class="step-title">En cada mensaje siguiente,</span>deriva una clave de mensaje de la cadena (y avanza la cadena: un ratchet de hash), cifra el mensaje una sola vez, firma el ciphertext y manda <b>un único mensaje</b> al servidor.</li>
+        <li><span class="step-title">El servidor reparte esa única copia</span>a todos los miembros. Los receptores la descifran con la Sender Key de Ana que recibieron antes.</li>
+        <li><span class="step-title">Si alguien sale del grupo,</span>todos los participantes descartan su Sender Key y empiezan de nuevo: así quien se fue no puede leer lo que se escriba después.</li>
+      </ol>
+
+      <p>El último punto tiene un costo oculto. Cuando un miembro sale de un grupo de 256, la próxima vez que escriba cada miembro debe generar una Sender Key nueva y mandarla, cifrada individualmente, a los otros 255. Si después de la salida escriben 50 personas distintas, son 50 × 255 = 12 750 mensajes de distribución de claves, repartidos a lo largo del tiempo a medida que cada uno habla. Los grupos grandes con mucha rotación de miembros pagan en claves lo que ahorran en mensajes.</p>
+
+      <h3 id="grupos-membresia">Membresía y orden</h3>
+
+      <ul>
+        <li><b>El servidor conoce a los miembros.</b> Para hacer el reparto tiene que saber quién está en el grupo; lo que no sabe es lo que se escribe. Los cambios (agregar, quitar, nombrar administradores) son mensajes del grupo con un número de versión.</li>
+        <li><b>Cada mensaje lleva la versión con que se cifró.</b> Si un receptor tiene otra versión, pide los cambios que le faltan antes de descifrar: así un mensaje enviado justo antes de que alguien saliera no se descifra con la membresía equivocada.</li>
+        <li><b>El límite es de 1 024 participantes</b> (eran 256 en 2021 y 512 en 2022). Es un número que sale de las cuentas de amplificación y de Sender Keys, no de una limitación técnica arbitraria. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Los estados (la función de "historias") usan el mismo cifrado que los grupos,</b> con el conjunto de contactos que pueden verlos como miembros. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Difusión masiva es otro problema.</b> Un canal con millones de seguidores no puede pagar una escritura por seguidor: se guarda un solo registro del mensaje y cada seguidor lee con un cursor propio (fan-out on read), como en los timelines del M30.</li>
+      </ul>
+
+      <h2 id="e2ee"><span class="sec-num">29.8</span>Cifrado de extremo a extremo</h2>
+
+      <p>WhatsApp define el cifrado de extremo a extremo como comunicaciones que permanecen cifradas desde un dispositivo controlado por el emisor hasta uno controlado por el receptor, sin que nadie en el medio, ni WhatsApp ni Meta, pueda acceder al contenido. Usa el protocolo Signal. <span class="badge badge--doc">Documentado</span> Esto define qué sabe el servidor:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>El servidor sabe</th><th>El servidor no puede ver</th></tr></thead>
+          <tbody>
+            <tr><td>El número de teléfono de cada cuenta y su lista de dispositivos</td><td>El texto de los mensajes</td></tr>
+            <tr><td>Las claves públicas de cada dispositivo</td><td>Las fotos, los audios, los videos y los documentos (solo ve blobs cifrados)</td></tr>
+            <tr><td>Para quién es cada mensaje y cuándo llega (los metadatos de entrega); cuánto tiempo los conserva es una decisión de la empresa, no una propiedad del cifrado</td><td>Las claves privadas de nadie</td></tr>
+            <tr><td>Quién está en cada grupo (necesita repartir)</td><td>El audio y el video de las llamadas</td></tr>
+            <tr><td>El tamaño de los mensajes y la IP de la conexión</td><td>El contenido de los mensajes ya entregados: el servidor no los conserva</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="prekeys">Cómo dos personas acuerdan una clave sin hablarse</h3>
+
+      <p>Ana y Beto nunca se cruzaron, Beto está desconectado y aun así el primer mensaje de Ana tiene que salir cifrado. El protocolo lo logra con un intercambio asincrónico de claves: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Al instalar la app,</b> cada dispositivo genera y sube al servidor tres cosas, todas públicas: una <b>clave de identidad</b> (Curve25519, de larga duración), una <b>prekey firmada</b> (de mediano plazo, firmada con la identidad) y un lote de <b>prekeys de un solo uso</b>.</li>
+        <li><b>Para escribirle por primera vez,</b> Ana pide al servidor el bundle de Beto: su identidad, su prekey firmada y una prekey única, que el servidor borra al entregarla. Si se agotaron las únicas, entrega el bundle sin ellas.</li>
+        <li><b>Ana calcula un secreto compartido</b> combinando cuatro operaciones Diffie-Hellman entre sus claves (la de identidad y una efímera nueva) y las de Beto (identidad, prekey firmada y prekey única). Es el acuerdo X3DH. De ahí deriva una clave raíz y las claves de cadena con HKDF.</li>
+        <li><b>Ana envía el primer mensaje,</b> cifrado, con un encabezado que dice qué claves usó. Beto, al recibirlo, hace el mismo cálculo con sus claves privadas y obtiene el mismo secreto. La prekey única se borra de ambos lados.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 478" role="img" aria-labelledby="f293t f293d">
+<title id="f293t">Claves para la primera conversación</title>
+<desc id="f293d">Al registrarse, Beto sube al servidor su clave de identidad, una prekey firmada y un lote de prekeys de un solo uso. Días después, Ana quiere escribirle por primera vez. Pide su bundle al servidor, que entrega la identidad, la prekey firmada y una prekey única, que borra. Ana calcula el secreto compartido con cuatro operaciones Diffie-Hellman y manda el primer mensaje cifrado con el encabezado que Beto necesita. Beto estaba sin conexión; cuando vuelve, el servidor le entrega el mensaje, Beto reconstruye el mismo secreto con su prekey única y la borra.</desc>
+<defs><marker id="f293-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f293-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f293-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f293-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Beto</text>
+<path class="dg-frame" d="M70.0 40 V468"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor</text>
+<path class="dg-frame" d="M385.0 40 V468"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Ana</text>
+<path class="dg-frame" d="M700.0 40 V468"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f293-a)"/>
+<rect x="96.10000000000002" y="55" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">identidad, prekey firmada y 100 únicas</text>
+<path d="M20 104 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="93" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="108" text-anchor="middle" style="fill:var(--fail)">días después: Ana quiere escribirle a Beto por primera vez</text>
+<path class="dg-edge" d="M697.0 140 L390.0 140" marker-end="url(#f293-a)"/>
+<rect x="463.9" y="123" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="134" text-anchor="middle">pide el bundle de Beto</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M388.0 174 L695.0 174" marker-end="url(#f293-r)"/>
+<rect x="434.2" y="157" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="168" text-anchor="middle">identidad + firmada + única #17</text>
+<rect x="395.0" y="194" width="195" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="210">borra la prekey única #17</text>
+<rect x="502.0" y="228" width="188" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="512.0" y="244">calcula X3DH: clave raíz</text>
+<path class="dg-edge" d="M697.0 276 L390.0 276" marker-end="url(#f293-a)"/>
+<rect x="437.5" y="259" width="210.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="270" text-anchor="middle">primer mensaje + clave efímera</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">Beto estaba sin conexión</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 344 L75.0 344" marker-end="url(#f293-r)"/>
+<rect x="162.1" y="327" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="338" text-anchor="middle">entrega el mensaje</text>
+<rect x="80.0" y="364" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="380">reconstruye la clave raíz con la #17</text>
+<path class="dg-edge" d="M73.0 412 L380.0 412" marker-end="url(#f293-a)"/>
+<rect x="152.2" y="395" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="406" text-anchor="middle">repone prekeys únicas</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.4.</b> El servidor solo guarda y entrega claves públicas. No participa del cálculo del secreto ni puede reconstruirlo.</figcaption>
+      </figure>
+
+      <h3 id="ratchet">Un secreto nuevo para cada mensaje</h3>
+
+      <p>El secreto inicial no se reutiliza. Cada mensaje se cifra con una clave derivada que avanza con un mecanismo de dos ruedas, el Double Ratchet: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Rueda de hash.</b> Por cada mensaje enviado, la clave de mensaje sale de la clave de cadena (<code>HMAC-SHA256(cadena, 0x01)</code>) y la cadena avanza (<code>HMAC-SHA256(cadena, 0x02)</code>). Una clave de mensaje vieja no permite reconstruir la cadena ni las claves anteriores: si un atacante roba las claves de hoy, no descifra el historial.</li>
+        <li><b>Rueda de Diffie-Hellman.</b> Con cada ida y vuelta de la conversación se hace un acuerdo nuevo con claves efímeras nuevas, y la clave raíz se renueva. Si un atacante roba las claves de hoy, la conversación "se cura" sola en cuanto se intercambia el siguiente par de mensajes.</li>
+        <li><b>Mensajes perdidos o desordenados no rompen nada:</b> cada mensaje lleva el número de su cadena, y el receptor guarda las claves de los que todavía no llegaron. Es lo que hace compatible este cifrado con un servidor que reenvía y duplica.</li>
+        <li><b>Cifrado y autenticación del mensaje:</b> AES-256 en modo CBC y HMAC-SHA256.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">No lo implementes tú</p>
+        <p>Es un protocolo con decenas de detalles que se rompen sin avisar (verificaciones, orden de operaciones, manejo de errores y de claves caducas). Si armas un clon, usa libsignal, la biblioteca de código abierto de Signal (con el núcleo en Rust y enlaces para Java, Swift y TypeScript) o una implementación mantenida del mismo protocolo. Tu trabajo es el servicio que guarda claves públicas y mueve ciphertexts, no el cifrado.</p>
+      </aside>
+
+      <ul>
+        <li><b>Verificar con quién hablas.</b> Un atacante que controlara el directorio de claves podría entregar su propia clave en lugar de la de Beto. El código de seguridad (números y QR) deja comparar las claves por fuera del servidor, y la app avisa cuando la clave de un contacto cambia. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Copias de seguridad.</b> Lo que el servidor no guarda no se puede recuperar de él: el historial vive en los dispositivos, y una copia de seguridad en la nube es un sistema aparte, que puede cifrarse con una clave que solo tiene el usuario.</li>
+      </ul>
+
+      <h2 id="multidispositivo"><span class="sec-num">29.9</span>Varios dispositivos por cuenta</h2>
+
+      <p>Hasta 2021, WhatsApp dependía del teléfono: la versión web era un espejo que se conectaba a través de él. Hoy el teléfono y hasta cuatro dispositivos vinculados funcionan cada uno por su cuenta, incluso con el teléfono apagado. El diseño, publicado por el equipo de ingeniería de Meta, tiene tres ideas: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Cada dispositivo tiene su propia identidad criptográfica.</b> El servidor mantiene un mapa de cada cuenta a la lista de identidades de sus dispositivos, firmada, y un dispositivo vinculado solo es válido si el teléfono firmó su identidad.</li>
+        <li><b>El cifrado se hace por dispositivo, en el emisor</b> (client fan-out). Ana cifra el mensaje una vez para cada dispositivo de Beto y una vez para cada uno de sus propios dispositivos, con la sesión de cada par. El servidor no descifra ni recifra nada.</li>
+        <li><b>Un dispositivo nuevo recibe un paquete cifrado con el historial reciente</b> que prepara el teléfono y se transfiere por el almacén de medios. Después sincroniza solo, con su propio buzón.</li>
+      </ul>
+
+      <p>Para el servidor, eso significa que todo lo de las secciones anteriores pasa a ser por dispositivo y no por usuario:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Antes (una cuenta, un teléfono)</th><th>Con varios dispositivos</th></tr></thead>
+          <tbody>
+            <tr><td>Registro de sesiones</td><td>Una entrada por usuario</td><td>Una entrada por dispositivo: <code>sess:{usuario}:{dispositivo}</code></td></tr>
+            <tr><td>Buzón</td><td>Una cola por usuario</td><td>Una cola por dispositivo, con su propio número de secuencia y su propio <code>last_seq</code></td></tr>
+            <tr><td>Envío</td><td>Un ciphertext por mensaje</td><td>Un ciphertext por dispositivo destino, más uno por dispositivo propio</td></tr>
+            <tr><td>Claves</td><td>Un bundle por usuario</td><td>Un bundle por dispositivo, y una lista firmada de dispositivos autorizados</td></tr>
+            <tr><td>Recibos</td><td>Uno al recibir</td><td>El "entregado" sale cuando llega a un dispositivo del destinatario, sin esperar a los demás (decisión de diseño de referencia: una computadora olvidada no debería bloquear los dos tildes)</td></tr>
+            <tr><td>Revocación</td><td>Cerrar sesión</td><td>Quitar el dispositivo de la lista: los demás dejan de cifrarle. Reinstalar la app en el teléfono regenera su identidad y revoca todos los dispositivos vinculados.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="medios"><span class="sec-num">29.10</span>Fotos, audios y documentos</h2>
+
+      <p>Un mensaje de texto pesa cientos de bytes; una foto, cientos de kilobytes; un video, megabytes. Si viajaran por la conexión de mensajes, un solo adjunto ocuparía a un gateway durante segundos y bloquearía los mensajes chicos que van detrás. Por eso los adjuntos tienen su propio camino: <span class="badge badge--doc">Documentado</span></p>
+
+      <ol class="steps">
+        <li><span class="step-title">Cifrar en el teléfono</span>El emisor genera una clave AES-256 y una clave HMAC-SHA256, de 32 bytes cada una y de un solo uso. Cifra el archivo con AES-256 en modo CBC con un IV aleatorio y agrega un MAC al final.</li>
+        <li><span class="step-title">Subir el blob cifrado</span>Pide una URL firmada y sube el archivo directo al almacén de objetos (M09), sin pasar por los gateways.</li>
+        <li><span class="step-title">Mandar un mensaje chico</span>Es un mensaje cifrado de extremo a extremo como los demás, que lleva la clave de cifrado, la clave HMAC, el hash SHA-256 del blob y la dirección del blob.</li>
+        <li><span class="step-title">Descargar, verificar, descifrar</span>Cada dispositivo receptor baja el blob, comprueba el hash y el MAC, y lo descifra.</li>
+      </ol>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Decisión</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>Subida y descarga directas al almacén, con URL firmada</td><td>Los gateways siguen moviendo solo mensajes chicos; el almacén escala por su cuenta.</td></tr>
+            <tr><td>Una CDN adelante de las descargas</td><td>Un blob opaco se puede cachear cerca del usuario sin que la CDN pueda leerlo (M28).</td></tr>
+            <tr><td>Miniatura dentro del mensaje</td><td>Una imagen diminuta cifrada viaja con el mensaje para mostrar algo al instante, sin esperar la descarga.</td></tr>
+            <tr><td>Reenviar reutiliza el blob</td><td>El mensaje nuevo apunta al mismo objeto con la misma clave: no se sube otra copia. Cifrar con claves distintas impediría deduplicar por contenido, así que solo se deduplican los reenvíos.</td></tr>
+            <tr><td>Subida por partes y reanudable</td><td>En una red móvil, un archivo grande se corta: se reanuda donde quedó (M09).</td></tr>
+            <tr><td>Ciclo de vida del almacén</td><td>Un blob que nadie descarga se borra. El diseño de referencia usa 30 días, igual que los mensajes.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los medios son la mayor parte del almacenamiento y del tráfico. Con 10 millones de usuarios activos por día, 40 mensajes por usuario, un 5&#8239;% con adjunto de 300 KB y 2 descargas por adjunto, son 6 TB de subidas y 12 TB de descargas por día: 180 TB guardados a 30 días y 360 TB de descargas al mes. Son las cifras que usa la calculadora del final.</p>
+
+      <h2 id="llamadas"><span class="sec-num">29.11</span>Llamadas de voz y video</h2>
+
+      <p>La <b>señalización</b> de una llamada (quién llama, si contesta, cómo se conectan) viaja por la misma conexión persistente y el mismo camino de mensajes. El <b>audio y el video</b> no: van por UDP, directo entre los dos teléfonos si la red lo permite, o a través de un servidor de retransmisión si hace falta atravesar NAT o firewalls. <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Las claves de la llamada viajan cifradas de extremo a extremo.</b> El que llama genera un secreto maestro de SRTP de 32 bytes para cada dispositivo del destinatario y se lo manda en un mensaje cifrado, igual que cualquier mensaje. Los servidores no tienen acceso a él ni al audio. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>En las llamadas grupales,</b> el servidor guarda el estado de la llamada (lista de participantes, quién la inició) y elige a uno como distribuidor de claves; las claves se renuevan cada vez que alguien entra o sale, y la sesión anterior sigue viva 5 segundos para cubrir la transición. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Retransmisión con TURN.</b> La mayoría de las llamadas van directas; una fracción (se suele estimar entre el 10 y el 30&#8239;%) necesita un relay. Un millón de llamadas simultáneas, con un 25&#8239;% retransmitidas, a 40 kbps por sentido, son 1 000 000 × 0.25 × 80 kbps = 20 Gbps. En AWS no hay un TURN administrado para esto; se arma con coturn en instancias EC2 optimizadas para red (c7gn), en varias regiones, o se usa Kinesis Video Streams con WebRTC, que incluye señalización y TURN administrados.</li>
+        <li>El tema completo de voz y tiempo real, con WebRTC, está en el M24.</li>
+      </ul>
+
+      <h2 id="fallas"><span class="sec-num">29.12</span>Fallas, tormentas de reconexión y despliegues</h2>
+
+      <p>Un servidor web que cae pierde las requests en vuelo; un gateway que cae pierde <b>cientos de miles de conexiones a la vez</b>, y todas van a intentar volver en los mismos segundos. El primer problema después de una falla es el daño que causan los propios clientes al reconectarse.</p>
+
+      <h3 id="tormenta">La tormenta de reconexión</h3>
+
+      <p>Un gateway con 400 000 conexiones muere. Los teléfonos lo notan en un rato, y todos reintentan. Si reintentan a la vez, 400 000 handshakes caen sobre los 11 gateways que quedan, que tienen capacidad para unos cuantos miles por segundo cada uno. Los que no logran entrar esperan un tiempo fijo y vuelven todos juntos otra vez, en oleadas sincronizadas. Mientras tanto, los gateways sanos gastan su CPU en handshakes y pueden dejar de atender a los usuarios que sí estaban conectados. Es la falla metaestable del M08: una causa (la caída) y un mecanismo de amplificación (los reintentos) que sostiene el daño aunque la causa ya no esté.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f295t f295d">
+<title id="f295t">Tormenta de reconexión, con y sin jitter</title>
+<desc id="f295d">Gráfico ilustrativo de intentos de conexión por segundo después de que cae un gateway con 400 000 conexiones. Sin jitter, todos los teléfonos reintentan a la vez y llegan oleadas de cientos de miles de intentos que superan la capacidad de admisión de 50 000 por segundo. Con jitter, los intentos se reparten en 60 segundos y llegan unos 6 700 por segundo, muy por debajo de la capacidad.</desc>
+<line class="sim-grid" x1="70" x2="740" y1="260.0" y2="260.0"/>
+<text class="sim-axis" x="62" y="264.0" text-anchor="end">0</text>
+<line class="sim-grid" x1="70" x2="740" y1="205.0" y2="205.0"/>
+<text class="sim-axis" x="62" y="209.0" text-anchor="end">100 mil</text>
+<line class="sim-grid" x1="70" x2="740" y1="150.0" y2="150.0"/>
+<text class="sim-axis" x="62" y="154.0" text-anchor="end">200 mil</text>
+<line class="sim-grid" x1="70" x2="740" y1="95.0" y2="95.0"/>
+<text class="sim-axis" x="62" y="99.0" text-anchor="end">300 mil</text>
+<line class="sim-grid" x1="70" x2="740" y1="40.0" y2="40.0"/>
+<text class="sim-axis" x="62" y="44.0" text-anchor="end">400 mil</text>
+<text class="sim-axis" x="70.0" y="278" text-anchor="middle">0 s</text>
+<text class="sim-axis" x="237.5" y="278" text-anchor="middle">20 s</text>
+<text class="sim-axis" x="405.0" y="278" text-anchor="middle">40 s</text>
+<text class="sim-axis" x="572.5" y="278" text-anchor="middle">60 s</text>
+<text class="sim-axis" x="740.0" y="278" text-anchor="middle">80 s</text>
+<text class="dg-small" x="70" y="22">intentos de conexión por segundo</text>
+<text class="dg-small" x="740" y="300" text-anchor="end">tiempo desde la caída del gateway</text>
+<line x1="70" x2="740" y1="232.5" y2="232.5" stroke="var(--label-3)" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text class="dg-tiny" x="736" y="226.5" text-anchor="end">capacidad de admisión: 50 000 por segundo</text>
+<rect x="71.2" y="40.0" width="6" height="220.0" fill="var(--fail)" opacity="0.85"/>
+<rect x="87.9" y="67.5" width="6" height="192.5" fill="var(--fail)" opacity="0.85"/>
+<rect x="121.4" y="100.5" width="6" height="159.5" fill="var(--fail)" opacity="0.85"/>
+<rect x="188.4" y="150.0" width="6" height="110.0" fill="var(--fail)" opacity="0.85"/>
+<rect x="322.4" y="199.5" width="6" height="60.5" fill="var(--fail)" opacity="0.85"/>
+<rect x="590.4" y="238.0" width="6" height="22.0" fill="var(--fail)" opacity="0.85"/>
+<text class="dg-tiny dg-fail-text" x="145.4" y="66.4">sin jitter: todos reintentan a la vez,</text>
+<text class="dg-tiny dg-fail-text" x="145.4" y="81.4">en oleadas con backoff exponencial sincronizado</text>
+<path d="M70.0 256.3 H572.5" stroke="var(--accent)" stroke-width="3.4" fill="none"/>
+<path d="M572.5 256.3 V260.0" stroke="var(--accent)" stroke-width="3.4" fill="none"/>
+<path d="M455.2 253.3 V197.5" stroke="var(--accent)" stroke-width="1" fill="none"/>
+<text class="dg-tiny" x="455.2" y="177.5" text-anchor="middle" style="fill:var(--accent);font-weight:600">con jitter: unos 6 700 por segundo</text>
+<text class="dg-tiny" x="455.2" y="192.5" text-anchor="middle" style="fill:var(--accent)">durante 60 s, bajo la capacidad</text>
+<text class="dg-small" x="10" y="322">Ilustrativo: 400 000 teléfonos, 11 gateways sanos, 50 000 handshakes por segundo entre todos.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.5.</b> Con un backoff exponencial sin aleatoriedad, todos los clientes caen en las mismas oleadas. Con jitter, el mismo trabajo se reparte en un minuto y nunca supera la capacidad.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Backoff exponencial con jitter completo, en el cliente.</b> Cada teléfono espera un tiempo aleatorio entre cero y un tope que se duplica en cada fallo. Con 400 000 teléfonos repartidos en 60 segundos llegan unos 6 700 por segundo.</li>
+        <li><b>Control de admisión, en el servidor.</b> Cada gateway acepta un máximo de conexiones nuevas por segundo. A las que sobran les responde con un rechazo corto y un <code>retry_after</code> aleatorio, en lugar de dejar que se acumulen handshakes a medio hacer.</li>
+        <li><b>Capacidad de sobra.</b> La flota se dimensiona para perder un gateway, y mejor una zona entera: con 3 millones de conexiones y 400 000 por gateway se necesitan 8, y 12 para perder una zona de tres.</li>
+        <li><b>Un mensaje no espera a la reconexión.</b> Mientras el gateway está caído, los mensajes entran al buzón por el camino normal; cada teléfono recupera lo suyo cuando vuelve.</li>
+        <li><b>Señal de que los clientes hacen bien su parte.</b> Un panel con handshakes por segundo por gateway, conexiones abiertas, rechazos por admisión y la antigüedad del mensaje más viejo del buzón muestra la tormenta en curso.</li>
+      </ul>
+
+<pre data-lang="python"><code>import random
+
+def espera(intento: int, base: float = 1.0, tope: float = 60.0) -> float:
+    """Backoff exponencial con jitter completo: un valor al azar entre 0 y el tope creciente."""
+    return random.uniform(0, min(tope, base * 2 ** intento))
+
+# intento 0: 0 a 1 s · intento 3: 0 a 8 s · intento 6 en adelante: 0 a 60 s
+# El azar es lo importante: sin él, todos los clientes reintentan en los mismos instantes.</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Qué pasa</th><th>Defensa</th></tr></thead>
+          <tbody>
+            <tr><td><b>Un gateway</b></td><td>Se cortan sus conexiones; sus entradas del registro siguen hasta que vencen</td><td>Jitter, control de admisión y capacidad de sobra. Los mensajes esperan en el buzón.</td></tr>
+            <tr><td><b>Una zona de disponibilidad</b></td><td>Se pierde un tercio de la flota</td><td>Flota para perder una zona; balanceador y buzón repartidos en tres zonas.</td></tr>
+            <tr><td><b>El registro de sesiones</b></td><td>No se sabe dónde está nadie</td><td>Todo se trata como "sin conexión": buzón y push. Nada se pierde.</td></tr>
+            <tr><td><b>El buzón</b></td><td>No se puede guardar</td><td>El servicio no confirma: el primer tilde no aparece y los teléfonos reintentan. Es fail-closed a propósito.</td></tr>
+            <tr><td><b>Apple o Google (push)</b></td><td>Las notificaciones se demoran</td><td>Los mensajes ya están en el buzón; la app los descarga al abrirse o reconectar.</td></tr>
+            <tr><td><b>Una región entera</b></td><td>Se pierde una parte de los usuarios</td><td>Celdas en otra región y cambio de DNS o de IPs anycast. Con replicación asíncrona del buzón, los mensajes guardados en el último instante pueden perderse: es un trade-off que se decide y se documenta (M06).</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="celdas">Celdas</h3>
+
+      <p>Para que una falla o un despliegue malo afecte a una parte de los usuarios y no a todos, el sistema se parte en <b>celdas</b> (M08): cada celda es una pila completa (gateways, registro, servicio de mensajes, buzones) que atiende un subconjunto de usuarios, por ejemplo por el hash de su número de teléfono. Una tabla, cacheada en el borde, dice a qué celda va cada cuenta. Para crecer se agregan celdas; un cambio riesgoso se prueba primero en la más chica.</p>
+
+      <h3 id="desplegar">Desplegar gateways sin desconectar a nadie</h3>
+
+      <p>Actualizar un gateway corta todas sus conexiones. Reiniciar todos a la vez sería provocar la tormenta a propósito. El procedimiento es el de draining (M03) aplicado a conexiones que nunca terminan solas: <a href="#scenario=despliegue">escenario "Desplegar una versión nueva"</a>.</p>
+      <ol class="steps">
+        <li><span class="step-title">Sacar al gateway de la rotación</span>El balanceador deja de ofrecerle conexiones nuevas.</li>
+        <li><span class="step-title">Pedir a los clientes que se vayan de a poco</span>El gateway manda <code>Reconnect(en N s)</code> a cada conexión con un retraso aleatorio distinto, repartido en minutos (del 1 al 2&#8239;% por segundo). El cliente abre la conexión nueva antes de cerrar la vieja.</li>
+        <li><span class="step-title">Registrar la sesión nueva con un epoch mayor</span>El cierre tardío de la conexión vieja no borra la entrada nueva gracias al compare-and-delete (29.4).</li>
+        <li><span class="step-title">Reiniciar cuando está casi vacío</span>Después de unos 10 minutos, con pocas conexiones que cortar.</li>
+        <li><span class="step-title">Repetir con el siguiente, por celdas,</span>vigilando errores, conexiones y latencia. Con 114 gateways, de a uno serían 19 horas, así que se hacen en grupos dentro del margen de capacidad, empezando por la celda más chica.</li>
+      </ol>
+      <p>En AWS, este procedimiento se engancha en el ciclo de vida del Auto Scaling Group: un <span class="no-autolink">lifecycle hook</span> en el estado de terminación da tiempo al gateway para hacer el draining antes de que la instancia se apague.</p>
+
+      <h2 id="numeros"><span class="sec-num">29.13</span>Estimar la flota</h2>
+
+      <p>Las cuentas de servilleta (M00) para un clon de 10 millones de usuarios activos por día:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Magnitud</th><th>Cuenta</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Conexiones simultáneas en el pico</td><td>10 M × 30&#8239;% conectados</td><td class="r">3 millones</td></tr>
+            <tr><td>Gateways sin margen</td><td>3 M ÷ 400 000</td><td class="r">8</td></tr>
+            <tr><td>Gateways para perder una zona</td><td>8 × 3/2, múltiplo de 3</td><td class="r">12</td></tr>
+            <tr><td>Memoria de conexiones por gateway</td><td>400 000 × 30 KB</td><td class="r">12 GB de 32 GB (37&#8239;%)</td></tr>
+            <tr><td>Mensajes por segundo: promedio y pico</td><td>10 M × 40 ÷ 86 400; × 3</td><td class="r">4 600 y 13 900</td></tr>
+            <tr><td>Entregas por segundo en el pico</td><td>13 900 × 1.5 dispositivos</td><td class="r">20 800</td></tr>
+            <tr><td>Escrituras de buzón por segundo en el pico</td><td>entregas × 2 (guardar y borrar)</td><td class="r">41 700</td></tr>
+            <tr><td>Lecturas del registro por segundo en el pico</td><td>una por dispositivo destino</td><td class="r">20 800</td></tr>
+            <tr><td>Medios: subidas por día</td><td>400 M mensajes × 5&#8239;% × 300 KB</td><td class="r">6 TB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Ninguna cifra asusta: lo que sostiene el sistema es la forma de los datos (conexiones quietas, mensajes chicos, estado fuera de los gateways), no una base gigantesca. Cambia el tamaño, la memoria por conexión y las proporciones en la calculadora, y compara la opción de gateways propios con API Gateway WebSocket, que cobra por minuto de conexión y por mensaje:</p>
+
+      <div data-calc="gateways"></div>
+
+      <h2 id="implementalo"><span class="sec-num">29.14</span>Impleméntalo tú mismo: tu clon de WhatsApp en AWS</h2>
+
+      <p>Las piezas de este módulo existen como servicios de AWS, salvo una: la conexión persistente a gran escala, que puedes comprar ya hecha o armar con instancias. Esa decisión cambia todo lo demás, así que se toma primero:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>API Gateway WebSocket</th><th>AWS IoT Core (MQTT)</th><th>Gateways propios en EC2</th></tr></thead>
+          <tbody>
+            <tr><td><b>Qué es</b></td><td>WebSockets administrados; tú escribes funciones por evento</td><td>Un broker MQTT administrado, con sesiones persistentes</td><td>Tus procesos en instancias, detrás de un NLB</td></tr>
+            <tr><td><b>Límites que importan</b></td><td>Conexión de 2 horas como máximo, 10 minutos de inactividad, 500 conexiones nuevas por segundo por cuenta y región (ampliable), mensajes de hasta 128 KB</td><td>500 000 conexiones por cuenta (ampliable); una sesión persistente guarda los mensajes QoS 1 de 1 hora a 7 días y, al reconectar, los entrega a un máximo de 10 por segundo</td><td>Los que tú pongas: memoria, descriptores, handshakes por segundo</td></tr>
+            <tr><td><b>Costo</b></td><td>1 USD por millón de mensajes (en tramos de 32 KB) y 0.25 USD por millón de minutos de conexión</td><td>1 USD por millón de mensajes (en tramos de 5 KB) y 0.08 USD por millón de minutos de conexión</td><td>Las instancias: con 400 000 conexiones por instancia, el costo por conexión es una fracción mínima</td></tr>
+            <tr><td><b>Cuándo sirve</b></td><td>Un prototipo o un producto de pocos cientos de miles de usuarios, sin equipo para operar gateways</td><td>Dispositivos IoT y apps con pocos mensajes por conexión; la entrega de 10 mensajes por segundo al reconectar no sirve para descargar un buzón de cientos</td><td>Un chat serio: control del protocolo, del draining, del tamaño de los frames y del costo por conexión</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con gateways propios, una arquitectura de referencia sobre AWS:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 392" role="img" aria-labelledby="f296t f296d">
+<title id="f296t">Un clon de WhatsApp sobre AWS</title>
+<desc id="f296d">Los teléfonos resuelven el nombre con Route 53 y se conectan por TCP a un Network Load Balancer, que reparte las conexiones entre gateways en instancias EC2 m7g.2xlarge. Los medios cifrados pasan por CloudFront y S3, y las APIs HTTPS por un Application Load Balancer. Los gateways se apoyan en un registro de sesiones en Valkey y hablan con el servicio de mensajes, que guarda los buzones en DynamoDB. Grupos y claves viven en servicios con una base Aurora PostgreSQL. Un servicio de push toma tareas de una cola SQS y habla con APNs y FCM.</desc>
+<defs><marker id="f296a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="6" y="6" width="758" height="52" rx="10"/>
+<text class="dg-group" x="18" y="21" style="font-size:11.5px">Clientes</text>
+<rect class="dg-frame" x="6" y="70" width="758" height="82" rx="10"/>
+<text class="dg-group" x="18" y="85" style="font-size:11.5px">Entrada</text>
+<rect class="dg-frame" x="6" y="164" width="758" height="92" rx="10"/>
+<text class="dg-group" x="18" y="179" style="font-size:11.5px">Servicios</text>
+<rect class="dg-frame" x="6" y="268" width="758" height="92" rx="10"/>
+<text class="dg-group" x="18" y="283" style="font-size:11.5px">Datos</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="12" y="26" width="738" height="28" rx="9"/>
+<text class="dg-label" x="381.0" y="45.0" text-anchor="middle" style="font-size:12px">Teléfonos y computadoras</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="12" y="96" width="138" height="48" rx="9"/>
+<text class="dg-label" x="81.0" y="117.0" text-anchor="middle" style="font-size:12.5px">NLB</text>
+<text class="dg-tiny" x="81.0" y="133.0" text-anchor="middle">TCP 443, 3 zonas</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="312" y="96" width="138" height="48" rx="9"/>
+<text class="dg-label" x="381.0" y="117.0" text-anchor="middle" style="font-size:12.5px">ALB</text>
+<text class="dg-tiny" x="381.0" y="133.0" text-anchor="middle">HTTPS: registro y APIs</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="612" y="96" width="138" height="48" rx="9"/>
+<text class="dg-label" x="681.0" y="117.0" text-anchor="middle" style="font-size:12.5px">CloudFront + S3</text>
+<text class="dg-tiny" x="681.0" y="133.0" text-anchor="middle">medios cifrados</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="12" y="190" width="138" height="56" rx="9"/>
+<text class="dg-label" x="81.0" y="215.0" text-anchor="middle" style="font-size:12.5px">Gateways</text>
+<text class="dg-tiny" x="81.0" y="231.0" text-anchor="middle">EC2 m7g.2xlarge ×12</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="162" y="190" width="138" height="56" rx="9"/>
+<text class="dg-label" x="231.0" y="215.0" text-anchor="middle" style="font-size:12.5px">Mensajes</text>
+<text class="dg-tiny" x="231.0" y="231.0" text-anchor="middle">ECS Fargate ARM</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="312" y="190" width="138" height="56" rx="9"/>
+<text class="dg-label" x="381.0" y="215.0" text-anchor="middle" style="font-size:12.5px">Grupos y claves</text>
+<text class="dg-tiny" x="381.0" y="231.0" text-anchor="middle">ECS Fargate ARM</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="462" y="190" width="138" height="56" rx="9"/>
+<text class="dg-label" x="531.0" y="215.0" text-anchor="middle" style="font-size:12.5px">Push</text>
+<text class="dg-tiny" x="531.0" y="231.0" text-anchor="middle">ECS + SQS</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="612" y="190" width="138" height="56" rx="9"/>
+<text class="dg-label" x="681.0" y="215.0" text-anchor="middle" style="font-size:12.5px">APNs y FCM</text>
+<text class="dg-tiny" x="681.0" y="231.0" text-anchor="middle">Apple y Google</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="12" y="292" width="138" height="56" rx="9"/>
+<text class="dg-label" x="81.0" y="317.0" text-anchor="middle" style="font-size:12.5px">Registro</text>
+<text class="dg-tiny" x="81.0" y="333.0" text-anchor="middle">Valkey r7g.large</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="162" y="292" width="138" height="56" rx="9"/>
+<text class="dg-label" x="231.0" y="317.0" text-anchor="middle" style="font-size:12.5px">Buzones</text>
+<text class="dg-tiny" x="231.0" y="333.0" text-anchor="middle">DynamoDB o ScyllaDB</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="312" y="292" width="138" height="56" rx="9"/>
+<text class="dg-label" x="381.0" y="317.0" text-anchor="middle" style="font-size:12.5px">Usuarios y claves</text>
+<text class="dg-tiny" x="381.0" y="333.0" text-anchor="middle">Aurora r7g.xlarge</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="462" y="292" width="138" height="56" rx="9"/>
+<text class="dg-label" x="531.0" y="317.0" text-anchor="middle" style="font-size:12.5px">Cola de push</text>
+<text class="dg-tiny" x="531.0" y="333.0" text-anchor="middle">SQS</text>
+<path class="dg-edge" d="M81.0 56 V94" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M381.0 56 V94" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M681.0 56 V94" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M81.0 146 V188" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M381.0 146 V188" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M152 218 H160" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M302 218 H310" marker-end="url(#f296a)"/>
+<path class="dg-feedback" d="M602 218 H610" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M81.0 248 V290" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M231.0 248 V290" marker-end="url(#f296a)"/>
+<path class="dg-edge" d="M381.0 248 V290" marker-end="url(#f296a)"/>
+<path class="dg-feedback" d="M531.0 290 V250" marker-end="url(#f296a)"/>
+<text class="dg-small" x="12" y="376">Gateways en un grupo de Auto Scaling de tres zonas, con draining al desplegar. Todo lo que guarda estado está fuera de los gateways.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 29.6.</b> Un <span class="badge badge--ref">Diseño de referencia</span> para un clon de 10 millones de usuarios por día. Todo lo que guarda estado está fuera de los gateways, y los gateways pueden reemplazarse de a uno.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Con qué la armas en AWS</th><th>Qué tener en cuenta</th></tr></thead>
+          <tbody>
+            <tr><td>Nombre y entrada</td><td>Route 53 con enrutamiento por latencia; Global Accelerator si quieres IPs fijas y failover rápido; un Network Load Balancer con listener TCP 443 en tres zonas</td><td>El NLB reenvía paquetes sin tocar el contenido y conserva la IP del cliente. Su timeout por inactividad de TCP es de 350 s: el ping de la app tiene que ser menor. Un NLCU admite 100 000 conexiones activas.</td></tr>
+            <tr><td>Gateways de conexión</td><td>EC2 m7g.2xlarge (8 vCPU Graviton3, 32 GB, hasta 15 Gbps), en un grupo de Auto Scaling en tres zonas, con una AMI propia. Para tráfico muy alto, c7gn</td><td>400 000 conexiones por instancia: 12 instancias para 3 millones. Ajustes del sistema: descriptores (<code>ulimit -n</code> y <code>fs.file-max</code>), cola de conexiones (<code>somaxconn</code>) y buffers TCP chicos. Se vigila <code>conntrack_allowance_exceeded</code>.</td></tr>
+            <tr><td>Registro de sesiones</td><td>ElastiCache para Valkey en modo clúster, cache.r7g.large, con una réplica por shard en otra zona</td><td>30 millones de sesiones ocupan de 5 a 10 GB. Se usan scripts Lua para el epoch (29.4). No hace falta durabilidad: si se pierde, los gateways lo reconstruyen con los heartbeats.</td></tr>
+            <tr><td>Servicio de mensajes, grupos y claves</td><td>ECS con Fargate sobre ARM (tareas de 2 vCPU y 4 GB), o EKS</td><td>Sin estado. Hablan con los gateways por gRPC sobre HTTP/2, con un pool de conexiones por gateway.</td></tr>
+            <tr><td>Buzones</td><td>DynamoDB bajo demanda para empezar; ScyllaDB en instancias i4i.2xlarge (NVMe local) cuando el costo por operación pese</td><td>TTL de 30 días. La clave es (dispositivo, secuencia). El costo de DynamoDB pasa a dominar a cierta escala: es lo primero para recalcular.</td></tr>
+            <tr><td>Usuarios, dispositivos y grupos</td><td>Aurora PostgreSQL, db.r7g.xlarge con un escritor y un lector en otra zona</td><td>Es la única pieza con transacciones relacionales. Los datos de grupos se leen mucho y cambian poco: se cachean.</td></tr>
+            <tr><td>Claves públicas y prekeys</td><td>DynamoDB con escrituras condicionales, o Aurora con <code>FOR UPDATE SKIP LOCKED</code></td><td>Consumir una prekey única tiene que ser atómico.</td></tr>
+            <tr><td>Notificaciones push</td><td>Un servicio en ECS con SQS, que habla con APNs y FCM por HTTP/2; o SNS Mobile Push si no quieres operar esa parte</td><td>Tokens que caducan, colapso de avisos, reintentos con backoff y límites por proveedor.</td></tr>
+            <tr><td>Medios</td><td>S3 con ciclo de vida a 30 días, URLs firmadas (M09) y CloudFront adelante</td><td>Los blobs son opacos: se pueden cachear sin leerlos. Es la mayor factura de datos.</td></tr>
+            <tr><td>Verificación del teléfono</td><td>AWS End User Messaging o SNS para SMS, o un proveedor de verificación</td><td>El costo por SMS varía mucho por país. El abuso (enviar SMS a números caros) necesita límites por número, por IP y por país.</td></tr>
+            <tr><td>Llamadas</td><td>coturn en EC2 c7gn en varias regiones, o Kinesis Video Streams con WebRTC</td><td>Solo la señalización pasa por tus gateways; el audio va por UDP (29.11).</td></tr>
+            <tr><td>Seguridad y operación</td><td>KMS y Secrets Manager, WAF en los endpoints HTTPS, Shield, CloudWatch y OpenTelemetry</td><td>Métricas por gateway: conexiones, handshakes por segundo, rechazos por admisión y p99 de la cola de salida.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un orden razonable para construirlo, donde cada paso deja algo que se puede probar:</p>
+      <ol class="steps">
+        <li><span class="step-title">Un gateway mínimo</span>Acepta conexiones TCP con TLS, responde <code>Hello</code> y <code>Ping</code> y hace eco de <code>Send</code>. Una prueba de carga lo lleva a 10 000, luego a 100 000 conexiones, y mide la memoria por conexión.</li>
+        <li><span class="step-title">Registro, servicio de mensajes y buzón</span>Dos gateways, el registro con epoch y la entrega de punta a punta con los dos tildes.</li>
+        <li><span class="step-title">Idempotencia y recuperación</span>Una prueba que mata procesos en cada paso del envío y comprueba que nada se pierde ni se duplica.</li>
+        <li><span class="step-title">Sin conexión</span>El <code>Hello</code> con <code>last_seq</code>, la descarga por lotes con ack acumulativo y el TTL de 30 días.</li>
+        <li><span class="step-title">Push</span>Con APNs y FCM, tokens, colapso y limpieza de tokens vencidos.</li>
+        <li><span class="step-title">Claves y cifrado</span>El directorio de claves y libsignal en el cliente. El servidor solo mueve ciphertexts y claves públicas.</li>
+        <li><span class="step-title">Grupos</span>Membresía con versión, Sender Keys y el reparto en el servidor, con lecturas y escrituras en lote.</li>
+        <li><span class="step-title">Medios</span>Cifrado en el cliente, URLs firmadas, subida reanudable y CDN.</li>
+        <li><span class="step-title">Operación</span>Draining, despliegue por celdas, alarmas, y una prueba de caos: derribar un gateway con 100 000 conexiones y mirar la tormenta.</li>
+      </ol>
+
+      <div data-calc="bom" data-preset="m29"></div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Qué no construir</p>
+        <ul>
+          <li><b>El cifrado.</b> Usa libsignal o una implementación mantenida del protocolo. Los errores de criptografía se descubren años después.</li>
+          <li><b>La infraestructura de push.</b> APNs y FCM son el único camino: tu trabajo es el servicio que les habla bien, no competir con ellos.</li>
+          <li><b>La verificación por SMS,</b> si no eres experto en rutas de mensajería y en fraude de SMS: un proveedor lo hace mejor.</li>
+          <li><b>Tu propio protocolo en la primera versión.</b> Empieza con WebSocket sobre TLS y frames en Protocol Buffers; un protocolo más liviano es una optimización que llega cuando la factura lo justifica.</li>
+        </ul>
+        <p>La factura de arriba no incluye SMS de verificación a precios reales por país, el equipo de guardia ni los costos de las tiendas de apps. Los medios y los gateways son las dos líneas que crecen con los usuarios.</p>
+      </aside>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m29"></div>
+
+      <section class="exercise" aria-labelledby="ej-m29">
+        <p class="exercise-title" id="ej-m29">Ejercicio de diseño: anuncios a una comunidad de 100 000 personas</p>
+        <p>Tu clon tiene grupos de hasta 1 024 miembros. Quieres agregar comunidades, con un canal de anuncios donde solo escriben los administradores y leen 100 000 personas. Un anuncio importante tiene que llegar a todos en un par de minutos, y los miembros pueden estar conectados, sin conexión o con el teléfono apagado.</p>
+        <p>Diseña cómo se reparte un anuncio, qué se guarda, cómo se avisa a los teléfonos y qué pasa con el cifrado.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Por qué el reparto de los grupos no sirve:</b> 100 000 escrituras de buzón, 100 000 lecturas del registro y hasta 100 000 borrados por anuncio. Con 50 anuncios en un día de una comunidad grande son cinco millones de escrituras para una sola comunidad. Y las Sender Keys necesitarían repartirse a 100 000 dispositivos.</li>
+            <li><b>Fan-out on read:</b> el anuncio se guarda <b>una vez</b> en un registro del canal, con un número de secuencia propio del canal. Cada miembro tiene un cursor (hasta qué anuncio leyó). Publicar cuesta una escritura, sin importar cuántos leen.</li>
+            <li><b>Avisar sin escribir en 100 000 buzones:</b> un push liviano por tema, o un mensaje pequeño "hay novedades en el canal" al buzón de cada miembro, con el número del último anuncio. Es un mensaje de pocos bytes, no el contenido; aun así son 100 000 escrituras, así que se hacen en lotes y por ondas para que lleguen en un par de minutos sin saturar el buzón.</li>
+            <li><b>Conectados:</b> el servicio de mensajes recorre los miembros por shard del registro y publica a los gateways en lote. Los gateways empujan el aviso a sus conexiones. Es el mismo camino del grupo, pero sin guardar copias.</li>
+            <li><b>Los que abren la app después</b> piden los anuncios posteriores a su cursor y descargan el contenido desde una CDN, como un medio: el contenido del canal es el mismo para todos y se cachea.</li>
+            <li><b>Cifrado:</b> un canal de difusión a 100 000 personas no puede usar una Sender Key repartida uno a uno. Las opciones son cifrado a nivel de transporte (el servidor puede ver el contenido, como en un sitio web) o una clave de canal compartida que se entrega al unirse y se rota cuando alguien sale, con el costo de rotación que eso implica. Es una decisión de producto con consecuencias de privacidad que se le explica al usuario.</li>
+            <li><b>Límites y abuso:</b> solo los administradores publican, con un límite por hora, y el registro del canal tiene un tope de retención.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m29"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m29.data.js"></script>
+<script src="../assets/js/data/maps/m29-whatsapp.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
+</body>
+</html>

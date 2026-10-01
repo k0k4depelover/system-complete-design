@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M28. Cloudflare</title>
-<meta name="description" content="Caso de estudio de una red de borde: anycast y BGP, el camino de una request dentro de un PoP, mitigación de DDoS en L3, L4 y L7, caché por niveles, Workers en isolates de V8, estado en el borde con KV, Durable Objects y R2, propagación global de configuración y Zero Trust, con un mapa explorable de seis escenarios.">
+<meta name="description" content="Caso de estudio de una red de borde: anycast y BGP, balanceo L4 con XDP, el camino de una request dentro de un PoP, mitigación de DDoS en L3, L4 y L7, caché por niveles, Workers en isolates de V8 comparados con Kubernetes, microVMs y contenedores, estado en el borde con KV, Durable Objects y R2, propagación global de configuración, Zero Trust y cómo armar una red de borde propia en AWS, con un mapa explorable de ocho escenarios.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -38,11 +38,11 @@
 
       <header class="title-block">
         <h1>Cloudflare</h1>
-        <p class="lead">Una parte enorme del tráfico web pasa por una misma red antes de llegar a su destino. Este caso de estudio la recorre desde el primer paquete: cómo llega cada usuario al edificio más cercano sin que nadie elija por él, cómo se absorbe un ataque de terabits, cómo corre código de miles de clientes en el mismo servidor y cómo se cambia la configuración de todo el mundo en segundos sin romperlo.</p>
+        <p class="lead">Una parte enorme del tráfico web pasa por una misma red antes de llegar a su destino. Este caso de estudio la recorre desde el primer paquete: cómo llega cada usuario al edificio más cercano sin que nadie elija por él, cómo se absorbe un ataque de terabits, cómo corre código de miles de clientes en el mismo servidor sin pods ni réplicas, cómo se cambia la configuración de todo el mundo en segundos sin romperlo, y cómo armarías una versión propia.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M28</dd></div>
           <div><dt>Parte</dt><dd>III. Casos de estudio</dd></div>
-          <div><dt>Duración</dt><dd>100 min</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M01, M03, M04, M06, M08</dd></div>
           <div><dt>Estado</dt><dd data-status="m28">Sin empezar</dd></div>
         </dl>
@@ -51,10 +51,12 @@
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
           <li>Explicar cómo anycast y BGP llevan a cada usuario a un PoP cercano y cómo se sale de un PoP que falla.</li>
-          <li>Recorrer una request dentro de un PoP, del filtro de paquetes a la caché.</li>
+          <li>Recorrer una request dentro de un PoP, del router y el balanceo L4 hasta la caché.</li>
           <li>Diseñar la defensa contra ataques de denegación de servicio en cada capa.</li>
+          <li>Explicar cómo corre un Worker comparado con un pod de Kubernetes, una función en una microVM y un contenedor.</li>
           <li>Usar caché por niveles, Workers, KV, Durable Objects y R2 según lo que cada uno garantiza.</li>
           <li>Propagar configuración a todo el mundo sin que un error llegue a todos a la vez.</li>
+          <li>Armar una red de borde propia sobre AWS y estimar cuánto cuesta.</li>
         </ul>
       </section>
 
@@ -67,6 +69,8 @@
         <li><b>El plano de datos no consulta al plano de control:</b> cada servidor tiene una copia local de toda la configuración, así una request nunca espera a un servicio central.</li>
       </ul>
 
+      <p>Los servidores son genéricos y todos iguales dentro de una generación; la generación 12, presentada en 2024, usa CPUs AMD EPYC de 96 núcleos. <span class="badge badge--doc">Documentado</span> Que cada máquina haga todo simplifica la operación: para sumar capacidad se agregan servidores iguales, y uno que falla sale de la rotación sin que ningún servicio pierda una capa entera. El costo de ese diseño es que todo el software tiene que convivir en la misma máquina, repartiéndose CPU y memoria, y que un error en cualquiera de sus piezas puede afectar a todas.</p>
+
       <aside class="callout callout--def">
         <p class="callout-label">Qué es documentado y qué no</p>
         <p>Cloudflare publica mucho sobre su arquitectura en su blog técnico y su documentación, y lo marcamos como <span class="badge badge--doc">Documentado</span>. Los detalles que completan el recorrido (tiempos exactos, orden de algunos pasos) son un <span class="badge badge--ref">Diseño de referencia</span> coherente con lo publicado.</p>
@@ -74,7 +78,7 @@
 
       <h2 id="mapa"><span class="sec-num">28.2</span>El mapa completo</h2>
 
-      <p>Un usuario de Lisboa visita una tienda cuyo origen está en Virginia. Explora cada pieza y reproduce los seis escenarios, incluidos el ataque y la caída de un PoP.</p>
+      <p>Un usuario de Lisboa visita una tienda cuyo origen está en Virginia. Explora cada pieza y reproduce los ocho escenarios, incluidos el ataque, la caída de un PoP, el despliegue de un Worker y un Worker que deriva trabajo a un contenedor.</p>
 
       <div data-map="m28-cloudflare"></div>
 
@@ -114,10 +118,10 @@
 <path class="dg-edge" d="M510 252 V180" marker-end="url(#f281a)"/>
 <path class="dg-edge" d="M690 252 V180" marker-end="url(#f281a)"/>
 <path class="dg-feedback" d="M110 252 V180" style="stroke: var(--fail)"/>
-<text class="dg-tiny dg-fail-text" x="110" y="222" text-anchor="middle">✕</text>
+<text class="dg-tiny dg-fail-text" x="110" y="204" text-anchor="middle">✕</text>
 <path class="dg-edge" d="M116 254 C 170 220, 260 210, 300 178" marker-end="url(#f281a)" style="stroke: var(--l-service)"/>
 <path class="dg-feedback" d="M190 252 V180" style="stroke: var(--fail)"/>
-<text class="dg-tiny dg-fail-text" x="190" y="222" text-anchor="middle">✕</text>
+<text class="dg-tiny dg-fail-text" x="190" y="204" text-anchor="middle">✕</text>
 <path class="dg-edge" d="M196 254 C 250 220, 260 210, 300 178" marker-end="url(#f281a)" style="stroke: var(--l-service)"/>
 <text class="dg-small" x="385" y="40" text-anchor="middle">Mismo prefijo en todos los PoPs: cada red lleva el paquete por su ruta más corta.</text>
 <text class="dg-small" x="385" y="60" text-anchor="middle">Si un PoP retira su anuncio, sus usuarios pasan al siguiente más cercano sin cambiar la IP.</text>
@@ -131,13 +135,14 @@
         <li><b>"Más cercano" es según BGP, no según el mapa.</b> La ruta más corta para una red puede cruzar un océano si esa red no tiene mejores acuerdos de intercambio. Por eso Cloudflare conecta directamente con miles de redes: cuantas más, más cerca queda cada usuario.</li>
         <li><b>Las rutas cambian mientras hay conexiones abiertas.</b> Si una conexión TCP empieza en Lisboa y a mitad de camino sus paquetes llegan a Madrid, Madrid no conoce esa conexión y la corta. Es raro, y los clientes se reconectan; las conexiones de larga duración (WebSockets) lo sienten más.</li>
         <li><b>Los ataques se reparten solos.</b> Una botnet repartida por el mundo termina enviando cada parte de su tráfico al PoP de su región: ningún PoP recibe el ataque entero (28.5).</li>
+        <li><b>Anycast no mira la carga.</b> La ruta más corta no sabe si el PoP está saturado. Un sistema automático, Traffic Manager, mide la CPU de cada PoP contra tres umbrales (el máximo, donde la latencia empieza a degradarse; el objetivo, al que quiere volver; y el aceptable, por debajo del cual un PoP puede recibir tráfico de otro) y, cuando uno se pasa, le quita carga. Al principio lo hacía retirando rutas del PoP, que mueve demasiado tráfico de golpe; ahora también reenvía un porcentaje de las conexiones a PoPs vecinos con capacidad (con extensiones de Unimog llamadas Plurimog y Duomog), sin retirar el anuncio. <span class="badge badge--doc">Documentado</span></li>
       </ul>
 
       <h2 id="camino"><span class="sec-num">28.4</span>El camino de una request dentro de un PoP</h2>
 
       <figure class="figure">
         <div class="figure-frame">
-<svg viewBox="0 0 770 250" role="img" aria-labelledby="f282t f282d">
+<svg viewBox="0 0 770 264" role="img" aria-labelledby="f282t f282d">
 <title id="f282t">El camino de una request dentro de un PoP</title>
 <desc id="f282d">El paquete entra por el router, pasa por el filtro XDP y el balanceo L4, que descarta el ataque y elige un servidor. En el servidor, el proxy termina TLS, aplica WAF y bots, las reglas del cliente, el Worker si hay uno y la caché. Si no está en caché, va al nivel superior y, si tampoco está, al origen. Todos los pasos corren en el mismo servidor.</desc>
 <defs><marker id="f282a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
@@ -151,7 +156,7 @@
 <path class="dg-edge" d="M251 110 H263" marker-end="url(#f282a)"/>
 <rect class="dg-layer" style="--c: var(--l-service)" x="266" y="80" width="112" height="60" rx="10"/>
 <text class="dg-label" x="322" y="106" text-anchor="middle" style="font-size:13px">TLS</text>
-<text class="dg-tiny" x="322" y="124" text-anchor="middle">certificado del cliente</text>
+<text class="dg-tiny" x="322" y="124" text-anchor="middle">termina TLS</text>
 <path class="dg-edge" d="M379 110 H391" marker-end="url(#f282a)"/>
 <rect class="dg-layer" style="--c: var(--l-service)" x="394" y="80" width="112" height="60" rx="10"/>
 <text class="dg-label" x="450" y="106" text-anchor="middle" style="font-size:13px">WAF y bots</text>
@@ -167,29 +172,97 @@
 <rect class="dg-frame" x="130" y="64" width="640" height="94" rx="12"/>
 <text class="dg-group" x="440" y="56">Un mismo servidor del PoP, elegido por el balanceo L4</text>
 <path class="dg-edge" d="M706 142 V190 H600" marker-end="url(#f282a)"/>
-<text class="dg-small" x="712" y="174">MISS</text>
+<text class="dg-small" x="714" y="184">MISS</text>
 <rect class="dg-layer" style="--c: var(--l-cache)" x="430" y="172" width="166" height="44" rx="10"/>
 <text class="dg-label" x="513" y="199" text-anchor="middle" style="font-size:13px">Nivel superior</text>
 <path class="dg-edge" d="M428 194 H366" marker-end="url(#f282a)"/>
 <rect class="dg-layer" style="--c: var(--l-external)" x="250" y="172" width="112" height="44" rx="10"/>
 <text class="dg-label" x="306" y="199" text-anchor="middle" style="font-size:13px">Origen</text>
-<text class="dg-small" x="10" y="236">Cada servidor corre todos los servicios: no hay una capa de caché ni de WAF aparte, y cualquier servidor sano puede atender cualquier request.</text>
+<text class="dg-small" x="10" y="254">Cada servidor corre todos los servicios: no hay una capa de caché ni de WAF aparte, y cualquier servidor sano puede atender cualquier request.</text>
 <text class="dg-small" x="196" y="28" text-anchor="middle">los ataques de red se descartan acá</text>
-<path class="dg-feedback" d="M196 36 V78"/>
+<path class="dg-feedback" d="M196 42 V78"/>
 </svg>
         </div>
         <figcaption><b>Figura 28.2.</b> Los paquetes de ataque se descartan en el primer paso, antes de que cuesten memoria o CPU. Todo lo demás corre en un mismo servidor.</figcaption>
       </figure>
 
       <ol class="steps">
-        <li><span class="step-title">Router y balanceo L4</span>El router reparte los paquetes entre los servidores del PoP. En cada servidor, un programa XDP (eBPF que corre en el driver de red) descarta lo que coincide con una huella de ataque y, para el resto, elige qué servidor atiende la conexión con hashing consistente: el balanceador L4 de Cloudflare, Unimog, funciona así. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Router y balanceo L4</span>El router reparte los paquetes entre los servidores del PoP. En cada servidor, un programa XDP (eBPF que corre en el driver de red) descarta lo que coincide con una huella de ataque y, para el resto, decide qué servidor atiende la conexión. Es el balanceador L4 de Cloudflare, Unimog, y se explica abajo. <span class="badge badge--doc">Documentado</span></li>
         <li><span class="step-title">TLS</span>El proxy termina TLS con el certificado del sitio. Con el handshake contra un PoP a 8 ms en lugar del origen a 80, la primera conexión cuesta una fracción (M01). Quien no quiere entregar su clave privada puede usar Keyless SSL: la operación de firma se delega a un servidor del cliente. <span class="badge badge--doc">Documentado</span></li>
         <li><span class="step-title">WAF, bots y reglas</span>El <dfn data-term="waf">WAF</dfn> evalúa la request contra reglas administradas y del cliente, y un modelo asigna un puntaje de bot. La acción puede ser dejar pasar, bloquear, desafiar o limitar la tasa.</li>
         <li><span class="step-title">Worker</span>Si la ruta tiene un Worker, su código corre acá y puede responder, reescribir la request o consultar estado en el borde (28.7).</li>
         <li><span class="step-title">Caché, nivel superior y origen</span>Si la respuesta es cacheable y está, sale del PoP; si no, se pide al nivel superior y, en último caso, al origen (28.6).</li>
       </ol>
 
-      <p>El proxy que hace todo esto es un programa propio: Cloudflare reemplazó su proxy basado en NGINX por Pingora, un framework escrito en Rust que publicó como código abierto. <span class="badge badge--doc">Documentado</span></p>
+      <h3 id="unimog">Balanceo L4 sin una capa de balanceadores</h3>
+
+      <p>El router reparte con <dfn data-term="ecmp">ECMP</dfn>: un hash de direcciones y puertos elige uno de varios caminos iguales. Pero el router no sabe nada de conexiones, y cuando cambia la cantidad de servidores, el mismo hash empieza a mandar los paquetes de una conexión abierta a otro servidor, que no la conoce y la corta. En lugar de poner balanceadores dedicados delante, Unimog resuelve eso en los mismos servidores que atienden las requests: <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f28ut f28ud">
+<title id="f28ut">Balanceo L4 dentro de un PoP</title>
+<desc id="f28ud">El router reparte los paquetes entre los servidores con ECMP, sin saber a qué conexión pertenecen. El paquete de una conexión ya abierta llega al servidor 1. Su programa XDP calcula el hash de la conexión y busca su bucket en la tabla de reenvío, que es igual en todos los servidores: la primera ranura, para conexiones nuevas, dice servidor 4, y la segunda, para las ya abiertas, dice servidor 2. Encapsula el paquete y lo manda al servidor 4. Como el 4 no tiene el socket y no es un SYN, lo pasa al servidor 2, que sí lo tiene y atiende la conexión.</desc>
+<defs><marker id="f28ua" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="24" width="120" height="50" rx="9"/>
+<text class="dg-label" x="80.0" y="46.0" text-anchor="middle" style="font-size:13px">Router</text>
+<text class="dg-tiny" x="80.0" y="62.0" text-anchor="middle">ECMP por hash</text>
+<rect class="dg-box" x="220" y="24" width="160" height="42" rx="9"/>
+<text class="dg-label" x="300" y="42" text-anchor="middle" style="font-size:12.5px">Servidor 1</text>
+<text class="dg-tiny" x="300" y="57" text-anchor="middle">recibe el paquete</text>
+<rect class="dg-box dg-box--em" x="220" y="82" width="160" height="42" rx="9"/>
+<text class="dg-label" x="300" y="100" text-anchor="middle" style="font-size:12.5px">Servidor 2</text>
+<text class="dg-tiny" x="300" y="115" text-anchor="middle">tiene el socket de C</text>
+<rect class="dg-box" x="220" y="140" width="160" height="42" rx="9"/>
+<text class="dg-label" x="300" y="158" text-anchor="middle" style="font-size:12.5px">Servidor 3</text>
+<text class="dg-tiny" x="300" y="173" text-anchor="middle">no interviene</text>
+<rect class="dg-box" x="220" y="198" width="160" height="42" rx="9"/>
+<text class="dg-label" x="300" y="216" text-anchor="middle" style="font-size:12.5px">Servidor 4</text>
+<text class="dg-tiny" x="300" y="231" text-anchor="middle">primer salto, sin socket</text>
+<path class="dg-edge" d="M142 49 H216" marker-end="url(#f28ua)"/>
+<path class="dg-edge" style="stroke: var(--l-edge); stroke-width: 2" d="M382 45 C 470 45, 470 219, 384 219" marker-end="url(#f28ua)"/>
+<text class="dg-tiny" x="452" y="126">1. lo encapsula</text>
+<text class="dg-tiny" x="452" y="140">y lo manda al 4</text>
+<path class="dg-edge" style="stroke: var(--l-edge); stroke-width: 2" d="M218 219 C 160 219, 160 103, 216 103" marker-end="url(#f28ua)"/>
+<text class="dg-tiny" x="150" y="158" text-anchor="end">2. sin socket:</text>
+<text class="dg-tiny" x="150" y="172" text-anchor="end">lo pasa al 2</text>
+<rect class="dg-frame" x="560" y="24" width="200" height="216" rx="12"/>
+<text class="dg-group" x="574" y="46">Tabla de reenvío</text>
+<text class="dg-tiny" x="574" y="64">igual en todos los servidores</text>
+<text class="dg-small" x="574" y="92">bucket</text>
+<text class="dg-small" x="640" y="92" text-anchor="middle">nuevas</text>
+<text class="dg-small" x="742" y="92" text-anchor="end">abiertas</text>
+<text class="dg-tiny" x="578" y="116">0</text>
+<text class="dg-tiny" x="640" y="116" text-anchor="middle">servidor 3</text>
+<text class="dg-tiny" x="742" y="116" text-anchor="end">servidor 3</text>
+<text class="dg-tiny" x="578" y="140">1</text>
+<text class="dg-tiny" x="640" y="140" text-anchor="middle">servidor 1</text>
+<text class="dg-tiny" x="742" y="140" text-anchor="end">servidor 1</text>
+<rect x="568" y="149" width="184" height="22" rx="5" fill="var(--accent-tint)"/>
+<text class="dg-tiny" x="578" y="164">2</text>
+<text class="dg-tiny" x="640" y="164" text-anchor="middle">servidor 4</text>
+<text class="dg-tiny" x="742" y="164" text-anchor="end">servidor 2</text>
+<text class="dg-tiny" x="578" y="188">3</text>
+<text class="dg-tiny" x="640" y="188" text-anchor="middle">servidor 2</text>
+<text class="dg-tiny" x="742" y="188" text-anchor="end">servidor 2</text>
+<text class="dg-tiny" x="574" y="222">La conexión C cae en el bucket 2.</text>
+<text class="dg-small" x="20" y="272">El router no sabe de conexiones. Cualquier servidor puede recibir el paquete y llevarlo al que tiene el socket.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.3.</b> Como todos los servidores tienen la misma tabla, no importa a cuál llega el paquete: el primer salto lo manda al servidor que recibe las conexiones nuevas del bucket, y si ese no tiene la conexión, el segundo salto lo manda al que la tenía.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Una tabla de reenvío igual en todos:</b> la conexión cae en un bucket según el hash de su 4-tupla (direcciones y puertos). La tabla tiene más de 100 veces más buckets que servidores, así que mover unos pocos buckets ajusta la carga con precisión.</li>
+        <li><b>Dos ranuras por bucket:</b> la primera es el servidor que recibe las conexiones nuevas; la segunda, el servidor anterior, que sigue atendiendo las que ya estaban abiertas.</li>
+        <li><b>Reenvío en XDP:</b> el servidor que recibe el paquete lo encapsula con GUE (encapsulado genérico sobre UDP) y lo manda al primer salto. Si es un SYN, se queda ahí. Si no, y ese servidor no tiene un socket para la conexión, lo pasa al segundo salto. Ese segundo salto lo necesitan muy pocos paquetes, normalmente menos del 1&#8239;%.</li>
+        <li><b>Un conductor que balancea:</b> un proceso de control consulta la salud de los servidores (Consul) y su uso de CPU (Prometheus), y mueve buckets de los más cargados a los menos cargados, empezando por los modificados hace más tiempo.</li>
+        <li><b>Drenar sin cortar:</b> para sacar un servidor, el conductor lo pasa a la segunda ranura de sus buckets y pone a otro en la primera: no recibe conexiones nuevas, pero sigue atendiendo las que ya tenía hasta que terminan.</li>
+      </ul>
+
+      <p>Todo esto conserva la propiedad que busca el diseño: agregar, quitar o sobrecargar un servidor no corta conexiones abiertas.</p>
+
+      <p>El proxy que viene después también es propio. Cloudflare reemplazó su proxy basado en NGINX por Pingora, un framework escrito en Rust. Una de las razones: en NGINX, cada proceso worker tiene su propio pool de conexiones hacia los orígenes y no puede reutilizar las de los demás, así que agregar workers empeora la reutilización. Pingora usa hilos que comparten un solo pool; para un cliente grande, la reutilización de conexiones al origen pasó del 87.1&#8239;% al 99.92&#8239;% (una reducción de 160 veces en las conexiones nuevas), y el servicio usa cerca de 70&#8239;% menos CPU y 67&#8239;% menos memoria que el anterior con el mismo tráfico. <span class="badge badge--doc">Documentado</span> Pingora es código abierto desde 2024.</p>
 
       <h2 id="ddos"><span class="sec-num">28.5</span>Mitigación de DDoS en L3, L4 y L7</h2>
 
@@ -206,7 +279,14 @@
         </table>
       </div>
 
-      <p>La detección es automática. Un sistema que corre en cada servidor muestrea los paquetes, encuentra los rasgos que comparten los del ataque (flags, puertos, rangos de TTL, tamaños) y genera una regla de descarte en <dfn data-term="xdp">XDP</dfn>, en segundos y sin intervención humana; una vista global coordina los ataques que golpean muchos PoPs. <span class="badge badge--doc">Documentado</span> Descartar en el driver es la clave: cada paquete de ataque cuesta casi nada, así que el mismo servidor sigue atendiendo a los usuarios legítimos. Cloudflare ha reportado haber absorbido ataques récord de más de 7 Tbps. <span class="badge badge--doc">Documentado</span></p>
+      <p>La detección es automática. Un sistema que corre en cada servidor muestrea los paquetes, encuentra los rasgos que comparten los del ataque (flags, puertos, rangos de TTL, tamaños) y genera una regla de descarte en <dfn data-term="xdp">XDP</dfn>, en segundos y sin intervención humana. <span class="badge badge--doc">Documentado</span> Descartar en el driver es la clave: cada paquete de ataque cuesta casi nada, así que el mismo servidor sigue atendiendo a los usuarios legítimos. El récord publicado es de 31.4 Tbps, en el último trimestre de 2025: duró 35 segundos y se detectó y mitigó sin intervención humana. En la primera mitad de 2026, Cloudflare mitigó 935 ataques de red de más de 1 Tbps. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Las piezas tienen nombre propio y se reparten el trabajo entre lo local y lo global: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>dosd</b> (denial of service daemon) corre en cada servidor de cada PoP y decide por su cuenta, sin consenso central. Sus reglas se aplican en su PoP.</li>
+        <li><b>Gatebot</b> corre en el centro de datos principal, recibe muestras de todos los PoPs, ve los ataques distribuidos por el mundo y manda reglas a todos. Sus reglas tienen prioridad sobre las de dosd.</li>
+        <li><b>flowtrackd</b> sigue el estado de las conexiones TCP donde el tráfico de ida y de vuelta viaja por caminos distintos, como en Magic Transit, donde Cloudflare anuncia por BGP los prefijos del cliente y le entrega por un túnel solo el tráfico limpio.</li>
+      </ul>
 
       <aside class="callout callout--tradeoff">
         <p class="callout-label">Trade-off</p>
@@ -219,12 +299,14 @@
 
       <ul>
         <li><b>La clave de caché</b> decide qué cuenta como el mismo objeto: host y ruta, y solo los parámetros que importan. Un parámetro de tracking en la clave multiplica las copias y hunde la tasa de aciertos (M04).</li>
+        <li><b>Qué PoP es el nivel superior:</b> con Smart Tiered Cache, Cloudflare mide la latencia desde sus PoPs hasta el origen de cada cliente y elige como nivel superior el más cercano a él. <span class="badge badge--doc">Documentado</span></li>
         <li><b>Coalescing:</b> si mil usuarios piden a la vez un objeto que no está, sale un solo pedido hacia arriba y los demás esperan su respuesta. Sin eso, un lanzamiento sería una estampida contra el origen.</li>
+        <li><b>Un piso persistente:</b> las cachés en disco desalojan lo menos pedido. Cache Reserve guarda lo cacheable en R2, así un objeto que salió de todos los discos no vuelve a costar una request al origen. <span class="badge badge--doc">Documentado</span></li>
         <li><b>Purgas:</b> borrar un objeto de todos los PoPs tarda segundos. Se purga por URL o por etiqueta; purgar todo el sitio manda todo el tráfico al origen a la vez.</li>
         <li><b>Contenido vencido ante errores:</b> con <code>stale-if-error</code> y <code>stale-while-revalidate</code>, un origen caído o lento no se nota para lo cacheable.</li>
       </ul>
 
-      <h2 id="workers"><span class="sec-num">28.7</span>Workers: código en el borde</h2>
+      <h2 id="workers"><span class="sec-num">28.7</span>Workers por dentro</h2>
 
       <p>Los Workers ejecutan código de los clientes en cada servidor de cada PoP. Correr código de millones de clientes distintos en la misma máquina, en milisegundos, descarta los contenedores: cada Worker corre en un <dfn data-term="isolates">isolate de V8</dfn>, el mecanismo que aísla las pestañas de Chrome. <span class="badge badge--doc">Documentado</span></p>
 
@@ -312,12 +394,210 @@
 <text class="dg-small" x="400" y="244">Uno por función: cientos de ms en frío, decenas de MB o más.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 28.3.</b> Un isolate comparte el motor con los demás y no trae un sistema operativo propio: por eso arranca en milisegundos y caben miles por máquina. El precio es que el código tiene que correr en ese entorno (JavaScript o WebAssembly), con límites de CPU y memoria por request.</figcaption>
+        <figcaption><b>Figura 28.4.</b> Un isolate comparte el motor con los demás y no trae un sistema operativo propio: por eso arranca en milisegundos y caben miles por máquina. El precio es que el código tiene que correr en ese entorno (JavaScript, TypeScript o WebAssembly), con límites de CPU y memoria por request.</figcaption>
       </figure>
 
-      <p>El aislamiento entre clientes se refuerza por capas: el sandbox de V8, procesos separados según la confianza, y mitigaciones contra ataques de canal lateral como Spectre, como la eliminación de temporizadores de alta precisión. <span class="badge badge--doc">Documentado</span> Para que el arranque en frío no se note, el isolate se prepara mientras se completa el handshake TLS, antes de que llegue la request. <span class="badge badge--doc">Documentado</span></p>
+      <p>El runtime es workerd, que Cloudflare publicó como código abierto en 2022: un proceso que aloja muchos isolates y les da las APIs de la web (<code>fetch</code>, <code>Request</code>, <code>Response</code>, streams) más los bindings hacia KV, Durable Objects o R2. <span class="badge badge--doc">Documentado</span> Un isolate no es un proceso ni un hilo: es un heap de V8 con su propio contexto global. El proceso pasa de uno a otro sin que intervenga el kernel, y cada isolate atiende muchas requests a la vez con un event loop, como Node.js.</p>
 
-      <h2 id="estado"><span class="sec-num">28.8</span>Estado en el borde: KV, Durable Objects y R2</h2>
+      <h3 id="deploy-worker">Qué pasa al desplegar</h3>
+      <ol class="steps">
+        <li><span class="step-title">Subir el código</span><code>wrangler deploy</code> empaqueta el código con sus dependencias y lo sube junto con su configuración: rutas, bindings y fecha de compatibilidad. No hay imagen de contenedor ni sistema operativo que empaquetar.</li>
+        <li><span class="step-title">Una versión nueva</span>La API valida el paquete y lo guarda como una versión inmutable. Con despliegues graduales, la versión nueva puede recibir un porcentaje del tráfico mientras la anterior atiende el resto. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">A todos los PoPs</span>La versión llega a cada servidor de cada PoP en segundos. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Nada que reservar</span>No se eligen regiones, réplicas ni tamaños de máquina, y no hay reglas de autoscaling: cualquier servidor puede correr cualquier Worker en el momento en que le llega una request.</li>
+      </ol>
+
+      <h3 id="request-worker">Qué pasa cuando llega una request</h3>
+      <ol class="steps">
+        <li><span class="step-title">Buscar la ruta</span>El proxy encuentra en su configuración local que la URL tiene un Worker y qué versión le corresponde.</li>
+        <li><span class="step-title">¿Hay un isolate caliente?</span>Si el runtime de ese servidor ya tiene un isolate de esa versión, la request entra a su event loop: no hay arranque.</li>
+        <li><span class="step-title">Si no, crearlo durante el handshake</span>El primer mensaje del handshake TLS trae el nombre del sitio (<dfn data-term="sni">SNI</dfn>). Con eso, el runtime empieza a cargar y compilar el Worker mientras el handshake termina: el <dfn data-term="cold-start">arranque en frío</dfn> queda escondido detrás de un viaje de ida y vuelta que igual había que hacer. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Concentrar los Workers poco usados</span>Con el tiempo, los Workers crecieron (hasta 10 MB de código y unos 400 ms de CPU para arrancar), y el arranque empezó a perder la carrera contra el handshake. La respuesta de 2025 fue dejar de crear isolates nuevos cuando ya existe uno: dentro de cada PoP, un anillo de hashing consistente asigna a cada Worker un servidor "de casa". El servidor que recibe la request (el cliente del shard) la reenvía a ese servidor (el servidor del shard), que tiene el isolate caliente. El reenvío cuesta menos de 1 ms, contra cientos de ms de un arranque en frío. Con solo el 4&#8239;% del tráfico empresarial en este esquema, la tasa de requests atendidas por un isolate caliente subió del 99.9&#8239;% al 99.99&#8239;%. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Si el servidor de casa está lleno, no fallar</span>El servidor del shard puede rechazar la request. Para no pagar un viaje extra, el cliente manda la request de forma optimista, con una referencia a una instancia local del Worker que todavía no cargó; si le dicen que no, esa misma referencia le sirve para correrlo localmente, sin hacer pasar los bytes por el otro servidor. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Liberar memoria</span>Los isolates que no se usan se desalojan cuando hace falta memoria. Las variables globales de un isolate pueden sobrevivir entre requests, pero no hay garantía: el estado va a KV, Durable Objects o R2 (28.9).</li>
+      </ol>
+
+      <p>El aislamiento entre clientes se refuerza por capas: <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>El sandbox de V8</b>, el mismo que separa pestañas en Chrome, actualizado con los parches de seguridad del motor.</li>
+        <li><b>Cordones:</b> los Workers se agrupan en procesos distintos según el nivel de confianza, así el código de una cuenta gratuita recién creada no comparte proceso con el de un cliente empresarial.</li>
+        <li><b>Un sandbox del sistema operativo</b> alrededor de cada proceso del runtime, con namespaces de Linux y filtros seccomp: aunque un atacante escapara de V8, no tendría la red ni el disco.</li>
+        <li><b>Defensas contra Spectre:</b> el reloj no avanza mientras el código ejecuta (<code>Date.now()</code> cambia solo después de una operación de entrada o salida) y no hay hilos con memoria compartida, así que medir tiempos con la precisión que exige el ataque es muy difícil. Además, un sistema detecta los Workers con comportamiento sospechoso y los pasa a un proceso propio.</li>
+      </ul>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Ningún aislamiento por software es definitivo. En 2026, un grupo de investigadores demostró un ataque Spectre remoto que, desde un Worker en el mismo proceso, filtraba hasta 12 bits por segundo de otro Worker con un 99&#8239;% de acierto, midiendo tiempos a través de una conexión WebSocket. Cloudflare respondió con dos capas más: el V8 Sandbox, que elimina los punteros de 64 bits crudos de los heaps de JavaScript (los ataques necesitaban forjarlos), y las claves de protección de memoria (MPK) de la CPU, que aíslan por hardware el heap de cada isolate dentro del mismo proceso. También mejoró la detección de Workers de larga duración o con mucha entrada y salida para aislarlos en procesos propios. <span class="badge badge--doc">Documentado</span> La lección de diseño: la defensa es en capas y se sigue mejorando, porque compartir un proceso entre clientes es el precio de arrancar en milisegundos.</p>
+      </aside>
+
+      <p>Los límites son parte del contrato: 128 MB de memoria por isolate; un tiempo de CPU por request que va de 10 ms en el plan gratuito a 30 segundos por defecto (hasta 5 minutos) en el pago; y 1 segundo para que el código global termine de cargar. El tiempo que el Worker pasa esperando la red no cuenta como CPU. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="workers-k8s"><span class="sec-num">28.8</span>Workers contra Kubernetes, microVMs y contenedores</h2>
+
+      <p>Quien viene de Kubernetes pregunta dónde están las instancias. En <dfn data-term="kubernetes">Kubernetes</dfn> declaras cuántas réplicas quieres, un scheduler elige en qué nodos corren y cada réplica es un contenedor con sus procesos, que tarda segundos en arrancar. En AWS Lambda, cada request concurrente recibe un entorno de ejecución, una <dfn data-term="microvm">microVM</dfn> de Firecracker creada bajo demanda dentro de una región. En Workers no hay una decisión de dónde correr: el código está en todos los servidores, y la "instancia" es un isolate que existe mientras hace falta en el servidor que recibió la request.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 470" role="img" aria-labelledby="f285t f285d">
+<title id="f285t">Desplegar y atender una request: Kubernetes contra Workers</title>
+<desc id="f285d">En Kubernetes, un deploy declara cuántas réplicas quieres; el scheduler elige nodos, el kubelet descarga la imagen y arranca el contenedor, y el pod entra al Service cuando está listo. Una request llega al balanceador de la región, el Service elige una réplica y el pod la atiende. En Workers, el deploy sube el código, la API guarda la versión y se replica a cada servidor de cada PoP en segundos, sin réplicas ni nodos que programar. Una request llega al PoP más cercano, cualquier servidor busca la ruta en su configuración local y la atiende un isolate que ya estaba caliente o se crea en milisegundos.</desc>
+<defs><marker id="f285a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="22">Kubernetes: tú decides cuántas réplicas y dónde</text>
+<text class="dg-num" x="20" y="48">Desplegar</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="58" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="75.0" text-anchor="middle" style="font-size:13px">kubectl apply</text>
+<text class="dg-tiny" x="195.0" y="91.0" text-anchor="middle">un Deployment con 6 réplicas y su imagen</text>
+<path class="dg-edge" d="M195 99 V110" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="112" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="129.0" text-anchor="middle" style="font-size:13px">Scheduler</text>
+<text class="dg-tiny" x="195.0" y="145.0" text-anchor="middle">elige nodos con CPU y memoria libres</text>
+<path class="dg-edge" d="M195 153 V164" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="166" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="183.0" text-anchor="middle" style="font-size:13px">Kubelet</text>
+<text class="dg-tiny" x="195.0" y="199.0" text-anchor="middle">descarga la imagen y arranca el contenedor</text>
+<path class="dg-edge" d="M195 207 V218" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="220" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="237.0" text-anchor="middle" style="font-size:13px">Readiness</text>
+<text class="dg-tiny" x="195.0" y="253.0" text-anchor="middle">entra al Service: segundos, minutos si falta un nodo</text>
+<text class="dg-num" x="20" y="300">Atender una request</text>
+<rect class="dg-box" x="20" y="310" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="327.0" text-anchor="middle" style="font-size:13px">Balanceador de la región</text>
+<text class="dg-tiny" x="195.0" y="343.0" text-anchor="middle">los usuarios lejanos pagan la distancia</text>
+<path class="dg-edge" d="M195 351 V362" marker-end="url(#f285a)"/>
+<rect class="dg-box" x="20" y="364" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="381.0" text-anchor="middle" style="font-size:13px">Service</text>
+<text class="dg-tiny" x="195.0" y="397.0" text-anchor="middle">elige una de las 6 réplicas</text>
+<path class="dg-edge" d="M195 405 V416" marker-end="url(#f285a)"/>
+<rect class="dg-box" x="20" y="418" width="350" height="40" rx="9"/>
+<text class="dg-label" x="195.0" y="435.0" text-anchor="middle" style="font-size:13px">Pod</text>
+<text class="dg-tiny" x="195.0" y="451.0" text-anchor="middle">un proceso que atiende muchas requests</text>
+<text class="dg-group" x="400" y="22">Workers: el código está en todos los servidores</text>
+<text class="dg-num" x="400" y="48">Desplegar</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="400" y="58" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="75.0" text-anchor="middle" style="font-size:13px">wrangler deploy</text>
+<text class="dg-tiny" x="575.0" y="91.0" text-anchor="middle">sube el bundle y declara sus bindings</text>
+<path class="dg-edge" d="M575 99 V110" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="400" y="112" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="129.0" text-anchor="middle" style="font-size:13px">API</text>
+<text class="dg-tiny" x="575.0" y="145.0" text-anchor="middle">valida y guarda la versión</text>
+<path class="dg-edge" d="M575 153 V164" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="400" y="166" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="183.0" text-anchor="middle" style="font-size:13px">Réplica global</text>
+<text class="dg-tiny" x="575.0" y="199.0" text-anchor="middle">llega a cada servidor de cada PoP en segundos</text>
+<path class="dg-edge" d="M575 207 V218" marker-end="url(#f285a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="400" y="220" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="237.0" text-anchor="middle" style="font-size:13px">Nada que programar</text>
+<text class="dg-tiny" x="575.0" y="253.0" text-anchor="middle">no hay réplicas, nodos ni autoscaling</text>
+<text class="dg-num" x="400" y="300">Atender una request</text>
+<rect class="dg-box" x="400" y="310" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="327.0" text-anchor="middle" style="font-size:13px">PoP más cercano</text>
+<text class="dg-tiny" x="575.0" y="343.0" text-anchor="middle">anycast elige: nadie viaja lejos</text>
+<path class="dg-edge" d="M575 351 V362" marker-end="url(#f285a)"/>
+<rect class="dg-box" x="400" y="364" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="381.0" text-anchor="middle" style="font-size:13px">Cualquier servidor</text>
+<text class="dg-tiny" x="575.0" y="397.0" text-anchor="middle">lee la ruta de su configuración local</text>
+<path class="dg-edge" d="M575 405 V416" marker-end="url(#f285a)"/>
+<rect class="dg-box" x="400" y="418" width="350" height="40" rx="9"/>
+<text class="dg-label" x="575.0" y="435.0" text-anchor="middle" style="font-size:13px">Isolate</text>
+<text class="dg-tiny" x="575.0" y="451.0" text-anchor="middle">caliente, o creado en ms durante el handshake TLS</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.5.</b> En Kubernetes, el deploy decide dónde va a correr el código antes de que llegue una request. En Workers esa decisión no existe: la toma anycast, request por request.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Pod de Kubernetes</th><th>Función en Lambda</th><th>Worker</th><th>Contenedor de Cloudflare</th></tr></thead>
+          <tbody>
+            <tr><td><b>Aislamiento</b></td><td>Contenedor Linux: namespaces y cgroups sobre el kernel del nodo</td><td>MicroVM de Firecracker, con kernel propio</td><td>Isolate de V8 dentro de un proceso compartido</td><td>Contenedor Linux con tu imagen</td></tr>
+            <tr><td><b>Quién decide dónde corre</b></td><td>El scheduler, entre los nodos de tu clúster</td><td>Lambda, dentro de una región</td><td>Nadie: cualquier servidor del PoP al que llegó el usuario</td><td>Cloudflare, al pedirlo desde un Worker</td></tr>
+            <tr><td><b>Arranque en frío</b></td><td>Segundos con la imagen en el nodo; minutos si hay que crear un nodo</td><td>De unos 100 ms a más de un segundo, según el runtime y el paquete</td><td>Milisegundos, escondidos detrás del handshake TLS</td><td>Segundos</td></tr>
+            <tr><td><b>Cómo escala</b></td><td>El HPA agrega réplicas (lo revisa cada 15 s) y un autoscaler agrega nodos</td><td>Un entorno más por cada request concurrente</td><td>Implícito: cada request corre donde llega</td><td>Una instancia por ID; tu código decide cuántas</td></tr>
+            <tr><td><b>Requests por instancia</b></td><td>Muchas a la vez</td><td>Una a la vez por entorno</td><td>Muchas a la vez (event loop)</td><td>Las que atienda tu proceso</td></tr>
+            <tr><td><b>Densidad</b></td><td>Hasta 110 pods por nodo por defecto</td><td>Menos de 5 MiB de sobrecarga por microVM</td><td>Miles de isolates por proceso</td><td>Según el tipo de instancia</td></tr>
+            <tr><td><b>Lenguajes</b></td><td>Cualquiera</td><td>Varios runtimes, o una imagen propia</td><td>JavaScript, TypeScript, WebAssembly y Python</td><td>Cualquiera</td></tr>
+            <tr><td><b>Límites típicos</b></td><td>Los que declares en <code>requests</code> y <code>limits</code></td><td>15 minutos por invocación, hasta 10 GB de memoria</td><td>128 MB de memoria; CPU por request limitada</td><td>Los del tipo de instancia</td></tr>
+            <tr><td><b>Estado local</b></td><td>Disco efímero y volúmenes persistentes</td><td><code>/tmp</code> efímero</td><td>Ninguno: KV, Durable Objects, R2 o D1</td><td>Disco efímero</td></tr>
+            <tr><td><b>Distancia al usuario</b></td><td>La de la región del clúster</td><td>La de la región</td><td>La del PoP más cercano</td><td>Cerca de donde se pidió</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted">Kubernetes, Firecracker, Lambda y Workers según su documentación pública. <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="tabs" data-tabs="Lo que declaras en cada caso">
+        <section data-tab="Kubernetes">
+          <p>Un Deployment con su imagen, sus réplicas y sus recursos, y un HorizontalPodAutoscaler que las ajusta según la CPU. Todo ocurre en un clúster, en una región.</p>
+<pre><code>apiVersion: apps/v1
+kind: Deployment
+metadata: { name: tienda-api }
+spec:
+  replicas: 6
+  selector: { matchLabels: { app: tienda-api } }
+  template:
+    metadata: { labels: { app: tienda-api } }
+    spec:
+      containers:
+        - name: api
+          image: registry.example/tienda-api:1.42
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { memory: "1Gi" }
+          readinessProbe: { httpGet: { path: /healthz, port: 8080 } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: tienda-api }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: tienda-api }
+  minReplicas: 6
+  maxReplicas: 40
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 60 } }</code></pre>
+        </section>
+        <section data-tab="Workers">
+          <p>La configuración de Wrangler declara el código, sus rutas y sus bindings. No aparecen réplicas, regiones, CPU reservada ni autoscaling.</p>
+<pre data-lang="json"><code>{
+  "name": "tienda-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "tienda.example/api/*", "zone_name": "tienda.example" }],
+  "kv_namespaces": [{ "binding": "CONFIG", "id": "a1b2c3…" }],
+  "durable_objects": { "bindings": [{ "name": "SALAS", "class_name": "Sala" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sala"] }],
+  "limits": { "cpu_ms": 50 }
+}</code></pre>
+<pre><code>export default {
+  async fetch(request, env, ctx) {
+    const flags = await env.CONFIG.get("flags", "json");     // KV: lectura local
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/salas/")) {
+      const id = env.SALAS.idFromName(url.pathname.split("/")[3]);
+      return env.SALAS.get(id).fetch(request);             // al Durable Object de la sala
+    }
+    return fetch(request);                                  // al origen, pasando por la caché
+  },
+};</code></pre>
+        </section>
+      </div>
+
+      <p>Lo que falta en la configuración del Worker es la lección. El costo de no tener que decidir dónde corre el código está en las restricciones: un modelo de programación basado en eventos, límites de memoria y de CPU, nada de procesos largos ni de sistema de archivos, y el estado siempre afuera.</p>
+
+      <h3 id="contenedores">Cuando hace falta un contenedor</h3>
+
+      <p>Para lo que no entra en un isolate (un binario nativo, FFmpeg, un lenguaje sin soporte, más memoria), Cloudflare lanzó en 2025 Containers: imágenes de contenedor normales que corren en su red. La diferencia con Kubernetes está en quién las orquesta. No hay un clúster ni un Deployment con réplicas: el código de un Worker pide una instancia por un ID (para cada ID distinto, Cloudflare crea una instancia nueva y le manda las requests), la controla un Durable Object, y la instancia se apaga tras un tiempo sin uso (<code>sleepAfter</code>). Nadie elige región: Cloudflare escoge la mejor ubicación donde ya tiene contenedores preparados. <span class="badge badge--doc">Documentado</span> Arrancar un contenedor cuesta unos segundos, no milisegundos: el diseño natural es que el Worker atienda lo rápido y derive al contenedor solo lo que lo necesita. En la beta inicial, además, no había autoscaling ni ruteo por latencia: la cantidad de instancias la decide tu propio código.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Cuál elegir</p>
+        <ul>
+          <li><b>Kubernetes:</b> servicios de larga duración, cualquier lenguaje, estado local, GPUs y control total. Pagas capacidad reservada y operas el clúster.</li>
+          <li><b>Lambda:</b> funciones que reaccionan a eventos dentro de una región, cerca de tus datos. Una request por entorno y arranques en frío visibles.</li>
+          <li><b>Workers:</b> lógica por request cerca del usuario (autenticación, ruteo, personalización, APIs livianas), con el estado en Durable Objects o KV. Límites de CPU y memoria.</li>
+          <li><b>Containers:</b> lo pesado al lado de los Workers, sin operar un clúster, a costa de arranques de segundos.</li>
+        </ul>
+      </aside>
+
+      <h2 id="estado"><span class="sec-num">28.9</span>Estado en el borde: KV, Durable Objects y R2</h2>
 
       <p>Un Worker no guarda nada entre requests. Para el estado hay tres servicios con garantías distintas, y elegir mal es el error más común:</p>
 
@@ -337,25 +617,153 @@
 
       <p>Un Durable Object vive en un lugar concreto, en general cerca de donde se creó, y todas sus requests viajan hasta ahí: es el mismo compromiso que el líder de un grupo de Raft (M06), pero con un líder por objeto en lugar de uno por base. El diseño correcto usa muchos objetos chicos, uno por sala, por documento o por usuario, para que la carga se reparta. <a href="#scenario=worker-do">Escenario "Worker y Durable Object"</a>.</p>
 
-      <h2 id="config"><span class="sec-num">28.9</span>Propagar configuración a todo el mundo</h2>
-
-      <p>Cada cambio de un cliente (un registro DNS, una regla del WAF, una ruta de un Worker) tiene que llegar a todos los servidores de todos los PoPs, porque cada servidor atiende sin consultar a nadie. Cloudflare usa para eso <dfn data-term="quicksilver">Quicksilver</dfn>, un almacén clave-valor replicado en cada servidor que recibe los cambios en segundos. <span class="badge badge--doc">Documentado</span></p>
-
-      <p>Esa velocidad es también el mayor riesgo del sistema. El 2 de julio de 2019, una regla nueva del WAF con una expresión regular de backtracking catastrófico llegó así a todos los servidores del mundo y llevó su CPU al 100&#8239;% durante 27 minutos. <span class="badge badge--doc">Documentado</span> Las defensas que se desprenden son las del M11, aplicadas a la configuración:</p>
+      <h3 id="do-dentro">Durable Objects por dentro</h3>
       <ul>
-        <li><b>Validar antes de publicar:</b> no solo la sintaxis, también el costo (motores de expresiones regulares con límites, pruebas contra tráfico de muestra).</li>
-        <li><b>Desplegar por etapas:</b> primero unos pocos servidores o PoPs, con la CPU y los errores vigilados, y rollback automático si empeoran.</li>
-        <li><b>Interruptores para apagar una función al instante</b>, que viajan por el mismo sistema pero no pasan por las etapas.</li>
-        <li><b>Decidir cómo falla cada componente:</b> si un módulo nuevo no puede leer su configuración, ¿deja pasar el tráfico (fail-open) o lo corta (fail-closed)? Para la mayoría de las funciones de un proxy, dejar pasar es el error menos caro (M00).</li>
+        <li><b>Encontrar el objeto.</b> <code>idFromName("sala-42")</code> calcula siempre el mismo ID a partir del nombre. La primera vez que se usa, el objeto se crea en un centro de datos cercano a quien lo pidió, o donde sugiera una location hint (que es de mejor esfuerzo, no una garantía; una jurisdicción como la UE sí lo es). Desde entonces todas las requests para ese ID, vengan de donde vengan, viajan hasta ahí. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Input gates.</b> Mientras el objeto espera una operación de su almacenamiento, no recibe otros eventos: dos requests no pueden intercalar lecturas y escrituras sobre los mismos datos, aunque el código tenga <code>await</code> en el medio. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Output gates.</b> Las respuestas y los mensajes que el objeto envía se retienen hasta que las escrituras que los precedieron están confirmadas como durables. Si la escritura falla, nadie vio un resultado que no se guardó. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Almacenamiento.</b> Desde 2024, cada objeto puede tener su propia base SQLite, en el mismo hilo que su código, así una consulta cuesta microsegundos y no un viaje por la red. Cada transacción confirmada se envía como un log a cinco seguidores en centros de datos distintos (Storage Relay Service), y la escritura se confirma cuando al menos tres respondieron: un quórum, como en Raft (M06). Con puntos de recuperación se puede volver a cualquier momento de los últimos 30 días. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>WebSockets que hibernan.</b> Un objeto con miles de clientes conectados puede salir de la memoria mientras nadie habla, sin cortar las conexiones, y despertarse con el siguiente mensaje: se paga por lo que se usa, no por las conexiones abiertas. <span class="badge badge--doc">Documentado</span></li>
       </ul>
 
-      <h2 id="zero-trust"><span class="sec-num">28.10</span>Enrutamiento inteligente y Zero Trust</h2>
+      <p>Completan el conjunto D1, una base SQLite administrada; Queues, colas con reintentos y cola de mensajes fallidos; y Hyperdrive, que mantiene pools de conexiones hacia una base PostgreSQL o MySQL en una región, para que cada request de un Worker no pague un handshake nuevo contra ella. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="config"><span class="sec-num">28.10</span>Propagar configuración a todo el mundo</h2>
+
+      <p>Cada cambio de un cliente (un registro DNS, una regla del WAF, una ruta de un Worker) tiene que llegar a todos los servidores de todos los PoPs, porque cada servidor atiende sin consultar a nadie. Cloudflare usa para eso <dfn data-term="quicksilver">Quicksilver</dfn>, un almacén clave-valor replicado en cada servidor que recibe los cambios en segundos. <span class="badge badge--doc">Documentado</span> Cada servidor guarda su copia en una base embebida (RocksDB en la versión actual; la primera usaba LMDB), y la replicación es asíncrona y en forma de árbol: nodos raíz en los centros de datos principales, nodos intermedios en los más chicos y hojas en los servidores que atienden tráfico. Que sea asíncrona evita que un servidor lento frene a los demás. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Esa velocidad es también el mayor riesgo del sistema. El 2 de julio de 2019, una regla nueva del WAF con una expresión regular de backtracking catastrófico llegó así a todos los servidores del mundo y llevó su CPU al 100&#8239;% durante 27 minutos. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>El 18 de noviembre de 2025 pasó algo parecido por otra puerta. A las 11:05 UTC se desplegó un cambio de permisos en una base ClickHouse; una consulta sin filtro de base de datos empezó a devolver columnas duplicadas, y el archivo de características del sistema de gestión de bots, que se regenera cada cinco minutos y se distribuye a toda la red, duplicó su tamaño: de unas 60 características a más del límite de 200 que el proxy había reservado en memoria. El proxy nuevo (FL2) llamó a <code>unwrap()</code> sobre un error y falló; el anterior (FL) asignó puntaje de bot cero a todo el tráfico. Entre las 11:20 y las 14:30 UTC buena parte del tráfico recibió errores 5xx. Como la base se actualizaba por partes, cada cinco minutos el archivo generado era bueno o malo según el nodo que lo producía, y la red alternaba entre funcionar y no funcionar: al principio pareció un ataque. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Las defensas que se desprenden son las del M11, aplicadas a la configuración:</p>
+      <ul>
+        <li><b>Validar antes de publicar:</b> no solo la sintaxis, también el costo (motores de expresiones regulares con límites, pruebas contra tráfico de muestra).</li>
+        <li><b>Tratar lo generado como código:</b> un archivo que produce otro sistema se valida igual que uno escrito a mano (tamaño, forma, cantidad de entradas) antes de distribuirlo.</li>
+        <li><b>Desplegar por etapas:</b> primero unos pocos servidores o PoPs, con la CPU y los errores vigilados, y rollback automático si empeoran.</li>
+        <li><b>Interruptores para apagar una función al instante</b>, que viajan por el mismo sistema pero no pasan por las etapas.</li>
+        <li><b>Decidir cómo falla cada componente:</b> si un módulo no puede leer su configuración nueva, ¿sigue con la última buena, deja pasar el tráfico (fail-open) o lo corta (fail-closed)? Para la mayoría de las funciones de un proxy, seguir con la última versión buena es el error menos caro (M00). En noviembre de 2025 el módulo hizo lo contrario: <code>unwrap()</code> convierte un error de datos en la muerte del proceso.</li>
+      </ul>
+
+      <h2 id="zero-trust"><span class="sec-num">28.11</span>Enrutamiento inteligente y Zero Trust</h2>
 
       <p>Dos productos usan la misma red para otra cosa que servir sitios:</p>
       <ul>
         <li><b>Argo Smart Routing</b> mide continuamente la latencia y las pérdidas entre PoPs y manda el tráfico hacia el origen por el camino más rápido de ese momento, que no siempre es el que elegiría BGP. <span class="badge badge--doc">Documentado</span></li>
         <li><b><dfn data-term="zero-trust">Zero Trust</dfn></b> invierte el modelo de la VPN: en lugar de dar acceso a una red interna, cada request a una aplicación interna pasa por la red de Cloudflare, que verifica la identidad del usuario (OIDC, M10) y el estado de su dispositivo antes de dejarla pasar. Con Cloudflare Tunnel, el servidor interno abre una conexión saliente hacia la red y no necesita ninguna IP pública ni puertos abiertos. <span class="badge badge--doc">Documentado</span></li>
       </ul>
+
+      <h2 id="implementalo"><span class="sec-num">28.12</span>Impleméntalo tú mismo: tu propia red de borde</h2>
+
+      <p>Nadie arma un Cloudflare en un fin de semana: la red es el resultado de miles de acuerdos de interconexión y de servidores en cientos de ciudades. Pero las ideas se pueden construir a escala chica, y construirlas es la mejor forma de entenderlas. Conviene separar dos objetivos:</p>
+      <ul>
+        <li><b>Para aprender:</b> una red de borde propia en dos o tres regiones de AWS, con las mismas piezas: anycast, balanceo L4, proxy con WAF y caché, nivel superior, código en el borde y configuración propagada por etapas.</li>
+        <li><b>Para un producto real:</b> comprarla. CloudFront o Cloudflare delante de tu origen te dan cientos de PoPs, mitigación de DDoS y un WAF administrado por menos de lo que cuesta operar una versión propia, como muestra la calculadora de abajo.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza de Cloudflare</th><th>Con qué la armas en AWS</th><th>Qué tener en cuenta</th></tr></thead>
+          <tbody>
+            <tr><td>Anycast y BGP</td><td>Global Accelerator</td><td>Dos IPs anycast estáticas: el usuario entra a la red de AWS en la ubicación de borde más cercana y viaja por ella hasta el endpoint sano más cercano, con failover en segundos. Cuesta 0.025 USD por hora más un recargo por GB que va de 0.015 (entre Norteamérica y Europa) a 0.035 (hacia Asia-Pacífico) y hasta 0.105 según el par de regiones. Un anycast propio exige un número de sistema autónomo, un bloque de al menos /24 y proveedores que acepten tus anuncios BGP; en AWS, lo más parecido es traer tu bloque (BYOIP) para que lo anuncie Global Accelerator.</td></tr>
+            <tr><td>Router y Unimog</td><td>Network Load Balancer en cada región</td><td>Balanceo L4 que conserva la IP del cliente y escala solo; el hash de la conexión elige el proxy.</td></tr>
+            <tr><td>XDP y detección de DDoS</td><td>Shield Standard, gratis y siempre activo; Shield Advanced para L7 y respuesta humana</td><td>El volumen lo absorbe la red de AWS. Tus instancias pueden correr XDP para reglas propias.</td></tr>
+            <tr><td>Proxy (Pingora)</td><td>Pingora, Envoy o NGINX en EC2 c7gn</td><td>Pingora es código abierto. Las c7gn son las Graviton con más ancho de banda de red por vCPU.</td></tr>
+            <tr><td>WAF y bots</td><td>AWS WAF, o reglas dentro del proxy</td><td>AWS WAF se asocia a ALB, CloudFront o API Gateway, no a un NLB: detrás de un NLB, las reglas van en tu proxy (por ejemplo, Coraza con el Core Rule Set de OWASP).</td></tr>
+            <tr><td>Caché del PoP</td><td>La caché en disco del proxy, sobre NVMe local (i4i)</td><td>Hashing consistente por URL entre las instancias de la región, para que cada objeto viva en una sola.</td></tr>
+            <tr><td>Caché por niveles</td><td>Instancias de caché en la región del origen</td><td>Todas las regiones piden ahí antes de ir al origen, con coalescing.</td></tr>
+            <tr><td>Workers</td><td>workerd en tus proxies, o CloudFront Functions y Lambda@Edge</td><td>workerd es el mismo runtime, sin la red. Su propio README advierte que no es un sandbox reforzado: para código de terceros necesita otras capas (una máquina virtual, por ejemplo). Para tu propio código, sirve.</td></tr>
+            <tr><td>Workers KV</td><td>DynamoDB Global Tables</td><td>Réplicas en varias regiones con lecturas locales; entre regiones, la consistencia es eventual, normalmente en un segundo o menos. Existe también un modo de consistencia fuerte entre regiones, con exactamente tres regiones (o dos y un testigo), a costa de más latencia en las escrituras.</td></tr>
+            <tr><td>Durable Objects</td><td>Sin equivalente directo</td><td>Un dueño por ID con hashing consistente y un lease con escritura condicional en DynamoDB y fencing token (M06), o una base en una sola región.</td></tr>
+            <tr><td>R2</td><td>S3</td><td>La misma API. La diferencia está en la factura: S3 cobra la salida a internet.</td></tr>
+            <tr><td>Quicksilver</td><td>S3 versionado y una copia local en cada proxy</td><td>Cada proxy se entera de los cambios por una notificación (SNS hacia una cola SQS propia) y los aplica por etapas.</td></tr>
+            <tr><td>Logs y analítica</td><td>Firehose hacia S3 y Athena, o ClickHouse</td><td>Con mucho volumen, se muestrea en el borde.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f286t f286d">
+<title id="f286t">Una red de borde propia sobre AWS</title>
+<desc id="f286d">Usuarios de Lisboa, São Paulo y Tokio se conectan a dos IPs anycast de Global Accelerator, que los lleva por la red de AWS a la región sana más cercana. En cada región, un Network Load Balancer reparte las conexiones entre proxies propios en instancias c7gn, que terminan TLS, aplican el WAF y los Workers, y consultan una caché en discos NVMe de instancias i4i. Lo que falta se pide al nivel superior, en la región del origen, y de ahí al origen. La configuración vive en S3 versionado y cada proxy guarda una copia local; los cambios avanzan por etapas.</desc>
+<defs><marker id="f286a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<circle cx="40" cy="90" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="40" y="112" text-anchor="middle">Lisboa</text>
+<path class="dg-edge" d="M49 90 L112 160" marker-end="url(#f286a)"/>
+<circle cx="40" cy="175" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="40" y="197" text-anchor="middle">São Paulo</text>
+<path class="dg-edge" d="M49 175 L112 175" marker-end="url(#f286a)"/>
+<circle cx="40" cy="260" r="7" fill="var(--l-client)"/>
+<text class="dg-tiny" x="40" y="282" text-anchor="middle">Tokio</text>
+<path class="dg-edge" d="M49 260 L112 190" marker-end="url(#f286a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="114" y="140" width="140" height="70" rx="9"/>
+<text class="dg-label" x="184" y="166" text-anchor="middle" style="font-size:13px">Global Accelerator</text>
+<text class="dg-tiny" x="184" y="184" text-anchor="middle">2 IPs anycast</text>
+<text class="dg-tiny" x="184" y="199" text-anchor="middle">entrada más cercana</text>
+<rect class="dg-frame" x="284" y="34" width="290" height="120" rx="12"/>
+<text class="dg-group" x="298" y="54">Región eu-west-1</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="296" y="74" width="72" height="58" rx="9"/>
+<text class="dg-label" x="332.0" y="100.0" text-anchor="middle" style="font-size:12.5px">NLB</text>
+<text class="dg-tiny" x="332.0" y="116.0" text-anchor="middle">L4</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="74" width="94" height="58" rx="9"/>
+<text class="dg-label" x="427.0" y="100.0" text-anchor="middle" style="font-size:12.5px">Proxies</text>
+<text class="dg-tiny" x="427.0" y="116.0" text-anchor="middle">c7gn: TLS, WAF</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="486" y="74" width="78" height="58" rx="9"/>
+<text class="dg-label" x="525.0" y="100.0" text-anchor="middle" style="font-size:12.5px">Caché</text>
+<text class="dg-tiny" x="525.0" y="116.0" text-anchor="middle">i4i NVMe</text>
+<path class="dg-edge" d="M369 103 H377" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M475 103 H483" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M256 175 L293 103" marker-end="url(#f286a)"/>
+<rect class="dg-frame" x="284" y="194" width="290" height="120" rx="12"/>
+<text class="dg-group" x="298" y="214">Región ap-northeast-1</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="296" y="234" width="72" height="58" rx="9"/>
+<text class="dg-label" x="332.0" y="260.0" text-anchor="middle" style="font-size:12.5px">NLB</text>
+<text class="dg-tiny" x="332.0" y="276.0" text-anchor="middle">L4</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="234" width="94" height="58" rx="9"/>
+<text class="dg-label" x="427.0" y="260.0" text-anchor="middle" style="font-size:12.5px">Proxies</text>
+<text class="dg-tiny" x="427.0" y="276.0" text-anchor="middle">c7gn: TLS, WAF</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="486" y="234" width="78" height="58" rx="9"/>
+<text class="dg-label" x="525.0" y="260.0" text-anchor="middle" style="font-size:12.5px">Caché</text>
+<text class="dg-tiny" x="525.0" y="276.0" text-anchor="middle">i4i NVMe</text>
+<path class="dg-edge" d="M369 263 H377" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M475 263 H483" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M256 175 L293 263" marker-end="url(#f286a)"/>
+<rect class="dg-frame" x="604" y="34" width="156" height="280" rx="12"/>
+<text class="dg-group" x="618" y="54">Región del origen</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="616" y="90" width="132" height="58" rx="9"/>
+<text class="dg-label" x="682.0" y="116.0" text-anchor="middle" style="font-size:12.5px">Nivel superior</text>
+<text class="dg-tiny" x="682.0" y="132.0" text-anchor="middle">caché i4i</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="616" y="220" width="132" height="58" rx="9"/>
+<text class="dg-label" x="682.0" y="246.0" text-anchor="middle" style="font-size:12.5px">Origen</text>
+<text class="dg-tiny" x="682.0" y="262.0" text-anchor="middle">ALB y la aplicación</text>
+<path class="dg-edge" d="M682 150 V216" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M566 103 C 590 103, 594 110, 613 110" marker-end="url(#f286a)"/>
+<path class="dg-edge" d="M566 263 C 596 263, 590 132, 613 132" marker-end="url(#f286a)"/>
+<text class="dg-small" x="20" y="336">Configuración: S3 versionado; cada proxy guarda una copia local y los cambios avanzan por etapas</text>
+<text class="dg-small" x="20" y="354">(una instancia, una zona, una región, todas), con rollback automático si suben los errores.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 28.6.</b> Una red de borde propia con piezas de AWS. Es un <span class="badge badge--ref">Diseño de referencia</span>: tres regiones alcanzan para ver todos los problemas de una red global, desde la convergencia tras una caída hasta la propagación de la configuración.</figcaption>
+      </figure>
+
+      <p>Un orden razonable para construirla, en el que cada paso deja algo que se puede medir:</p>
+      <ol class="steps">
+        <li><span class="step-title">Una región y dos proxies</span>Un NLB, dos instancias c7gn con Pingora o NGINX, certificados de Let's Encrypt, caché en disco y health checks. Mide el tiempo hasta el primer byte con y sin caché.</li>
+        <li><span class="step-title">La configuración como datos</span>Un archivo de reglas por sitio en S3 versionado. Cada proxy lo baja, lo valida y lo aplica sin reiniciar, y agrega a cada respuesta un header con la versión que la atendió.</li>
+        <li><span class="step-title">Segunda región y Global Accelerator</span>Apaga una región y mide cuánto tarda el tráfico en pasar a la otra, y qué ven las conexiones abiertas.</li>
+        <li><span class="step-title">Nivel superior y coalescing</span>Cuenta las requests que llegan al origen antes y después, con tráfico sintético de cola larga.</li>
+        <li><span class="step-title">Rate limiting y WAF</span>Contadores en Valkey por región y el Core Rule Set de OWASP. Prueba qué pasa con un ataque de requests HTTP desde muchas IPs.</li>
+        <li><span class="step-title">Código en el borde</span>workerd en los proxies, para tus propias funciones de ruteo o autenticación.</li>
+        <li><span class="step-title">Despliegue por etapas</span>Una instancia canario, una zona, una región, todas, con rollback automático si suben los errores o la CPU (M11). Rompe a propósito un archivo de configuración y comprueba que los proxies siguen con la última versión buena.</li>
+      </ol>
+
+      <div data-calc="bom" data-preset="m28"></div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Cuándo conviene construirla</p>
+        <p>En casi todos los escenarios, la línea más grande de la factura es la salida a internet, y en la nube la pagas a precio de lista, mientras un CDN negocia tránsito y peering a otra escala. Una red propia tiene sentido cuando ya operas tu propia red física, cuando el volumen es tan grande que el precio del CDN pesa más que un equipo dedicado, o cuando necesitas algo que ningún proveedor ofrece. Para aprender, en cambio, vale cada dólar.</p>
+      </aside>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 
@@ -370,7 +778,7 @@
           <ul>
             <li><b>Todo pasa por la red:</b> DNS apuntando a la red, TLS terminado en el PoP (los usuarios de Asia hacen el handshake a pocos milisegundos) y el origen conectado con un túnel saliente, sin IP pública que atacar directo.</li>
             <li><b>Qué se cachea:</b> los archivos estáticos de la web, con caché por niveles, y respuestas públicas y estables como la lista de modelos. Nada de las respuestas del chat: son únicas y privadas.</li>
-            <li><b>Streaming:</b> las respuestas SSE pasan sin buffering, con timeouts de inactividad más largos que los de una request normal y keep-alive periódico (M17).</li>
+            <li><b>Streaming:</b> las respuestas SSE pasan sin buffering, con timeouts de inactividad más largos que los de una request normal y keep-alive periódico (<a href="m17-api-streaming.html#sse-infra">M17</a>).</li>
             <li><b>Protección de la API:</b> sin desafíos de navegador. Validación de la API key en un Worker contra KV (la revocación tarda hasta un minuto: aceptable, o se usa un Durable Object para las revocaciones urgentes), rate limiting por clave en el borde, límites de tamaño del cuerpo y validación del esquema. El ataque se corta en el PoP antes de gastar una sola GPU.</li>
             <li><b>La web:</b> WAF administrado, puntaje de bots y desafíos en login y registro.</li>
             <li><b>Operación:</b> los cambios de reglas por etapas y con rollback, y métricas del borde (tasa de bloqueos, aciertos de caché, errores del origen) en los mismos dashboards que el resto del servicio (M11).</li>
@@ -399,5 +807,6 @@
 <script src="../assets/js/core/quiz.js"></script>
 <script src="../assets/js/map/map-engine.js"></script>
 <script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
 </body>
 </html>

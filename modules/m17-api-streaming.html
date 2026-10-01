@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M17. Diseño de la API del LLM</title>
+<meta name="description" content="Los endpoints de una API de LLM y sus esquemas (chat, respuestas con estado, embeddings, archivos y batches), el streaming con SSE de punta a punta en los formatos de OpenAI y de Anthropic, la infraestructura que lo sostiene, la cancelación hasta la GPU, los streams que sobreviven a un corte de red, el tool calling, las salidas estructuradas y los errores antes y después del 200.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m17">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Diseño de la API del LLM</h1>
+        <p class="lead">La API de un LLM parece un POST más, pero la respuesta tarda decenas de segundos, llega de a pedazos, puede cortarse a la mitad y se cobra por token. Este módulo diseña la API completa: los endpoints y sus esquemas, el streaming con SSE de punta a punta, qué pasa cuando el cliente se va o la red se corta, las herramientas, las salidas estructuradas y los errores que un cliente tiene que saber distinguir.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M17</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>80 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M02, M12, M15</dd></div>
+          <div><dt>Estado</dt><dd data-status="m17">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Diseñar los endpoints de una API de LLM y sus esquemas: chat, respuestas con estado, embeddings, archivos y batches.</li>
+          <li>Leer un stream SSE evento por evento en los tres formatos más usados y escribir un cliente que no se rompa.</li>
+          <li>Preparar la infraestructura para el streaming: buffering, timeouts de inactividad y cuántas conexiones abiertas vas a sostener.</li>
+          <li>Propagar una cancelación hasta la GPU y diseñar streams que sobrevivan a un corte de red.</li>
+          <li>Explicar cómo funcionan el tool calling y las salidas estructuradas, y qué sigue validando tu aplicación.</li>
+          <li>Distinguir los errores que se reintentan de los que no, antes y después del 200.</li>
+        </ul>
+      </section>
+
+      <h2 id="diferente"><span class="sec-num">17.1</span>Qué tiene de distinta una API de LLM</h2>
+
+      <p>Desde afuera, una API de LLM es una API HTTP como las del M02: JSON de ida, JSON de vuelta y una clave en un header. Pero casi todas sus cifras están en otra escala, y cada una obliga a una decisión de diseño:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>API REST típica</th><th>API de un LLM</th></tr></thead>
+          <tbody>
+            <tr><td><b>Duración</b></td><td>De 10 a 200 ms</td><td>De 1 a 60 s; minutos con modelos que razonan antes de responder</td></tr>
+            <tr><td><b>Tamaño de la request</b></td><td>Unos kilobytes</td><td>Hasta cientos de miles de tokens: varios megabytes. La API de Anthropic acepta hasta 32 MB por request <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td><b>Respuesta</b></td><td>De una vez</td><td>De a pedazos, token por token</td></tr>
+            <tr><td><b>Costo de una request</b></td><td>Casi cero y parejo</td><td>De fracciones de centavo a dólares, según los tokens</td></tr>
+            <tr><td><b>Qué se limita</b></td><td>Requests por segundo</td><td>Tokens por minuto, además de requests (M18)</td></tr>
+            <tr><td><b>Misma entrada, misma salida</b></td><td>Sí</td><td>No: con muestreo, cada respuesta sale distinta (M12)</td></tr>
+            <tr><td><b>Un error a la mitad</b></td><td>No existe: o responde o falla</td><td>Frecuente: cuando algo falla, el 200 ya se había enviado</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 314" role="img" aria-labelledby="f171t f171d">
+<title id="f171t">El camino de una request a una API de LLM</title>
+<desc id="f171d">Cinco etapas de izquierda a derecha. El cliente, un SDK o un navegador, abre el stream, reintenta y cancela. El gateway termina TLS, autentica la clave y reserva cuota por tokens contra un Redis de cuotas. El servicio de la API valida el esquema, cuenta tokens, arma el prompt y modera. El router elige réplica y región con afinidad de prefijo. El motor de inferencia hace prefill y decode en batch y emite tokens. Los tokens vuelven por el mismo camino convertidos en eventos SSE, uno por token. Al terminar, el servicio de la API manda un evento de uso al pipeline de metering, y el gateway reconcilia la reserva de cuota.</desc>
+<defs><marker id="f171a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f171r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="12" y="54" width="130" height="96" rx="9"/>
+<text class="dg-label" x="77.0" y="78" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<text class="dg-tiny" x="77.0" y="102" text-anchor="middle">SDK o navegador</text>
+<text class="dg-tiny" x="77.0" y="118" text-anchor="middle">abre el stream</text>
+<text class="dg-tiny" x="77.0" y="134" text-anchor="middle">reintenta y cancela</text>
+<path class="dg-edge" d="M144 74 H163" marker-end="url(#f171a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="166" y="54" width="130" height="96" rx="9"/>
+<text class="dg-label" x="231.0" y="78" text-anchor="middle" style="font-size:13.5px">Gateway</text>
+<text class="dg-tiny" x="231.0" y="102" text-anchor="middle">TLS y autenticación</text>
+<text class="dg-tiny" x="231.0" y="118" text-anchor="middle">cuota por tokens</text>
+<text class="dg-tiny" x="231.0" y="134" text-anchor="middle">timeouts y límites</text>
+<path class="dg-edge" d="M298 74 H317" marker-end="url(#f171a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="320" y="54" width="130" height="96" rx="9"/>
+<text class="dg-label" x="385.0" y="78" text-anchor="middle" style="font-size:13.5px">Servicio de la API</text>
+<text class="dg-tiny" x="385.0" y="102" text-anchor="middle">valida el esquema</text>
+<text class="dg-tiny" x="385.0" y="118" text-anchor="middle">cuenta tokens</text>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">arma el prompt</text>
+<path class="dg-edge" d="M452 74 H471" marker-end="url(#f171a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="474" y="54" width="130" height="96" rx="9"/>
+<text class="dg-label" x="539.0" y="78" text-anchor="middle" style="font-size:13.5px">Router</text>
+<text class="dg-tiny" x="539.0" y="102" text-anchor="middle">elige réplica y región</text>
+<text class="dg-tiny" x="539.0" y="118" text-anchor="middle">afinidad de prefijo</text>
+<text class="dg-tiny" x="539.0" y="134" text-anchor="middle">reintenta en otra</text>
+<path class="dg-edge" d="M606 74 H625" marker-end="url(#f171a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="628" y="54" width="130" height="96" rx="9"/>
+<text class="dg-label" x="693.0" y="78" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<text class="dg-tiny" x="693.0" y="102" text-anchor="middle">prefill y decode</text>
+<text class="dg-tiny" x="693.0" y="118" text-anchor="middle">continuous batching</text>
+<text class="dg-tiny" x="693.0" y="134" text-anchor="middle">emite tokens</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M693.0 52 V22 H77.0 V50" marker-end="url(#f171r)"/>
+<text class="dg-small" x="385" y="42" text-anchor="middle">de vuelta: un evento SSE por cada token</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="166" y="196" width="130" height="46" rx="9"/>
+<text class="dg-label" x="231.0" y="216.0" text-anchor="middle" style="font-size:13px">Redis de cuotas</text>
+<text class="dg-tiny" x="231.0" y="232.0" text-anchor="middle">reservar, reconciliar</text>
+<path class="dg-edge" d="M231.0 153 V192" marker-end="url(#f171a)" marker-start="url(#f171a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="320" y="196" width="130" height="46" rx="9"/>
+<text class="dg-label" x="385.0" y="216.0" text-anchor="middle" style="font-size:13px">Metering</text>
+<text class="dg-tiny" x="385.0" y="232.0" text-anchor="middle">evento de uso</text>
+<path class="dg-edge" d="M385.0 153 V192" marker-end="url(#f171a)"/>
+<text class="dg-tiny" x="239.0" y="176">M18</text>
+<text class="dg-tiny" x="393.0" y="176">M21, al terminar</text>
+<text class="dg-small" x="474" y="212">Router y flota: M19.</text>
+<text class="dg-small" x="474" y="230">Motor: M15.</text>
+<text class="dg-small" x="12" y="278">Todo empieza con un POST /v1/chat/completions con stream: true. Cada flecha es una conexión</text>
+<text class="dg-small" x="12" y="296">que tiene que dejar pasar los eventos sin acumularlos y avisar cuando el otro extremo se va.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.1.</b> Una request de chat atraviesa cinco etapas y vuelve convertida en cientos de eventos. Esta parte del curso cubre cada caja: las cuotas en el M18, el router en el M19, el motor en el M15 y el metering en el M21.</figcaption>
+      </figure>
+
+      <p>Una decisión de fondo atraviesa todo el módulo: el modelo no guarda estado entre requests (M12). En la API clásica de chat, cada request manda la conversación entera y el servidor la puede olvidar apenas responde. Eso simplifica mucho la operación, porque cualquier réplica atiende cualquier request, pero traslada el costo al cliente, que reenvía y paga todo el historial en cada turno (M16). Las APIs más nuevas ofrecen guardar el estado en el servidor; en 17.2 ves qué se gana y qué se paga.</p>
+
+      <h2 id="endpoints"><span class="sec-num">17.2</span>Los endpoints</h2>
+
+      <p>La API de OpenAI se convirtió en el estándar de hecho: vLLM, SGLang y casi todos los proveedores exponen rutas compatibles, así que un cliente escrito para ella funciona contra un motor propio cambiando la URL base (M15). La familia completa: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Endpoint</th><th>Qué hace</th><th>Perfil de carga</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /v1/chat/completions</code></td><td>Conversación sin estado: el cliente manda todos los mensajes</td><td>Interactivo, casi siempre con streaming</td></tr>
+            <tr><td><code>POST /v1/responses</code></td><td>Conversación con estado opcional en el servidor, herramientas integradas y modo en segundo plano</td><td>Interactivo o de larga duración</td></tr>
+            <tr><td><code>POST /v1/embeddings</code></td><td>Convierte textos en vectores para búsqueda semántica</td><td>Solo prefill, sin streaming: se optimiza el throughput</td></tr>
+            <tr><td><code>POST /v1/files</code></td><td>Sube documentos, imágenes y entradas de batch</td><td>Subidas grandes, se referencian después por id</td></tr>
+            <tr><td><code>POST /v1/batches</code></td><td>Encola miles de requests para procesarlas dentro de 24 horas, con descuento</td><td>Diferido: llena la capacidad ociosa</td></tr>
+            <tr><td><code>GET /v1/models</code></td><td>Lista los modelos que puede usar la clave</td><td>Lectura trivial</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Anthropic organiza lo mismo con otros nombres: <code>/v1/messages</code> para conversar, <code>/v1/messages/batches</code> para los batches, <code>/v1/files</code> y <code>/v1/models</code>, más <code>/v1/messages/count_tokens</code>, que cuenta los tokens de una request sin ejecutarla y sirve para estimar antes de gastar (M18). <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/v1/chat/completions</code>
+          <span class="badge badge--doc">Documentado</span>
+        </div>
+        <p class="ep-desc">Genera la respuesta del asistente para una conversación. La llama tu backend con la clave del proveedor; el navegador habla con tu backend, nunca con el proveedor.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/chat/completions HTTP/1.1
+Host: api.ejemplo.com
+Authorization: Bearer sk-…
+Content-Type: application/json
+
+{
+  "model": "modelo-chat",
+  "messages": [
+    {"role": "system", "content": "Eres el asistente de soporte. Responde en español."},
+    {"role": "user", "content": "¿Qué es el KV cache?"}
+  ],
+  "max_completion_tokens": 1024,
+  "temperature": 0.7,
+  "stream": false
+}</code></pre>
+          <p class="ep-sec">Respuesta 200 (sin streaming)</p>
+<pre data-lang="json"><code>{
+  "id": "chatcmpl-B7x2",
+  "object": "chat.completion",
+  "created": 1790726400,
+  "model": "modelo-chat",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "El KV cache guarda las claves y valores…", "refusal": null},
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 1250,
+    "completion_tokens": 17,
+    "total_tokens": 1267,
+    "prompt_tokens_details": {"cached_tokens": 1024},
+    "completion_tokens_details": {"reasoning_tokens": 0}
+  }
+}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>La respuesta completa o, con <code>stream: true</code>, el comienzo de un stream de eventos (17.3).</span></li>
+            <li><span class="st st--4xx">400</span><span>Request inválida: un esquema mal formado, o el prompt más <code>max_completion_tokens</code> no entra en la ventana de contexto (M16).</span></li>
+            <li><span class="st st--4xx">401</span><span>Clave inválida, revocada o vencida.</span></li>
+            <li><span class="st st--4xx">404</span><span>El modelo no existe o la clave no tiene acceso a él.</span></li>
+            <li><span class="st st--4xx">429</span><span>Límite de tasa, con <code>Retry-After</code>; o tope de gasto alcanzado, que no se arregla reintentando (M18).</span></li>
+            <li><span class="st st--5xx">500</span><span>Falla interna: se reintenta con backoff.</span></li>
+            <li><span class="st st--5xx">503</span><span>El modelo está sobrecargado (<code>server_is_overloaded</code>; en Anthropic es un 529): se reintenta respetando <code>Retry-After</code>, o se cambia de modelo.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <p><code>finish_reason</code> dice por qué terminó la generación, y conviene revisarlo siempre: <code>stop</code> si el modelo terminó solo, <code>length</code> si llegó al máximo de tokens y la respuesta está cortada, <code>tool_calls</code> si pidió una herramienta y <code>content_filter</code> si la cortó un filtro. <span class="badge badge--doc">Documentado</span> El bloque <code>usage</code> es lo que se cobra: <code>cached_tokens</code> son los que salieron del prompt caching (M16) y <code>reasoning_tokens</code>, los que el modelo usó para razonar sin mostrarlos.</p>
+
+      <h3 id="parametros">Los parámetros que importan</h3>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Parámetro</th><th>Qué controla</th></tr></thead>
+          <tbody>
+            <tr><td><code>model</code></td><td>Qué modelo responde. En producción conviene fijar una versión concreta y no un alias que el proveedor actualiza solo</td></tr>
+            <tr><td><code>messages</code></td><td>Toda la conversación, en orden, con roles <code>system</code>, <code>user</code>, <code>assistant</code> y <code>tool</code>. Cada mensaje puede traer texto, imágenes o archivos (M23)</td></tr>
+            <tr><td><code>max_completion_tokens</code></td><td>Techo de la salida. Además de cortar la respuesta, decide cuánta cuota se reserva al entrar (M18)</td></tr>
+            <tr><td><code>temperature</code>, <code>top_p</code></td><td>Cómo se muestrea el próximo token (M12)</td></tr>
+            <tr><td><code>stop</code></td><td>Secuencias que cortan la generación</td></tr>
+            <tr><td><code>n</code></td><td>Cuántas respuestas generar para el mismo prompt. Comparten el prefill y los bloques del KV cache (M15)</td></tr>
+            <tr><td><code>stream</code>, <code>stream_options</code></td><td>Streaming, y si al final llega el uso de tokens (17.3)</td></tr>
+            <tr><td><code>tools</code>, <code>tool_choice</code>, <code>parallel_tool_calls</code></td><td>Herramientas que el modelo puede pedir (17.6)</td></tr>
+            <tr><td><code>response_format</code></td><td>Salidas estructuradas con un JSON Schema (17.7)</td></tr>
+            <tr><td><code>seed</code></td><td>Pide determinismo, de mejor esfuerzo: la misma request puede no dar la misma respuesta</td></tr>
+            <tr><td><code>service_tier</code></td><td>Nivel de servicio: estándar, <code>flex</code> (más barato y más lento) o <code>priority</code> (M18)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Cambiar de modelo cambia el comportamiento, la latencia y el costo, así que se hace como un deploy: con evaluaciones, canary y la posibilidad de volver atrás (M22). Por eso se fija una versión con fecha y no un alias que apunta siempre al último modelo. Los proveedores anuncian con meses de anticipación cuándo retiran un modelo; esa fecha tiene que estar en el calendario del equipo, no aparecer como un 404 un lunes a la mañana.</p>
+      </aside>
+
+      <h3 id="tres-apis">Chat Completions, Responses y Messages</h3>
+
+      <p>Las tres APIs más usadas resuelven lo mismo con decisiones distintas. La misma pregunta, en las tres:</p>
+
+      <div class="tabs" data-tabs="La misma request en tres APIs">
+        <section data-tab="Chat Completions">
+<pre data-lang="http"><code>POST /v1/chat/completions
+Authorization: Bearer sk-…
+Content-Type: application/json
+
+{
+  "model": "modelo-chat",
+  "messages": [
+    {"role": "system", "content": "Responde en español, en dos frases."},
+    {"role": "user", "content": "¿Qué es el KV cache?"}
+  ],
+  "max_completion_tokens": 300,
+  "stream": true
+}</code></pre>
+        </section>
+        <section data-tab="Responses">
+<pre data-lang="http"><code>POST /v1/responses
+Authorization: Bearer sk-…
+Content-Type: application/json
+
+{
+  "model": "modelo-chat",
+  "instructions": "Responde en español, en dos frases.",
+  "input": "¿Qué es el KV cache?",
+  "previous_response_id": "resp_67f0",
+  "store": true,
+  "max_output_tokens": 300,
+  "stream": true
+}</code></pre>
+          <p>Con <code>previous_response_id</code>, el servidor ya tiene los turnos anteriores: el cliente manda solo lo nuevo.</p>
+        </section>
+        <section data-tab="Messages (Anthropic)">
+<pre data-lang="http"><code>POST /v1/messages
+x-api-key: sk-ant-…
+anthropic-version: 2023-06-01
+Content-Type: application/json
+
+{
+  "model": "modelo-chat",
+  "system": "Responde en español, en dos frases.",
+  "messages": [
+    {"role": "user", "content": "¿Qué es el KV cache?"}
+  ],
+  "max_tokens": 300,
+  "stream": true
+}</code></pre>
+          <p>La versión de la API va en un header: el comportamiento no cambia bajo tus pies aunque el proveedor publique una versión nueva.</p>
+        </section>
+      </div>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Chat Completions</th><th>Responses</th><th>Messages (Anthropic)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Estado de la conversación</b></td><td>El cliente manda todo</td><td>Opcional en el servidor, con <code>previous_response_id</code></td><td>El cliente manda todo</td></tr>
+            <tr><td><b>Forma de la salida</b></td><td><code>choices[].message</code></td><td>Lista de ítems: mensajes, llamadas a herramientas, razonamiento</td><td>Lista de bloques de contenido: texto, <code>tool_use</code>, <code>thinking</code></td></tr>
+            <tr><td><b>Prompt de sistema</b></td><td>Un mensaje con rol <code>system</code></td><td>El campo <code>instructions</code></td><td>El parámetro <code>system</code>, aparte</td></tr>
+            <tr><td><b>Máximo de salida</b></td><td>Opcional</td><td>Opcional</td><td>Obligatorio</td></tr>
+            <tr><td><b>Tareas largas</b></td><td>No</td><td><code>background: true</code>: se consulta o se reanuda después</td><td>Message Batches, o streaming</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Guardar la conversación en el servidor le ahorra al cliente reenviar el historial y le permite al proveedor reutilizar su KV cache con más facilidad. A cambio, el proveedor guarda tus conversaciones (retención, privacidad, M10) y la conversación queda atada a ese proveedor: para cambiar de modelo o de empresa hay que tener tu propia copia. Los productos serios guardan siempre su propia copia de cada mensaje (M20), usen o no el estado del proveedor.</p>
+      </aside>
+
+      <h3 id="embeddings">Embeddings</h3>
+
+      <p>Un <dfn data-term="embedding">embedding</dfn> es un vector de números que representa el significado de un texto: dos textos parecidos quedan cerca. Es la base de la búsqueda semántica y del RAG (M16, M20).</p>
+
+<pre data-lang="http"><code>POST /v1/embeddings
+Authorization: Bearer sk-…
+Content-Type: application/json
+
+{
+  "model": "modelo-embeddings",
+  "input": ["El KV cache guarda claves y valores…", "PagedAttention divide el cache en bloques…"],
+  "dimensions": 512
+}</code></pre>
+<pre data-lang="json"><code>{
+  "object": "list",
+  "data": [
+    {"object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, …]},
+    {"object": "embedding", "index": 1, "embedding": [-0.0071, 0.0332, …]}
+  ],
+  "model": "modelo-embeddings",
+  "usage": {"prompt_tokens": 21, "total_tokens": 21}
+}</code></pre>
+
+      <p>En la API de OpenAI, cada texto puede tener hasta 8192 tokens, una request lleva hasta 2048 textos y no más de 300 000 tokens en total, y <code>dimensions</code> recorta el vector para ahorrar espacio en la base vectorial. <span class="badge badge--doc">Documentado</span> Para el sistema, un embedding es solo un prefill: no hay decode ni KV cache que conservar, así que se sirve con batches grandes y sin streaming, optimizando el throughput y no la latencia. Es el endpoint más barato por token, y el que más volumen recibe cuando se indexan documentos.</p>
+
+      <h3 id="batches">Archivos y batches</h3>
+
+      <p>La <dfn data-term="batch-api">Batch API</dfn> recibe un archivo JSONL con miles de requests, cada una con un <code>custom_id</code> propio, y las procesa en diferido:</p>
+
+<pre><code>{"custom_id": "ticket-8812", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "modelo-chat", "messages": [{"role": "user", "content": "Clasifica este ticket: …"}], "max_completion_tokens": 50}}
+{"custom_id": "ticket-8813", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "modelo-chat", "messages": [{"role": "user", "content": "Clasifica este ticket: …"}], "max_completion_tokens": 50}}</code></pre>
+
+      <p>El archivo se sube con <code>POST /v1/files</code> y <code>purpose: "batch"</code>, y el batch se crea apuntando a él:</p>
+
+<pre data-lang="http"><code>POST /v1/batches
+Authorization: Bearer sk-…
+Content-Type: application/json
+
+{"input_file_id": "file-9Qa1", "endpoint": "/v1/chat/completions", "completion_window": "24h"}</code></pre>
+
+      <p>El batch pasa por <code>validating</code>, <code>in_progress</code> y <code>finalizing</code> hasta <code>completed</code>, o termina en <code>failed</code>, <code>expired</code> o <code>cancelled</code>. Al final hay un archivo de resultados y otro de errores. En OpenAI cuesta la mitad que las mismas requests síncronas, admite hasta 50 000 requests por batch y no consume los límites por minuto habituales: tiene los suyos. <span class="badge badge--doc">Documentado</span> Al proveedor le conviene: un trabajo que puede esperar horas llena las GPUs de madrugada, cuando el tráfico interactivo baja (M12).</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los resultados no vuelven en orden: se unen con la entrada por <code>custom_id</code>, que conviene que sea el id de tu propio registro. Un batch puede terminar con una parte de las requests fallidas en el archivo de errores, y si vence el plazo, las requests terminadas se cobran y las demás se cancelan. <span class="badge badge--doc">Documentado</span> El proceso que lo consume tiene que ser idempotente por <code>custom_id</code>, porque lo vas a correr más de una vez.</p>
+      </aside>
+
+      <h2 id="sse"><span class="sec-num">17.3</span>Streaming con SSE</h2>
+
+      <p>Una respuesta de 800 tokens a 50 tokens por segundo tarda 16 segundos en generarse. Sin streaming, el usuario mira una pantalla vacía todo ese tiempo; con streaming, empieza a leer en menos de medio segundo:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 170" role="img" aria-labelledby="f172t f172d">
+<title id="f172t">La misma respuesta con y sin streaming</title>
+<desc id="f172d">Una respuesta de 800 tokens a 50 tokens por segundo con un TTFT de 0.4 segundos termina a los 16.4 segundos en los dos casos. Sin streaming, el usuario mira una pantalla vacía durante 16.4 segundos y recibe todo junto al final. Con streaming, el primer texto aparece a los 0.4 segundos y el resto se escribe a unas 35 palabras por segundo, mucho más rápido de lo que se lee.</desc>
+<line class="sim-grid" x1="130.0" x2="130.0" y1="122" y2="128"/>
+<text class="sim-axis" x="130.0" y="144" text-anchor="middle">0 s</text>
+<line class="sim-grid" x1="198.9" x2="198.9" y1="122" y2="128"/>
+<text class="sim-axis" x="198.9" y="144" text-anchor="middle">2 s</text>
+<line class="sim-grid" x1="267.8" x2="267.8" y1="122" y2="128"/>
+<text class="sim-axis" x="267.8" y="144" text-anchor="middle">4 s</text>
+<line class="sim-grid" x1="336.7" x2="336.7" y1="122" y2="128"/>
+<text class="sim-axis" x="336.7" y="144" text-anchor="middle">6 s</text>
+<line class="sim-grid" x1="405.6" x2="405.6" y1="122" y2="128"/>
+<text class="sim-axis" x="405.6" y="144" text-anchor="middle">8 s</text>
+<line class="sim-grid" x1="474.4" x2="474.4" y1="122" y2="128"/>
+<text class="sim-axis" x="474.4" y="144" text-anchor="middle">10 s</text>
+<line class="sim-grid" x1="543.3" x2="543.3" y1="122" y2="128"/>
+<text class="sim-axis" x="543.3" y="144" text-anchor="middle">12 s</text>
+<line class="sim-grid" x1="612.2" x2="612.2" y1="122" y2="128"/>
+<text class="sim-axis" x="612.2" y="144" text-anchor="middle">14 s</text>
+<line class="sim-grid" x1="681.1" x2="681.1" y1="122" y2="128"/>
+<text class="sim-axis" x="681.1" y="144" text-anchor="middle">16 s</text>
+<line class="sim-grid" x1="750.0" x2="750.0" y1="122" y2="128"/>
+<text class="sim-axis" x="750.0" y="144" text-anchor="middle">18 s</text>
+<line class="sim-grid" x1="130.0" x2="750.0" y1="122" y2="122"/>
+<text class="sim-label" x="118" y="38" text-anchor="end">Sin streaming</text>
+<rect x="130.0" y="22" width="564.9" height="24" rx="4" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="143.8" y="38">pantalla vacía: el usuario no sabe si algo está pasando</text>
+<rect x="691.9" y="18" width="6" height="32" rx="2" fill="var(--l-service)"/>
+<text class="sim-val" x="706.9" y="38">todo junto</text>
+<text class="sim-label" x="118" y="96" text-anchor="end">Con streaming</text>
+<rect x="130.0" y="80" width="13.8" height="24" rx="3" fill="var(--fill-2)"/>
+<rect x="143.8" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.37"/>
+<rect x="157.6" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.38"/>
+<rect x="171.3" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.40"/>
+<rect x="185.1" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.41"/>
+<rect x="198.9" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.43"/>
+<rect x="212.7" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.45"/>
+<rect x="226.4" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.46"/>
+<rect x="240.2" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.48"/>
+<rect x="254.0" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.50"/>
+<rect x="267.8" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.51"/>
+<rect x="281.6" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.53"/>
+<rect x="295.3" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.54"/>
+<rect x="309.1" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.56"/>
+<rect x="322.9" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.58"/>
+<rect x="336.7" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.59"/>
+<rect x="350.4" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.61"/>
+<rect x="364.2" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.63"/>
+<rect x="378.0" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.64"/>
+<rect x="391.8" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.66"/>
+<rect x="405.6" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.68"/>
+<rect x="419.3" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.69"/>
+<rect x="433.1" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.71"/>
+<rect x="446.9" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.72"/>
+<rect x="460.7" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.74"/>
+<rect x="474.4" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.76"/>
+<rect x="488.2" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.77"/>
+<rect x="502.0" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.79"/>
+<rect x="515.8" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.80"/>
+<rect x="529.6" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.82"/>
+<rect x="543.3" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.84"/>
+<rect x="557.1" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.85"/>
+<rect x="570.9" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.87"/>
+<rect x="584.7" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.89"/>
+<rect x="598.4" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.90"/>
+<rect x="612.2" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.92"/>
+<rect x="626.0" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.94"/>
+<rect x="639.8" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.95"/>
+<rect x="653.6" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.97"/>
+<rect x="667.3" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="0.98"/>
+<rect x="681.1" y="80" width="13.0" height="24" fill="var(--l-service)" opacity="1.00"/>
+<path class="dg-feedback" d="M143.8 76 V62 H185.1"/>
+<text class="dg-tiny" x="192.0" y="66">primer token a los 0.4 s (TTFT)</text>
+<text class="dg-small" x="12" y="164">800 tokens a 50 tokens por segundo: los dos terminan a los 16.4 s. Cambia cuándo empieza a leer el usuario.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.2.</b> El tiempo total es el mismo. El streaming cambia lo que siente el usuario: la espera pasa de 16 segundos al TTFT.</figcaption>
+      </figure>
+
+      <p>Una persona lee en silencio unas 240 palabras por minuto, unas 4 por segundo, según un metaanálisis de Brysbaert de 2019 sobre 190 estudios. <span class="badge badge--doc">Documentado</span> Un modelo a 50 tokens por segundo escribe unas 35 palabras por segundo, mucho más rápido de lo que se lee. Por eso lo que el usuario percibe es el TTFT, no el tiempo total, y por eso también puede detener una respuesta que ve ir por mal camino en el segundo 2 en lugar de pagarla entera.</p>
+
+      <h3 id="sse-formato">El formato</h3>
+
+      <p><dfn data-term="sse">SSE</dfn> (Server-Sent Events) es una respuesta HTTP que no termina: el servidor la mantiene abierta con <code>Content-Type: text/event-stream</code> y va escribiendo eventos de texto. Las reglas son pocas: <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="sse"><code>retry: 5000
+
+: un comentario: el cliente lo ignora, pero mantiene viva la conexión
+
+id: 41
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hola"}}
+
+id: 42
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" mundo"}}
+</code></pre>
+
+      <ul>
+        <li>Cada línea es un campo: <code>event</code> (el tipo), <code>data</code> (el contenido; varias líneas <code>data</code> se unen con saltos de línea), <code>id</code> y <code>retry</code>.</li>
+        <li>Un evento termina con una línea vacía. Hasta que llega esa línea, el cliente no lo procesa.</li>
+        <li><code>id</code> guarda el último evento recibido; al reconectar, el navegador lo manda en el header <code>Last-Event-ID</code> para que el servidor siga desde ahí (17.5). <code>retry</code> fija cuántos milisegundos esperar antes de reconectar.</li>
+        <li>Una línea que empieza con dos puntos es un comentario. El estándar recomienda mandar uno cada unos 15 segundos para que ningún proxy cierre la conexión por inactividad.</li>
+      </ul>
+
+      <p>El navegador trae un cliente de SSE, <code>EventSource</code>, pero no sirve para una API de LLM: solo hace GET y no permite headers propios como <code>Authorization</code>. <span class="badge badge--doc">Documentado</span> Las APIs de LLM reciben un POST con el prompt en el cuerpo, así que los clientes leen el stream con <code>fetch</code> e interpretan el formato ellos mismos, que es lo que hacen los SDK. ¿Por qué no WebSockets? Porque SSE es HTTP común: pasa por proxies, CDNs y balanceadores sin configuración especial, se multiplexa en HTTP/2 y usa la misma autenticación que el resto de la API. Para texto alcanza con un solo sentido. La voz en tiempo real, que sí necesita los dos sentidos, usa WebSockets o WebRTC (M24).</p>
+
+      <h3 id="sse-formatos">Tres formatos, la misma idea</h3>
+
+      <p>Chat Completions, Responses y Messages usan SSE con eventos distintos. Reprodúcelos, avanza evento por evento, prueba los escenarios y detén la respuesta a la mitad:</p>
+
+      <div data-sim="sse"></div>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Chat Completions</th><th>Responses</th><th>Messages (Anthropic)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Línea <code>event:</code></b></td><td>No: solo <code>data:</code></td><td>Sí</td><td>Sí</td></tr>
+            <tr><td><b>Número de secuencia</b></td><td>No</td><td><code>sequence_number</code> en cada evento</td><td>No</td></tr>
+            <tr><td><b>Cómo termina bien</b></td><td><code>data: [DONE]</code></td><td><code>response.completed</code></td><td><code>message_stop</code></td></tr>
+            <tr><td><b>Uso de tokens</b></td><td>Un último chunk, solo con <code>include_usage</code></td><td>En <code>response.completed</code></td><td>La entrada en <code>message_start</code>; la salida, acumulada, en <code>message_delta</code></td></tr>
+            <tr><td><b>Error a mitad</b></td><td>El stream termina sin <code>[DONE]</code></td><td><code>response.failed</code> o <code>error</code></td><td><code>event: error</code>, por ejemplo <code>overloaded_error</code></td></tr>
+            <tr><td><b>Para reanudar</b></td><td>No hay: se repite todo</td><td><code>starting_after</code> con el último <code>sequence_number</code> (en segundo plano)</td><td>No hay: se pide una continuación</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--doc">Documentado</span> Además, los chunks de Chat Completions traen por defecto un campo <code>obfuscation</code> que rellena cada evento con caracteres al azar, para que el tamaño de lo que viaja cifrado no delate el largo de cada token (17.9).</p>
+
+      <h3 id="sse-cliente">Un cliente que no se rompe</h3>
+
+      <p>Un cliente de streaming que funciona en la demo y falla en producción suele fallar por alguna de estas razones:</p>
+      <ul>
+        <li><b>Asumir que cada lectura trae eventos completos.</b> Una lectura de la red puede cortar un evento por la mitad, o incluso un carácter de varios bytes como la "ñ". Hay que acumular, decodificar en modo stream y procesar solo hasta la última línea vacía.</li>
+        <li><b>Romperse con lo desconocido.</b> Los proveedores agregan tipos de evento nuevos, y Anthropic avisa que el código tiene que ignorar los que no conoce. <span class="badge badge--doc">Documentado</span> Lo mismo con los comentarios y los <code>ping</code>.</li>
+        <li><b>Parsear los argumentos de una herramienta a medida que llegan.</b> Los pedazos no son JSON válido por separado: se concatenan y se parsean cuando termina el bloque.</li>
+        <li><b>Confiar en que el stream terminó bien porque se cerró.</b> Una respuesta está completa solo si llegó su evento final: <code>[DONE]</code>, <code>response.completed</code> o <code>message_stop</code>. Sin él, la respuesta está cortada aunque parezca terminada.</li>
+        <li><b>Poner un timeout total.</b> Una respuesta larga puede durar minutos y estar sana. Lo que conviene es un timeout entre eventos: si pasan 60 segundos sin nada, ni siquiera un <code>ping</code>, la conexión está muerta.</li>
+      </ul>
+
+      <p>El núcleo de un cliente en el navegador, con el botón de detener incluido:</p>
+
+<pre><code>const ctrl = new AbortController();
+botonDetener.onclick = () =&gt; ctrl.abort();          // cierra la conexión (17.4)
+
+const res = await fetch('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ messages, stream: true }),
+  signal: ctrl.signal,
+});
+const reader = res.body.getReader();
+const decoder = new TextDecoder();                 // { stream: true } no corta caracteres de varios bytes
+let buffer = '';
+for (;;) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+  let corte;
+  while ((corte = buffer.indexOf('\n\n')) &gt;= 0) {   // un evento termina en una línea vacía
+    const crudo = buffer.slice(0, corte);
+    buffer = buffer.slice(corte + 2);
+    procesar(parsearEvento(crudo));                // ignora comentarios y tipos desconocidos
+  }
+}
+// si no llegó el evento final, la respuesta quedó incompleta</code></pre>
+
+      <p>Está simplificado: el estándar también acepta <code>\r\n</code> como fin de línea, y <code>parsearEvento</code> tiene que unir las líneas <code>data</code> de un mismo evento.</p>
+
+      <h3 id="sse-infra">La infraestructura entre medio</h3>
+
+      <p>Entre el motor y el navegador hay proxies, balanceadores y a veces una CDN, y cada uno puede romper el streaming sin dar ningún error:</p>
+      <ul>
+        <li><b>Buffering.</b> Nginx, por defecto, acumula la respuesta del servidor de origen antes de reenviarla. En un stream eso significa que todos los eventos llegan juntos al final. Se desactiva con <code>proxy_buffering off</code> o, respuesta por respuesta, con el header <code>X-Accel-Buffering: no</code>. <span class="badge badge--doc">Documentado</span> Con la compresión pasa lo mismo: gzip acumula para comprimir mejor, así que el stream no se comprime, o se fuerza el envío de cada evento.</li>
+        <li><b>Timeouts de inactividad.</b> Un balanceador de aplicación de AWS cierra una conexión después de 60 segundos sin datos, salvo que lo configures (hasta 4000). Cloudflare responde con un error 524 si el origen pasa 125 segundos sin enviar nada, y solo en el plan Enterprise se puede cambiar. <span class="badge badge--doc">Documentado</span> Un prefill de 128 000 tokens tarda más de 10 segundos (M16), y un modelo que razona puede pasar minutos sin emitir un token visible. Por eso se mandan comentarios o eventos <code>ping</code> cada unos 15 segundos, y Anthropic los incluye en sus streams.</li>
+        <li><b>Límite de conexiones del navegador.</b> Sobre HTTP/1.1, el navegador abre como mucho 6 conexiones por dominio, y cada stream abierto ocupa una: con varias pestañas, la séptima espera. <span class="badge badge--doc">Documentado</span> HTTP/2 lleva muchos streams por una sola conexión.</li>
+        <li><b>Deploys.</b> Reiniciar un gateway corta todos sus streams. Se drena (M03): la instancia deja de recibir requests nuevas y espera a que terminen las que tiene, con un máximo. Con respuestas de minutos, ese máximo es largo, y conviene que el cliente sepa reanudar (17.5).</li>
+      </ul>
+
+      <p>El streaming también cambia la cuenta de capacidad. Lo que ocupa memoria y descriptores en el gateway ya no son las requests por segundo, sino los streams abiertos, que por la ley de Little son las requests por segundo multiplicadas por la duración de cada stream:</p>
+
+      <div data-calc="streamcap"></div>
+
+      <p>Con los valores de ejemplo, 2000 requests por segundo de 12.8 segundos cada una son 25 600 streams abiertos a la vez. Cada token viaja envuelto en unos 260 bytes de JSON, así que el texto útil es menos del 2&#8239;% de lo que se transmite: 1.2 millones de eventos por segundo y 2.5 Gbps de salida para unos 5 MB/s de texto.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>El incidente clásico: se agrega una capa nueva (un proxy corporativo, un WAF, otra CDN) con el buffering activado, y los usuarios ven la respuesta entera de golpe después de 20 segundos. Los dashboards del servidor muestran un TTFT perfecto, porque lo miden donde se genera el primer token, no donde se lo ve. El TTFT se mide también en el cliente (M11), y cada capa nueva se prueba con un stream real antes de salir a producción.</p>
+      </aside>
+
+      <h2 id="cancelacion"><span class="sec-num">17.4</span>Cuando el cliente se va</h2>
+
+      <p>El usuario pulsa "Detener", cierra la pestaña o se queda sin señal. Si nadie avisa, la GPU sigue generando tokens que nadie va a leer: se pierde dinero y, sobre todo, un lugar en el batch que otra request estaba esperando (M15). La cancelación tiene que viajar hasta el motor:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 546" role="img" aria-labelledby="f173t f173d">
+<title id="f173t">Cómo viaja una cancelación</title>
+<desc id="f173d">El navegador abre un stream a través del balanceador hasta el servidor de la API, que pide la generación al motor. Los tokens vuelven como eventos SSE. El usuario cierra la pestaña: el navegador cierra la conexión, con FIN en HTTP/1.1 o RST_STREAM en HTTP/2. El balanceador cierra la conexión con el servidor de la API. La próxima escritura del servidor falla, o su servidor web le avisa de la desconexión. El servidor llama a abort con el id de la request; el motor saca la request del batch y libera su KV cache. El servidor registra el uso parcial.</desc>
+<defs><marker id="f173-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f173-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f173-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f173-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Navegador</text>
+<path class="dg-frame" d="M70.0 40 V536"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Balanceador</text>
+<path class="dg-frame" d="M280.0 40 V536"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor de la API</text>
+<path class="dg-frame" d="M490.0 40 V536"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<path class="dg-frame" d="M700.0 40 V536"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f173-a)"/>
+<rect x="86.5" y="55" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">POST /v1/chat/completions</text>
+<path class="dg-edge" d="M283.0 106 L485.0 106" marker-end="url(#f173-a)"/>
+<rect x="336.1" y="89" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">POST (stream)</text>
+<path class="dg-edge" d="M493.0 140 L695.0 140" marker-end="url(#f173-a)"/>
+<rect x="536.2" y="123" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="134" text-anchor="middle">generar req_7Hc2</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 174 L495.0 174" marker-end="url(#f173-r)"/>
+<rect x="569.2" y="157" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="168" text-anchor="middle">tokens</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 208 L285.0 208" marker-end="url(#f173-r)"/>
+<rect x="342.7" y="191" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">eventos SSE</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 242 L75.0 242" marker-end="url(#f173-r)"/>
+<rect x="132.7" y="225" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="236" text-anchor="middle">eventos SSE</text>
+<path d="M20 274 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="263" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="278" text-anchor="middle" style="fill:var(--fail)">el usuario cierra la pestaña</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 310 L275.0 310" marker-end="url(#f173-f)"/>
+<rect x="116.2" y="293" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="304" text-anchor="middle">FIN o RST_STREAM</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M283.0 344 L485.0 344" marker-end="url(#f173-f)"/>
+<rect x="319.6" y="327" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">cierra la conexión</text>
+<rect x="500.0" y="364" width="202" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="510.0" y="380">la próxima escritura falla</text>
+<path class="dg-edge" d="M493.0 412 L695.0 412" marker-end="url(#f173-a)"/>
+<rect x="539.5" y="395" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="406" text-anchor="middle">abort(req_7Hc2)</text>
+<rect x="495.0" y="432" width="195" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="505.0" y="448">sale del batch, libera KV</text>
+<path class="dg-edge" d="M490.0 472 h40 v14 h-38" marker-end="url(#f173-a)"/>
+<text class="dg-tiny" x="536.0" y="483">registra el uso parcial</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.3.</b> En HTTP no hay un mensaje de "cancelar": la señal es que la conexión se cerró, y cada salto tiene que notarlo y cerrar la suya.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">El navegador cierra la conexión</span><code>AbortController.abort()</code> cierra la conexión TCP o, en HTTP/2, solo ese stream con un <code>RST_STREAM</code>.</li>
+        <li><span class="step-title">El proxy cierra hacia atrás</span>Un proxy bien configurado cierra la conexión con el servidor de origen cuando se cierra la del cliente. Uno que acumula la respuesta puede seguir leyendo del origen como si nada.</li>
+        <li><span class="step-title">El servidor de la API se entera</span>O porque falla la siguiente escritura, o porque su servidor web le avisa de la desconexión: Starlette, por ejemplo, cancela el generador que produce el stream. Ahí tiene que cancelar su propia llamada al motor, no solo dejar de escribir.</li>
+        <li><span class="step-title">El motor libera la GPU</span>vLLM aborta la request cuando se cierra la conexión con su servidor HTTP: la saca del batch y libera sus bloques del KV cache. En noviembre de 2024 se reportó que, con un middleware agregado, esa detección fallaba y las GPUs seguían generando para nadie. <span class="badge badge--doc">Documentado</span></li>
+      </ol>
+
+      <p>En los modos en segundo plano la conexión no es la señal, porque justamente se quiere que la generación siga sin ella. Por eso hay un endpoint explícito, <code>POST /v1/responses/{id}/cancel</code>, idempotente: cancelar dos veces devuelve el mismo objeto final. <span class="badge badge--doc">Documentado</span> Lo que ya se generó hasta que el motor se enteró gastó GPU; cómo se cobra depende del proveedor, y tu sistema tiene que registrar ese uso parcial igual (M21).</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Si tu producto permite reanudar (17.5), una conexión cerrada ya no puede significar "cancelar": el usuario que entró a un túnel quiere encontrar la respuesta terminada al salir. Entonces se separan las dos cosas: el botón "Detener" llama a un endpoint de cancelación, y una desconexión solo deja de mandar eventos mientras la generación sigue. El costo es generar respuestas que a veces nadie va a leer.</p>
+      </aside>
+
+      <h2 id="reanudar"><span class="sec-num">17.5</span>Streams que sobreviven a un corte</h2>
+
+      <p>En un teléfono, la conexión se corta todo el tiempo: al cambiar de wifi a datos, al entrar al ascensor o al pasar la app a segundo plano. Hay tres formas de seguir:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Cómo funciona</th><th>Qué cuesta</th></tr></thead>
+          <tbody>
+            <tr><td><b>Reintentar desde cero</b></td><td>El cliente repite la request</td><td>Se genera y se paga todo de nuevo, y la respuesta sale distinta. Es lo único posible en una API sin estado</td></tr>
+            <tr><td><b>Continuar desde el cliente</b></td><td>El cliente manda lo que alcanzó a recibir y pide seguir desde ahí</td><td>Se paga otra vez toda la entrada y el empalme puede no ser perfecto. Es la estrategia que documenta Anthropic; no sirve para bloques de herramientas ni de razonamiento a medio llegar <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td><b>Reanudar en el servidor</b></td><td>La generación sigue sin el cliente, los eventos quedan guardados con su número y el cliente vuelve con el último que recibió</td><td>Guardar los eventos unos minutos. Es el modo en segundo plano de Responses, con <code>starting_after</code> <span class="badge badge--doc">Documentado</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La tercera es la que usan los productos de chat, y es la que conviene construir si el producto es tuyo: un <dfn data-term="stream-reanudable">stream reanudable</dfn> separa la generación de la conexión.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f174t f174d">
+<title id="f174t">Un stream que sobrevive a la conexión</title>
+<desc id="f174d">La generación se separa de la conexión. Un worker de generación pide los tokens al motor y escribe cada evento, con un número de secuencia, en un buffer de eventos por respuesta, por ejemplo un stream de Redis con la clave de la respuesta y una expiración de minutos. El servidor de la API no genera nada: lee del buffer desde el último número que el cliente confirmó y lo manda como eventos SSE con ese id. Si la conexión se corta, el cliente vuelve con Last-Event-ID o starting_after y el servidor reenvía desde ahí, sin regenerar. Cualquier instancia del servidor de la API puede atender la reconexión.</desc>
+<defs><marker id="f174a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f174r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="12" y="118" width="118" height="58" rx="9"/>
+<text class="dg-label" x="71.0" y="144.0" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<text class="dg-tiny" x="71.0" y="160.0" text-anchor="middle">guarda el último id</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="190" y="118" width="150" height="58" rx="9"/>
+<text class="dg-label" x="265.0" y="144.0" text-anchor="middle" style="font-size:13.5px">Servidor de la API</text>
+<text class="dg-tiny" x="265.0" y="160.0" text-anchor="middle">sin estado</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="400" y="118" width="162" height="58" rx="9"/>
+<text class="dg-label" x="481.0" y="144.0" text-anchor="middle" style="font-size:13.5px">Buffer de eventos</text>
+<text class="dg-tiny" x="481.0" y="160.0" text-anchor="middle">resp_68c1: seq 0, 1, 2…</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="622" y="30" width="136" height="58" rx="9"/>
+<text class="dg-label" x="690.0" y="56.0" text-anchor="middle" style="font-size:13.5px">Worker</text>
+<text class="dg-tiny" x="690.0" y="72.0" text-anchor="middle">genera una vez</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="622" y="206" width="136" height="58" rx="9"/>
+<text class="dg-label" x="690.0" y="232.0" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<text class="dg-tiny" x="690.0" y="248.0" text-anchor="middle">prefill y decode</text>
+<path class="dg-edge" d="M676 90 V202" marker-end="url(#f174a)"/>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M704 204 V92" marker-end="url(#f174r)"/>
+<text class="dg-tiny" x="668" y="150" text-anchor="end">generar</text>
+<text class="dg-tiny" x="712" y="150">tokens</text>
+<path class="dg-edge" d="M620 60 H481 V114" marker-end="url(#f174a)"/>
+<text class="dg-tiny" x="552" y="52" text-anchor="middle">XADD: evento con su seq</text>
+<path class="dg-edge" d="M398 147 H344" marker-end="url(#f174a)"/>
+<text class="dg-tiny" x="371" y="139" text-anchor="middle">leer</text>
+<text class="dg-tiny" x="371" y="195" text-anchor="middle">desde seq n</text>
+<path class="dg-feedback" d="M371 168 V181"/>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M188 136 H134" marker-end="url(#f174r)"/>
+<text class="dg-tiny" x="160" y="110" text-anchor="middle">SSE, id: n</text>
+<path class="dg-edge" d="M134 160 H186" marker-end="url(#f174a)"/>
+<text class="dg-tiny" x="160" y="192" text-anchor="middle">reconecta:</text>
+<text class="dg-tiny" x="160" y="207" text-anchor="middle">Last-Event-ID: 9</text>
+<text class="dg-small" x="12" y="262">El buffer vive unos minutos después del final: alcanza para reconectar, recargar la página</text>
+<text class="dg-small" x="12" y="280">o abrir la conversación en otro dispositivo mientras la respuesta todavía se escribe.</text>
+<text class="dg-small" x="12" y="24">La conexión se puede cortar; la generación sigue.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.4.</b> El worker genera una sola vez y el servidor de la API solo lee y reenvía. Cualquier instancia puede atender una reconexión, porque el estado está en el buffer y no en la memoria del servidor que se cayó.</figcaption>
+      </figure>
+
+      <p>El diseño, en detalle: <span class="badge badge--ref">Diseño de referencia</span></p>
+      <ul>
+        <li><b>Un worker de generación</b> pide los tokens al motor y escribe cada evento en un buffer por respuesta, con un número de secuencia creciente. Un stream de Redis con la clave <code>resp:{id}</code> encaja bien: agrega al final, se lee desde un id y se le pone una expiración.</li>
+        <li><b>El servidor de la API no genera</b>: lee del buffer desde el número que pide el cliente y lo manda como SSE, con ese número en el campo <code>id</code>. Cuando no hay eventos nuevos, espera bloqueado en el buffer y manda comentarios cada 15 segundos.</li>
+        <li><b>El cliente guarda el último id</b> y reconecta con <code>Last-Event-ID</code> (o un parámetro como <code>starting_after</code>). Si recibe un evento repetido, lo descarta por su número: el consumo es idempotente.</li>
+        <li><b>El buffer vive unos minutos</b> después del final. Alcanza para reconectar, para recargar la página y para abrir la conversación en otro dispositivo mientras la respuesta todavía se escribe. El mensaje completo se guarda en la base de datos al terminar (M20).</li>
+      </ul>
+
+      <p>Guardar eventos tiene una consecuencia de privacidad que conviene decir en voz alta: aun para clientes con retención cero, el modo en segundo plano de OpenAI guarda los datos de la respuesta unos 10 minutos para poder consultarla. <span class="badge badge--doc">Documentado</span> Si tu producto promete no guardar nada, la reanudación tiene que entrar en esa promesa.</p>
+
+      <h2 id="herramientas"><span class="sec-num">17.6</span>Tool calling</h2>
+
+      <p>Con <dfn data-term="tool-calling">tool calling</dfn> el modelo puede pedir datos o acciones que no tiene: consultar un pedido, buscar en la web, ejecutar código. El modelo no ejecuta nada. Declaras funciones con un JSON Schema, el modelo responde con una llamada y sus argumentos, y tu aplicación la ejecuta y le devuelve el resultado:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 376" role="img" aria-labelledby="f175t f175d">
+<title id="f175t">El ciclo de una llamada a herramienta</title>
+<desc id="f175d">Tu aplicación manda los mensajes y la definición de la herramienta buscar_pedido. El modelo decide llamarla y responde con una llamada que trae los argumentos, sin texto. Tu aplicación valida los argumentos y los permisos del usuario, llama a su propio servicio de pedidos y recibe el estado. Después manda una request nueva con toda la conversación más el resultado, asociado al id de la llamada. El modelo responde con el texto final para el usuario.</desc>
+<defs><marker id="f175-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f175-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f175-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f175-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Tu aplicación</text>
+<path class="dg-frame" d="M70.0 40 V366"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">API del LLM</text>
+<path class="dg-frame" d="M385.0 40 V366"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Tu servicio</text>
+<path class="dg-frame" d="M700.0 40 V366"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f175-a)"/>
+<rect x="112.60000000000001" y="55" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">mensajes + tools: [buscar_pedido]</text>
+<rect x="395.0" y="92" width="300" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="108">el modelo decide llamar a la herramienta</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 140 L75.0 140" marker-end="url(#f175-r)"/>
+<rect x="69.70000000000002" y="123" width="315.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">tool_call: buscar_pedido {&quot;pedido_id&quot;: &quot;8812&quot;}</text>
+<rect x="80.0" y="160" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="176">valida los argumentos y los permisos</text>
+<path class="dg-edge" d="M73.0 208 L695.0 208" marker-end="url(#f175-a)"/>
+<rect x="322.9" y="191" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">GET /pedidos/8812</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 242 L75.0 242" marker-end="url(#f175-r)"/>
+<rect x="303.1" y="225" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">{&quot;estado&quot;: &quot;en camino&quot;}</text>
+<path class="dg-edge" d="M73.0 276 L380.0 276" marker-end="url(#f175-a)"/>
+<rect x="102.7" y="259" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="270" text-anchor="middle">mensajes + resultado (mismo call_id)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 310 L75.0 310" marker-end="url(#f175-r)"/>
+<rect x="109.30000000000001" y="293" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="304" text-anchor="middle">texto: &quot;Tu pedido está en camino…&quot;</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.5.</b> Una llamada a herramienta son dos requests al modelo. En la primera, el modelo decide qué función llamar y con qué argumentos; en la segunda, recibe el resultado y escribe la respuesta.</figcaption>
+      </figure>
+
+      <p>La declaración, en el formato de Chat Completions:</p>
+
+<pre data-lang="json"><code>{
+  "type": "function",
+  "function": {
+    "name": "buscar_pedido",
+    "description": "Devuelve el estado de un pedido del usuario actual",
+    "parameters": {
+      "type": "object",
+      "properties": {"pedido_id": {"type": "string", "description": "Número del pedido"}},
+      "required": ["pedido_id"],
+      "additionalProperties": false
+    },
+    "strict": true
+  }
+}</code></pre>
+
+      <p>La respuesta del modelo trae <code>finish_reason: "tool_calls"</code> y la llamada, con los argumentos como un string JSON. Tu aplicación ejecuta la función y manda una request nueva con toda la conversación, la llamada y un mensaje con rol <code>tool</code> que lleva el mismo id: <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="json"><code>{"role": "assistant", "tool_calls": [{"id": "call_Qm2", "type": "function",
+  "function": {"name": "buscar_pedido", "arguments": "{\"pedido_id\": \"8812\"}"}}]}
+{"role": "tool", "tool_call_id": "call_Qm2", "content": "{\"estado\": \"en camino\", \"llega\": \"2026-10-02\"}"}</code></pre>
+
+      <p>Responses y Messages hacen lo mismo con otros nombres: un ítem <code>function_call</code> que se responde con <code>function_call_output</code>, o un bloque <code>tool_use</code> que se responde con <code>tool_result</code>. Lo que importa es lo que queda de tu lado:</p>
+      <ul>
+        <li><b>Los argumentos no son una autorización.</b> El modelo puede equivocarse o ser manipulado por un texto que leyó (prompt injection, M22 y M25). Si pide el pedido 8812, tu servicio verifica que ese pedido sea del usuario de la sesión, igual que con cualquier request de un cliente (BOLA, M10).</li>
+        <li><b>Las acciones con efectos necesitan idempotencia.</b> Si una herramienta cobra, envía un correo o crea un ticket, deriva una idempotency key del id de la llamada: un reintento no puede cobrar dos veces (M02, M27).</li>
+        <li><b>Los errores vuelven al modelo.</b> Si la herramienta falla o tarda demasiado, se le devuelve el error como resultado ("el servicio de pedidos no responde") para que responda con lo que tiene o proponga otra cosa.</li>
+        <li><b>Las llamadas pueden venir juntas.</b> Con <code>parallel_tool_calls</code>, el modelo pide varias en un mismo turno: se ejecutan en paralelo y cada una se responde con su id.</li>
+        <li><b>El bucle necesita un límite.</b> Un modelo puede pedir herramientas en cadena. Se fija un máximo de pasos, de tokens, de tiempo y de dinero por tarea (M25).</li>
+        <li><b>Las definiciones cuestan tokens.</b> Viajan en cada request como parte de la entrada. Conviene que sean cortas y que estén siempre en el mismo orden para no romper el prompt caching (M16).</li>
+      </ul>
+
+      <p>Responses ofrece además herramientas que ejecuta el propio proveedor, como la búsqueda en archivos o un intérprete de código: el bucle ocurre dentro de una sola request, y el stream trae eventos del progreso de cada herramienta. <span class="badge badge--doc">Documentado</span> Es cómodo, pero el control de qué se ejecuta y de cuánto tarda pasa al proveedor.</p>
+
+      <h2 id="estructuradas"><span class="sec-num">17.7</span>Salidas estructuradas</h2>
+
+      <p>Cuando la respuesta la lee un programa y no una persona, se necesita JSON que cumpla un esquema. El modo JSON solo garantiza JSON válido; las <dfn data-term="structured-outputs">salidas estructuradas</dfn> garantizan además que cumpla tu esquema. <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="json"><code>"response_format": {
+  "type": "json_schema",
+  "json_schema": {
+    "name": "clasificacion",
+    "strict": true,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "motivo": {"type": "string"},
+        "prioridad": {"type": "string", "enum": ["alta", "media", "baja"]}
+      },
+      "required": ["motivo", "prioridad"],
+      "additionalProperties": false
+    }
+  }
+}</code></pre>
+
+      <p>No es una instrucción que el modelo puede ignorar. El motor aplica <dfn data-term="constrained-decoding">decodificación restringida</dfn>: compila el esquema en una gramática y, en cada paso, enmascara los tokens que dejarían el JSON fuera del esquema antes de muestrear. OpenAI lo describió así al lanzar la función en 2024, y los motores abiertos lo ofrecen con bibliotecas como XGrammar. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 292" role="img" aria-labelledby="f176t f176d">
+<title id="f176t">Decodificación restringida por un esquema</title>
+<desc id="f176d">El esquema dice que prioridad es uno de tres valores: alta, media o baja. El modelo ya generó la apertura del objeto y la clave prioridad, y está por elegir el valor. Sus probabilidades son: alta 31 %, urgente 28 %, media 22 %, Alta con mayúscula 8 %, baja 6 % y un salto de línea 5 %. La gramática compilada del esquema bloquea urgente, Alta y el salto de línea, que dejarían un JSON inválido. Después de la máscara, las probabilidades que quedan se renormalizan: alta 53 %, media 37 % y baja 10 %.</desc>
+<rect x="12" y="12" width="746" height="54" rx="8" fill="var(--bg)" stroke="var(--separator)"/>
+<text class="dg-small" x="26" y="34">Esquema: "prioridad": {"enum": ["alta", "media", "baja"]}</text>
+<text class="dg-small" x="26" y="55">Generado hasta ahora: {"prioridad": "</text>
+<text class="sim-label" x="12" y="92">Lo que propone el modelo</text>
+<text class="sim-label" x="420" y="92">Después de la máscara</text>
+<text class="dg-small" x="80" y="119" text-anchor="end">alta</text>
+<rect x="88" y="107" width="217.0" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="311.0" y="119">31 %</text>
+<text class="dg-small" x="480" y="119" text-anchor="end">alta</text>
+<rect x="488" y="107" width="199.7" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="693.7" y="119">53 %</text>
+<text class="dg-small" x="80" y="145" text-anchor="end">urgente</text>
+<rect x="88" y="133" width="196.0" height="16" rx="3" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="290.0" y="145">28 %</text>
+<text class="dg-tiny dg-fail-text" x="488" y="145">bloqueado: el JSON dejaría de cumplir el esquema</text>
+<text class="dg-small" x="80" y="171" text-anchor="end">media</text>
+<rect x="88" y="159" width="154.0" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="248.0" y="171">22 %</text>
+<text class="dg-small" x="480" y="171" text-anchor="end">media</text>
+<rect x="488" y="159" width="141.7" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="635.7" y="171">37 %</text>
+<text class="dg-small" x="80" y="197" text-anchor="end">Alta</text>
+<rect x="88" y="185" width="56.0" height="16" rx="3" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="150.0" y="197">8 %</text>
+<text class="dg-tiny dg-fail-text" x="488" y="197">bloqueado: el JSON dejaría de cumplir el esquema</text>
+<text class="dg-small" x="80" y="223" text-anchor="end">baja</text>
+<rect x="88" y="211" width="42.0" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="136.0" y="223">6 %</text>
+<text class="dg-small" x="480" y="223" text-anchor="end">baja</text>
+<rect x="488" y="211" width="38.6" height="16" rx="3" fill="var(--l-service)"/>
+<text class="dg-tiny" x="532.6" y="223">10 %</text>
+<text class="dg-small" x="80" y="249" text-anchor="end">\n</text>
+<rect x="88" y="237" width="35.0" height="16" rx="3" fill="var(--fill-2)"/>
+<text class="dg-tiny" x="129.0" y="249">5 %</text>
+<text class="dg-tiny dg-fail-text" x="488" y="249">bloqueado: el JSON dejaría de cumplir el esquema</text>
+<text class="dg-small" x="12" y="280">La máscara se aplica a los logits en cada paso. El modelo sigue eligiendo; solo que entre las opciones válidas.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.6.</b> La máscara no elige por el modelo: descarta lo inválido y reparte la probabilidad entre lo que queda.</figcaption>
+      </figure>
+
+      <p>Lo que hay que saber para usarlas bien:</p>
+      <ul>
+        <li><b>El primer uso de un esquema es más lento.</b> La gramática se compila y se guarda en caché: la primera request con un esquema nuevo tiene latencia extra, las siguientes no. <span class="badge badge--doc">Documentado</span> Un esquema que cambia en cada request, por ejemplo con un enum armado a partir de datos del usuario, paga esa compilación cada vez.</li>
+        <li><b>No se acepta todo JSON Schema.</b> Hay un subconjunto soportado; en modo estricto, todos los campos son obligatorios y no se permiten campos adicionales.</li>
+        <li><b>El modelo puede negarse.</b> En ese caso la respuesta trae un campo <code>refusal</code> en lugar del JSON. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Un corte deja JSON inválido.</b> Si <code>finish_reason</code> es <code>length</code>, el objeto quedó a medias: se revisa antes de parsear.</li>
+        <li><b>El orden de los campos importa.</b> El modelo genera de izquierda a derecha: si la prioridad va antes que el motivo, decide sin haber escrito el razonamiento. Se ponen primero los campos que ayudan a decidir.</li>
+        <li><b>El esquema no reemplaza la validación.</b> Garantiza la forma, no el contenido: que <code>prioridad</code> sea "alta" no quiere decir que sea correcta. Las reglas de negocio se siguen validando en tu código.</li>
+      </ul>
+
+      <h2 id="errores"><span class="sec-num">17.8</span>Errores y reintentos</h2>
+
+      <p>Un cliente de una API de LLM tiene que distinguir los errores por lo que hay que hacer con ellos:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Código</th><th>Qué significa</th><th>¿Reintentar?</th></tr></thead>
+          <tbody>
+            <tr><td><code>400</code></td><td>Request inválida, o el contexto no entra en la ventana</td><td>No: hay que corregirla, por ejemplo recortando el contexto (M16)</td></tr>
+            <tr><td><code>401</code>, <code>403</code></td><td>Clave inválida o sin permiso</td><td>No</td></tr>
+            <tr><td><code>404</code></td><td>Modelo inexistente o sin acceso</td><td>No</td></tr>
+            <tr><td><code>413</code></td><td>Request demasiado grande en bytes</td><td>No: los archivos grandes van por <code>/v1/files</code></td></tr>
+            <tr><td><code>429</code> con <code>Retry-After</code></td><td>Tu límite por minuto</td><td>Sí, después de esperar lo que indica; y frenar el ritmo (M18)</td></tr>
+            <tr><td><code>429</code> sin <code>Retry-After</code></td><td>Tu tope de gasto</td><td>No: falla hasta que cambie el mes o el tope</td></tr>
+            <tr><td><code>500</code></td><td>Falla interna</td><td>Sí, con backoff y jitter</td></tr>
+            <tr><td><code>503</code>, <code>529</code></td><td>Sobrecarga del proveedor</td><td>Sí, respetando <code>Retry-After</code>; o usar otro modelo o región</td></tr>
+            <tr><td><code>504</code></td><td>Timeout procesando</td><td>Sí, mejor con streaming o batch</td></tr>
+            <tr><td>Error dentro del stream</td><td>Falla después del 200</td><td>Según el tipo; lo recibido se conserva</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los dos proveedores distinguen el tope de gasto del límite por minuto: Anthropic lo marca con <code>error_code: enforced_spend_limit_reached</code> y sin <code>retry-after</code>; OpenAI, con el código <code>organization_spend_limit_exceeded</code> o <code>project_spend_limit_exceeded</code>. <span class="badge badge--doc">Documentado</span> Un cliente que reintenta todos los 429 igual se queda horas golpeando una puerta cerrada.</p>
+
+      <ul>
+        <li><b>El 200 no es el éxito.</b> El éxito es el evento final. Un error a mitad del stream llega como un evento, y la respuesta parcial ya está en pantalla: se muestra lo recibido con el error y se ofrece reintentar.</li>
+        <li><b>Los SDK ya reintentan.</b> El de Anthropic reintenta dos veces por defecto, con backoff exponencial y respetando <code>retry-after</code>. <span class="badge badge--doc">Documentado</span> Si tu código reintenta encima, las tormentas de reintentos se multiplican (M08).</li>
+        <li><b>Reintentar genera otra respuesta.</b> Una generación no es idempotente en su contenido: el reintento cuesta de nuevo y dice otra cosa. Para un chat da igual; para una herramienta con efectos, no (17.6).</li>
+        <li><b>Cada respuesta trae un id.</b> <code>x-request-id</code> en OpenAI, <code>request-id</code> en Anthropic. Se loguea siempre, para cruzar tus traces con el soporte del proveedor (M11).</li>
+        <li><b>Lo que tarda más de 10 minutos va por streaming o por batch.</b> Anthropic lo recomienda porque algunas redes cortan las conexiones inactivas, y sus SDK rechazan requests sin streaming que podrían superar ese tiempo. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>La API cambia.</b> Aparecen campos y tipos de evento nuevos: el cliente los ignora en lugar de fallar. La versión se fija explícitamente, como el header <code>anthropic-version</code>, y el modelo con una versión con fecha.</li>
+      </ul>
+
+      <h2 id="seguridad-stream"><span class="sec-num">17.9</span>Seguridad del streaming</h2>
+
+      <p>El streaming complica tres cosas que sin él son simples:</p>
+      <ul>
+        <li><b>Moderar la salida.</b> Con la respuesta completa, se la revisa antes de mostrarla. Con streaming, el usuario ya leyó el principio cuando llega el final. OpenAI lo advierte: los puntajes de moderación llegan cuando la salida está completa, no con cada delta. <span class="badge badge--doc">Documentado</span> Las opciones son moderar la entrada antes de generar, moderar la salida por ventanas de algunas decenas de tokens y cortar el stream si algo se marca, o no usar streaming en los casos de más riesgo.</li>
+        <li><b>El tamaño de los paquetes.</b> Aunque el tráfico vaya cifrado, un token por evento deja ver el largo de cada token. Un trabajo presentado en USENIX Security en 2024 reconstruyó con exactitud el 29&#8239;% de las respuestas de ChatGPT y de Copilot, y dedujo el tema del 55&#8239;%, solo a partir de esa secuencia de largos. <span class="badge badge--doc">Documentado</span> La mitigación es rellenar los eventos (el campo <code>obfuscation</code> de OpenAI) o agrupar varios tokens por evento.</li>
+        <li><b>Las claves.</b> La clave del proveedor nunca llega al navegador: el cliente habla con tu backend, que autentica al usuario, aplica tus cuotas y llama al proveedor (el patrón BFF del M03).</li>
+      </ul>
+
+      <h2 id="implementacion"><span class="sec-num">17.10</span>Impleméntalo: el endpoint de streaming</h2>
+
+      <p>Un endpoint compatible con Chat Completions que se pone delante de un motor como vLLM, con todo lo de este módulo: cuota reservada al entrar, comentarios cuando hay silencio, cancelación hasta el motor y uso registrado pase lo que pase. Usa FastAPI y el SDK de OpenAI apuntando al motor. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<pre data-lang="python"><code>import asyncio, time
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from openai import AsyncOpenAI
+
+app = FastAPI()
+motor = AsyncOpenAI(base_url="http://vllm.interno:8000/v1", api_key="interno")
+SILENCIO = 15   # segundos sin eventos antes de mandar un comentario
+
+@app.post("/v1/chat/completions")
+async def chat(request: Request):
+    body = await request.json()
+    org = request.state.org                        # lo dejó el middleware de autenticación
+    reserva = await cuotas.reservar(org, body)     # M18: responde 429 si no alcanza
+
+    async def eventos():
+        uso, salida, completo, t0 = None, 0, False, time.monotonic()
+        stream = await motor.chat.completions.create(
+            model=body["model"], messages=body["messages"],
+            max_completion_tokens=body.get("max_completion_tokens", 1024),
+            stream=True, stream_options={"include_usage": True})
+        siguiente = None
+        try:
+            it = aiter(stream)
+            while True:
+                if siguiente is None:
+                    siguiente = asyncio.ensure_future(anext(it))
+                listo, _ = await asyncio.wait({siguiente}, timeout=SILENCIO)
+                if not listo:
+                    yield ": keep-alive\n\n"       # nadie corta una conexión que habla
+                    continue
+                try:
+                    chunk = siguiente.result()
+                except StopAsyncIteration:
+                    completo = True
+                    break
+                siguiente = None
+                if chunk.usage:
+                    uso = chunk.usage
+                elif chunk.choices and chunk.choices[0].delta.content:
+                    salida += 1                    # aproximado: un token por chunk
+                yield f"data: {chunk.model_dump_json()}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # Si el cliente se va, Starlette cancela este generador y se llega acá igual.
+            if siguiente is not None:
+                siguiente.cancel()
+            await stream.close()                   # cierra la conexión con el motor: vLLM aborta
+            await cuotas.reconciliar(reserva, uso, salida)
+            await metering.registrar(org, body["model"], uso, salida,
+                                     completo=completo, segundos=time.monotonic() - t0)
+
+    return StreamingResponse(eventos(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})</code></pre>
+
+      <p>Tres detalles que suelen faltar. El bloque <code>finally</code> corre aunque el cliente se vaya, y es el único lugar donde la cuota se reconcilia y el uso se registra en todos los casos; en producción conviene protegerlo de una segunda cancelación o hacerlo en una tarea aparte. <code>stream.close()</code> es lo que le avisa al motor que deje de generar. Y los comentarios de keep-alive salen de una espera con timeout sobre el próximo chunk, no de un temporizador aparte que podría escribir en medio de un evento.</p>
+
+      <p>Para que el stream sobreviva a un corte, la generación se muda a un worker que escribe en un stream de Redis, y el endpoint que habla con el cliente solo lee (17.5):</p>
+
+<pre data-lang="python"><code>import redis.asyncio as redis
+r = redis.Redis()
+TTL = 600   # segundos para reconectar después del final
+
+async def generar(rid: str, body: dict):
+    """Worker: genera una sola vez y guarda cada evento con su número de secuencia."""
+    clave, seq = f"resp:{rid}", 0
+    async for chunk in await motor.chat.completions.create(**body, stream=True):
+        seq += 1
+        await r.xadd(clave, {"data": chunk.model_dump_json()}, id=f"0-{seq}")
+        if seq == 1:
+            await r.expire(clave, TTL)             # si el worker muere, la clave vence igual
+    await r.xadd(clave, {"data": "[DONE]"}, id=f"0-{seq + 1}")
+    await r.expire(clave, TTL)
+
+@app.get("/v1/respuestas/{rid}/eventos")
+async def eventos(rid: str, request: Request):
+    ultimo = int(request.headers.get("Last-Event-ID", 0))
+
+    async def leer():
+        nonlocal ultimo
+        while True:
+            res = await r.xread({f"resp:{rid}": f"0-{ultimo}"}, block=15000, count=100)
+            if not res:
+                yield ": keep-alive\n\n"
+                continue
+            for id_, campos in res[0][1]:
+                ultimo = int(id_.decode().split("-")[1])
+                data = campos[b"data"].decode()
+                yield f"id: {ultimo}\ndata: {data}\n\n"
+                if data == "[DONE]":
+                    return
+
+    return StreamingResponse(leer(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})</code></pre>
+
+      <p>Los ids explícitos <code>0-1</code>, <code>0-2</code>… hacen que el número de secuencia sea el propio id del stream de Redis, y <code>XREAD</code> desde <code>0-{ultimo}</code> devuelve solo lo posterior. Lo que conviene medir desde el primer día:</p>
+      <ul>
+        <li>TTFT y TPOT medidos en el cliente, no solo en el servidor.</li>
+        <li>El porcentaje de streams que terminan con su evento final, y los que terminan cortados, por causa.</li>
+        <li>Cancelaciones por minuto y el tiempo entre la desconexión y el abort en el motor.</li>
+        <li>Tokens generados después de una desconexión: lo que se tira.</li>
+        <li>Reconexiones y cuántas logran reanudar.</li>
+        <li>Streams abiertos por instancia y la duración de los streams en p99.</li>
+      </ul>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m17"></div>
+
+      <section class="exercise" aria-labelledby="ej-m17">
+        <p class="exercise-title" id="ej-m17">Ejercicio de diseño: el streaming de un asistente móvil</p>
+        <p>Un asistente recibe 3000 requests por segundo en el pico. Las respuestas promedian 700 tokens a 40 tokens por segundo, con un TTFT de 0.8 s, y un 10&#8239;% de las requests usa un modelo que razona hasta 60 segundos antes del primer token visible. El 30&#8239;% de los usuarios está en el teléfono, donde la conexión se corta seguido. El producto tiene un botón "Detener" y promete que, si la red se corta, la respuesta sigue al volver dentro de 2 minutos. Adelante del servicio hay Cloudflare y un balanceador de AWS.</p>
+        <p>Diseña el streaming: cuántos streams vas a sostener, qué configuras en la infraestructura, cómo se reanuda, qué significa cancelar, qué errores ve el cliente y qué mides.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Capacidad:</b> un stream normal dura 0.8 + 700 ÷ 40 = 18.3 s, y uno con razonamiento, hasta unos 78 s. Promediando, 0.9 × 18.3 + 0.1 × 78 ≈ 24 s, así que por la ley de Little hay 3000 × 24 ≈ 72 000 streams abiertos. A 10 000 por instancia son 8 gateways solo por conexiones, más margen para perder una zona.</li>
+            <li><b>Infraestructura:</b> buffering desactivado en cada proxy (<code>X-Accel-Buffering: no</code>) y sin compresión del stream. El timeout de inactividad del balanceador se sube, por ejemplo a 300 s, y aun así se manda un comentario cada 15 s: eso cubre los 125 s de Cloudflare durante los 60 s de razonamiento. Todo sobre HTTP/2.</li>
+            <li><b>Reanudación:</b> la generación va en workers que escriben en streams de Redis por respuesta, con ids secuenciales y una expiración de 5 minutos, más que los 2 prometidos. El cliente guarda el último id y reconecta con <code>Last-Event-ID</code> y backoff con jitter, para que un corte masivo no se convierta en una tormenta de reconexiones.</li>
+            <li><b>Cancelar:</b> una desconexión no cancela, porque la promesa es reanudar. El botón "Detener" llama a un endpoint explícito que aborta la generación en el motor. Las respuestas abandonadas se generan igual hasta el final, y ese costo se mide.</li>
+            <li><b>Errores:</b> los errores después del 200 viajan como eventos. El cliente conserva el texto parcial, muestra el error y ofrece reintentar; distingue los 429 con <code>Retry-After</code>, que espera, del tope de gasto, que no reintenta, y de la sobrecarga, que reintenta con backoff o pasa a otro modelo.</li>
+            <li><b>Métricas:</b> TTFT medido en el teléfono, porcentaje de streams completos, reconexiones y su tasa de éxito, tiempo del botón "Detener" hasta el abort y streams abiertos por instancia.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m17"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m17.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-sse.js"></script>
+</body>
+</html>

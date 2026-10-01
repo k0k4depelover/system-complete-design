@@ -10,6 +10,8 @@ def seq(sid, title, desc, actors, msgs, width=770, row=34, top=64):
     n = len(actors)
     margin = 70
     xs = {a: margin + i * (width - 2 * margin) / (n - 1) for i, (a, _) in enumerate(actors)}
+    step = (width - 2 * margin) / (n - 1) if n > 1 else 124
+    bw = min(124, step - 8)                     # con muchos actores, las cajas se angostan para no pisarse
     height = top + row * len(msgs) + 40
     out = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-labelledby="{sid}t {sid}d">',
            f'<title id="{sid}t">{escape(title)}</title>', f'<desc id="{sid}d">{escape(desc)}</desc>',
@@ -19,7 +21,7 @@ def seq(sid, title, desc, actors, msgs, width=770, row=34, top=64):
            f'<marker id="{sid}-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>']
     for a, label in actors:
         x = xs[a]
-        out.append(f'<rect class="dg-box" x="{x - 62}" y="8" width="124" height="32" rx="4"/>')
+        out.append(f'<rect class="dg-box" x="{x - bw / 2}" y="8" width="{bw}" height="32" rx="4"/>')
         out.append(f'<text class="dg-label" x="{x}" y="29" text-anchor="middle" style="font-size:13.5px">{escape(label)}</text>')
         out.append(f'<path class="dg-frame" d="M{x} 40 V{height - 10}"/>')
     y = top

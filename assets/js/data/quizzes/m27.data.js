@@ -122,6 +122,126 @@ SD.defineQuiz('m27', {
       ],
       answer: 1,
       explain: 'El costo de PCI DSS depende de cuántos sistemas tocan tarjetas. Con el iframe, el comercio solo maneja tokens, y del lado del procesador una sola bóveda guarda los números.'
+    },
+    {
+      id: 'sca-exencion', type: 'single',
+      prompt: 'Un cliente europeo paga 25 EUR con tarjeta. ¿Qué pasa con la autenticación reforzada (3D Secure)?',
+      options: [
+        'Es obligatoria siempre, sin excepciones.',
+        'Puede aplicarse la exención de bajo valor (menos de 30 EUR, con tope de 5 pagos seguidos o 100 EUR acumulados), pero es una petición: el banco puede exigir la autenticación de todos modos con un rechazo suave, y entonces se reintenta el mismo pago autenticado.',
+        'Nunca se necesita en pagos menores de 100 EUR.',
+        'Solo aplica si el comercio la activa.'
+      ],
+      answer: 1,
+      explain: 'Las exenciones reducen la fricción pero no eliminan la decisión del emisor. Un buen procesador reconoce el rechazo suave y vuelve a pedir el pago con autenticación en lugar de dar el pago por perdido.'
+    },
+    {
+      id: 'liability', type: 'single',
+      prompt: 'Un pago se autenticó con 3D Secure y semanas después el titular lo disputa diciendo que no lo autorizó. ¿Qué cambia respecto de un pago sin autenticar?',
+      options: [
+        'Nada: el comercio siempre pierde las disputas.',
+        'La responsabilidad por el fraude pasó al banco emisor (liability shift), y el comercio tiene una defensa fuerte porque el banco autenticó al titular.',
+        'El contracargo se cancela automáticamente y sin costo.',
+        'El procesador devuelve el dinero sin preguntar.'
+      ],
+      answer: 1,
+      explain: 'El valor de autenticación (CAVV) y el indicador ECI 05 en la autorización son la prueba de que el emisor autenticó al titular. Por eso 3D Secure también es una herramienta contra el fraude, no solo contra la regulación.'
+    },
+    {
+      id: 'limitador', type: 'multi',
+      prompt: 'Diseñas el limitador de tasa por cuenta de una API de pagos con un token bucket en Redis. ¿Qué decisiones son correctas?',
+      options: [
+        'Hacer la lectura y la actualización del balde en un solo script atómico.',
+        'Usar el reloj de Redis y no el de cada servidor de la API, para que todos midan igual.',
+        'Si Redis no responde, dejar pasar la request (fail-open): el limitador protege, no decide si el pago es correcto.',
+        'Si Redis no responde, rechazar todas las requests.',
+        'Activarlo de golpe en producción con el umbral que parezca razonable.'
+      ],
+      answer: [0, 1, 2],
+      explain: 'Un limitador se lanza primero a oscuras (dark launch): registra qué bloquearía sin bloquear, se ajustan los umbrales y recién entonces se activa, con un interruptor para apagarlo. Rechazar todos los pagos porque falló el limitador sería peor que no limitar unos minutos.'
+    },
+    {
+      id: 'prioridad', type: 'single',
+      prompt: 'Durante un incidente, el load shedder por utilización de workers tiene que descartar tráfico. ¿En qué orden?',
+      options: [
+        'Al azar, para ser justos.',
+        'Primero el tráfico de prueba, luego los GET, luego los POST y por último los métodos críticos, como crear un cargo, y de forma gradual para no oscilar.',
+        'Primero los métodos críticos, porque son los más costosos.',
+        'Primero los clientes más grandes.'
+      ],
+      answer: 1,
+      explain: 'Se descarta por prioridad de negocio, desde lo que menos duele perder. Crear un pago es lo último que se sacrifica. Y la gradualidad importa: un descarte brusco y una recuperación brusca hacen que el sistema oscile entre saturado y vacío.'
+    },
+    {
+      id: 'cuenta-caliente', type: 'single',
+      prompt: 'En tu ledger, la cuenta "ingresos por comisiones" recibe un asiento por cada pago y las transacciones se bloquean entre sí. ¿Qué haces?',
+      options: [
+        'Quitas las restricciones de integridad de la tabla.',
+        'La repartes en N subcuentas (comisiones:0 a comisiones:31), escribes en la que dice hash(pago) % N y las sumas al leer.',
+        'Guardas el saldo en un campo y lo actualizas con un UPDATE en cada pago.',
+        'Procesas los pagos de a uno.'
+      ],
+      answer: 1,
+      explain: 'Una cuenta compartida por todos es una fila que todos quieren bloquear a la vez. Repartirla quita la contención y deja el saldo total intacto; el costo es una suma al leer, que se resuelve con snapshots.'
+    },
+    {
+      id: 'payout-dos-fases', type: 'single',
+      prompt: '¿Por qué un payout se modela en dos fases (reservar, y después confirmar o anular)?',
+      options: [
+        'Por cumplir una norma contable.',
+        'Porque el banco puede rechazar o demorar días: se reserva el monto para que no se gaste dos veces, se llama al banco con una idempotency key y se confirma o se anula según el resultado.',
+        'Para cobrar una comisión extra.',
+        'Porque las bases de datos no admiten una sola transacción.'
+      ],
+      answer: 1,
+      explain: 'Es el mismo patrón que autorizar y capturar. Un payout que sale y falla días después se revierte con asientos nuevos: el saldo vuelve a disponible y nunca se pierde ni se gasta dos veces.'
+    },
+    {
+      id: 'stan-rrn', type: 'single',
+      prompt: '¿Para qué sirven el STAN (campo 11) y el RRN (campo 37) de un mensaje ISO 8583?',
+      options: [
+        'Son dos nombres del mismo dato.',
+        'El STAN identifica el intento contra la red (detecta duplicados y permite revertirlo); el RRN identifica la transacción para siempre: la liquidación, las disputas y la conciliación la llaman por él.',
+        'El STAN es la clave de cifrado y el RRN, el saldo.',
+        'El STAN es el número de tarjeta y el RRN, el del comercio.'
+      ],
+      answer: 1,
+      explain: 'Por eso se guarda el STAN antes de salir: si la respuesta se pierde, la recuperación sabe por cuál número preguntar o revertir. Y por eso el RRN es la clave de unión de la conciliación.'
+    },
+    {
+      id: 'disputa-ledger', type: 'single',
+      prompt: 'Llega hoy un contracargo de 49.90 EUR y la disputa se resolverá en semanas. ¿Cuándo registra el ledger el movimiento?',
+      options: [
+        'Cuando se resuelva la disputa.',
+        'Hoy, con asientos que sacan el monto (y la tarifa) del saldo del comercio; si el comercio gana, una reversión con asientos nuevos.',
+        'Nunca: las disputas no pasan por el ledger.',
+        'Editando el asiento del cobro original.'
+      ],
+      answer: 1,
+      explain: 'El ledger registra lo que ya ocurrió con el dinero, no lo que podría ocurrir. La red retiró el monto ese día; si después el comercio gana, eso es otro movimiento. Nada se edita.'
+    },
+    {
+      id: 'migracion-orden', type: 'order',
+      prompt: 'Ordena las cuatro fases para cambiar el modelo de datos sin apagar el sistema:',
+      items: [
+        'Escribir en el modelo viejo y en el nuevo, y rellenar los datos antiguos',
+        'Pasar las lecturas al modelo nuevo',
+        'Pasar las escrituras para que solo vayan al modelo nuevo',
+        'Borrar los datos y el código del modelo viejo'
+      ],
+      explain: 'El modelo viejo sigue siendo la fuente de verdad hasta que el nuevo está completo y probado con lecturas reales. Mientras se escribe en ambos, se puede volver atrás; lo irreversible, borrar, queda para el final.'
+    },
+    {
+      id: 'pci-cuenta', type: 'single',
+      prompt: 'Armas un procesador en AWS. ¿Por qué la bóveda de tarjetas y el conector del adquirente van en una cuenta aparte?',
+      options: [
+        'Porque AWS lo exige para cualquier carga de trabajo.',
+        'Para limitar el alcance de PCI DSS a esa cuenta: es la única que ve números de tarjeta, y se conecta con el core por PrivateLink, de modo que el resto del sistema solo maneja tokens.',
+        'Para pagar menos por los servicios.',
+        'Porque Aurora no puede guardar tokens.'
+      ],
+      answer: 1,
+      explain: 'El costo de PCI DSS crece con la cantidad de sistemas que tocan tarjetas. Una cuenta aislada, sin internet y con un solo canal hacia el core, reduce lo que hay que auditar y lo que puede filtrarse.'
     }
   ]
 });

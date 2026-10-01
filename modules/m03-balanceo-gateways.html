@@ -297,9 +297,9 @@
           <ul>
             <li><b>Capas:</b> L4 o anycast hacia una flota de gateways L7. El gateway termina TLS, autentica la API key y aplica la cuota. El streaming exige L7 con buffering desactivado y timeouts de inactividad por encima de la duración máxima de una respuesta.</li>
             <li><b>Algoritmo:</b> menos requests en curso (o P2C sobre requests en curso), nunca round robin. Las requests duran de 200 ms a 60 s: contarlas es la única forma de saber qué GPU está libre. En M19 se refina con el uso de memoria de KV cache, que es el recurso real.</li>
-            <li><b>Límite por servidor:</b> 16 requests concurrentes como máximo. Si todos están llenos, el gateway encola un tiempo corto y después responde 503 con <code>Retry-After</code>, en lugar de sobrecargar las GPUs (admission control, M18).</li>
+            <li><b>Límite por servidor:</b> 16 requests concurrentes como máximo. Si todos están llenos, el gateway encola un tiempo corto y después responde 503 con <code>Retry-After</code>, en lugar de sobrecargar las GPUs (<a href="m18-cuotas-tokens.html#admision">admission control, M18</a>).</li>
             <li><b>Health checks:</b> readiness que falla mientras el modelo se carga en la GPU (puede tardar minutos) y detección de outliers para GPUs que devuelven errores.</li>
-            <li><b>Cuota:</b> en el gateway, contando tokens estimados al entrar y corrigiendo con los reales al terminar (M18). Nunca reintentar en el gateway una generación que ya empezó a transmitirse: el cliente ya recibió parte de la respuesta.</li>
+            <li><b>Cuota:</b> en el gateway, contando tokens estimados al entrar y corrigiendo con los reales al terminar (<a href="m18-cuotas-tokens.html#reservar">M18</a>). Nunca reintentar en el gateway una generación que ya empezó a transmitirse: el cliente ya recibió parte de la respuesta.</li>
           </ul>
         </details>
       </section>

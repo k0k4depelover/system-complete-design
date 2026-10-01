@@ -2,6 +2,7 @@
 # Uso: python tools/mkpage.py fragmento.html   (el fragmento empieza con <!--META {...}-->)
 # Solo para CREAR páginas nuevas: una vez generada, la página en modules/ es la fuente de verdad y se edita directo.
 # <!--INCLUDE archivo.svg--> inserta un archivo relativo a la carpeta del fragmento.
+# META opcional: "css", "data", "scripts", "quiz": false, "exercises": true (carga data/exercises/<id>.data.js y core/exercise.js).
 import json, re, sys, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent   # raíz del proyecto
@@ -20,8 +21,12 @@ def build(frag_path):
     scripts = ["core/sd.js", "data/course.data.js", "data/glossary.data.js"]
     if meta.get("quiz", True):
         scripts.append(f"data/quizzes/{mid}.data.js")
+    if meta.get("exercises"):
+        scripts.append(f"data/exercises/{mid}.data.js")   # ejercicios guiados (SD.defineExercise)
     scripts += meta.get("data", [])
     scripts += ["core/progress.js", "core/nav.js", "core/glossary.js", "core/quiz.js"]
+    if meta.get("exercises"):
+        scripts.append("core/exercise.js")
     scripts += meta.get("scripts", [])
     script_tags = "\n".join(f'<script src="../assets/js/{s}"></script>' for s in scripts)
     tb = f'''        <dl class="tb-grid">

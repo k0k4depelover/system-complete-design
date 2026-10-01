@@ -6,8 +6,8 @@ SD.defineMap('m27-pagos', {
   start: 'payments',
   groups: [
     { id: 'g-com', label: 'El comercio', x: 20, y: 40, w: 300, h: 740 },
-    { id: 'g-psp', label: 'Procesador de pagos (diseño de referencia)', x: 350, y: 40, w: 1005, h: 740 },
-    { id: 'g-red', label: 'Red de tarjetas y bancos', x: 1385, y: 40, w: 280, h: 740 }
+    { id: 'g-psp', label: 'Procesador de pagos (diseño de referencia)', x: 500, y: 40, w: 1005, h: 740 },
+    { id: 'g-red', label: 'Red de tarjetas y bancos', x: 1595, y: 40, w: 280, h: 740 }
   ],
   nodes: [
     { id: 'browser', layer: 'client', label: 'Navegador del cliente', sub: 'Stripe.js y Elements', x: 170, y: 150,
@@ -34,15 +34,15 @@ SD.defineMap('m27-pagos', {
         fail: '<p>La condición <code>status = \'pending\'</code> hace que un evento viejo que llega tarde no pueda devolver a "pagado" un pedido ya reembolsado.</p>',
         nums: '<ul><li>Los eventos procesados se pueden borrar pasados unos días: más que los 3 días de reintentos.</li></ul>'
       } },
-    { id: 'edge', layer: 'edge', label: 'API del procesador', sub: 'autenticación, límites, idempotencia', x: 525, y: 330,
+    { id: 'edge', layer: 'edge', label: 'API del procesador', sub: 'autenticación, límites, idempotencia', x: 675, y: 330,
       info: {
-        resp: '<p>Recibe cada request: autentica la clave secreta (<code>sk_</code>) o publicable (<code>pk_</code>), aplica límites por cuenta y pasa por la capa de idempotencia antes de cualquier operación que cambie estado. La API de Stripe recibe los parámetros como formulario y responde JSON. <span class="badge badge--doc">Documentado</span></p>',
+        resp: '<p>Recibe cada request: autentica la clave secreta (<code>sk_</code>) o publicable (<code>pk_</code>), aplica límites por cuenta y pasa por la capa de idempotencia antes de cualquier operación que cambie estado. La API de Stripe recibe los parámetros como formulario y responde JSON, y versiona por fecha: cada cuenta queda fijada a la versión de su primera request y puede pedir otra con el header <code>Stripe-Version</code>. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre data-lang="http"><code>POST /v1/payment_intents HTTP/1.1\nHost: api.stripe.com\nAuthorization: Bearer sk_live_…\nIdempotency-Key: ord_8812-pago\nContent-Type: application/x-www-form-urlencoded\n\namount=4990&amp;currency=eur&amp;metadata[order_id]=ord_8812</code></pre>',
         data: '<p>Sin estado propio: usa el almacén de idempotencia y los contadores de límites por cuenta.</p>',
-        fail: '<ul><li><b>429:</b> el cliente espera y reintenta con backoff.</li><li><b>5xx o timeout:</b> se reintenta con la misma clave. Las librerías oficiales de Stripe reintentan solas y generan la clave si no se la das. <span class="badge badge--doc">Documentado</span></li></ul>',
-        nums: '<ul><li>Stripe documenta un límite básico del orden de 100 operaciones de lectura y 100 de escritura por segundo por cuenta en modo live. <span class="badge badge--doc">Documentado</span></li></ul>'
+        fail: '<ul><li><b>429:</b> el cliente espera y reintenta con backoff exponencial y jitter. El header <code>Stripe-Rate-Limited-Reason</code> dice cuál límite se superó (<code>global-rate</code>, <code>endpoint-rate</code>, <code>global-concurrency</code>…). <span class="badge badge--doc">Documentado</span></li><li><b>5xx o timeout:</b> se reintenta con la misma clave. Las librerías oficiales de Stripe reintentan solas y generan la clave si no se la das. <span class="badge badge--doc">Documentado</span></li><li><b>Bajo presión:</b> cuatro capas de límites y descarte, de la más suave a la más dura (escenario "Flash sale").</li></ul>',
+        nums: '<ul><li>Límite global de 100 requests por segundo por cuenta en modo live y 25 en sandbox; 25 por segundo por endpoint salvo que se indique otro; 1000 actualizaciones por hora por PaymentIntent. <span class="badge badge--doc">Documentado</span></li><li>Las lecturas tienen además un presupuesto: en promedio 500 por transacción en 30 días. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'idem', layer: 'db', label: 'Claves de idempotencia', sub: 'una fila por clave, 24 h o más', x: 525, y: 510,
+    { id: 'idem', layer: 'db', label: 'Claves de idempotencia', sub: 'una fila por clave, 24 h o más', x: 675, y: 510,
       info: {
         resp: '<p>Por cada clave guarda un hash de la request, quién la está ejecutando y la respuesta final. El comportamiento público de Stripe: la primera respuesta se guarda y se repite, incluidos los errores 500; la misma clave con otros parámetros da error; las claves se pueden borrar pasadas al menos 24 horas. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>INSERT … ON CONFLICT DO NOTHING\nsi la clave ya existía:\n  hash distinto          → 400 idempotency_error\n  respuesta guardada     → devolverla tal cual\n  locked_until &gt; now()   → 409: otra request con esta clave sigue en curso\n  lock vencido           → tomarlo y retomar desde recovery_point</code></pre>',
@@ -50,7 +50,7 @@ SD.defineMap('m27-pagos', {
         fail: '<p>Si este almacén no responde, la API no puede garantizar el efecto único: rechaza las escrituras (fail-closed) en lugar de ejecutarlas sin protección. Es la decisión opuesta a la de Radar, y por el mismo motivo: cuál error cuesta más (M00).</p>',
         nums: '<ul><li>1 a 10 kB por clave con la respuesta guardada; particionado por cuenta.</li></ul>'
       } },
-    { id: 'payments', layer: 'service', label: 'Servicio de pagos', sub: 'máquina de estados del PaymentIntent', x: 865, y: 330,
+    { id: 'payments', layer: 'service', label: 'Servicio de pagos', sub: 'máquina de estados del PaymentIntent', x: 1015, y: 330,
       info: {
         resp: '<p>Ejecuta las transiciones del PaymentIntent, consulta a Radar, habla con el adquirente, escribe el ledger y deja el evento en el outbox. Cada operación avanza por puntos de recuperación guardados en la base, así cualquier instancia puede retomar una request cortada a la mitad.</p>',
         api: '<pre><code>POST /v1/payment_intents              crear\nPOST /v1/payment_intents/{id}/confirm confirmar con un medio de pago\nPOST /v1/payment_intents/{id}/capture capturar lo autorizado\nPOST /v1/payment_intents/{id}/cancel  cancelar\nPOST /v1/refunds                      reembolsar, total o parcial</code></pre>',
@@ -58,7 +58,7 @@ SD.defineMap('m27-pagos', {
         fail: '<p>La llamada al adquirente es el único efecto que no se puede deshacer con un rollback. Se registra antes de hacerla, con el ID de transacción que se enviará, y después con el resultado. Si el proceso muere en el medio, la recuperación consulta por ese ID o envía una reversa (escenario "Timeout del banco").</p>',
         nums: '<ul><li>Stripe informó 1.4 billones de dólares de volumen procesado en 2024. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'vault', layer: 'db', label: 'Bóveda de tarjetas', sub: 'números cifrados, alcance PCI', x: 525, y: 150,
+    { id: 'vault', layer: 'db', label: 'Bóveda de tarjetas', sub: 'números cifrados, alcance PCI', x: 675, y: 150,
       info: {
         resp: '<p>Recibe el número de la tarjeta (PAN), lo cifra con claves custodiadas en HSM (envelope encryption, M10) y devuelve un token (<code>pm_…</code>). Es el único componente dentro del alcance más estricto de PCI DSS: el resto del sistema solo ve tokens.</p>',
         api: '<pre><code>tokenize(pan, vencimiento, cvc)  → pm_1Q…\ndetokenize(pm_1Q…)               → solo desde el conector del adquirente, auditado</code></pre>',
@@ -66,15 +66,15 @@ SD.defineMap('m27-pagos', {
         fail: '<p>Una filtración de la bóveda es el peor incidente posible: red segmentada, acceso de muy pocas personas, claves en HSM y auditoría anual externa.</p>',
         nums: '<ul><li>Tokenizar: milisegundos. Los tokens de la red (network tokens) permiten además que la tarjeta siga funcionando cuando el banco la reemplaza.</li></ul>'
       } },
-    { id: 'radar', layer: 'service', label: 'Radar', sub: 'puntaje de fraude', x: 865, y: 150,
+    { id: 'radar', layer: 'service', label: 'Radar', sub: 'puntaje de fraude', x: 1015, y: 150,
       info: {
-        resp: '<p>Asigna a cada pago un puntaje de riesgo con un modelo entrenado con pagos de toda la red, y aplica las reglas del comercio: bloquear, mandar a revisión o pedir 3D Secure. <span class="badge badge--doc">Documentado</span></p>',
+        resp: '<p>Asigna a cada pago un puntaje de riesgo con un modelo entrenado con pagos de toda la red, y aplica las reglas del comercio: bloquear, mandar a revisión o pedir 3D Secure. Evalúa más de mil características de cada pago y decide en menos de 100 ms, dentro de la ruta de la autorización. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre><code>score(pago) → { risk_score: 0–99, risk_level: normal | elevated | highest }\nregla del comercio:  Block if :risk_score: &gt; 75</code></pre>',
         data: '<p>Señales: fingerprint de la tarjeta, IP, dispositivo, historial de esa tarjeta en otros comercios, velocidad de intentos.</p>',
         fail: '<p>Si Radar no responde a tiempo, el pago sigue con el puntaje por defecto (fail-open): perder una evaluación de fraude cuesta menos que rechazar todos los pagos. La decisión está escrita, no es un accidente.</p>',
         nums: '<ul><li>Decenas de milisegundos por evaluación, dentro del presupuesto de la confirmación.</li></ul>'
       } },
-    { id: 'acquirer', layer: 'service', label: 'Conector del adquirente', sub: 'habla ISO 8583 con la red', x: 1195, y: 330,
+    { id: 'acquirer', layer: 'service', label: 'Conector del adquirente', sub: 'habla ISO 8583 con la red', x: 1345, y: 330,
       info: {
         resp: '<p>Traduce cada intento a mensajes ISO 8583: 0100 para autorizar, 0400 para revertir. Asigna a cada intento un número único (STAN y RRN) que la red usa para detectar duplicados y que después aparece en los archivos de liquidación.</p>',
         api: '<pre><code>0100  autorización\n  campo 2   PAN (desde la bóveda)\n  campo 4   000000004990      monto\n  campo 49  978               EUR\n  campo 11  STAN 004211       número del intento\n0110  respuesta, campo 39: 00 aprobado · 05 no autorizar · 51 sin fondos · 91 emisor no disponible</code></pre>',
@@ -82,15 +82,15 @@ SD.defineMap('m27-pagos', {
         fail: '<p>Timeout sin respuesta: se envía una reversa (0400) para anular una posible aprobación. Reintentar la autorización a ciegas puede retener el dinero dos veces en la tarjeta del cliente.</p>',
         nums: '<ul><li>Una autorización tarda de 1 a 2 s de ida y vuelta hasta el emisor.</li></ul>'
       } },
-    { id: 'network', layer: 'external', label: 'Red de tarjetas', sub: 'Visa, Mastercard', x: 1525, y: 330,
+    { id: 'network', layer: 'external', label: 'Red de tarjetas', sub: 'Visa, Mastercard', x: 1735, y: 330,
       info: {
         resp: '<p>Enruta la autorización del adquirente al banco emisor según los primeros dígitos de la tarjeta, y cada día hace el clearing y la liquidación entre bancos. Si el emisor no responde, puede aprobar en su nombre dentro de reglas acordadas con él (stand-in processing). <span class="badge badge--doc">Documentado</span></p>',
-        api: '<p>Mensajes ISO 8583 en tiempo real para autorizaciones; archivos por lotes para clearing, liquidación y disputas.</p>',
+        api: '<p>Mensajes ISO 8583 en tiempo real para autorizaciones (0100/0110), reversas (0400/0410) y mensajes de red como el eco (0800); archivos por lotes para clearing, liquidación y disputas.</p>',
         data: '<p>Reglas de stand-in por emisor, tokens de red e historial de disputas.</p>',
         fail: '<p>Semanas después puede llegar un contracargo: el titular disputa el cobro y la red devuelve el dinero al emisor; el comercio lo recupera solo si gana la disputa.</p>',
         nums: '<ul><li>Las grandes redes procesan cientos de millones de transacciones por día.</li></ul>'
       } },
-    { id: 'issuer', layer: 'external', label: 'Banco emisor', sub: 'aprueba y retiene fondos', x: 1525, y: 510,
+    { id: 'issuer', layer: 'external', label: 'Banco emisor', sub: 'aprueba y retiene fondos', x: 1735, y: 510,
       info: {
         resp: '<p>El banco del titular de la tarjeta: verifica fondos o crédito, su propio fraude y la autenticación (3D Secure), y aprueba o rechaza. Al aprobar, retiene el monto; el dinero se mueve recién en la liquidación.</p>',
         api: '<p>Responde 0110 con el código 00 (aprobado) o el motivo del rechazo.</p>',
@@ -98,23 +98,23 @@ SD.defineMap('m27-pagos', {
         fail: '<p>Si está caído, la red aplica stand-in o rechaza con código 91; el comercio muestra "no se pudo procesar, intenta de nuevo".</p>',
         nums: '<ul><li>Una autorización que nunca se captura retiene el dinero unos días; Stripe cancela los PaymentIntents sin capturar a los 7 días en pagos con tarjeta online. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'paydb', layer: 'db', label: 'Base de pagos', sub: 'PaymentIntents y outbox', x: 865, y: 510,
+    { id: 'paydb', layer: 'db', label: 'Base de pagos', sub: 'PaymentIntents y outbox', x: 1015, y: 510,
       info: {
         resp: '<p>El estado de cada pago. El cambio de estado y el evento que lo anuncia se escriben en la misma transacción, en la tabla outbox (M07): no puede existir un pago exitoso sin su evento.</p>',
         api: '<pre data-lang="sql"><code>BEGIN;\nUPDATE payment_intents\n   SET status = \'succeeded\', amount_received = 4990, version = version + 1\n WHERE id = \'pi_3Q…\' AND version = 7;\nINSERT INTO outbox (event_type, payload)\n     VALUES (\'payment_intent.succeeded\', \'{"id": "pi_3Q…"}\');\nCOMMIT;</code></pre>',
         data: '<pre data-lang="sql"><code>CREATE TABLE payment_intents (\n  id               text PRIMARY KEY,     -- pi_3Q…\n  account_id       text NOT NULL,\n  amount           bigint NOT NULL CHECK (amount &gt; 0),\n  currency         char(3) NOT NULL,\n  status           text NOT NULL,\n  amount_received  bigint NOT NULL DEFAULT 0,\n  amount_refunded  bigint NOT NULL DEFAULT 0\n                   CHECK (amount_refunded &lt;= amount_received),\n  version          int NOT NULL DEFAULT 0\n);</code></pre>',
-        fail: '<p>Particionada por cuenta: una partición caída detiene los pagos de sus comercios, no los de todos (arquitectura celular, M08).</p>',
+        fail: '<p>Particionada por cuenta: una partición caída detiene los pagos de sus comercios, no los de todos (arquitectura celular, M08). Stripe describió públicamente su base de documentos, DocDB, construida sobre MongoDB: más de 2000 shards y 5 millones de consultas por segundo, con migraciones de datos entre shards sin cortes (la transferencia de tráfico dura menos de 2 segundos). <span class="badge badge--doc">Documentado</span></p>',
         nums: '<ul><li>El <code>CHECK</code> de reembolsos es la última defensa contra reembolsar más de lo cobrado, aunque falle todo lo demás.</li></ul>'
       } },
-    { id: 'ledger', layer: 'db', label: 'Ledger', sub: 'doble entrada, solo se agrega', x: 1195, y: 510,
+    { id: 'ledger', layer: 'db', label: 'Ledger', sub: 'doble entrada, solo se agrega', x: 1345, y: 510,
       info: {
         resp: '<p>Registra cada movimiento de dinero como una transacción de asientos que suman cero: lo que sale de una cuenta entra en otra. Los saldos se derivan de los asientos, y nada se edita: un error se corrige con asientos nuevos.</p>',
         api: '<pre><code>cobro de pi_3Q…, 49.90 EUR con 1.00 de comisión:\n  débito   por cobrar al adquirente      4990\n  crédito  saldo pendiente del comercio  4890\n  crédito  ingresos por comisiones        100\n  total                                     0</code></pre>',
         data: '<pre data-lang="sql"><code>CREATE TABLE ledger_entries (\n  id              bigserial PRIMARY KEY,\n  transaction_id  uuid    NOT NULL,\n  account_id      text    NOT NULL,\n  amount          bigint  NOT NULL,       -- débitos +, créditos −\n  currency        char(3) NOT NULL,\n  created_at      timestamptz NOT NULL DEFAULT now()\n);\n-- invariante: por transaction_id y currency, SUM(amount) = 0</code></pre>',
         fail: '<p>Una transacción que no suma cero se rechaza: es un bug de dinero, no un dato raro. La conciliación diaria compara este registro con el mundo exterior.</p>',
-        nums: '<ul><li>Cada pago genera varios juegos de asientos (cobro, liquidación, pago al comercio, reembolsos): miles de millones de filas por año.</li></ul>'
+        nums: '<ul><li>Cada pago genera varios juegos de asientos (cobro, liquidación, pago al comercio, reembolsos): miles de millones de filas por año.</li><li>Stripe describió su Ledger como un registro inmutable que recibe cinco mil millones de eventos por día, con el 99.99 % del volumen en dólares ingerido y verificado en cuatro días y una explicabilidad del movimiento de dinero superior al 99.9999 %. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'events', layer: 'queue', label: 'Bus de eventos', sub: 'particionado por cuenta', x: 865, y: 690,
+    { id: 'events', layer: 'queue', label: 'Bus de eventos', sub: 'particionado por cuenta', x: 1015, y: 690,
       info: {
         resp: '<p>Un relay lee el outbox y publica cada evento en el bus. Lo consumen el envío de webhooks, las proyecciones del ledger, la analítica y el entrenamiento de Radar.</p>',
         api: '<pre data-lang="json"><code>{\n  "id": "evt_1Q9x…",\n  "object": "event",\n  "type": "payment_intent.succeeded",\n  "created": 1790592000,\n  "data": { "object": { "id": "pi_3Q…", "amount": 4990,\n                        "currency": "eur", "status": "succeeded" } }\n}</code></pre>',
@@ -122,15 +122,15 @@ SD.defineMap('m27-pagos', {
         fail: '<p>Entrega al menos una vez: el relay puede publicar dos veces si muere después de publicar y antes de marcar la fila. Todos los consumidores deduplican por <code>id</code>.</p>',
         nums: '<ul><li>Segundos entre el pago y el evento publicado.</li></ul>'
       } },
-    { id: 'webhooks', layer: 'service', label: 'Envío de webhooks', sub: 'firma y reintenta hasta 3 días', x: 525, y: 690,
+    { id: 'webhooks', layer: 'service', label: 'Envío de webhooks', sub: 'firma y reintenta hasta 3 días', x: 675, y: 690,
       info: {
         resp: '<p>Por cada evento y cada endpoint suscrito hace un POST firmado. Si el endpoint no responde 2xx, reintenta con backoff exponencial durante hasta 3 días, y avisa al comercio si su endpoint falla de forma sostenida. <span class="badge badge--doc">Documentado</span></p>',
         api: '<pre data-lang="http"><code>POST /webhooks/pagos HTTP/1.1\nHost: tienda.example\nStripe-Signature: t=1790592001,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd\nContent-Type: application/json\n\n{"id": "evt_1Q9x…", "type": "payment_intent.succeeded", …}</code></pre>',
         data: '<p>Una cola de entregas pendientes por endpoint, con la hora del próximo intento.</p>',
         fail: '<p>El orden de entrega no está garantizado y los duplicados son normales: un endpoint que tardó en responder recibe el mismo evento otra vez. <span class="badge badge--doc">Documentado</span></p>',
-        nums: '<ul><li>La firma es un HMAC-SHA256 de <code>{t}.{cuerpo}</code> con el secreto del endpoint; el comercio rechaza firmas de más de 5 minutos para frenar repeticiones.</li></ul>'
+        nums: '<ul><li>La firma es un HMAC-SHA256 de <code>{t}.{cuerpo}</code> con el secreto del endpoint; las librerías oficiales rechazan por defecto firmas de más de 5 minutos para frenar repeticiones. Cada reintento lleva una firma y una hora nuevas. <span class="badge badge--doc">Documentado</span></li><li>En modo live reintenta hasta 3 días con backoff exponencial; en sandbox, 3 veces en unas horas. Un evento se puede reenviar a mano desde el panel hasta 15 días después, y con la CLI hasta 30. <span class="badge badge--doc">Documentado</span></li></ul>'
       } },
-    { id: 'recon', layer: 'service', label: 'Conciliación', sub: 'archivos diarios del adquirente', x: 1195, y: 690,
+    { id: 'recon', layer: 'service', label: 'Conciliación', sub: 'archivos diarios del adquirente', x: 1345, y: 690,
       info: {
         resp: '<p>Cada día compara el archivo de liquidación del adquirente, línea por línea, con el ledger: montos, comisiones, monedas y fechas. Lo que no coincide abre una excepción que alguien resuelve.</p>',
         api: '<pre data-lang="sql"><code>SELECT f.rrn, f.amount AS en_archivo, l.amount AS en_ledger\n  FROM settlement_file f\n  FULL OUTER JOIN ledger_captures l ON l.rrn = f.rrn\n WHERE l.rrn IS NULL OR f.rrn IS NULL OR l.amount &lt;&gt; f.amount;</code></pre>',
@@ -141,8 +141,8 @@ SD.defineMap('m27-pagos', {
   ],
   edges: [
     { id: 'e1', from: 'browser', to: 'merchant', both: true, label: 'checkout' },
-    { id: 'e2', from: 'merchant', to: 'edge', both: true, label: 'POST /v1/payment_intents' },
-    { id: 'e3', from: 'browser', to: 'edge', both: true, label: 'confirmar (Stripe.js)' },
+    { id: 'e2', from: 'merchant', to: 'edge', both: true, label: 'POST /v1/payment_intents', labelAt: 0.47 },
+    { id: 'e3', from: 'browser', to: 'edge', both: true, label: 'confirmar (Stripe.js)', labelAt: 0.46 },
     { id: 'e4', from: 'edge', to: 'vault', both: true, label: 'tokenizar' },
     { id: 'e5', from: 'edge', to: 'idem', both: true },
     { id: 'e6', from: 'edge', to: 'payments', both: true },
@@ -154,9 +154,9 @@ SD.defineMap('m27-pagos', {
     { id: 'e12', from: 'payments', to: 'ledger', both: true, label: 'asientos' },
     { id: 'e13', from: 'paydb', to: 'events', async: true, label: 'outbox' },
     { id: 'e14', from: 'events', to: 'webhooks', async: true },
-    { id: 'e15', from: 'webhooks', to: 'merchant', both: true, label: 'webhook firmado' },
+    { id: 'e15', from: 'webhooks', to: 'merchant', both: true, label: 'webhook firmado', labelAt: 0.54 },
     { id: 'e16', from: 'merchant', to: 'merchantdb', both: true },
-    { id: 'e17', from: 'network', to: 'recon', async: true, label: 'liquidación diaria', labelAt: 0.78 },
+    { id: 'e17', from: 'network', to: 'recon', async: true, label: 'liquidación diaria', labelAt: 0.84 },
     { id: 'e18', from: 'recon', to: 'ledger', both: true }
   ],
   scenarios: [
@@ -277,6 +277,91 @@ SD.defineMap('m27-pagos', {
         { from: 'paydb', to: 'events', kind: 'async', tag: 'charge.refunded', ms: 300, title: 'El evento sale por el outbox', text: '' },
         { from: 'events', to: 'webhooks', kind: 'async', tag: 'evento', ms: 20, title: 'Webhook programado', text: '' },
         { from: 'webhooks', to: 'merchant', kind: 'req', tag: 'POST firmado', ms: 80, title: 'El comercio lo confirma en su base', text: '' }
+      ]
+    },
+    {
+      id: '3ds', title: 'Pago con 3D Secure',
+      desc: 'Un cliente europeo paga 120 EUR. La regulación pide autenticación reforzada: el pago queda esperando que el titular confirme en la app de su banco.',
+      steps: [
+        { from: 'browser', to: 'edge', kind: 'req', tag: 'confirmar', ms: 80, title: 'Stripe.js confirma con la tarjeta', text: 'Junto con la tarjeta viajan datos del navegador y del dispositivo que el banco usará para decidir.' },
+        { from: 'edge', to: 'vault', kind: 'req', tag: 'tokenizar', ms: 5, title: 'La tarjeta se convierte en un token', text: '' },
+        { from: 'edge', to: 'payments', kind: 'req', tag: 'confirm', ms: 2, title: 'Confirmar el pago', text: '' },
+        { from: 'payments', to: 'radar', kind: 'req', tag: '¿riesgo? ¿SCA?', ms: 20, title: 'Radar y las reglas de autenticación', text: 'El puntaje es normal, pero 120 EUR superan la exención de bajo valor (30 EUR) y la tarjeta es europea: hay que autenticar al titular, salvo que el banco lo considere de riesgo bajo.' },
+        { from: 'payments', to: 'acquirer', kind: 'req', tag: 'AReq 3DS2', ms: 5, title: 'Pide autenticación 3D Secure 2', text: 'Un mensaje con más de cien datos del pago, el dispositivo y el titular.' },
+        { from: 'acquirer', to: 'network', kind: 'req', tag: 'AReq', ms: 60, title: 'La red lo lleva al servidor de directorio', text: '' },
+        { from: 'network', to: 'issuer', kind: 'req', tag: 'AReq', ms: 150, title: 'El banco evalúa el riesgo', text: 'Su servidor de control de acceso (ACS) decide: sin fricción si el riesgo es bajo, o pedir un desafío.' },
+        { from: 'issuer', to: 'network', kind: 'res', tag: 'ARes: desafío', ms: 150, title: 'El banco pide un desafío', text: 'El titular deberá aprobar en la app del banco.' },
+        { from: 'network', to: 'acquirer', kind: 'res', tag: 'ARes', ms: 60, title: 'La respuesta vuelve', text: '' },
+        { from: 'acquirer', to: 'payments', kind: 'res', tag: 'requires_action', ms: 5, title: 'El pago necesita una acción del titular', text: '' },
+        { from: 'payments', to: 'paydb', kind: 'req', tag: 'status = requires_action', ms: 3, title: 'El estado se guarda', text: 'Si el proceso muere, otra instancia sabe en qué punto está el pago.' },
+        { from: 'edge', to: 'browser', kind: 'res', tag: 'requires_action', ms: 80, title: 'Stripe.js muestra el desafío del banco', text: 'En un iframe o con una redirección. El PaymentIntent no avanza hasta que el titular actúe, y el comercio no debe cumplir el pedido todavía.' },
+        { at: 'browser', kind: 'info', ms: 20000, title: 'El titular aprueba en la app de su banco', text: 'Con su huella o PIN. Puede tardar decenas de segundos. Si cierra la pestaña, el pago queda en requires_action hasta que el comercio lo cancele o la autenticación expire.' },
+        { from: 'browser', to: 'edge', kind: 'req', tag: 'confirmar (autenticado)', ms: 80, title: 'Stripe.js avisa que el desafío terminó', text: '' },
+        { from: 'edge', to: 'payments', kind: 'req', tag: 'continuar', ms: 2, title: 'El pago retoma', text: '' },
+        { from: 'payments', to: 'acquirer', kind: 'req', tag: 'autorizar · CAVV · ECI 05', ms: 5, title: 'Pide la autorización con la prueba de autenticación', text: 'El banco entregó un valor de autenticación (CAVV) y el indicador ECI 05: autenticación completa.' },
+        { from: 'acquirer', to: 'network', kind: 'req', tag: '0100', ms: 60, title: 'Mensaje ISO 8583 a la red', text: '' },
+        { from: 'network', to: 'issuer', kind: 'req', tag: '¿fondos?', ms: 150, title: 'El banco verifica los fondos', text: '' },
+        { from: 'issuer', to: 'network', kind: 'res', tag: '00 aprobado', ms: 150, title: 'Aprobado', text: 'Retiene 120 EUR.' },
+        { from: 'network', to: 'acquirer', kind: 'res', tag: '0110 · 00', ms: 60, title: 'La respuesta vuelve', text: '' },
+        { from: 'acquirer', to: 'payments', kind: 'res', tag: 'aprobado', ms: 5, title: 'Autorizado', text: '' },
+        { from: 'payments', to: 'paydb', kind: 'req', tag: 'UPDATE + outbox', ms: 4, title: 'Estado y evento en una transacción', text: '' },
+        { from: 'payments', to: 'ledger', kind: 'req', tag: 'asientos', ms: 3, title: 'El ledger registra el cobro', text: 'Y queda anotado que el pago fue autenticado: si el titular disputa el cobro por fraude, la responsabilidad pasa al banco (liability shift).' },
+        { from: 'edge', to: 'browser', kind: 'res', tag: 'succeeded', ms: 80, title: 'Pago aceptado', text: 'Unos 25 segundos en total, casi todos esperando al titular. Sin 3D Secure habrían sido 2.' }
+      ]
+    },
+    {
+      id: 'limites', title: 'Flash sale: límites y prioridades',
+      desc: 'Un comercio lanza una oferta y su backend manda 400 requests por segundo. La API protege a todos: limita por cuenta, prioriza lo crítico y descarta lo que puede esperar.',
+      steps: [
+        { from: 'merchant', to: 'edge', kind: 'req', tag: '400 req/s', ms: 60, title: 'Una ráfaga muy por encima del límite', text: 'El límite global en modo live es de 100 requests por segundo por cuenta.' },
+        { at: 'edge', kind: 'info', ms: 1, title: 'Limitador de tasa por cuenta', text: 'Un token bucket en Redis: cada cuenta tiene un balde que se llena a razón fija, permite ráfagas breves y se vacía si la tasa sostenida es mayor. Es el limitador que más se activa, sobre todo con tráfico de prueba.' },
+        { from: 'edge', to: 'merchant', kind: 'fail', tag: '429 · global-rate', ms: 60, title: 'Rechazadas antes de ejecutar nada', text: 'El header Stripe-Rate-Limited-Reason dice por qué. Como la request no llegó a ejecutarse, no se guarda ningún resultado de idempotencia: se puede reintentar con la misma clave.' },
+        { from: 'merchant', to: 'edge', kind: 'req', tag: 'reintento con backoff y jitter', ms: 800, title: 'El comercio reintenta con espera creciente y aleatoria', text: 'Sin jitter, todos sus workers volverían a golpear a la vez (M08). Mejor aún es limitar del lado del cliente con su propio token bucket.' },
+        { at: 'edge', kind: 'info', ms: 1, title: 'Limitador de concurrencia', text: 'Un listado con expansiones puede tardar segundos. Si el comercio tiene demasiados en curso a la vez, los nuevos reciben 429 aunque su tasa sea baja. La solución es procesar con N trabajadores, no lanzar todo junto.' },
+        { at: 'edge', kind: 'fail', ms: 1, title: 'Load shedder de la flota', text: 'La flota reserva capacidad para las operaciones críticas (crear y confirmar pagos). Si el uso total supera el umbral, primero se descarta lo no crítico, como listar cargos, con un 503.' },
+        { from: 'merchant', to: 'edge', kind: 'req', tag: 'GET /v1/charges', ms: 60, title: 'Un listado del panel de reportes', text: 'Puede esperar.' },
+        { from: 'edge', to: 'merchant', kind: 'fail', tag: '503', ms: 30, title: 'Descartado por no ser crítico', text: '' },
+        { at: 'payments', kind: 'fail', ms: 1, title: 'Load shedder por utilización de workers', text: 'El último recurso en un incidente: si los workers se saturan, se descarta por prioridad en cuatro niveles (métodos críticos, POST, GET y tráfico de prueba) y de forma gradual, para no oscilar entre saturado y vacío.' },
+        { from: 'merchant', to: 'edge', kind: 'req', tag: 'POST /v1/payment_intents', ms: 60, title: 'Crear un pago', text: 'Es una operación crítica.' },
+        { from: 'edge', to: 'payments', kind: 'req', tag: 'crear', ms: 2, title: 'Pasa todos los filtros', text: '' },
+        { from: 'edge', to: 'merchant', kind: 'res', tag: '200', ms: 60, title: 'Las ventas siguen', text: 'La API sacrificó los reportes para no perder pagos.' }
+      ]
+    },
+    {
+      id: 'liquidacion', title: 'Liquidación y conciliación del día',
+      desc: 'Llega el archivo de liquidación del adquirente. La conciliación lo compara con el ledger: casi todo cuadra, salvo un cobro que el ledger no conoce.',
+      steps: [
+        { from: 'network', to: 'recon', kind: 'async', tag: 'archivo de liquidación', ms: 2000, title: 'El adquirente recibe el archivo del día', text: 'La red hizo el clearing y la liquidación entre bancos. El archivo lista cada transacción (con su RRN, monto y comisiones) y el neto a pagar.' },
+        { at: 'recon', kind: 'info', ms: 20000, title: 'Compara línea por línea', text: 'Un FULL OUTER JOIN por RRN entre el archivo y las capturas del ledger: montos, monedas, comisiones y fechas.' },
+        { from: 'recon', to: 'ledger', kind: 'req', tag: 'capturas del día', ms: 40, title: 'Lee las capturas registradas', text: '' },
+        { from: 'ledger', to: 'recon', kind: 'res', tag: '1 204 883 coinciden', ms: 40, title: 'Casi todo cuadra', text: 'Las líneas que coinciden se marcan conciliadas sin intervención humana.' },
+        { at: 'recon', kind: 'fail', ms: 1, title: 'Una línea está en el archivo y no en el ledger', text: 'RRN 000913, 49.90 EUR. Es un timeout mal resuelto: el banco aprobó y cobró, la reversa falló, y el sistema creyó que el pago no salió. Dinero movido sin registro: la excepción más grave.' },
+        { from: 'recon', to: 'ledger', kind: 'req', tag: 'asiento de ajuste', ms: 4, title: 'Se corrige con asientos nuevos, no editando', text: 'Por cobrar al adquirente contra una cuenta de excepciones. El historial queda completo: el error y su corrección.' },
+        { at: 'recon', kind: 'info', ms: 1, title: 'Se abre una excepción con dueño y fecha', text: 'Alguien investiga y decide: reembolsar al cliente, o completar el pago si ya se envió el pedido. La antigüedad y el monto de las excepciones abiertas son métricas con alertas.' },
+        { at: 'ledger', kind: 'info', ms: 2000, title: 'Pago al comercio', text: 'El saldo pendiente pasa a disponible y sale por transferencia al banco del comercio: saldo pendiente contra banco del procesador. Si la transferencia es devuelta, el saldo vuelve y la cuenta se marca.' }
+      ]
+    },
+    {
+      id: 'contracargo', title: 'Contracargo',
+      desc: 'Cuarenta días después, el titular desconoce un cobro. La red saca el dinero del comercio y abre una disputa con plazos.',
+      steps: [
+        { from: 'issuer', to: 'network', kind: 'req', tag: 'contracargo · 10.4', ms: 150, title: 'El banco abre la disputa', text: 'El titular dice que no autorizó el cobro. Motivo Visa 10.4, otro fraude con tarjeta ausente. Los emisores tienen plazos de hasta unos 120 días desde la transacción.' },
+        { from: 'network', to: 'acquirer', kind: 'req', tag: 'contracargo', ms: 60, title: 'La red lo baja al adquirente', text: 'Y retira el dinero de la liquidación de ese día.' },
+        { from: 'acquirer', to: 'payments', kind: 'req', tag: 'disputa por RRN', ms: 5, title: 'Se asocia con el pago', text: 'El RRN del mensaje original es la clave que une el contracargo con el PaymentIntent.' },
+        { from: 'payments', to: 'ledger', kind: 'req', tag: 'asientos de disputa', ms: 3, title: 'El dinero sale del saldo desde el primer día', text: 'Débito al saldo del comercio por 49.90 más la tarifa de disputa. Aunque la disputa aún pueda ganarse, el ledger no espera: registra lo que ya ocurrió con el dinero.' },
+        { from: 'payments', to: 'paydb', kind: 'req', tag: 'dispute + outbox', ms: 3, title: 'Estado y evento', text: '' },
+        { from: 'paydb', to: 'events', kind: 'async', tag: 'charge.dispute.created', ms: 300, title: 'El evento sale por el outbox', text: '' },
+        { from: 'events', to: 'webhooks', kind: 'async', tag: 'evento', ms: 20, title: 'Webhook programado', text: '' },
+        { from: 'webhooks', to: 'merchant', kind: 'req', tag: 'POST firmado', ms: 80, title: 'El comercio se entera y tiene un plazo', text: 'Suelen ser pocos días para presentar evidencia. Perder el plazo es perder la disputa.' },
+        { from: 'merchant', to: 'edge', kind: 'req', tag: 'evidencia', ms: 60, title: 'Presenta la evidencia', text: 'Prueba de entrega, comunicaciones con el cliente, historial de compras anteriores sin disputa y, si hubo 3D Secure, el resultado de la autenticación.' },
+        { from: 'edge', to: 'payments', kind: 'req', tag: 'evidencia', ms: 2, title: 'Se guarda y se prepara el paquete', text: '' },
+        { from: 'payments', to: 'acquirer', kind: 'req', tag: 'representación', ms: 5, title: 'El adquirente responde a la red', text: 'Se llama representment: el comercio contesta al contracargo.' },
+        { from: 'acquirer', to: 'network', kind: 'req', tag: 'evidencia', ms: 60, title: 'La red lo lleva al emisor', text: '' },
+        { from: 'network', to: 'issuer', kind: 'req', tag: 'evidencia', ms: 150, title: 'El emisor decide', text: 'Semanas después. Si rechaza la evidencia, puede haber una segunda ronda (pre-arbitraje) y, al final, el arbitraje de la red, con costo.' },
+        { from: 'issuer', to: 'network', kind: 'res', tag: 'a favor del comercio', ms: 150, title: 'El comercio gana', text: 'Con evidencia sólida, en este caso. Muchos comercios pierden por no responder a tiempo.' },
+        { from: 'network', to: 'acquirer', kind: 'res', tag: 'resuelta', ms: 60, title: 'La red revierte el contracargo', text: '' },
+        { from: 'acquirer', to: 'payments', kind: 'res', tag: 'disputa ganada', ms: 5, title: 'Resultado', text: '' },
+        { from: 'payments', to: 'ledger', kind: 'req', tag: 'asientos de reversión', ms: 3, title: 'El monto vuelve al saldo', text: 'Con nuevos asientos: no se edita el débito anterior. La tarifa de disputa puede no devolverse, según las reglas de la cuenta.' }
       ]
     }
   ]
