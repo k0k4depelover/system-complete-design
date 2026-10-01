@@ -483,6 +483,9 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-sub); line
 /* Verificador de linealizabilidad (M06) */
 .lin-chart svg,
 .router-chart svg { min-width: 560px; }   /* en el teléfono se desplaza en lugar de achicar las etiquetas */
+/* Snowflake (M30): el id en binario tiene 68 caracteres; va en su propia línea y se corta donde haga falta */
+.snowflake-calc .out-row { grid-template-columns: minmax(0, 1fr); }
+.snowflake-calc .out-value { white-space: normal; overflow-wrap: anywhere; text-align: left; font-size: var(--fs-md); }
 .lin-controls { margin: var(--s-3) 0 0; }
 .lin-verdict { display: grid; gap: 6px; margin: var(--s-3) 0 0; }
 .lin-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; margin: 0 !important; padding: 10px 14px; border-radius: var(--radius-s); font-size: var(--fs-sub); max-width: none !important; }

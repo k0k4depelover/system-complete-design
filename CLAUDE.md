@@ -284,6 +284,7 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 - Formato completo en la cabecera de `map/map-engine.js` y `map/flow-sim.js`:
   - `groups`, `nodes` y `edges`, con las coordenadas del centro de cada nodo;
   - capas: `client`, `edge`, `service`, `queue`, `cache`, `db`, `gpu`, `external`;
+  - `bus: true` con un `w` grande dibuja una barra, como un log de Kafka: cada arista llega de frente, a la altura o en la columna del otro nodo (así está en M30);
   - cada nodo tiene cinco pestañas: `info.resp`, `info.api`, `info.data`, `info.fail` e `info.nums`;
   - `scenarios` con `steps` de la forma `{from, to | at, kind, tag, ms, title, text, code, lang, down, up}`;
   - enlaces directos: `#node=<id>&scenario=<id>&step=<n>`.
@@ -312,7 +313,8 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="sse"`, `data-calc="streamcap"` | `widgets/sim-sse.js` | Un stream SSE evento por evento en tres formatos, y streams abiertos con la ley de Little (M17) |
 | `data-sim="reserve"`, `"tenants"`, `data-calc="escrow"` | `widgets/sim-quota.js` | Reservar y reconciliar tokens, cuatro clientes sobre una flota, y contador central contra escrow; lógica en `SD.quotaCore` (M18) |
 | `data-sim="router"`, `data-calc="coldstart"` | `widgets/sim-router.js` | Cinco políticas de routing con prefix caching y carga, y cold start con colchón de réplicas; lógica en `SD.routerCore` (M19) |
-| `data-calc="bom" data-preset="m27\|m28\|m29"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
+| `data-calc="snowflake"`, `data-calc="fanout"` | `widgets/sim-feed.js` | Id Snowflake bit por bit, y escrituras y lecturas del fan-out en escritura, en lectura e híbrido (M30) |
+| `data-calc="bom" data-preset="m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
 
 Para escribir un widget nuevo:
 
@@ -408,6 +410,7 @@ ia-system-desing
 │       │   │       m27-pagos.data.js
 │       │   │       m28-cloudflare.data.js
 │       │   │       m29-whatsapp.data.js
+│       │   │       m30-twitter.data.js
 │       │   │
 │       │   └───quizzes
 │       │           cpa.data.js
@@ -435,6 +438,7 @@ ia-system-desing
 │       │           m27.data.js
 │       │           m28.data.js
 │       │           m29.data.js
+│       │           m30.data.js
 │       │
 │       ├───map
 │       │       flow-sim.js
@@ -448,6 +452,7 @@ ia-system-desing
 │               sim-cache.js
 │               sim-context.js
 │               sim-db.js
+│               sim-feed.js
 │               sim-engine.js
 │               sim-gpu.js
 │               sim-infra.js
@@ -491,6 +496,7 @@ ia-system-desing
 │       m27-pagos-stripe.html
 │       m28-cloudflare.html
 │       m29-whatsapp.html
+│       m30-twitter.html
 │
 └───tools
     │   mkpage.py

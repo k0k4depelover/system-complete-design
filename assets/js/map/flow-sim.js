@@ -28,7 +28,8 @@
     if (ms > 0 && ms < 0.01) return SD.fmt.sig(ms * 1e6) + ' ns';
     if (ms < 1) return SD.fmt.num(ms, 2) + ' ms';
     if (ms < 10000) return SD.fmt.num(ms, ms < 10 ? 1 : 0) + ' ms';
-    return SD.fmt.num(ms / 1000, 1) + ' s';
+    if (ms < 120000) return SD.fmt.num(ms / 1000, 1) + ' s';
+    return SD.fmt.duration(ms / 1000);
   }
 
   MapView.prototype.initScenarios = function () {

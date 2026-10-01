@@ -1,5 +1,5 @@
 /* Widgets de las secciones "Impleméntalo tú mismo" de los casos de estudio:
-   <div data-calc="bom" data-preset="m27|m28|m29">  factura mensual estimada de un clon en AWS, en tres escalas
+   <div data-calc="bom" data-preset="m27|m28|m29|m30">  factura mensual estimada de un clon en AWS, en tres escalas
    <div data-calc="gateways">                     cuántos gateways de conexión necesita un clon de WhatsApp
    Precios: lista on-demand aproximada de us-east-1 (septiembre de 2026). Son editables porque cambian. */
 (function () {
@@ -96,6 +96,33 @@
         { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [20, 1000, 8000] }
       ],
       foot: 'APNs y FCM no cobran por notificación; un servicio propio que les habla directo cuesta unas pocas instancias, contra unos 0.50 USD por millón con SNS. Los medios dominan la factura: por eso se cifran una vez, se reenvían sin volver a subirse y se borran del servidor tras la descarga o a los 30 días.'
+    },
+    m30: {
+      title: 'Factura mensual de tu clon de Twitter',
+      scales: ['MVP', 'Producción', 'Gran escala'],
+      scaleNote: [
+        '100 000 usuarios activos al día: un nodo de Valkey con réplica para las timelines, SQS para el fan-out.',
+        '10 millones de usuarios activos al día: 368 GB de timelines en 9 shards, Kafka y caché de tweets aparte.',
+        '100 millones de usuarios activos al día: 3.7 TB de timelines en 87 shards, todo lo demás por diez.'
+      ],
+      rows: [
+        { c: 'Timelines precalculadas', s: 'ElastiCache (Valkey) r7g.large en el MVP, r7g.2xlarge después; con réplica', u: 'h', p: [0.175, 0.699, 0.699], q: [2, 18, 174] },
+        { c: 'Caché de tweets y autores', s: 'ElastiCache (Valkey) cache.r7g.xlarge', u: 'h', p: 0.35, q: [0, 6, 60] },
+        { c: 'Contadores de likes y retweets', s: 'ElastiCache (Valkey) cache.r7g.large', u: 'h', p: 0.175, q: [0, 2, 12] },
+        { c: 'Servicios y workers de fan-out', s: 'Fargate ARM, tarea de 4 vCPU y 8 GB', u: 'h', p: 0.158, q: [3, 18, 150] },
+        { c: 'Log de eventos', s: 'MSK kafka.m7g.large, un broker', u: 'h', p: 0.204, q: [0, 3, 12] },
+        { c: 'Cola del fan-out (MVP)', s: 'SQS, por millón de requests', u: 'M', p: 0.4, q: [20, 0, 0] },
+        { c: 'Tweets, grafo y likes: escrituras', s: 'DynamoDB on-demand, por millón de WRU', u: 'M', p: 0.625, q: [46, 4560, 45600] },
+        { c: 'Tweets, grafo y likes: lecturas', s: 'DynamoDB on-demand, por millón de RRU', u: 'M', p: 0.125, q: [40, 4000, 40000] },
+        { c: 'Almacenamiento de DynamoDB', s: 'GB al mes (crece unos 600 GB por mes en producción)', u: 'GB', p: 0.25, q: [20, 2000, 20000] },
+        { c: 'Búsqueda', s: 'OpenSearch r7g.large.search en el MVP, r7g.xlarge.search después', u: 'h', p: [0.178, 0.356, 0.356], q: [2, 3, 15] },
+        { c: 'Tendencias', s: 'Fargate ARM, tarea de 2 vCPU y 8 GB', u: 'h', p: 0.0932, q: [1, 2, 6] },
+        { c: 'Entrada HTTPS', s: 'Application Load Balancer', u: 'h', p: 0.0225, q: [1, 1, 3] },
+        { c: 'Capacidad del ALB', s: 'LCU-hora (promedio)', u: 'h', p: 0.008, q: [1, 80, 800] },
+        { c: 'Respuestas de la API', s: 'Salida a internet, promedio por tramos', u: 'GB', p: [0.09, 0.083, 0.056], q: [600, 60000, 600000] },
+        { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [20, 1000, 8000] }
+      ],
+      foot: 'No incluye fotos ni videos: con 10 millones de usuarios, la CDN mueve más de un petabyte al mes y es la línea más cara; se dimensiona como en el M09. Tampoco el ranking de Para ti ni sus GPUs. Con tráfico estable, la capacidad provisionada de DynamoDB cuesta bastante menos que on-demand.'
     }
   };
 

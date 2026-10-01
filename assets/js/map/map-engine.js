@@ -3,7 +3,8 @@
    Definición:
      { title, intro, width, height,
        groups: [{ id, label, x, y, w, h }],
-       nodes:  [{ id, layer, label, sub, x, y, w?, h?, info: { resp, api, data, fail, nums } }]   (x, y = centro)
+       nodes:  [{ id, layer, label, sub, x, y, w?, h?, bus?, info: { resp, api, data, fail, nums } }]   (x, y = centro)
+               (bus: true = una barra larga, como un log, que recibe cada arista de frente a la altura o en la columna del otro nodo)
        edges:  [{ id, from, to, label?, async?, bend?, labelAt? }],   (labelAt: 0–1, dónde va la etiqueta; 0.5 por defecto)
        scenarios: [...] (ver flow-sim.js) }
    Deep link: #node=<id>&scenario=<id>&step=<n> */
@@ -238,6 +239,11 @@
     var dx = tx - n.x, dy = ty - n.y;
     if (!dx && !dy) return [n.x, n.y];
     var hw = n.w / 2 + pad, hh = n.h / 2 + pad;
+    /* Un bus (un log largo, por ejemplo) recibe cada arista de frente, a la altura o en la columna del otro nodo */
+    if (n.bus) {
+      if (Math.abs(dx) > n.w / 2) return [n.x + (dx > 0 ? hw : -hw), clamp(ty, n.y - n.h / 2 + 12, n.y + n.h / 2 - 12)];
+      return [clamp(tx, n.x - n.w / 2 + 12, n.x + n.w / 2 - 12), n.y + (dy > 0 ? hh : -hh)];
+    }
     var sc = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
     return [n.x + dx * sc, n.y + dy * sc];
   }
@@ -249,8 +255,13 @@
       var dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
       cx += -dy / len * bend; cy += dx / len * bend;
     }
-    var p1 = boxPoint(a, bend ? cx : b.x, bend ? cy : b.y, 3);
-    var p2 = boxPoint(b, bend ? cx : a.x, bend ? cy : a.y, 5);
+    var p1, p2;
+    if (!bend && b.bus) { p2 = boxPoint(b, a.x, a.y, 5); p1 = boxPoint(a, p2[0], p2[1], 3); }
+    else if (!bend && a.bus) { p1 = boxPoint(a, b.x, b.y, 3); p2 = boxPoint(b, p1[0], p1[1], 5); }
+    else {
+      p1 = boxPoint(a, bend ? cx : b.x, bend ? cy : b.y, 3);
+      p2 = boxPoint(b, bend ? cx : a.x, bend ? cy : a.y, 5);
+    }
     var d = bend
       ? 'M' + p1[0] + ' ' + p1[1] + ' Q' + cx + ' ' + cy + ' ' + p2[0] + ' ' + p2[1]
       : 'M' + p1[0] + ' ' + p1[1] + ' L' + p2[0] + ' ' + p2[1];

@@ -1,0 +1,1712 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M30. Twitter/X</title>
+<meta name="description" content="Cómo se arma una timeline para cientos de millones de personas: la arquitectura actual de X por planos y el viaje de una request de Para ti, la API, ids Snowflake, el grafo social, fan-out en escritura y en lectura, el timeline híbrido para las cuentas con millones de seguidores, la lectura con hidratación, el ranking de For You, contadores calientes, tendencias con streaming, búsqueda en tiempo real, fallas, la flota y tu propio clon en AWS.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m30">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Twitter/X</h1>
+        <p class="lead">Twitter lee mucho más de lo que escribe, pero cada escritura puede tocar millones de timelines. Este caso recorre cómo se resolvió ese desequilibrio, con los números que la empresa publicó, y termina con lo necesario para construir tu propio clon.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M30</dd></div>
+          <div><dt>Parte</dt><dd>III. Casos de estudio</dd></div>
+          <div><dt>Duración</dt><dd>120 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M04, M05, M07</dd></div>
+          <div><dt>Estado</dt><dd data-status="m30">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Estimar la carga de lectura y de escritura de una red social y explicar por qué se precalcula la timeline.</li>
+    <li>Dibujar la arquitectura actual de X por planos, del borde al log de eventos, y seguir una request de Para ti salto por salto con su presupuesto de tiempo.</li>
+    <li>Diseñar la API de publicar y leer, con ids como texto y paginación por id.</li>
+    <li>Generar ids únicos y ordenados por tiempo sin coordinación, con el formato Snowflake, y saber qué hacer cuando el reloj retrocede.</li>
+    <li>Comparar fan-out en escritura, en lectura e híbrido, y calcular el costo de un tweet de una cuenta con decenas de millones de seguidores.</li>
+    <li>Seguir un tweet desde que se publica hasta que aparece en la timeline de cada seguidor, y una lectura hasta que se hidrata.</li>
+    <li>Diseñar contadores que aguanten una clave caliente, un detector de tendencias con memoria acotada y un índice que hace buscable un tweet en segundos.</li>
+    <li>Armar tu propio clon en AWS: qué servicios usar, cuánta memoria necesitan las timelines y cuánto costaría.</li>
+  </ul>
+</section>
+
+<h2 id="numeros"><span class="sec-num">30.1</span>Qué se construye y los números</h2>
+
+<p>Twitter (hoy X) parece simple: textos cortos que se publican y se leen. Lo difícil es la forma de la carga. El producto mínimo tiene estos requisitos funcionales:</p>
+
+<ul>
+  <li><b>Publicar</b> un tweet de hasta 280 caracteres, con respuestas, retweets, citas y medios. <span class="badge badge--doc">Documentado</span></li>
+  <li><b>Seguir</b> y dejar de seguir cuentas, sin pedir permiso salvo en las cuentas protegidas.</li>
+  <li><b>Leer la home timeline:</b> lo que publicaron las cuentas que sigues, en orden cronológico (la pestaña Siguiendo) o recomendado (Para ti).</li>
+  <li><b>Leer el perfil</b> de una cuenta, dar like, buscar y ver las tendencias.</li>
+</ul>
+
+<p>Y estos no funcionales:</p>
+
+<ul>
+  <li><b>Llegar rápido.</b> Un tweet aparece en las timelines de los seguidores en segundos: Twitter se fijaba un objetivo de 5 segundos. <span class="badge badge--doc">Documentado</span></li>
+  <li><b>Leer siempre.</b> La timeline tiene que cargar rápido y estar disponible aunque falle algo detrás; puede atrasarse unos segundos (consistencia eventual), salvo con tus propios tweets, que aparecen al instante.</li>
+  <li><b>Aguantar picos</b> de 25 veces el promedio sin perder ni un tweet: lo publicado puede tardar en repartirse, pero no se pierde.</li>
+</ul>
+
+<p>Las cifras que publicó Twitter en 2012 y 2013 son la mejor radiografía de esa carga:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Dato</th><th class="r">Valor</th><th>Fuente</th></tr></thead>
+    <tbody>
+      <tr><td>Usuarios activos (2012)</td><td class="r">150 millones</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Lecturas de timeline por segundo (2012)</td><td class="r">300&#8239;000</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Escrituras por segundo (2012)</td><td class="r">6&#8239;000</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Tweets por día (2012)</td><td class="r">400 millones</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Firehose con todos los tweets públicos (2012)</td><td class="r">22&#8239;MB/s</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Tweets por día (2013)</td><td class="r">más de 500 millones</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Tweets por segundo, promedio (2013)</td><td class="r">5&#8239;700</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Récord: la emisión de <i>Castle in the Sky</i> en Japón (agosto de 2013)</td><td class="r">143&#8239;199 por segundo</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Tres cuentas salen de esa tabla y guían el resto del módulo:</p>
+
+<ul>
+  <li><b>Se lee 50 veces más de lo que se escribe:</b> 300&#8239;000 lecturas contra 6&#8239;000 escrituras por segundo. Armar cada timeline al leerla (juntar los tweets recientes de cientos de cuentas, ordenarlos y cortar) se pagaría 300&#8239;000 veces por segundo. Precalcularla al escribir mueve el costo a las 6&#8239;000 escrituras. Esa es la decisión central del caso, y tiene una excepción que la complica (30.8).</li>
+  <li><b>El pico es 25 veces el promedio:</b> 143&#8239;199 contra unos 5&#8239;700 por segundo. Dimensionar para el promedio deja el sistema caído justo en el momento que más importa.</li>
+  <li><b>Un tweet pesa más de lo que parece:</b> 22&#8239;MB/s divididos por los 4&#8239;630 tweets por segundo de 2012 (400 millones / 86&#8239;400) son unos 4.8&#8239;KB por tweet, porque el JSON del firehose lleva el objeto completo del autor. El texto es lo de menos.</li>
+</ul>
+
+<aside class="callout callout--def">
+  <p class="callout-label">Qué es documentado y qué no</p>
+  <p>Twitter contó mucho de su arquitectura entre 2010 y 2017, en charlas y en su blog de ingeniería; publicó el código de Snowflake y de FlockDB, un artículo sobre su motor de búsqueda y, en 2023 y en 2026, el código de su algoritmo de recomendación. Con eso se puede dibujar la arquitectura actual de X pieza por pieza (30.2); lo que esas fuentes dicen lo marcamos como <span class="badge badge--doc">Documentado</span>. Lo que no dicen, como los esquemas exactos, el tamaño de cada flota o cómo se arma hoy la pestaña Siguiendo, lo completamos con un <span class="badge badge--ref">Diseño de referencia</span> coherente con lo publicado. El clon de 30.16 es otra cosa: una versión mucho más chica que puedes construir tú.</p>
+</aside>
+
+<h2 id="arquitectura"><span class="sec-num">30.2</span>La arquitectura de X hoy</h2>
+
+<p>Tres fuentes públicas permiten dibujar X como funciona hoy, no como un ejercicio de entrevista. El blog de infraestructura de 2017 cuenta el almacenamiento, el caché, el log y los datos offline. El repositorio <code>the-algorithm</code>, de 2023, publica los servicios que arman la timeline, la búsqueda y la visibilidad. El repositorio <code>x-algorithm</code>, de 2026, publica cómo se arma Para ti hoy: Home Mixer reescrito, Thunder para tu red y Phoenix, un transformer derivado de Grok, para recuperar y puntuar. <span class="badge badge--doc">Documentado</span> La figura junta todo en planos; más abajo, el mapa lo hace explorable y una request se sigue de punta a punta.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 712" role="img" aria-labelledby="f30ht f30hd">
+<title id="f30ht">La arquitectura de X por planos</title>
+<desc id="f30hd">De arriba abajo: las apps; el borde con los PoPs y TFE, y la CDN de medios; la API GraphQL, la subida de medios y XChat. Debajo, dos planos lado a lado. Leer: Home Mixer, Búsqueda, Phoenix ranking, Timeline Service, Visibility filtering, Anuncios y Grok. Escribir: Tweetypie, Interacciones, Cuentas y Premium, Community Notes, Manhattan, el caché, el grafo social y Blobstore. Todo lo que se escribe entra una vez en Kafka. Debajo de Kafka, lo derivado del log: Thunder, Phoenix retrieval, Señales del usuario, Earlybird, Haplo, Tendencias, Grox, Notificaciones y los datos offline. Una flecha a la izquierda muestra que el plano de lectura consulta lo derivado; otra a la derecha, que las notificaciones salen por APNs y FCM.</desc>
+<defs><marker id="f30ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="36" y="12" width="440" height="44" rx="8"/>
+<text class="dg-label" x="256.0" y="31" text-anchor="middle" style="font-size:12.5px">Apps de iOS y Android, y x.com</text>
+<text class="dg-tiny" x="256.0" y="47" text-anchor="middle">Ana publica, Beto lee, la cuenta famosa tiene 30 millones de seguidores</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="492" y="12" width="262" height="44" rx="8"/>
+<text class="dg-label" x="623.0" y="31" text-anchor="middle" style="font-size:12.5px">APNs y FCM</text>
+<text class="dg-tiny" x="623.0" y="47" text-anchor="middle">entregan los avisos push</text>
+<path class="dg-edge" d="M256 59 V83" marker-end="url(#f30ha)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="36" y="86" width="440" height="44" rx="8"/>
+<text class="dg-label" x="256.0" y="105" text-anchor="middle" style="font-size:12.5px">PoPs y TFE</text>
+<text class="dg-tiny" x="256.0" y="121" text-anchor="middle">TLS, sesión, límites; reparte por Finagle</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="492" y="86" width="262" height="44" rx="8"/>
+<text class="dg-label" x="623.0" y="105" text-anchor="middle" style="font-size:12.5px">CDN de medios</text>
+<text class="dg-tiny" x="623.0" y="121" text-anchor="middle">pbs.twimg.com, video.twimg.com</text>
+<path class="dg-edge" d="M436 59 L560 83" marker-end="url(#f30ha)"/>
+<text class="dg-tiny" x="470" y="76" text-anchor="end">fotos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="36" y="160" width="300" height="44" rx="8"/>
+<text class="dg-label" x="186.0" y="179" text-anchor="middle" style="font-size:12.5px">API GraphQL</text>
+<text class="dg-tiny" x="186.0" y="195" text-anchor="middle">HomeTimeline, CreateTweet…; datos por Strato</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="352" y="160" width="190" height="44" rx="8"/>
+<text class="dg-label" x="447.0" y="179" text-anchor="middle" style="font-size:12.5px">Subida de medios</text>
+<text class="dg-tiny" x="447.0" y="195" text-anchor="middle">INIT, APPEND, FINALIZE</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="558" y="160" width="196" height="44" rx="8"/>
+<text class="dg-label" x="656.0" y="179" text-anchor="middle" style="font-size:12.5px">XChat</text>
+<text class="dg-tiny" x="656.0" y="195" text-anchor="middle">DMs cifrados, en Rust</text>
+<path class="dg-edge" d="M186 133 V157" marker-end="url(#f30ha)"/>
+<path class="dg-edge" d="M366 133 L447 157" marker-end="url(#f30ha)"/>
+<path class="dg-edge" d="M456 133 L640 157" marker-end="url(#f30ha)"/>
+<rect class="dg-frame" x="36" y="234" width="351.0" height="254" rx="12"/>
+<text class="dg-group" x="50" y="256">Leer: lo que pide cada pantalla</text>
+<rect class="dg-frame" x="403.0" y="234" width="351.0" height="254" rx="12"/>
+<text class="dg-group" x="417.0" y="256">Escribir: la verdad, una sola vez</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="48" y="268" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="126.75" y="287" text-anchor="middle" style="font-size:12.5px">Home Mixer</text>
+<text class="dg-tiny" x="126.75" y="303" text-anchor="middle">Para ti y Siguiendo</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="217.5" y="268" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="296.25" y="287" text-anchor="middle" style="font-size:12.5px">Búsqueda</text>
+<text class="dg-tiny" x="296.25" y="303" text-anchor="middle">Blender reparte</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="48" y="322" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="126.75" y="341" text-anchor="middle" style="font-size:12.5px">Phoenix ranking</text>
+<text class="dg-tiny" x="126.75" y="357" text-anchor="middle">transformer de Grok, GPU</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="217.5" y="322" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="296.25" y="341" text-anchor="middle" style="font-size:12.5px">Timeline Service</text>
+<text class="dg-tiny" x="296.25" y="357" text-anchor="middle">Siguiendo, en Haplo</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="48" y="376" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="126.75" y="395" text-anchor="middle" style="font-size:12.5px">Visibility filtering</text>
+<text class="dg-tiny" x="126.75" y="411" text-anchor="middle">ALLOW, INTERSTITIAL, DROP</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="217.5" y="376" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="296.25" y="395" text-anchor="middle" style="font-size:12.5px">Anuncios</text>
+<text class="dg-tiny" x="296.25" y="411" text-anchor="middle">subasta y brand safety</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="48" y="430" width="327.0" height="44" rx="8"/>
+<text class="dg-label" x="211.5" y="449" text-anchor="middle" style="font-size:12.5px">Grok</text>
+<text class="dg-tiny" x="211.5" y="465" text-anchor="middle">resume tendencias y explica posts</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="415.0" y="268" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="493.75" y="287" text-anchor="middle" style="font-size:12.5px">Tweetypie</text>
+<text class="dg-tiny" x="493.75" y="303" text-anchor="middle">posts e ids Snowflake</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="584.5" y="268" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="663.25" y="287" text-anchor="middle" style="font-size:12.5px">Interacciones</text>
+<text class="dg-tiny" x="663.25" y="303" text-anchor="middle">likes, reposts, guardados</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="415.0" y="322" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="493.75" y="341" text-anchor="middle" style="font-size:12.5px">Cuentas y Premium</text>
+<text class="dg-tiny" x="493.75" y="357" text-anchor="middle">perfiles y seguir</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="584.5" y="322" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="663.25" y="341" text-anchor="middle" style="font-size:12.5px">Community Notes</text>
+<text class="dg-tiny" x="663.25" y="357" text-anchor="middle">notas y calificaciones</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="415.0" y="376" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="493.75" y="395" text-anchor="middle" style="font-size:12.5px">Manhattan</text>
+<text class="dg-tiny" x="493.75" y="411" text-anchor="middle">clave-valor multi-región</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="584.5" y="376" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="663.25" y="395" text-anchor="middle" style="font-size:12.5px">Twemcache, Nighthawk</text>
+<text class="dg-tiny" x="663.25" y="411" text-anchor="middle">caché de posts y usuarios</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="415.0" y="430" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="493.75" y="449" text-anchor="middle" style="font-size:12.5px">Grafo social</text>
+<text class="dg-tiny" x="493.75" y="465" text-anchor="middle">quién sigue a quién</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="584.5" y="430" width="157.5" height="44" rx="8"/>
+<text class="dg-label" x="663.25" y="449" text-anchor="middle" style="font-size:12.5px">Blobstore</text>
+<text class="dg-tiny" x="663.25" y="465" text-anchor="middle">fotos y videos</text>
+<path class="dg-edge" d="M146 207 V231" marker-end="url(#f30ha)"/>
+<path class="dg-edge" d="M286 207 L463.0 231" marker-end="url(#f30ha)"/>
+<path class="dg-edge" d="M447 207 L714.0 231" marker-end="url(#f30ha)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="36" y="520" width="718" height="34" rx="8"/>
+<text class="dg-label" x="50" y="542" style="font-size:12.5px">Kafka</text>
+<text class="dg-tiny" x="98" y="541">posts, likes, follows e impresiones: cada evento se escribe una vez y lo leen muchos</text>
+<path class="dg-edge" d="M578.5 491 V517" marker-end="url(#f30ha)"/>
+<text class="dg-tiny" x="586.5" y="508" text-anchor="start">cada escritura, una vez</text>
+<rect class="dg-frame" x="36" y="582" width="718" height="118" rx="12"/>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M395.0 557 V579" marker-end="url(#f30ha)"/>
+<text class="dg-tiny" x="403.0" y="572" text-anchor="start">cada consumidor, a su ritmo</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="48.0" y="592" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="113.4" y="611" text-anchor="middle" style="font-size:12.5px">Thunder</text>
+<text class="dg-tiny" x="113.4" y="627" text-anchor="middle">tu red, en memoria</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="188.8" y="592" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="254.20000000000002" y="611" text-anchor="middle" style="font-size:12.5px">Phoenix retrieval</text>
+<text class="dg-tiny" x="254.20000000000002" y="627" text-anchor="middle">índice de vecinos</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="329.6" y="592" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="395.0" y="611" text-anchor="middle" style="font-size:12.5px">Señales</text>
+<text class="dg-tiny" x="395.0" y="627" text-anchor="middle">tus últimas acciones</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="470.40000000000003" y="592" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="535.8000000000001" y="611" text-anchor="middle" style="font-size:12.5px">Earlybird</text>
+<text class="dg-tiny" x="535.8000000000001" y="627" text-anchor="middle">índice invertido</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="611.2" y="592" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="676.6" y="611" text-anchor="middle" style="font-size:12.5px">Haplo</text>
+<text class="dg-tiny" x="676.6" y="627" text-anchor="middle">timelines; fan-out</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="48.0" y="646" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="113.4" y="665" text-anchor="middle" style="font-size:12.5px">Tendencias</text>
+<text class="dg-tiny" x="113.4" y="681" text-anchor="middle">count-min y Grok</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="188.8" y="646" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="254.20000000000002" y="665" text-anchor="middle" style="font-size:12.5px">Grox</text>
+<text class="dg-tiny" x="254.20000000000002" y="681" text-anchor="middle">spam y calidad</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="329.6" y="646" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="395.0" y="665" text-anchor="middle" style="font-size:12.5px">Datos offline</text>
+<text class="dg-tiny" x="395.0" y="681" text-anchor="middle">Hadoop, BigQuery</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="470.40000000000003" y="646" width="130.8" height="44" rx="8"/>
+<text class="dg-label" x="535.8000000000001" y="665" text-anchor="middle" style="font-size:12.5px">Notificaciones</text>
+<text class="dg-tiny" x="535.8000000000001" y="681" text-anchor="middle">pushservice</text>
+<path class="dg-edge" d="M36 640 H16 V300 H33" marker-end="url(#f30ha)"/>
+<text class="dg-tiny" transform="translate(30 470) rotate(-90)" text-anchor="middle">la lectura consulta lo derivado</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M601.2 668 H764 V34 H757" marker-end="url(#f30ha)"/>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.1.</b> X por planos. Arriba, un solo borde y una sola API; los bytes de fotos y videos van aparte, por la CDN. En el medio, el plano de lectura y el de escritura no se tocan: lo que se escribe entra una vez en Kafka, y abajo cada consumidor mantiene al día una vista derivada. La lectura consulta esas vistas, nunca el log.</figcaption>
+</figure>
+
+<p>Cinco ideas ordenan el diagrama:</p>
+
+<ul>
+  <li><b>Un solo borde, una sola API.</b> Las apps y la web entran por los PoPs y TFE, que validan la sesión y aplican los límites, y hablan con una API GraphQL con una operación por pantalla: <code>HomeTimeline</code>, <code>CreateTweet</code>, <code>SearchTimeline</code>. Los medios se suben aparte, por trozos, y se sirven desde la CDN: la API nunca toca un byte de imagen. <span class="badge badge--doc">Documentado</span></li>
+  <li><b>Leer y escribir son planos distintos.</b> Escribir es guardar la verdad una vez: Tweetypie guarda el post en Manhattan y en el caché, y las interacciones, las cuentas y las notas hacen lo mismo con lo suyo. Leer es componer: Home Mixer junta candidatos de varias fuentes, los puntúa y los filtra, y no escribe nada que otro necesite.</li>
+  <li><b>Kafka es la columna.</b> Cada escritura produce un evento, y todo lo derivado se alimenta del log: Thunder, el índice de Phoenix retrieval, las señales del usuario, Earlybird, las tendencias, las notificaciones, Grox y los datos de entrenamiento. Cada consumidor va a su ritmo; puede atrasarse unos segundos, pero no perder un evento.</li>
+  <li><b>Lo derivado se reconstruye.</b> Si Thunder o una timeline en memoria se pierde, se vuelve a llenar desde el log o desde Manhattan. Por eso puede vivir en memoria sin réplicas caras.</li>
+  <li><b>Lo caro es la GPU.</b> Puntuar mil candidatos con un transformer cuesta más que todo lo demás junto. El diseño entero, con catorce filtros antes de puntuar y el aislamiento de candidatos, existe para gastar esa GPU solo en lo que se puede mostrar.</li>
+</ul>
+
+<h3 id="arquitectura-piezas">Las piezas, una por una</h3>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Pieza</th><th>Qué hace</th><th>Un dato</th><th>Fuente</th></tr></thead>
+    <tbody>
+      <tr><td>TFE</td><td>El borde: TLS, sesión y límites; reparte por Finagle</td><td>PoPs en cinco continentes</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>API GraphQL</td><td>Una operación por pantalla; responde con instrucciones URT para la app</td><td><code>home_timeline_urt</code></td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Subida de medios y Blobstore</td><td>Recibe la foto por trozos, guarda variantes inmutables</td><td>Cientos de miles de millones de objetos (2017)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Home Mixer</td><td>Arma Para ti en siete etapas</td><td>Unos 28 hidratadores en paralelo</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Thunder</td><td>Los posts recientes de cada autor, en memoria</td><td>16 bytes por post</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Phoenix retrieval</td><td>Candidatos de fuera de tu red con dos torres y vecinos cercanos</td><td>La mitad de los candidatos (2023)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Phoenix ranking</td><td>Predice la probabilidad de cada reacción por candidato</td><td>19 acciones binarias y 8 continuas</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Tweetypie</td><td>Escribe y lee posts; les da su id Snowflake</td><td>Todo post pasa por aquí</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Manhattan</td><td>Clave-valor multi-región, la verdad de posts, cuentas y DMs</td><td>Almacenamiento y mensajería: 45&#8239;% de la flota (2017)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Twemcache, Nighthawk y Redis</td><td>Caché de posts y usuarios; timelines en memoria</td><td>105&#8239;TB de Redis a 39 millones de QPS (2014)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Haplo y Timeline Service</td><td>La timeline cronológica como lista en memoria</td><td>800 entradas por timeline (2017)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Earlybird</td><td>Índice invertido en tiempo real para la búsqueda</td><td>Buscable en 1 segundo</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Visibility filtering</td><td>Decide qué se muestra, con aviso o nada</td><td>ALLOW, INTERSTITIAL, DROP</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Grox</td><td>Etiqueta spam, seguridad y calidad con modelos</td><td>Publicado en 2026</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Community Notes</td><td>Muestra una nota solo si la califican bien personas que suelen discrepar</td><td>Intercept de al menos 0.40</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>XChat</td><td>DMs cifrados de punta a punta, escrito en Rust</td><td>Los metadatos no se cifran</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Kafka</td><td>El log de eventos: posts, interacciones, follows e impresiones</td><td>Migración desde EventBus en 2018</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Datos offline</td><td>Entrenamiento, analítica y los puntajes de Community Notes</td><td>Más de 500&#8239;PB en Hadoop (2017)</td><td><span class="badge badge--doc">Documentado</span></td></tr>
+      <tr><td>Fan-out hacia Haplo hoy</td><td>Si Siguiendo se precalcula como antes o se arma al leer</td><td>No publicado</td><td><span class="badge badge--ref">Diseño de referencia</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="mapa">El mapa explorable</h3>
+
+<p>El mapa tiene las mismas bandas que la figura, de arriba abajo: clientes, borde, API, servicios de producto, el núcleo y, abajo de todo, la barra de Kafka con sus consumidores. Hay tres cuentas: Ana, con 200 seguidores; una cuenta famosa, con 30 millones; y Beto, que sigue a 400 cuentas y lee. Cada caja tiene cinco pestañas, con qué hace, su API, sus datos, cómo falla y sus números. Los doce escenarios recorren las requests más importantes:</p>
+
+<ul>
+  <li><a href="#scenario=for-you">Abrir Para ti</a>, el viaje completo que sigue al mapa, y <a href="#scenario=leer">Siguiendo</a>, la cronológica.</li>
+  <li><a href="#scenario=publicar">Ana publica una foto</a> y <a href="#scenario=famosa">publica la cuenta famosa</a>: la misma escritura con 200 y con 30 millones de seguidores.</li>
+  <li><a href="#scenario=like-viral">Un like a un post viral</a>, <a href="#scenario=buscar">una búsqueda</a> y <a href="#scenario=tendencia">una tendencia que nace</a>.</li>
+  <li><a href="#scenario=notificacion">Una mención que llega al teléfono</a>, <a href="#scenario=dm">un mensaje cifrado</a> y <a href="#scenario=nota">una Community Note que aparece</a>.</li>
+  <li>Dos fallas: <a href="#scenario=reconstruir">reconstruir una timeline perdida</a> y <a href="#scenario=pico">un pico de 25 veces el promedio</a>.</li>
+</ul>
+
+<div data-map="m30-twitter"></div>
+
+<h3 id="viaje">El viaje de una request: abrir Para ti</h3>
+
+<p>Beto abre la app y toca Para ti. La figura sigue esa request por los siete servicios que la resuelven; el <a href="#scenario=for-you">escenario del mapa</a> la reproduce en 33 pasos, con el código de cada salto.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 784" role="img" aria-labelledby="f30st f30sd">
+<title id="f30st">El viaje de una request de Para ti</title>
+<desc id="f30sd">Diagrama de secuencia con siete participantes: la app de Beto, TFE, la API GraphQL, Home Mixer, Thunder, Phoenix y Tweetypie. La app pide HomeTimeline; TFE valida y la API delega en Home Mixer. Home Mixer hidrata el contexto, pide candidatos de la red de Beto a Thunder y de fuera de su red a Phoenix, los hidrata en Tweetypie, los filtra, los puntúa con Phoenix, combina los puntajes y elige los 20 mejores, aplica visibilidad y anuncios, y devuelve las entradas. La API completa cada objeto en Tweetypie y responde a la app.</desc>
+<defs><marker id="f30s-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f30s-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f30s-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f30s-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="21.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App de Beto</text>
+<path class="dg-frame" d="M70.0 40 V774"/>
+<rect class="dg-box" x="126.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="175.0" y="29" text-anchor="middle" style="font-size:13.5px">TFE</text>
+<path class="dg-frame" d="M175.0 40 V774"/>
+<rect class="dg-box" x="231.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">GraphQL</text>
+<path class="dg-frame" d="M280.0 40 V774"/>
+<rect class="dg-box" x="336.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Home Mixer</text>
+<path class="dg-frame" d="M385.0 40 V774"/>
+<rect class="dg-box" x="441.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Thunder</text>
+<path class="dg-frame" d="M490.0 40 V774"/>
+<rect class="dg-box" x="546.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="595.0" y="29" text-anchor="middle" style="font-size:13.5px">Phoenix</text>
+<path class="dg-frame" d="M595.0 40 V774"/>
+<rect class="dg-box" x="651.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Tweetypie</text>
+<path class="dg-frame" d="M700.0 40 V774"/>
+<path class="dg-edge" d="M73.0 72 L170.0 72" marker-end="url(#f30s-a)"/>
+<rect x="60.400000000000006" y="55" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="122.5" y="66" text-anchor="middle">POST HomeTimeline</text>
+<path class="dg-edge" d="M178.0 106 L275.0 106" marker-end="url(#f30s-a)"/>
+<rect x="172.0" y="89" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="100" text-anchor="middle">sesión y límite</text>
+<path class="dg-edge" d="M283.0 140 L380.0 140" marker-end="url(#f30s-a)"/>
+<rect x="270.4" y="123" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="332.5" y="134" text-anchor="middle">for_you(beto, 20)</text>
+<rect x="395.0" y="160" width="293" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="176">1. hidratar la consulta: 28 en paralelo</text>
+<path class="dg-edge" d="M388.0 208 L485.0 208" marker-end="url(#f30s-a)"/>
+<rect x="358.9" y="191" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="202" text-anchor="middle">2. tu red: 400 cuentas</text>
+<path class="dg-edge" d="M388.0 242 L590.0 242" marker-end="url(#f30s-a)"/>
+<rect x="434.5" y="225" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="236" text-anchor="middle">fuera de tu red</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 276 L390.0 276" marker-end="url(#f30s-r)"/>
+<rect x="375.4" y="259" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="270" text-anchor="middle">TinyPosts, &lt; 1 ms</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M592.0 310 L390.0 310" marker-end="url(#f30s-r)"/>
+<rect x="431.2" y="293" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="304" text-anchor="middle">vecinos cercanos</text>
+<path class="dg-edge" d="M388.0 344 L695.0 344" marker-end="url(#f30s-a)"/>
+<rect x="477.1" y="327" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="338" text-anchor="middle">3. hidratar ~1&#8239;500</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 378 L390.0 378" marker-end="url(#f30s-r)"/>
+<rect x="463.9" y="361" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="372" text-anchor="middle">posts, autores, medios</text>
+<rect x="395.0" y="398" width="314" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="414">4. catorce filtros: 48 h, vistos, bloqueos</text>
+<path class="dg-edge" d="M388.0 446 L590.0 446" marker-end="url(#f30s-a)"/>
+<rect x="385.0" y="429" width="210.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="440" text-anchor="middle">5. score(contexto, candidatos)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M592.0 480 L390.0 480" marker-end="url(#f30s-r)"/>
+<rect x="408.1" y="463" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="474" text-anchor="middle">P(acción) por candidato</text>
+<rect x="395.0" y="500" width="307" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="516">6. Σ peso × P, diversidad, los 20 mejores</text>
+<rect x="395.0" y="534" width="328" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="550">7. visibilidad; anuncios; guardar lo servido</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 582 L285.0 582" marker-end="url(#f30s-r)"/>
+<rect x="260.5" y="565" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="332.5" y="576" text-anchor="middle">22 entradas y cursor</text>
+<path class="dg-edge" d="M283.0 616 L695.0 616" marker-end="url(#f30s-a)"/>
+<rect x="427.9" y="599" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="610" text-anchor="middle">completar objetos</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 650 L285.0 650" marker-end="url(#f30s-r)"/>
+<rect x="401.5" y="633" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="644" text-anchor="middle">texto, medios, contadores</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 684 L180.0 684" marker-end="url(#f30s-r)"/>
+<rect x="145.60000000000002" y="667" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="678" text-anchor="middle">URT: TimelineAddEntries</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M172.0 718 L75.0 718" marker-end="url(#f30s-r)"/>
+<rect x="106.6" y="701" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="122.5" y="712" text-anchor="middle">200</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.2.</b> Las siete etapas de Home Mixer, numeradas en las notas. Thunder y Phoenix retrieval responden en paralelo; Phoenix ranking recibe un solo pedido con todos los candidatos, y la API completa los objetos recién al final, solo para los 22 que se van a mostrar.</figcaption>
+</figure>
+
+<p>El presupuesto de tiempo de ese recorrido, salto por salto. Las etapas y sus cantidades están publicadas; los milisegundos son un <span class="badge badge--ref">Diseño de referencia</span> para la mediana.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Salto o etapa</th><th>Qué pasa</th><th class="r">ms</th><th class="r">Acumulado</th></tr></thead>
+    <tbody>
+      <tr><td>App a TFE</td><td>Por una conexión HTTP/2 ya abierta con el PoP más cercano</td><td class="r">40</td><td class="r">40</td></tr>
+      <tr><td>TFE y API GraphQL</td><td>Sesión, límite y enrutamiento a Home Mixer</td><td class="r">3</td><td class="r">43</td></tr>
+      <tr><td>1. Hidratar la consulta</td><td>28 hidratadores a la vez; manda el más lento, las señales del usuario</td><td class="r">12</td><td class="r">55</td></tr>
+      <tr><td>2. Buscar candidatos</td><td>Thunder en menos de 1&#8239;ms y Phoenix retrieval en 25&#8239;ms, en paralelo</td><td class="r">27.5</td><td class="r">82.5</td></tr>
+      <tr><td>3. Hidratar candidatos</td><td>Unos 1&#8239;500 posts desde Tweetypie, casi todos en Twemcache</td><td class="r">11</td><td class="r">93.5</td></tr>
+      <tr><td>4. Filtrar</td><td>Catorce filtros: duplicados, más de 48 horas, vistos, bloqueos</td><td class="r">3</td><td class="r">96.5</td></tr>
+      <tr><td>5. Puntuar</td><td>Phoenix ranking en GPU, un pedido para unos mil candidatos</td><td class="r">92</td><td class="r">188.5</td></tr>
+      <tr><td>6. Combinar y elegir</td><td>Suma ponderada, diversidad de autores, los 20 mejores</td><td class="r">2</td><td class="r">190.5</td></tr>
+      <tr><td>7. Filtros finales y anuncios</td><td>Visibilidad sobre los 20, tres anuncios, guardar lo servido</td><td class="r">14.5</td><td class="r">205</td></tr>
+      <tr><td>Completar y responder</td><td>La API completa los 22 objetos y responde en URT</td><td class="r">10</td><td class="r">215</td></tr>
+      <tr><td>TFE a la app</td><td>40&#8239;KB de JSON</td><td class="r">40</td><td class="r">255</td></tr>
+      <tr><td>Imágenes</td><td>Doce imágenes desde el PoP de la CDN, en paralelo</td><td class="r">40</td><td class="r">295</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Tres lecturas de esa tabla:</p>
+
+<ul>
+  <li><b>La GPU se lleva más de la mitad.</b> De los 175&#8239;ms en el servidor, 92 son Phoenix. Cada filtro que corre antes de puntuar ahorra GPU, y por eso son catorce antes y solo tres después.</li>
+  <li><b>Lo paralelo cuesta lo que el más lento.</b> Los 28 hidratadores y las dos fuentes de candidatos corren a la vez: la etapa dura lo que tarda su miembro más lento. Un hidratador nuevo que tarda 30&#8239;ms atrasa toda la timeline, aunque los otros 27 tarden 1.</li>
+  <li><b>La cifra publicada es más alta.</b> En 2023, X publicó que el pipeline corría unas 5&#8239;000 millones de veces por día, tardaba menos de 1.5&#8239;s en promedio y usaba unos 220&#8239;s de CPU repartidos en muchas máquinas. <span class="badge badge--doc">Documentado</span> La app lo esconde: al abrir muestra lo que tenía guardado y pide la página siguiente mientras haces scroll.</li>
+</ul>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>Mira de dónde salen los candidatos de tu red: de Thunder, que guarda una lista de posts recientes <i>por autor</i> y la consulta al leer. Para ti ya no depende del fan-out en escritura, y el problema de la cuenta con 30 millones de seguidores desaparece de ese camino: leer sus posts cuesta lo mismo que leer los de Ana. <span class="badge badge--doc">Documentado</span> El precio es leer 400 listas en cada request en lugar de una, algo que solo es barato porque Thunder vive en memoria y cada entrada pesa 16 bytes. El fan-out que explicamos en 30.6 y 30.8 sigue siendo la forma clásica de armar Siguiendo, y es lo que construirías en un clon; si X hoy la precalcula o la compone al leer no está publicado.</p>
+</aside>
+
+<h2 id="api"><span class="sec-num">30.3</span>La API: publicar, leer, seguir</h2>
+
+<p>Cuatro operaciones sostienen el producto. Las rutas y los formatos siguen la API v2 de X, que es pública <span class="badge badge--doc">Documentado</span>; la idempotency key y lo que pasa detrás de cada llamada son de nuestro clon <span class="badge badge--ref">Diseño de referencia</span>.</p>
+
+<div class="endpoint">
+  <div class="ep-head">
+    <span class="ep-method" data-m="POST">POST</span>
+    <code class="ep-path">/2/tweets</code>
+    <span class="badge badge--doc">Documentado</span>
+  </div>
+  <p class="ep-desc">Publica un tweet. Lo llama la app al tocar "Publicar". Responde cuando el tweet está guardado y su evento está en el log; el reparto a los seguidores ocurre después, en segundo plano (30.7).</p>
+  <div class="ep-body">
+    <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /2/tweets HTTP/1.1
+Host: api.ejemplo.com
+Authorization: Bearer eyJhbGciOi…
+Idempotency-Key: 6f1c2a0e-9d4b-4c55-8f0e-2b7a1c9e3d10
+Content-Type: application/json
+
+{
+  "text": "Empieza la final",
+  "reply": { "in_reply_to_tweet_id": "2105447600747868202" }
+}</code></pre>
+    <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{
+  "data": {
+    "id": "2105447601003728896",
+    "text": "Empieza la final",
+    "edit_history_tweet_ids": ["2105447601003728896"]
+  }
+}</code></pre>
+    <p class="ep-sec">Códigos de respuesta</p>
+    <ul class="ep-responses">
+      <li><span class="st st--2xx">201</span><span>Creado. Un reintento con la misma <code>Idempotency-Key</code> recibe el mismo id, no un tweet duplicado: es lo que pasa cuando la red se corta después de publicar y la app vuelve a intentar.</span></li>
+      <li><span class="st st--4xx">400</span><span>Texto vacío, de más de 280 caracteres, o una respuesta a un tweet que no existe.</span></li>
+      <li><span class="st st--4xx">403</span><span>La cuenta no puede publicar, o no puede responder a ese tweet porque su autor limitó quién responde.</span></li>
+      <li><span class="st st--4xx">429</span><span>Superó su límite. X limita a 2&#8239;400 publicaciones por día por cuenta, repartidas en límites más chicos por media hora. <span class="badge badge--doc">Documentado</span></span></li>
+      <li><span class="st st--5xx">503</span><span>No se pudo guardar. La app reintenta con backoff y la misma <code>Idempotency-Key</code>.</span></li>
+    </ul>
+  </div>
+</div>
+
+<div class="endpoint">
+  <div class="ep-head">
+    <span class="ep-method" data-m="GET">GET</span>
+    <code class="ep-path">/2/users/{id}/timelines/reverse_chronological</code>
+    <span class="badge badge--doc">Documentado</span>
+  </div>
+  <p class="ep-desc">La home timeline cronológica, la pestaña Siguiendo. <code>max_results</code> va de 1 a 100 y <code>pagination_token</code> es el cursor que devolvió la página anterior. Con <code>expansions=author_id</code>, los autores vienen una sola vez en <code>includes</code> en lugar de repetirse en cada tweet.</p>
+  <div class="ep-body">
+    <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>GET /2/users/1002/timelines/reverse_chronological?max_results=50&amp;expansions=author_id&amp;tweet.fields=created_at,public_metrics HTTP/1.1
+Host: api.ejemplo.com
+Authorization: Bearer eyJhbGciOi…</code></pre>
+    <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{
+  "data": [
+    { "id": "2105447601003728896", "author_id": "1001", "text": "Empieza la final",
+      "created_at": "2026-10-01T00:00:00.061Z",
+      "public_metrics": { "like_count": 1520, "retweet_count": 88, "reply_count": 31, "quote_count": 4 } },
+    …
+  ],
+  "includes": { "users": [ { "id": "1001", "username": "ana", "name": "Ana" } ] },
+  "meta": {
+    "result_count": 50,
+    "newest_id": "2105447601003728896",
+    "oldest_id": "2105441233794121735",
+    "next_token": "7140dibdnow9c7btw4"
+  }
+}</code></pre>
+    <p class="ep-sec">Códigos de respuesta</p>
+    <ul class="ep-responses">
+      <li><span class="st st--2xx">200</span><span>Una página. Sin <code>next_token</code> no hay más: la timeline guarda como mucho 800 entradas (30.6).</span></li>
+      <li><span class="st st--4xx">400</span><span><code>max_results</code> fuera de 1 a 100, o un cursor que no se puede leer.</span></li>
+      <li><span class="st st--4xx">429</span><span>Demasiadas lecturas: una app que refresca en un bucle no puede tumbar el servicio de timeline.</span></li>
+    </ul>
+  </div>
+</div>
+
+<p>El resto de las operaciones, con lo que tocan en nuestro clon:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Llamada</th><th>Qué hace</th><th>Qué toca por dentro</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /2/users/{id}/following</code></td><td>Seguir a <code>target_user_id</code></td><td>Dos filas del grafo, una por dirección (30.5). En segundo plano, copia los tweets recientes de esa cuenta a tu timeline.</td></tr>
+      <tr><td><code>DELETE /2/users/{id}/following/{target}</code></td><td>Dejar de seguir</td><td>Borra las dos filas. Los tweets de esa cuenta que ya están en tu timeline se filtran al leer.</td></tr>
+      <tr><td><code>POST /2/users/{id}/likes</code></td><td>Dar like a <code>tweet_id</code></td><td>Una fila <code>(user_id, tweet_id)</code> y un incremento del contador (30.11).</td></tr>
+      <tr><td><code>GET /2/users/{id}/tweets</code></td><td>El perfil de una cuenta</td><td>El índice por autor del almacén (30.5).</td></tr>
+      <tr><td><code>GET /2/tweets/search/recent</code></td><td>Buscar en los tweets recientes</td><td>El índice invertido en memoria (30.13).</td></tr>
+      <tr><td><code>DELETE /2/tweets/{id}</code></td><td>Borrar un tweet</td><td>Lo marca como borrado. Las copias en las timelines no se persiguen: se descartan al hidratar (30.9).</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="api-ids">Por qué los ids viajan como texto</h3>
+
+<p>Un id Snowflake (30.4) usa hasta 63 bits, y los números de JavaScript representan enteros exactos solo hasta 2<sup>53</sup> − 1, 9&#8239;007&#8239;199&#8239;254&#8239;740&#8239;991. En un navegador, <code>JSON.parse('2105447600747868202')</code> devuelve 2105447600747868200: el id de otro tweet. Por eso la API v1.1 de Twitter mandaba cada id dos veces, como número en <code>id</code> y como texto en <code>id_str</code>, y la v2 manda todos los ids como texto. <span class="badge badge--doc">Documentado</span> La regla para tu clon: los ids de 64 bits salen siempre como string en el JSON, aunque en la base sean <code>bigint</code>.</p>
+
+<h3 id="api-paginacion">Paginar por id, no por número de página</h3>
+
+<p>La timeline cambia mientras la lees. Si pides "la página 2" con un offset y entretanto llegaron 10 tweets nuevos, ves 10 repetidos. Con ids ordenados por tiempo, el cursor es un id: "los 50 anteriores a 2105441233794121735" para bajar, y "los posteriores a 2105447601003728896" para buscar novedades al tirar hacia abajo. Sobre una lista ordenada, los dos son rangos baratos (la paginación por cursor del M02). El <code>next_token</code> de X es opaco: por dentro, nuestro clon guarda el último id de la página. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<pre data-lang="python"><code>import bisect
+
+def pagina(usuario, antes_de=None, n=50):
+    ids = leer_timeline_ids(usuario)          # hasta 800, del más nuevo al más viejo (30.9)
+    if antes_de is not None:
+        # la lista está en orden descendente: se busca sobre los negativos
+        i = bisect.bisect_right([-x for x in ids], -antes_de)
+        ids = ids[i:]
+    pagina = ids[:n]
+    siguiente = codificar_cursor(pagina[-1]) if len(pagina) == n else None
+    return hidratar(pagina), siguiente</code></pre>
+
+<p>El techo de 800 entradas también es un límite del producto: la API v1.1 avisaba que de la home timeline solo se podían obtener los 800 tweets más recientes. <span class="badge badge--doc">Documentado</span> Para leer más atrás está el perfil de cada cuenta o la búsqueda.</p>
+
+<h2 id="snowflake"><span class="sec-num">30.4</span>Ids únicos sin coordinación: Snowflake</h2>
+
+<p>Cada tweet necesita un id único. Un autoincremental de MySQL deja de servir cuando los tweets se reparten entre muchas bases, y un UUID aleatorio de 128 bits no se puede ordenar por tiempo. En 2010 Twitter publicó <dfn data-term="snowflake-id">Snowflake</dfn>: un servicio que genera ids de 64 bits, únicos y aproximadamente ordenados por tiempo, sin hablar con nadie. Sus requisitos eran al menos 10&#8239;000 ids por segundo por proceso, respuesta en 2&#8239;ms más la red, y un orden aproximado: dos ids generados con un segundo de diferencia salen ordenados, con el objetivo de bajar ese margen a decenas de milisegundos. <span class="badge badge--doc">Documentado</span></p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 190" role="img" aria-labelledby="f301t f301d">
+<title id="f301t">Los 64 bits de un id Snowflake</title>
+<desc id="f301d">Un id Snowflake ocupa 64 bits: un bit de signo en cero, 41 bits con los milisegundos transcurridos desde el 4 de noviembre de 2010, 5 bits de datacenter, 5 de worker y 12 de secuencia, que permiten 4096 ids por milisegundo en cada worker. Como el tiempo va en los bits altos, ordenar por id es ordenar por tiempo.</desc>
+<rect x="40.0" y="40" width="8.8" height="44" rx="4" class="dg-layer" style="--c: var(--l-external)"/>
+<path class="dg-feedback" d="M45.4 86 V96"/>
+<text class="dg-label" x="40.0" y="108" text-anchor="start">signo</text>
+<text class="dg-tiny" x="40.0" y="123" text-anchor="start">0</text>
+<rect x="50.8" y="40" width="440.0" height="44" rx="4" class="dg-layer" style="--c: var(--l-service)"/>
+<text class="dg-small" x="271.8" y="67" text-anchor="middle">41 bits</text>
+<path class="dg-feedback" d="M271.8 86 V128"/>
+<text class="dg-label" x="271.8" y="140" text-anchor="middle">milisegundos desde la época de Twitter</text>
+<text class="dg-tiny" x="271.8" y="155" text-anchor="middle">41 bits: 69.7 años</text>
+<rect x="492.8" y="40" width="51.9" height="44" rx="4" class="dg-layer" style="--c: var(--l-edge)"/>
+<path class="dg-feedback" d="M519.8 86 V96"/>
+<text class="dg-label" x="519.8" y="108" text-anchor="middle">datacenter</text>
+<text class="dg-tiny" x="519.8" y="123" text-anchor="middle">5 bits</text>
+<rect x="546.7" y="40" width="51.9" height="44" rx="4" class="dg-layer" style="--c: var(--l-db)"/>
+<path class="dg-feedback" d="M573.7 86 V128"/>
+<text class="dg-label" x="573.7" y="140" text-anchor="middle">worker</text>
+<text class="dg-tiny" x="573.7" y="155" text-anchor="middle">5 bits</text>
+<rect x="600.6" y="40" width="127.4" height="44" rx="4" class="dg-layer" style="--c: var(--l-gpu)"/>
+<text class="dg-small" x="665.3" y="67" text-anchor="middle">12 bits</text>
+<path class="dg-feedback" d="M665.3 86 V96"/>
+<text class="dg-label" x="665.3" y="108" text-anchor="middle">secuencia</text>
+<text class="dg-tiny" x="665.3" y="123" text-anchor="middle">12 bits: 4&#8239;096 por ms</text>
+<text class="dg-tiny" x="40" y="26">bit 63</text>
+<text class="dg-tiny" x="730" y="26" text-anchor="end">bit 0</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.3.</b> El tiempo va en los bits altos: ordenar ids es ordenar por momento de creación. La época de Twitter es el 4 de noviembre de 2010 (1288834974657 en milisegundos Unix).</figcaption>
+</figure>
+
+<pre data-lang="python"><code>import time, threading
+
+EPOCA = 1288834974657            # 2010-11-04, en ms Unix
+
+class Snowflake:
+    def __init__(self, datacenter, worker):
+        assert 0 &lt;= datacenter &lt; 32 and 0 &lt;= worker &lt; 32
+        self.nodo = (datacenter &lt;&lt; 17) | (worker &lt;&lt; 12)
+        self.ultimo, self.seq = -1, 0
+        self.lock = threading.Lock()
+
+    def siguiente(self):
+        with self.lock:
+            ms = int(time.time() * 1000)
+            if ms &lt; self.ultimo:                  # el reloj fue para atrás
+                raise RuntimeError('reloj atrasado: no generar ids repetidos')
+            if ms == self.ultimo:
+                self.seq = (self.seq + 1) &amp; 0xFFF  # 12 bits
+                if self.seq == 0:                 # 4&#8239;096 en este ms: esperar al siguiente
+                    while ms &lt;= self.ultimo:
+                        ms = int(time.time() * 1000)
+            else:
+                self.seq = 0
+            self.ultimo = ms
+            return ((ms - EPOCA) &lt;&lt; 22) | self.nodo | self.seq</code></pre>
+
+<p>Los números salen de los bits: 41 bits de milisegundos alcanzan para 2<sup>41</sup> ms, 69.7 años, hasta julio de 2080. Diez bits de nodo permiten 1&#8239;024 generadores, y 12 bits de secuencia, 4&#8239;096 ids por milisegundo en cada uno: más de 4 millones por segundo por generador, 400 veces lo que pedían los requisitos. Un id generado el 1 de octubre de 2026 en el datacenter 3, worker 7, secuencia 42 vale 2105447600747868202; desplazarlo 22 bits a la derecha devuelve los milisegundos desde la época. Prueba a cambiar el tiempo, el nodo o la secuencia:</p>
+
+<div data-calc="snowflake"></div>
+
+<h3 id="snowflake-reloj">Cuando el reloj miente</h3>
+
+<p>Snowflake depende de dos cosas que pueden fallar: el reloj de la máquina y que no haya dos generadores con el mismo nodo.</p>
+
+<ul>
+  <li><b>El reloj retrocede.</b> Si NTP corrige el reloj hacia atrás, el generador podría volver a un milisegundo ya usado con la misma secuencia y repetir un id. Por eso se niega a emitir mientras el reloj esté detrás del último milisegundo que usó. <span class="badge badge--doc">Documentado</span> En la práctica se configura NTP para que corrija de a poco (acelerando o frenando el reloj) en lugar de saltar, y un retroceso grande saca al generador de la rotación hasta que el reloj lo alcanza.</li>
+  <li><b>Dos generadores con el mismo nodo.</b> Generan duplicados en cuanto coinciden en un milisegundo. La asignación de nodos se coordina una sola vez, al arrancar: el servidor original de Twitter registraba su worker id en ZooKeeper. <span class="badge badge--doc">Documentado</span> En tu clon puede ser un <span class="no-autolink">lease</span> en una tabla con escritura condicional, que el proceso renueva mientras vive.</li>
+  <li><b>El orden entre máquinas es aproximado.</b> Dos ids de generadores distintos están ordenados solo hasta el desfase de sus relojes (M06). Para una timeline alcanza: nadie nota si dos tweets del mismo segundo salen en un orden u otro. Para algo que necesite orden total, como un ledger, no alcanza.</li>
+</ul>
+
+<h3 id="snowflake-alternativas">Las alternativas</h3>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Opción</th><th>Tamaño</th><th>Ordenado por tiempo</th><th>Coordinación</th><th>Problema a escala</th></tr></thead>
+    <tbody>
+      <tr><td>Autoincremental de la base</td><td>64 bits</td><td>Sí, dentro de una base</td><td>Cada insert pasa por esa base</td><td>Con muchas bases, se repiten o hay que repartir rangos</td></tr>
+      <tr><td>Servidores de tickets (como los de Flickr)</td><td>64 bits</td><td>Aproximado</td><td>Una llamada por id, o por rango</td><td>Un servicio más del que depende cada escritura</td></tr>
+      <tr><td>UUIDv4</td><td>128 bits</td><td>No</td><td>Ninguna</td><td>Índices del doble de tamaño y escrituras dispersas por todo el B-tree (M05)</td></tr>
+      <tr><td>UUIDv7</td><td>128 bits</td><td>Sí, por milisegundo</td><td>Ninguna</td><td>No entra en un entero de 64 bits</td></tr>
+      <tr><td>Snowflake</td><td>64 bits</td><td>Sí, por milisegundo y nodo</td><td>Solo el nodo, al arrancar</td><td>Depende del reloj y de que no se repitan los nodos</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="almacenamiento"><span class="sec-num">30.5</span>Tweets, cuentas y el grafo social</h2>
+
+<p>Tres datos sostienen todo: los tweets, quién sigue a quién y las interacciones. Los esquemas de nuestro clon:</p>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">tweets</code>
+    <span class="schema-chip">Clave-valor particionado</span>
+    <span class="schema-chip">Partición: <b>id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code><span class="key">PK</span></td><td>bigint</td><td>Snowflake</td><td>Único y ordenado por tiempo. También es el cursor de paginación y la fecha de creación: no hace falta un <code>created_at</code>.</td></tr>
+        <tr><td><code>author_id</code><span class="key key--fk">FK</span></td><td>bigint</td><td>not null</td><td>Quién lo publicó</td></tr>
+        <tr><td><code>text</code></td><td>text</td><td>hasta 280 caracteres</td><td>Hasta 1&#8239;120 bytes en UTF-8</td></tr>
+        <tr><td><code>reply_to_id</code></td><td>bigint</td><td>null</td><td>A qué tweet responde</td></tr>
+        <tr><td><code>conversation_id</code></td><td>bigint</td><td>not null</td><td>El id del primer tweet del hilo: juntar una conversación es un índice por este campo</td></tr>
+        <tr><td><code>retweet_of_id</code></td><td>bigint</td><td>null</td><td>Un retweet es un tweet que apunta a otro, sin texto propio</td></tr>
+        <tr><td><code>quote_of_id</code></td><td>bigint</td><td>null</td><td>Una cita: apunta a otro y tiene texto</td></tr>
+        <tr><td><code>media</code></td><td>json</td><td></td><td>Referencias a objetos en el almacenamiento y la CDN (M09)</td></tr>
+        <tr><td><code>deleted_at</code></td><td>timestamp</td><td>null</td><td>Borrado lógico: las copias en las timelines se descartan al hidratar</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">user_tweets</code>
+    <span class="schema-chip">Índice secundario</span>
+    <span class="schema-chip">Partición: <b>author_id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>author_id</code><span class="key">PK</span></td><td>bigint</td><td>clave de partición</td><td>Todos los tweets de una cuenta en la misma partición</td></tr>
+        <tr><td><code>tweet_id</code><span class="key">PK</span></td><td>bigint</td><td>orden descendente</td><td>El perfil, la lista que se mezcla al leer las cuentas famosas (30.8) y la reconstrucción de timelines (30.6)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">following / followers</code>
+    <span class="schema-chip">Dos tablas</span>
+    <span class="schema-chip">Partición: <b>user_id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>user_id</code><span class="key">PK</span></td><td>bigint</td><td>clave de partición</td><td>En <code>following</code>, quien sigue; en <code>followers</code>, a quien siguen</td></tr>
+        <tr><td><code>other_id</code><span class="key">PK</span></td><td>bigint</td><td></td><td>La otra punta de la arista</td></tr>
+        <tr><td><code>since</code></td><td>bigint</td><td>Snowflake</td><td>Desde cuándo; ordena las listas de seguidores</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">likes</code>
+    <span class="schema-chip">Clave-valor particionado</span>
+    <span class="schema-chip">Partición: <b>user_id</b></span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>user_id</code><span class="key">PK</span></td><td>bigint</td><td>clave de partición</td><td>"¿Ya le di like?" es una lectura de una partición</td></tr>
+        <tr><td><code>tweet_id</code><span class="key">PK</span></td><td>bigint</td><td></td><td>La clave primaria impide el like doble; el número que se muestra es un contador aparte (30.11)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<h3 id="particion-tweets">Cómo partir los tweets</h3>
+
+<p>Twitter empezó partiendo los tweets por tiempo: los de un período en una base, los del siguiente en otra. Parece natural, pero concentra todo: la partición más nueva recibe todas las escrituras y casi todas las lecturas, mientras las viejas quedan ociosas. La reemplazó con T-bird, un almacén que reparte los tweets por id, construido sobre Gizzard (su framework de particionado y replicación sobre MySQL), con los índices secundarios, como el de tweets por autor, en otro almacén, T-flock. <span class="badge badge--doc">Documentado</span> Más tarde construyó Manhattan, su propia base clave-valor distribuida. <span class="badge badge--doc">Documentado</span></p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Partir por</th><th>Escrituras</th><th>Leer un tweet</th><th>Perfil de una cuenta</th><th>Problema</th></tr></thead>
+    <tbody>
+      <tr><td>Tiempo</td><td>Todas a la partición nueva</td><td>La fecha sale del id</td><td>Una partición por período</td><td>La partición nueva es una partición caliente</td></tr>
+      <tr><td>Id (hash)</td><td>Repartidas</td><td>Una partición</td><td>Todas, salvo con un índice por autor</td><td>Necesita el índice secundario <code>user_tweets</code></td></tr>
+      <tr><td>Autor</td><td>Repartidas</td><td>Hay que saber el autor</td><td>Una partición</td><td>Las cuentas más activas hacen particiones calientes, y un tweet no se encuentra solo por su id</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="grafo">El grafo en las dos direcciones</h3>
+
+<p>El grafo social se consulta en los dos sentidos: el fan-out necesita los seguidores de quien publica, y la lectura necesita a quién sigue quien lee (para mezclar las cuentas famosas, 30.8). Si se guarda una sola dirección, una de las dos consultas tiene que recorrer todas las particiones. Por eso cada arista se guarda dos veces, una en cada tabla. Twitter guardaba el grafo en FlockDB, un servicio propio sobre MySQL que almacenaba cada arista en las dos direcciones. <span class="badge badge--doc">Documentado</span></p>
+
+<p>Una cuenta con 100 millones de seguidores es una partición con 100 millones de filas: se recorre por páginas con cursor, nunca entera. Con unos 24 bytes por arista y dirección, un grafo de 2&#8239;000 millones de aristas ocupa unos 96&#8239;GB, sin réplicas: entra en cualquier base distribuida. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>Seguir a alguien escribe dos filas en particiones distintas. Con una transacción entre particiones (DynamoDB tiene <code>TransactWriteItems</code>) las dos se escriben o ninguna, a cambio de pagar el doble por escritura. Sin ella, se escribe <code>following</code> y un evento en el log (el outbox del M07) genera la fila de <code>followers</code> unos segundos después: durante ese rato, los tweets nuevos de la cuenta seguida no te llegan por fan-out. Para un "seguir" alcanza con la segunda; para un pago, no.</p>
+</aside>
+
+<h2 id="fanout"><span class="sec-num">30.6</span>Fan-out en escritura o en lectura</h2>
+
+<p>Hay dos formas de armar la home timeline, y la elección es el <dfn data-term="fanout-escritura">fan-out en escritura o en lectura</dfn>:</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f302t f302d">
+<title id="f302t">Fan-out en escritura, en lectura e híbrido</title>
+<desc id="f302d">Tres columnas. En escritura: un tweet se copia a la timeline de cada seguidor al publicarse, y leer la timeline es una sola lectura. En lectura: el tweet se guarda una vez y cada lectura junta los tweets recientes de todas las cuentas seguidas. Híbrido: las cuentas comunes hacen fan-out en escritura; las cuentas con millones de seguidores no, y sus tweets se mezclan al leer.</desc>
+<defs><marker id="f302a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="20" y="10" width="230" height="310" rx="12"/>
+<text class="dg-group" x="34" y="34">En escritura</text>
+<text class="dg-tiny" x="34" y="300">publicar: N copias</text>
+<text class="dg-tiny" x="34" y="314">leer: 1 lectura</text>
+<rect class="dg-frame" x="270" y="10" width="230" height="310" rx="12"/>
+<text class="dg-group" x="284" y="34">En lectura</text>
+<text class="dg-tiny" x="284" y="300">publicar: 1 escritura</text>
+<text class="dg-tiny" x="284" y="314">leer: K lecturas y mezcla</text>
+<rect class="dg-frame" x="520" y="10" width="230" height="310" rx="12"/>
+<text class="dg-group" x="534" y="34">Híbrido</text>
+<text class="dg-tiny" x="534" y="300">comunes: copias; famosos: no</text>
+<text class="dg-tiny" x="534" y="314">leer: 1 lectura + famosos</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="80" y="50" width="110" height="36" rx="8"/>
+<text class="dg-small" x="135.0" y="73.0" text-anchor="middle">tweet</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="40" y="150" width="58" height="36" rx="8"/>
+<text class="dg-small" x="69.0" y="173.0" text-anchor="middle">TL 1</text>
+<path class="dg-edge" d="M135 88 L69 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="106" y="150" width="58" height="36" rx="8"/>
+<text class="dg-small" x="135.0" y="173.0" text-anchor="middle">TL 2</text>
+<path class="dg-edge" d="M135 88 L135 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="172" y="150" width="58" height="36" rx="8"/>
+<text class="dg-small" x="201.0" y="173.0" text-anchor="middle">TL 3</text>
+<path class="dg-edge" d="M135 88 L201 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="80" y="236" width="110" height="36" rx="8"/>
+<text class="dg-small" x="135.0" y="259.0" text-anchor="middle">lector</text>
+<path class="dg-edge" d="M135 234 L135 188" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="290" y="50" width="58" height="36" rx="8"/>
+<text class="dg-small" x="319.0" y="73.0" text-anchor="middle">@a</text>
+<path class="dg-edge" d="M319 88 L385 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="356" y="50" width="58" height="36" rx="8"/>
+<text class="dg-small" x="385.0" y="73.0" text-anchor="middle">@b</text>
+<path class="dg-edge" d="M385 88 L385 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="422" y="50" width="58" height="36" rx="8"/>
+<text class="dg-small" x="451.0" y="73.0" text-anchor="middle">@c</text>
+<path class="dg-edge" d="M451 88 L385 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="330" y="150" width="110" height="36" rx="8"/>
+<text class="dg-small" x="385.0" y="173.0" text-anchor="middle">mezclar</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="330" y="236" width="110" height="36" rx="8"/>
+<text class="dg-small" x="385.0" y="259.0" text-anchor="middle">lector</text>
+<path class="dg-edge" d="M385 234 L385 188" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="540" y="50" width="86" height="36" rx="8"/>
+<text class="dg-small" x="583.0" y="73.0" text-anchor="middle">común</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="644" y="50" width="86" height="36" rx="8"/>
+<text class="dg-small" x="687.0" y="73.0" text-anchor="middle">famoso</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="540" y="150" width="86" height="36" rx="8"/>
+<text class="dg-small" x="583.0" y="173.0" text-anchor="middle">TL</text>
+<path class="dg-edge" d="M583 88 L583 148" fill="none" marker-end="url(#f302a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="590" y="236" width="110" height="36" rx="8"/>
+<text class="dg-small" x="645.0" y="259.0" text-anchor="middle">lector</text>
+<path class="dg-edge" d="M620 234 L590 188" fill="none" marker-end="url(#f302a)"/>
+<path class="dg-feedback" d="M687 88 L687 150 L676 232"/>
+<text class="dg-tiny" x="692" y="132">al leer</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.4.</b> En escritura, publicar cuesta una copia por seguidor y leer cuesta una lectura. En lectura, al revés. El híbrido usa cada una donde es barata.</figcaption>
+</figure>
+
+<ul>
+  <li><b>En escritura (push):</b> al publicar, el id del tweet se agrega a una lista por seguidor. Twitter guardaba cada home timeline en un cluster de Redis, con como mucho 800 entradas por usuario y tres réplicas. <span class="badge badge--doc">Documentado</span> Leer es un <code>LRANGE</code> de una sola clave, más la hidratación de los ids con el contenido de los tweets desde un caché.</li>
+  <li><b>En lectura (pull):</b> el tweet se guarda una vez, en la lista de la cuenta que lo publicó. Leer la timeline es pedir los tweets recientes de cada cuenta seguida y mezclarlos: con 400 cuentas seguidas, 400 lecturas para una pantalla.</li>
+</ul>
+
+<p>Con 50 lecturas por escritura, el push gana por goleada para la mayoría de las cuentas: una cuenta con 200 seguidores paga 200 escrituras al publicar y ahorra 400 lecturas cada vez que cada uno de esos 200 abre la app. Twitter contaba que un tweet de una cuenta con 20&#8239;000 seguidores generaba 20&#8239;000 inserciones repartidas por el cluster de Redis. <span class="badge badge--doc">Documentado</span></p>
+
+<h3 id="timeline-redis">La timeline en Redis</h3>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f303t f303d">
+<title id="f303t">Una home timeline en Redis</title>
+<desc id="f303d">La timeline de un usuario es una lista de Redis con la clave tl seguida del id del usuario. Al publicar, el fan-out agrega el tweet nuevo a la cabeza con LPUSH y recorta la lista a 800 entradas con LTRIM, que descarta las más viejas. Cada entrada ocupa unos 20 bytes: 8 del id del tweet, 8 del id del autor y 4 de bits de metadatos, como si es un retweet o una respuesta. 800 entradas de 20 bytes son 16 KB por usuario.</desc>
+<defs><marker id="f303a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="150" y="24">clave <tspan style="font-family:var(--f-mono)">tl:beto</tspan>: una lista de Redis</text>
+<text class="dg-tiny" x="150" y="44">más nuevo</text>
+<text class="dg-tiny" x="690" y="44" text-anchor="end">más viejo</text>
+<rect class="dg-box dg-box--em" x="150" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="178.0" y="75" text-anchor="middle">id 1</text>
+<rect class="dg-box" x="210" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="238.0" y="75" text-anchor="middle">id 2</text>
+<rect class="dg-box" x="270" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="298.0" y="75" text-anchor="middle">id 3</text>
+<rect class="dg-box" x="330" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="358.0" y="75" text-anchor="middle">id 4</text>
+<rect class="dg-box" x="390" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="418.0" y="75" text-anchor="middle">id 5</text>
+<rect class="dg-box" x="450" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="478.0" y="75" text-anchor="middle">id 6</text>
+<text class="dg-label" x="538.0" y="78" text-anchor="middle">…</text>
+<rect class="dg-box" x="570" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="598.0" y="75" text-anchor="middle">id 799</text>
+<rect class="dg-box" x="630" y="52" width="56" height="36" rx="4"/>
+<text class="dg-tiny" x="658.0" y="75" text-anchor="middle">id 800</text>
+<path class="dg-edge" d="M40 70 H146" marker-end="url(#f303a)"/>
+<text class="dg-small" x="40" y="62">LPUSH</text>
+<text class="dg-tiny" x="40" y="104">al publicar</text>
+<path class="dg-edge" d="M692 70 H752" marker-end="url(#f303a)"/>
+<text class="dg-small" x="752" y="104" text-anchor="end">LTRIM 0 799</text>
+<text class="dg-tiny" x="752" y="120" text-anchor="end">descarta lo más viejo</text>
+<path class="dg-feedback" d="M150 90 L150 146"/>
+<path class="dg-feedback" d="M206 90 L600.0 146"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="150" y="148" width="177.0" height="34" rx="5"/>
+<text class="dg-small" x="240.0" y="170" text-anchor="middle">tweet_id</text>
+<text class="dg-tiny" x="240.0" y="200" text-anchor="middle">8 bytes: el id Snowflake</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="330.0" y="148" width="177.0" height="34" rx="5"/>
+<text class="dg-small" x="420.0" y="170" text-anchor="middle">author_id</text>
+<text class="dg-tiny" x="420.0" y="200" text-anchor="middle">8 bytes: filtrar y mezclar sin hidratar</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="510.0" y="148" width="87.0" height="34" rx="5"/>
+<text class="dg-small" x="555.0" y="170" text-anchor="middle">bits</text>
+<text class="dg-tiny" x="555.0" y="200" text-anchor="middle">4 bytes: retweet, respuesta…</text>
+<text class="dg-small" x="150" y="236">800 entradas × 20 bytes = 16&#8239;KB por usuario, más la sobrecarga de Redis</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.5.</b> Una timeline es una lista que crece por la cabeza y se recorta por la cola. Cada entrada guarda ids, no texto: el contenido se busca al leer.</figcaption>
+</figure>
+
+<p>La timeline guarda solo ids: el del tweet, el del autor y 4 bytes de bits con metadatos, unos 20 bytes por entrada. <span class="badge badge--doc">Documentado</span> Guardar el texto sería un error doble: un tweet está en millones de timelines, así que copiarlo multiplica la memoria, y editarlo o borrarlo obligaría a tocar todas las copias. Con el id del autor en la entrada, el servicio de timeline puede filtrar (cuentas silenciadas, retweets repetidos) sin hidratar nada.</p>
+
+<p>La cuenta de memoria: 800 entradas de 20 bytes son 16&#8239;KB por usuario. Si los 150 millones de usuarios de 2012 tuvieran la timeline llena, serían 2.4&#8239;TB por copia y 7.2&#8239;TB con tres réplicas. Twitter contaba que todo entraba en unos pocos terabytes de RAM <span class="badge badge--doc">Documentado</span>, porque muchas timelines no están llenas y solo se guardan las de usuarios activos. Una lista de Redis con entradas chicas se guarda compacta (como un <span class="no-autolink">listpack</span>), y <code>LPUSH</code> y <code>LTRIM</code> sobre la cabeza y la cola son baratas; un sorted set daría orden por puntaje, pero ocupa varias veces más por entrada.</p>
+
+<h3 id="reconstruccion">Usuarios inactivos y reconstrucción</h3>
+
+<p>Twitter solo guardaba en Redis las timelines de quienes habían entrado en los últimos 30 días. Si alguien vuelve después, o si su timeline se perdió, pasa por una <b>reconstrucción</b>: se consulta el grafo y se lee del disco. <span class="badge badge--doc">Documentado</span> En el mapa, la reconstrucción es fan-out en lectura una sola vez, con los posts de cada cuenta seguida sacados de Thunder <span class="badge badge--ref">Diseño de referencia</span> (<a href="#scenario=reconstruir">escenario "Reconstruir una timeline perdida"</a>):</p>
+
+<ol class="steps">
+  <li><span class="step-title">Pedir a quién sigue</span>Una lectura de <code>following</code>: 400 cuentas.</li>
+  <li><span class="step-title">Leer los tweets recientes de cada una</span>400 lecturas de <code>user_tweets</code>, en paralelo y por lotes, de unos 20 tweets cada una.</li>
+  <li><span class="step-title">Mezclar y cortar</span>Ordenar por id y quedarse con 800.</li>
+  <li><span class="step-title">Escribir la lista</span>Un <code>RPUSH</code> con las 800 entradas en un pipeline, con un lock corto para que dos dispositivos del mismo usuario no la reconstruyan a la vez (el single-flight del M04).</li>
+</ol>
+
+<p>Cuesta unos cientos de milisegundos y algunas lecturas de disco: aceptable para quien vuelve tras un mes. Lo peligroso es la reconstrucción en masa: si se pierde un shard entero de Redis, millones de usuarios necesitan reconstruirse a la vez, y esa tormenta golpea al almacén. Por eso las reconstrucciones van con un límite de concurrencia, y mientras tanto la primera página se arma en lectura (30.14).</p>
+
+<h2 id="publicar"><span class="sec-num">30.7</span>Publicar un tweet de punta a punta</h2>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 546" role="img" aria-labelledby="f304t f304d">
+<title id="f304t">Publicar un tweet de punta a punta</title>
+<desc id="f304d">La app manda POST /2/tweets con una idempotency key. El servicio de tweets genera un id Snowflake en el proceso, guarda el tweet en el almacén y agrega un evento al log antes de responder 201 a la app. Lo que sigue es asíncrono: un worker de fan-out consume el evento, pide los seguidores del autor al grafo por páginas y agrega el id a la timeline de cada seguidor activo en Redis, con LPUSH y LTRIM en un pipeline.</desc>
+<defs><marker id="f304-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f304-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f304-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f304-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="21.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App</text>
+<path class="dg-frame" d="M70.0 40 V536"/>
+<rect class="dg-box" x="126.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="175.0" y="29" text-anchor="middle" style="font-size:13.5px">Tweets</text>
+<path class="dg-frame" d="M175.0 40 V536"/>
+<rect class="dg-box" x="231.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Almacén</text>
+<path class="dg-frame" d="M280.0 40 V536"/>
+<rect class="dg-box" x="336.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Log</text>
+<path class="dg-frame" d="M385.0 40 V536"/>
+<rect class="dg-box" x="441.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Fan-out</text>
+<path class="dg-frame" d="M490.0 40 V536"/>
+<rect class="dg-box" x="546.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="595.0" y="29" text-anchor="middle" style="font-size:13.5px">Grafo</text>
+<path class="dg-frame" d="M595.0 40 V536"/>
+<rect class="dg-box" x="651.5" y="8" width="97.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Timelines</text>
+<path class="dg-frame" d="M700.0 40 V536"/>
+<path class="dg-edge" d="M73.0 72 L170.0 72" marker-end="url(#f304-a)"/>
+<rect x="70.30000000000001" y="55" width="104.39999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="122.5" y="66" text-anchor="middle">POST /2/tweets</text>
+<path class="dg-edge" d="M175.0 98 h40 v14 h-38" marker-end="url(#f304-a)"/>
+<text class="dg-tiny" x="221.0" y="109">id Snowflake (en el proceso)</text>
+<path class="dg-edge" d="M178.0 140 L275.0 140" marker-end="url(#f304-a)"/>
+<rect x="181.9" y="123" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">INSERT tweet</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 174 L180.0 174" marker-end="url(#f304-r)"/>
+<rect x="214.9" y="157" width="25.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="168" text-anchor="middle">ok</text>
+<path class="dg-edge" d="M178.0 208 L380.0 208" marker-end="url(#f304-a)"/>
+<rect x="237.7" y="191" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="202" text-anchor="middle">TweetCreado</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M172.0 242 L75.0 242" marker-end="url(#f304-r)"/>
+<rect x="90.1" y="225" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="122.5" y="236" text-anchor="middle">201 · id</text>
+<path d="M20 274 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="263" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="278" text-anchor="middle" style="fill:var(--fail)">desde aquí, asíncrono: la app ya tiene su respuesta</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M388.0 310 L485.0 310" marker-end="url(#f304-q)"/>
+<rect x="405.1" y="293" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="304" text-anchor="middle">consumir</text>
+<path class="dg-edge" d="M493.0 344 L590.0 344" marker-end="url(#f304-a)"/>
+<rect x="470.5" y="327" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="338" text-anchor="middle">seguidores, página 1</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M592.0 378 L495.0 378" marker-end="url(#f304-r)"/>
+<rect x="506.8" y="361" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="372" text-anchor="middle">5&#8239;000 ids</text>
+<path class="dg-edge" d="M493.0 412 L695.0 412" marker-end="url(#f304-a)"/>
+<rect x="529.6" y="395" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="406" text-anchor="middle">LPUSH + LTRIM ×200</text>
+<rect x="509.0" y="432" width="181" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="519.0" y="448">solo seguidores activos</text>
+<path class="dg-edge" d="M487.0 480 L390.0 480" marker-end="url(#f304-a)"/>
+<rect x="388.6" y="463" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="437.5" y="474" text-anchor="middle">commit offset</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.6.</b> La app recibe su respuesta cuando el tweet está guardado y su evento está en el log. El reparto a las timelines ocurre después, en segundo plano.</figcaption>
+</figure>
+
+<p>Twitter describía el camino así: el tweet entra por la API de escritura, un proceso de fan-out consulta al servicio del grafo los seguidores y agrega el id del tweet a sus timelines en Redis, y el índice de búsqueda lo ingiere aparte. <span class="badge badge--doc">Documentado</span> Paso a paso (<a href="#scenario=publicar">escenario "Ana publica una foto"</a>):</p>
+
+<ol class="steps">
+  <li><span class="step-title">Validar y limitar</span>Autenticar, aplicar el límite por cuenta y revisar el texto. Si la <code>Idempotency-Key</code> ya existe (un <code>SET NX</code> en Valkey con TTL de 24 horas), devolver el id que se dio la primera vez.</li>
+  <li><span class="step-title">Asignar el id</span>Snowflake dentro del mismo proceso: sin llamadas de red.</li>
+  <li><span class="step-title">Guardar</span>El tweet en <code>tweets</code> y su entrada en <code>user_tweets</code>, en paralelo. Si la segunda falla, el consumidor del log la repara: es una escritura idempotente.</li>
+  <li><span class="step-title">Publicar el evento</span><code>TweetCreado</code> en el log de eventos (Kafka, M07), con <code>acks=all</code> y el <code>author_id</code> como clave: los tweets de una cuenta quedan en orden en una partición.</li>
+  <li><span class="step-title">Responder 201</span>Entre 20 y 50&#8239;ms. El tweet ya no se puede perder; falta repartirlo.</li>
+  <li><span class="step-title">Repartir</span>Los workers de fan-out consumen el evento, piden los seguidores por páginas de 5&#8239;000, descartan a los inactivos y hacen <code>LPUSH</code> y <code>LTRIM</code> en un pipeline por shard de Redis. Al terminar, confirman el offset.</li>
+  <li><span class="step-title">Los demás consumidores</span>Búsqueda, tendencias, notificaciones, contadores y las señales de For You leen el mismo evento, cada uno a su ritmo.</li>
+</ol>
+
+<h3 id="publicar-cola">La cola del fan-out</h3>
+
+<ul>
+  <li><b>Trabajos de tamaño muy desigual.</b> Repartir el tweet de una cuenta con 200 seguidores es una tarea; el de una con 900&#8239;000 son 180 tareas de 5&#8239;000, que se reparten entre muchos workers. Las tareas chicas van por una cola de mayor prioridad: un tweet de una cuenta con 200 seguidores no debería esperar detrás del de una con 900&#8239;000.</li>
+  <li><b>Reintentos sin duplicados.</b> Si un worker muere a mitad de una página, otro la repite y algunas timelines reciben el mismo id dos veces: <code>LPUSH</code> no es idempotente. Como la lista está ordenada, el servicio de timeline descarta los repetidos al leer; es más barato que coordinar cada inserción.</li>
+  <li><b>Backpressure.</b> Si Redis se pone lento, los workers bajan su ritmo y el lag del consumidor crece. Publicar sigue funcionando: lo que se atrasa es la llegada a las timelines. El lag es la métrica que se vigila (M11).</li>
+  <li><b>Retweets.</b> Un retweet se reparte a los seguidores de quien lo retuitea. Si sigues a los dos, el servicio de timeline muestra el tweet una sola vez, gracias a los bits de metadatos de cada entrada.</li>
+  <li><b>Borrados.</b> No se persiguen las copias en millones de listas: el tweet se marca como borrado y la hidratación lo descarta. Las copias desaparecen solas cuando <code>LTRIM</code> las empuja fuera.</li>
+</ul>
+
+<p class="small">La cola, los reintentos y los borrados de esta lista son <span class="badge badge--ref">Diseño de referencia</span>.</p>
+
+<h3 id="lectura-propia">Ver tu propio tweet al instante</h3>
+
+<p>Si el fan-out se atrasa, nadie lo nota, salvo el autor: publicar y no ver tu tweet en tu propia timeline parece una falla. Es la garantía <dfn data-term="read-your-writes">read-your-writes</dfn> del M06, y se resuelve barato: el servicio de tweets agrega el id a la timeline del propio autor antes de responder, y la app lo muestra de inmediato. Lo mismo no se puede hacer para los demás, y aparece el efecto inverso: Twitter contaba que, cuando el fan-out de una cuenta famosa tardaba minutos, los usuarios veían respuestas a un tweet que todavía no les había llegado. <span class="badge badge--doc">Documentado</span> La respuesta lleva el id del tweet original, así que la app puede pedirlo y mostrarlo como contexto.</p>
+
+<h2 id="hibrido"><span class="sec-num">30.8</span>El timeline híbrido para las cuentas famosas</h2>
+
+<p>El fan-out en escritura se rompe con las cuentas que tienen decenas de millones de seguidores. En 2012, Lady Gaga tenía 31 millones de seguidores, y Katy Perry y Justin Bieber, 28 millones cada uno; un tweet de esas cuentas podía tardar hasta 5 minutos en llegar a todas las timelines. <span class="badge badge--doc">Documentado</span> Son 31 millones de escrituras en Redis para un solo tweet: repartidas en 300 segundos, más de 100&#8239;000 por segundo, y mientras tanto los seguidores ven respuestas a un tweet que todavía no les llegó.</p>
+
+<p>La solución es híbrida: las cuentas comunes hacen fan-out en escritura; las cuentas con más de un umbral de seguidores no, y sus tweets se buscan y se mezclan al leer. Twitter lo describía como dejar de hacer fan-out para los usuarios de mucho alcance y mezclar su timeline al momento de leer. <span class="badge badge--doc">Documentado</span> Un usuario sigue en promedio a pocas cuentas famosas, así que leer su timeline es una lectura de su lista más unas pocas lecturas de las listas de esas cuentas, que además son las más cacheadas del sistema (<a href="#scenario=famosa">escenario "Publica una cuenta famosa"</a>).</p>
+
+<pre data-lang="python"><code>UMBRAL = 1_000_000   # seguidores; diseño de referencia
+
+def al_publicar(tweet):
+    autor = tweet.autor
+    guardar_en_lista_del_autor(tweet)
+    if seguidores(autor) &lt; UMBRAL:
+        for s in seguidores_activos(autor):        # en una cola, por lotes
+            redis.lpush(f'tl:{s}', tweet.id)
+            redis.ltrim(f'tl:{s}', 0, 799)
+
+def leer_timeline(usuario, n=50):
+    ids = redis.lrange(f'tl:{usuario}', 0, n - 1)
+    for famoso in famosos_que_sigue(usuario):      # en general, pocos
+        ids += tweets_recientes(famoso, n)        # cacheados: los leen millones
+    return hidratar(sorted(set(ids), reverse=True)[:n])  # ordenar por id es ordenar por tiempo</code></pre>
+
+<p>La calculadora compara las tres formas con los tweets y las lecturas por segundo que publicó Twitter. Con los valores de partida, que el 0.2&#8239;% de los tweets venga de cuentas con 5 millones de seguidores alcanza para que esas cuentas generen casi el 98&#8239;% de las escrituras del fan-out en escritura: unos 58 millones de los 59 millones por segundo. El híbrido se queda con 1.16 millones de escrituras y 1.8 millones de lecturas por segundo, contra 120 millones de lecturas si todo se armara al leer. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<div data-calc="fanout"></div>
+
+<h3 id="hibrido-umbral">Dónde poner el umbral</h3>
+
+<p>Lo curioso es que, contando operaciones, el fan-out en lectura de una cuenta famosa no es más barato. Si una cuenta con 30 millones de seguidores publica 10 tweets por día y cada seguidor abre la timeline 20 veces, el push cuesta 300 millones de escrituras por día y el pull, 600 millones de lecturas extra. Lo que cambia es la forma:</p>
+
+<ul>
+  <li><b>El push llega en ráfaga.</b> 30 millones de escrituras que tienen que terminar en segundos para cumplir el objetivo de 5&#8239;s, compitiendo con el fan-out de todas las demás cuentas.</li>
+  <li><b>El pull se reparte en el día y cae sobre una sola lista,</b> que cada servidor de timeline puede guardar en su propia memoria durante unos segundos: millones de lecturas que casi no salen del proceso.</li>
+</ul>
+
+<p>Así que el umbral sale del presupuesto de la ráfaga. Si cada tweet puede usar como mucho 200&#8239;000 escrituras por segundo del cluster y tiene que llegar a todos en 5 segundos, la cuenta más grande que entra es de 1 millón de seguidores. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>El umbral mueve costo entre escritura y lectura. Bajarlo ahorra escrituras pero hace más cara cada lectura de quien sigue a muchas cuentas medianas; subirlo hace que los tweets de cuentas grandes tarden minutos en llegar. Un detalle más: el umbral se decide por cuenta, no por tweet, y una cuenta que lo cruza cambia de modo. Sus tweets ya repartidos quedan en las timelines; los nuevos se mezclan al leer, sin hueco ni duplicados porque todo se ordena y deduplica por id.</p>
+</aside>
+
+<h2 id="leer"><span class="sec-num">30.9</span>Leer la timeline</h2>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 546" role="img" aria-labelledby="f305t f305d">
+<title id="f305t">Leer la home timeline</title>
+<desc id="f305d">La app pide la timeline. El servicio de timeline lee los 50 ids más nuevos de la lista del usuario en Redis y, en paralelo, las listas de las tres cuentas famosas que sigue. Mezcla por id, corta en 50 y pide el contenido de esos tweets al caché en una sola llamada múltiple; los dos que faltan los lee del almacén. En paralelo pide los contadores, y responde con los tweets y un cursor.</desc>
+<defs><marker id="f305-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f305-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f305-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f305-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="11.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App</text>
+<path class="dg-frame" d="M70.0 40 V536"/>
+<rect class="dg-box" x="137.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="196.0" y="29" text-anchor="middle" style="font-size:13.5px">Timeline</text>
+<path class="dg-frame" d="M196.0 40 V536"/>
+<rect class="dg-box" x="263.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="322.0" y="29" text-anchor="middle" style="font-size:13.5px">Redis</text>
+<path class="dg-frame" d="M322.0 40 V536"/>
+<rect class="dg-box" x="389.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="448.0" y="29" text-anchor="middle" style="font-size:13.5px">Caché</text>
+<path class="dg-frame" d="M448.0 40 V536"/>
+<rect class="dg-box" x="515.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="574.0" y="29" text-anchor="middle" style="font-size:13.5px">Almacén</text>
+<path class="dg-frame" d="M574.0 40 V536"/>
+<rect class="dg-box" x="641.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Contadores</text>
+<path class="dg-frame" d="M700.0 40 V536"/>
+<path class="dg-edge" d="M73.0 72 L191.0 72" marker-end="url(#f305-a)"/>
+<rect x="70.9" y="55" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="66" text-anchor="middle">GET timeline (50)</text>
+<path class="dg-edge" d="M199.0 106 L317.0 106" marker-end="url(#f305-a)"/>
+<rect x="190.3" y="89" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="100" text-anchor="middle">LRANGE tl:beto 0 49</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M319.0 140 L201.0 140" marker-end="url(#f305-r)"/>
+<rect x="233.2" y="123" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="134" text-anchor="middle">50 ids</text>
+<path class="dg-edge" d="M199.0 174 L317.0 174" marker-end="url(#f305-a)"/>
+<rect x="190.3" y="157" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="168" text-anchor="middle">listas de 3 famosos</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M319.0 208 L201.0 208" marker-end="url(#f305-r)"/>
+<rect x="220.0" y="191" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="202" text-anchor="middle">3 × 50 ids</text>
+<path class="dg-edge" d="M196.0 234 h40 v14 h-38" marker-end="url(#f305-a)"/>
+<text class="dg-tiny" x="242.0" y="245">mezclar por id y cortar en 50</text>
+<path class="dg-edge" d="M199.0 276 L443.0 276" marker-end="url(#f305-a)"/>
+<rect x="256.6" y="259" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="322.0" y="270" text-anchor="middle">multiget 50 tweets</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M445.0 310 L201.0 310" marker-end="url(#f305-r)"/>
+<rect x="279.7" y="293" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="322.0" y="304" text-anchor="middle">48 aciertos</text>
+<path class="dg-edge" d="M199.0 344 L569.0 344" marker-end="url(#f305-a)"/>
+<rect x="346.0" y="327" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">multiget 2</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M571.0 378 L201.0 378" marker-end="url(#f305-r)"/>
+<rect x="352.6" y="361" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">2 tweets</text>
+<path class="dg-edge" d="M199.0 412 L695.0 412" marker-end="url(#f305-a)"/>
+<rect x="379.3" y="395" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="406" text-anchor="middle">multiget contadores</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 446 L201.0 446" marker-end="url(#f305-r)"/>
+<rect x="389.2" y="429" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="440" text-anchor="middle">likes y retweets</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M193.0 480 L75.0 480" marker-end="url(#f305-r)"/>
+<rect x="34.60000000000001" y="463" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="474" text-anchor="middle">200 · 50 tweets + next_token</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.7.</b> Una lectura toca una lista propia, unas pocas listas de cuentas famosas y una llamada múltiple al caché de tweets. Casi nada llega al almacén.</figcaption>
+</figure>
+
+<p>El servicio de timeline busca en qué máquina de Redis está la lista del usuario, la lee e "hidrata" los tweets: trae su texto con un multiget al almacén de tweets. <span class="badge badge--doc">Documentado</span> En el mapa, con las cuentas famosas mezcladas al leer (<a href="#scenario=leer">escenario "Siguiendo: la cronológica"</a>):</p>
+
+<ol class="steps">
+  <li><span class="step-title">Leer la lista propia</span><code>LRANGE tl:beto 0 49</code>: 50 ids.</li>
+  <li><span class="step-title">Leer las cuentas famosas</span>En paralelo, las listas de las cuentas sobre el umbral que sigue Beto. A quién sigue se cachea por usuario.</li>
+  <li><span class="step-title">Mezclar y filtrar</span>Ordenar por id, quitar repetidos, cuentas silenciadas o bloqueadas y retweets que ya aparecen, y cortar en 50.</li>
+  <li><span class="step-title">Hidratar</span>Un multiget de los 50 tweets al caché; los que faltan, al almacén. Los borrados se descartan aquí.</li>
+  <li><span class="step-title">Completar</span>En paralelo, los autores (también cacheados) y los contadores de likes y retweets.</li>
+  <li><span class="step-title">Responder</span>Los tweets, los autores en <code>includes</code> y el cursor.</li>
+</ol>
+
+<p>El presupuesto de latencia de esa lectura, del lado del servidor <span class="badge badge--ref">Diseño de referencia</span>:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Paso</th><th class="r">p50</th><th class="r">p99</th></tr></thead>
+    <tbody>
+      <tr><td>Entrada: balanceador, autenticación y límites</td><td class="r">3&#8239;ms</td><td class="r">10&#8239;ms</td></tr>
+      <tr><td>Lista propia y listas de famosos, en paralelo</td><td class="r">1&#8239;ms</td><td class="r">5&#8239;ms</td></tr>
+      <tr><td>Mezclar, filtrar y cortar</td><td class="r">menos de 1&#8239;ms</td><td class="r">1&#8239;ms</td></tr>
+      <tr><td>Multiget de 50 tweets al caché</td><td class="r">2&#8239;ms</td><td class="r">15&#8239;ms</td></tr>
+      <tr><td>Faltantes al almacén (2 de 50)</td><td class="r">5&#8239;ms</td><td class="r">30&#8239;ms</td></tr>
+      <tr><td>Autores y contadores, en paralelo con lo anterior</td><td class="r">2&#8239;ms</td><td class="r">15&#8239;ms</td></tr>
+      <tr><td>Serializar el JSON</td><td class="r">2&#8239;ms</td><td class="r">5&#8239;ms</td></tr>
+      <tr><td><b>Total</b></td><td class="r"><b>unos 15&#8239;ms</b></td><td class="r"><b>unos 65&#8239;ms</b></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="hidratar">Hidratar sin el problema N+1</h3>
+
+<p>Pedir los 50 tweets de a uno serían 50 viajes de red: el problema N+1 del M02. El multiget agrupa los ids por shard del caché y hace una llamada por shard, en paralelo. Con 20 shards, una lectura toca casi todos, y ahí aparece la <dfn data-term="tail-latency">latencia de cola</dfn> del M00: la lectura tarda lo que tarde el shard más lento, así que el p99 de la timeline depende del p99.9 de cada shard. Tres técnicas lo contienen:</p>
+
+<ul>
+  <li><b>Respuestas parciales.</b> Si un shard no contesta en 20&#8239;ms, se responde con 48 tweets en lugar de 50. Nadie cuenta los tweets de una pantalla.</li>
+  <li><b>Pedidos duplicados con retraso.</b> Si un shard tarda más que su p95, se repite el pedido a su réplica y se usa la primera respuesta.</li>
+  <li><b>Un caché local para lo más caliente.</b> El tweet de una cuenta famosa lo leen millones: es una <dfn data-term="hot-key">clave caliente</dfn> (M04). Cada servidor de timeline lo guarda en su propia memoria durante unos segundos, y el shard que lo tiene deja de ser un cuello de botella.</li>
+</ul>
+
+<h2 id="ranking"><span class="sec-num">30.10</span>For You: de cronológico a ranking</h2>
+
+<p>La pestaña Para ti no es la lista cronológica: es un pipeline de recomendación que Twitter publicó como código abierto en 2023. <span class="badge badge--doc">Documentado</span> El fan-out de las secciones anteriores sigue existiendo: la timeline cronológica es una de sus fuentes y el plan B cuando el ranking falla (<a href="#scenario=for-you">escenario "Para ti"</a>).</p>
+
+<ol class="steps">
+  <li><span class="step-title">Buscar candidatos</span>De un universo de cientos de millones de tweets salen unos 1&#8239;500 por request: en promedio, la mitad de cuentas que sigues y la mitad de cuentas que no sigues. Los de cuentas que sigues salen del índice de búsqueda (30.13), ordenados por la probabilidad de que interactúes con cada autor; los otros, de lo que hicieron las personas que sigues y de embeddings que ubican cuentas y tweets en comunidades de intereses. <span class="badge badge--doc">Documentado</span></li>
+  <li><span class="step-title">Rankear</span>Una red neuronal de unos 48 millones de parámetros, entrenada continuamente con las interacciones, predice la probabilidad de cada acción (like, respuesta, retweet) y las combina en un puntaje. <span class="badge badge--doc">Documentado</span></li>
+  <li><span class="step-title">Filtrar y mezclar</span>Saca cuentas bloqueadas o silenciadas y contenido con mucha reacción negativa, limita la cantidad de tweets de un mismo autor, equilibra lo que sigues con lo que no, y mezcla anuncios. <span class="badge badge--doc">Documentado</span></li>
+</ol>
+
+<p>El pipeline corre unas 5 mil millones de veces por día y tarda en promedio menos de 1.5 segundos; cada ejecución consume unos 220 segundos de CPU repartidos entre muchas máquinas, casi 150 veces la latencia que percibe quien abre la app. <span class="badge badge--doc">Documentado</span> En promedio son 57&#8239;870 requests por segundo, y con 1&#8239;500 candidatos cada una, casi 87 millones de puntajes por segundo.</p>
+
+<h3 id="ranking-servir">Servirlo sin que la timeline dependa de él</h3>
+
+<ul>
+  <li><b>Fuentes en paralelo con deadline.</b> Cada fuente de candidatos tiene unos cientos de milisegundos; la que no llega se omite (los deadlines del M02). Mejor 1&#8239;200 candidatos a tiempo que 1&#8239;500 tarde.</li>
+  <li><b>Dos etapas de ranking.</b> Un modelo liviano poda los candidatos y el pesado puntúa los que quedan: el costo del modelo grande se paga sobre cientos, no sobre miles.</li>
+  <li><b>Guardar el resultado unos minutos.</b> Tirar hacia abajo para refrescar no debería repetir los 220 segundos de CPU: se sirve lo ya rankeado y se completa con lo nuevo.</li>
+  <li><b>Plan B cronológico.</b> Si el ranking no responde, Para ti muestra la timeline cronológica, que es barata y siempre está: la degradación elegante del M08.</li>
+</ul>
+
+<p class="small">Las cuatro prácticas de esta lista son <span class="badge badge--ref">Diseño de referencia</span>.</p>
+
+<h2 id="contadores"><span class="sec-num">30.11</span>Contadores con una clave caliente</h2>
+
+<p>Un tweet viral recibe decenas de miles de likes por segundo, todos sobre el mismo contador: la clave caliente del M04. Un <code>UPDATE ... SET likes = likes + 1</code> sobre una fila serializa todas esas escrituras en una partición, y un <code>SELECT ... FOR UPDATE</code> antes de cada incremento lo empeora (<a href="#scenario=like-viral">escenario "Un like a un post viral"</a>).</p>
+
+<ul>
+  <li><b>Guardar el like y contar aparte.</b> La fila <code>(user_id, tweet_id)</code> es la verdad, y su clave primaria evita el like doble; el número que se muestra es un contador derivado que puede atrasarse unos segundos.</li>
+  <li><b>Sumar en memoria y volcar.</b> Cada servidor acumula los incrementos de cada tweet durante un segundo y escribe uno solo. Con 200 servidores, 50&#8239;000 likes por segundo se vuelven 200 escrituras por segundo.</li>
+  <li><b>Partir el contador.</b> 64 subcontadores por tweet caliente, en shards distintos; cada incremento va a uno al azar y la lectura suma los 64, cacheada un segundo. Es un <dfn data-term="crdt">CRDT</dfn> de tipo G-Counter si cada réplica escribe el suyo.</li>
+</ul>
+
+<pre data-lang="python"><code>from collections import Counter
+
+pendientes = Counter()                    # en la memoria de cada servidor
+
+def like(usuario, tweet):
+    if likes.insertar_si_no_existe(usuario, tweet):   # PK (user_id, tweet_id): el doble clic no suma dos
+        pendientes[tweet] += 1
+
+def volcar():                             # cada segundo
+    global pendientes
+    lote, pendientes = pendientes, Counter()   # cambiar el contador, no recorrerlo mientras crece
+    with valkey.pipeline() as p:
+        for tweet, n in lote.items():
+            p.hincrby(f'cnt:{tweet}', 'likes', n)
+        p.execute()</code></pre>
+
+<p>Si un servidor muere con su lote sin volcar, el contador pierde como mucho un segundo de likes de ese servidor. Las filas de <code>likes</code> no se pierden, así que un proceso de conciliación recuenta cada tanto los tweets con actividad reciente y corrige el contador. Quitar un like es borrar la fila y restar uno, por el mismo camino.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Técnica, con 50&#8239;000 likes por segundo</th><th class="r">Escrituras por segundo sobre una clave</th><th>Exactitud</th><th>Atraso</th></tr></thead>
+    <tbody>
+      <tr><td>Un <code>UPDATE</code> por like</td><td class="r">50&#8239;000</td><td>Exacto, si la fila aguanta</td><td>Ninguno; en la práctica, colas y timeouts</td></tr>
+      <tr><td>Sumar en memoria y volcar (200 servidores)</td><td class="r">200</td><td>Exacto salvo si un servidor muere</td><td>Un segundo</td></tr>
+      <tr><td>64 subcontadores</td><td class="r">unas 780 por subclave</td><td>Exacto</td><td>Ninguno al escribir; un segundo al leer</td></tr>
+      <tr><td>Las dos juntas</td><td class="r">unas 3 por subclave</td><td>Exacto salvo si un servidor muere</td><td>Un segundo</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="small">Las técnicas de esta sección son <span class="badge badge--ref">Diseño de referencia</span>: Twitter no publicó el diseño actual de sus contadores.</p>
+
+<h2 id="trending"><span class="sec-num">30.12</span>Trending topics con streaming</h2>
+
+<p>Lo que es tendencia no es lo más mencionado sino lo que crece: Twitter define sus tendencias como temas populares ahora, no los que llevan tiempo siendo populares. <span class="badge badge--doc">Documentado</span> El cálculo es un problema de streaming: contar menciones por ventana de tiempo y compararlas con su línea base (<a href="#scenario=tendencia">escenario "#Final se vuelve tendencia"</a>).</p>
+
+<ol class="steps">
+  <li><span class="step-title">Extraer</span>Del firehose de tweets salen hashtags y frases, normalizadas (minúsculas, sin acentos, sin variantes triviales). Las cuentas detectadas como spam no cuentan.</li>
+  <li><span class="step-title">Contar con memoria acotada</span>Hay millones de frases distintas por hora. Un <dfn data-term="count-min-sketch">count-min sketch</dfn> cuenta todas con error acotado en memoria fija, y un heap guarda las mil más frecuentes de la ventana.</li>
+  <li><span class="step-title">Comparar con la línea base</span>El puntaje es cuánto supera la ventana actual (cinco minutos) a lo esperado para esa frase a esa hora. "Buenos días" se menciona muchísimo y nunca es tendencia.</li>
+  <li><span class="step-title">Publicar por región</span>Un ranking por país y por ciudad, recalculado cada minuto y servido desde caché.</li>
+</ol>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 268" role="img" aria-labelledby="f306t f306d">
+<title id="f306t">Un count-min sketch</title>
+<desc id="f306d">Una matriz de contadores con cinco filas, cada una con su propia función de hash. Cada mención de #Final suma uno en una celda de cada fila, la que indica su hash. Para estimar cuántas veces apareció, se leen las cinco celdas y se toma el mínimo: 398. Las otras celdas son más grandes porque comparten la celda con otras frases que chocaron en esa fila. El ancho de la matriz es e dividido por épsilon y la profundidad, el logaritmo de uno sobre delta.</desc>
+<defs><marker id="f306a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="16" y="112" width="100" height="40" rx="9"/>
+<text class="dg-label" x="66.0" y="129.0" text-anchor="middle" style="font-size:13px">#Final</text>
+<text class="dg-tiny" x="66.0" y="145.0" text-anchor="middle">una mención</text>
+<text class="dg-small" x="202" y="55" text-anchor="end">h1</text>
+<path class="dg-edge" d="M118 132 L178 50" marker-end="url(#f306a)"/>
+<rect class="dg-box" x="214" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="231.0" y="53" text-anchor="middle">17</text>
+<rect class="dg-box" x="250" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="267.0" y="53" text-anchor="middle">3</text>
+<rect class="dg-box" x="286" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="303.0" y="53" text-anchor="middle">25</text>
+<rect class="dg-box dg-box--em" x="322" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="339.0" y="53" text-anchor="middle">412</text>
+<rect class="dg-box" x="358" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="375.0" y="53" text-anchor="middle">44</text>
+<rect class="dg-box" x="394" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="411.0" y="53" text-anchor="middle">12</text>
+<rect class="dg-box" x="430" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="447.0" y="53" text-anchor="middle">6</text>
+<rect class="dg-box" x="466" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="483.0" y="53" text-anchor="middle">31</text>
+<rect class="dg-box" x="502" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="519.0" y="53" text-anchor="middle">2</text>
+<rect class="dg-box" x="538" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="555.0" y="53" text-anchor="middle">15</text>
+<rect class="dg-box" x="574" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="591.0" y="53" text-anchor="middle">22</text>
+<rect class="dg-box" x="610" y="34" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="627.0" y="53" text-anchor="middle">8</text>
+<text class="dg-tiny" x="650" y="53">…</text>
+<text class="dg-small" x="202" y="97" text-anchor="end">h2</text>
+<path class="dg-edge" d="M118 132 L178 92" marker-end="url(#f306a)"/>
+<rect class="dg-box" x="214" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="231.0" y="95" text-anchor="middle">12</text>
+<rect class="dg-box" x="250" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="267.0" y="95" text-anchor="middle">6</text>
+<rect class="dg-box" x="286" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="303.0" y="95" text-anchor="middle">31</text>
+<rect class="dg-box" x="322" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="339.0" y="95" text-anchor="middle">2</text>
+<rect class="dg-box" x="358" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="375.0" y="95" text-anchor="middle">15</text>
+<rect class="dg-box" x="394" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="411.0" y="95" text-anchor="middle">22</text>
+<rect class="dg-box" x="430" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="447.0" y="95" text-anchor="middle">8</text>
+<rect class="dg-box" x="466" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="483.0" y="95" text-anchor="middle">17</text>
+<rect class="dg-box dg-box--em" x="502" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="519.0" y="95" text-anchor="middle">398</text>
+<rect class="dg-box" x="538" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="555.0" y="95" text-anchor="middle">25</text>
+<rect class="dg-box" x="574" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="591.0" y="95" text-anchor="middle">9</text>
+<rect class="dg-box" x="610" y="76" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="627.0" y="95" text-anchor="middle">44</text>
+<text class="dg-tiny" x="650" y="95">…</text>
+<text class="dg-small" x="202" y="139" text-anchor="end">h3</text>
+<path class="dg-edge" d="M118 132 L178 134" marker-end="url(#f306a)"/>
+<rect class="dg-box" x="214" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="231.0" y="137" text-anchor="middle">22</text>
+<rect class="dg-box dg-box--em" x="250" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="267.0" y="137" text-anchor="middle">405</text>
+<rect class="dg-box" x="286" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="303.0" y="137" text-anchor="middle">17</text>
+<rect class="dg-box" x="322" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="339.0" y="137" text-anchor="middle">3</text>
+<rect class="dg-box" x="358" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="375.0" y="137" text-anchor="middle">25</text>
+<rect class="dg-box" x="394" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="411.0" y="137" text-anchor="middle">9</text>
+<rect class="dg-box" x="430" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="447.0" y="137" text-anchor="middle">44</text>
+<rect class="dg-box" x="466" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="483.0" y="137" text-anchor="middle">12</text>
+<rect class="dg-box" x="502" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="519.0" y="137" text-anchor="middle">6</text>
+<rect class="dg-box" x="538" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="555.0" y="137" text-anchor="middle">31</text>
+<rect class="dg-box" x="574" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="591.0" y="137" text-anchor="middle">2</text>
+<rect class="dg-box" x="610" y="118" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="627.0" y="137" text-anchor="middle">15</text>
+<text class="dg-tiny" x="650" y="137">…</text>
+<text class="dg-small" x="202" y="181" text-anchor="end">h4</text>
+<path class="dg-edge" d="M118 132 L178 176" marker-end="url(#f306a)"/>
+<rect class="dg-box" x="214" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="231.0" y="179" text-anchor="middle">9</text>
+<rect class="dg-box" x="250" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="267.0" y="179" text-anchor="middle">44</text>
+<rect class="dg-box" x="286" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="303.0" y="179" text-anchor="middle">12</text>
+<rect class="dg-box" x="322" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="339.0" y="179" text-anchor="middle">6</text>
+<rect class="dg-box" x="358" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="375.0" y="179" text-anchor="middle">31</text>
+<rect class="dg-box" x="394" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="411.0" y="179" text-anchor="middle">2</text>
+<rect class="dg-box" x="430" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="447.0" y="179" text-anchor="middle">15</text>
+<rect class="dg-box" x="466" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="483.0" y="179" text-anchor="middle">22</text>
+<rect class="dg-box" x="502" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="519.0" y="179" text-anchor="middle">8</text>
+<rect class="dg-box" x="538" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="555.0" y="179" text-anchor="middle">17</text>
+<rect class="dg-box dg-box--em" x="574" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="591.0" y="179" text-anchor="middle">431</text>
+<rect class="dg-box" x="610" y="160" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="627.0" y="179" text-anchor="middle">25</text>
+<text class="dg-tiny" x="650" y="179">…</text>
+<text class="dg-small" x="202" y="223" text-anchor="end">h5</text>
+<path class="dg-edge" d="M118 132 L178 218" marker-end="url(#f306a)"/>
+<rect class="dg-box" x="214" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="231.0" y="221" text-anchor="middle">2</text>
+<rect class="dg-box" x="250" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="267.0" y="221" text-anchor="middle">15</text>
+<rect class="dg-box" x="286" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="303.0" y="221" text-anchor="middle">22</text>
+<rect class="dg-box" x="322" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="339.0" y="221" text-anchor="middle">8</text>
+<rect class="dg-box" x="358" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="375.0" y="221" text-anchor="middle">17</text>
+<rect class="dg-box dg-box--em" x="394" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="411.0" y="221" text-anchor="middle">401</text>
+<rect class="dg-box" x="430" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="447.0" y="221" text-anchor="middle">25</text>
+<rect class="dg-box" x="466" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="483.0" y="221" text-anchor="middle">9</text>
+<rect class="dg-box" x="502" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="519.0" y="221" text-anchor="middle">44</text>
+<rect class="dg-box" x="538" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="555.0" y="221" text-anchor="middle">12</text>
+<rect class="dg-box" x="574" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="591.0" y="221" text-anchor="middle">6</text>
+<rect class="dg-box" x="610" y="202" width="34" height="30" rx="3"/>
+<text class="dg-tiny" x="627.0" y="221" text-anchor="middle">31</text>
+<text class="dg-tiny" x="650" y="221">…</text>
+<text class="dg-label" x="680" y="120" text-anchor="middle">mínimo</text>
+<text class="dg-big" x="680" y="150" text-anchor="middle">398</text>
+<text class="dg-tiny" x="680" y="170" text-anchor="middle">nunca cuenta de menos</text>
+<text class="dg-small" x="214" y="258">ancho ⌈e / ε⌉ columnas, profundidad ⌈ln(1 / δ)⌉ filas; las celdas grandes compartieron hash</text>
+<text class="dg-tiny" x="214" y="24">cada fila: su propia función de hash</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.8.</b> Cada mención suma en una celda por fila. Las celdas pueden compartirse con otras frases, así que cada una cuenta de más; el mínimo es la estimación con menos error.</figcaption>
+</figure>
+
+<pre data-lang="python"><code>import math, mmh3                        # mmh3: MurmurHash3
+
+class CountMin:
+    def __init__(self, eps=0.001, delta=0.01):
+        self.w = math.ceil(math.e / eps)         # 2&#8239;719 columnas
+        self.d = math.ceil(math.log(1 / delta))  # 5 filas
+        self.t = [[0] * self.w for _ in range(self.d)]
+
+    def sumar(self, frase, n=1):
+        for i in range(self.d):                  # una función de hash por fila (semilla i)
+            self.t[i][mmh3.hash(frase, i) % self.w] += n
+
+    def estimar(self, frase):
+        return min(self.t[i][mmh3.hash(frase, i) % self.w] for i in range(self.d))
+
+def puntaje(actual, esperado):
+    # cuántas desviaciones por encima de lo esperado, como si las menciones fueran de Poisson
+    return (actual - esperado) / math.sqrt(esperado + 1)</code></pre>
+
+<p>El dimensionamiento del sketch: con un error de ε = 0.001 del total y una probabilidad de fallar δ = 0.01, el ancho es ⌈e / ε⌉ = 2&#8239;719 y la profundidad ⌈ln(1 / δ)⌉ = 5. Son 13&#8239;595 contadores de 4 bytes, 54&#8239;KB, para cualquier cantidad de frases. Si en una ventana hay 10 millones de menciones, cada conteo se pasa como mucho en 10&#8239;000, con 99&#8239;% de probabilidad, y nunca cuenta de menos. Con cinco ventanas de un minuto por región y 500 regiones, todo ocupa 135&#8239;MB. Twitter construyó Storm y después Heron, sus motores de procesamiento de streams, para cálculos como este. <span class="badge badge--doc">Documentado</span></p>
+
+<h2 id="busqueda"><span class="sec-num">30.13</span>Búsqueda en tiempo real</h2>
+
+<p>Buscar en tweets exige un <dfn data-term="indice-invertido">índice invertido</dfn>: para cada término, la lista de tweets que lo contienen. Lo particular de Twitter es la frescura: un tweet tiene que ser buscable en segundos, cuando todavía importa. Earlybird, el motor de búsqueda de Twitter sobre Lucene, servía más de 2&#8239;000 millones de consultas por día con una latencia promedio de 50&#8239;ms, y hacía buscable un tweet unos 10 segundos después de publicarse. En 2020 bajó ese tiempo a un segundo. <span class="badge badge--doc">Documentado</span></p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 316" role="img" aria-labelledby="f307t f307d">
+<title id="f307t">Búsqueda en tiempo real</title>
+<desc id="f307d">Los tweets llegan desde el log a la ingesta, que los tokeniza y los manda a la partición que corresponde según su id. Cada partición tiene segmentos de unos 8.4 millones de tweets: el más nuevo está en memoria y recibe escrituras de un solo hilo; los anteriores están llenos y solo se leen. Una consulta llega a Blender, que la reparte a todas las particiones, junta los resultados y los ordena.</desc>
+<defs><marker id="f307a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="10" y="128" width="104" height="52" rx="9"/>
+<text class="dg-label" x="62.0" y="151.0" text-anchor="middle" style="font-size:12.5px">Log</text>
+<text class="dg-tiny" x="62.0" y="167.0" text-anchor="middle">tweets nuevos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="142" y="128" width="112" height="52" rx="9"/>
+<text class="dg-label" x="198.0" y="151.0" text-anchor="middle" style="font-size:12.5px">Ingesta</text>
+<text class="dg-tiny" x="198.0" y="167.0" text-anchor="middle">tokenizar</text>
+<path class="dg-edge" d="M116 154 H140" marker-end="url(#f307a)"/>
+<rect class="dg-frame" x="290" y="26" width="230" height="78" rx="9"/>
+<text class="dg-group" x="302" y="42" style="font-size:11.5px">partición 1</text>
+<rect class="dg-box" x="300" y="52" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="333" y="70" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="333" y="85" text-anchor="middle">solo lectura</text>
+<rect class="dg-box" x="372" y="52" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="405" y="70" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="405" y="85" text-anchor="middle">solo lectura</text>
+<rect class="dg-box dg-box--em" x="444" y="52" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="477" y="70" text-anchor="middle">activo</text>
+<text class="dg-tiny" x="477" y="85" text-anchor="middle">RAM, 1 hilo</text>
+<path class="dg-edge" d="M256 154 L288 65" marker-end="url(#f307a)"/>
+<path class="dg-edge" d="M592 154 L522 65" marker-end="url(#f307a)"/>
+<rect class="dg-frame" x="290" y="116" width="230" height="78" rx="9"/>
+<text class="dg-group" x="302" y="132" style="font-size:11.5px">partición 2</text>
+<rect class="dg-box" x="300" y="142" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="333" y="160" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="333" y="175" text-anchor="middle">solo lectura</text>
+<rect class="dg-box" x="372" y="142" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="405" y="160" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="405" y="175" text-anchor="middle">solo lectura</text>
+<rect class="dg-box dg-box--em" x="444" y="142" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="477" y="160" text-anchor="middle">activo</text>
+<text class="dg-tiny" x="477" y="175" text-anchor="middle">RAM, 1 hilo</text>
+<path class="dg-edge" d="M256 154 L288 155" marker-end="url(#f307a)"/>
+<path class="dg-edge" d="M592 154 L522 155" marker-end="url(#f307a)"/>
+<rect class="dg-frame" x="290" y="206" width="230" height="78" rx="9"/>
+<text class="dg-group" x="302" y="222" style="font-size:11.5px">partición 3</text>
+<rect class="dg-box" x="300" y="232" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="333" y="250" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="333" y="265" text-anchor="middle">solo lectura</text>
+<rect class="dg-box" x="372" y="232" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="405" y="250" text-anchor="middle">lleno</text>
+<text class="dg-tiny" x="405" y="265" text-anchor="middle">solo lectura</text>
+<rect class="dg-box dg-box--em" x="444" y="232" width="66" height="40" rx="4"/>
+<text class="dg-tiny" x="477" y="250" text-anchor="middle">activo</text>
+<text class="dg-tiny" x="477" y="265" text-anchor="middle">RAM, 1 hilo</text>
+<path class="dg-edge" d="M256 154 L288 245" marker-end="url(#f307a)"/>
+<path class="dg-edge" d="M592 154 L522 245" marker-end="url(#f307a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="594" y="128" width="96" height="52" rx="9"/>
+<text class="dg-label" x="642.0" y="151.0" text-anchor="middle" style="font-size:12.5px">Blender</text>
+<text class="dg-tiny" x="642.0" y="167.0" text-anchor="middle">repartir y juntar</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="706" y="128" width="56" height="52" rx="9"/>
+<text class="dg-label" x="734.0" y="159.0" text-anchor="middle" style="font-size:12px">App</text>
+<path class="dg-edge" d="M704 154 H692" marker-end="url(#f307a)"/>
+<text class="dg-tiny" x="142" y="210">el id decide</text>
+<text class="dg-tiny" x="142" y="224">la partición</text>
+<text class="dg-small" x="10" y="306">Segmentos de 2²³ tweets (unos 8.4 millones). Buscable en unos 10&#8239;s en 2012, en 1&#8239;s desde 2020.</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.9.</b> La escritura va a un solo segmento por partición; la lectura va a todas las particiones y Blender junta los resultados.</figcaption>
+</figure>
+
+<ul>
+  <li><b>Segmentos por tiempo.</b> Cada partición guarda segmentos de 2<sup>23</sup> tweets, unos 8.4 millones; solo el más nuevo recibe escrituras, y los anteriores son inmutables. <span class="badge badge--doc">Documentado</span></li>
+  <li><b>Listas ordenadas por id.</b> Como los ids son Snowflake, recorrer una lista desde el final devuelve primero lo más nuevo, que es lo que casi siempre se pide.</li>
+  <li><b>Un solo escritor por índice.</b> Un hilo escribe y muchos leen sin locks, con barreras de memoria puntuales, porque las listas solo crecen. <span class="badge badge--doc">Documentado</span></li>
+  <li><b>Repartir y juntar.</b> Blender, el servicio de búsqueda de Twitter, manda cada consulta a todas las particiones, junta los resultados y los ordena. <span class="badge badge--doc">Documentado</span></li>
+</ul>
+
+<p>En 2020 Twitter bajó la latencia de indexado de unos 15 segundos a 1: indexa en el momento lo esencial del tweet y completa después, de forma asíncrona, los campos que tardan, y reemplazó sus listas por skip lists que admiten inserciones concurrentes. <span class="badge badge--doc">Documentado</span> En 2014 había sumado un índice de todos los tweets desde 2006, en discos SSD, separado del índice en memoria de lo reciente. <span class="badge badge--doc">Documentado</span></p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>El firehose alimenta a la vez el fan-out, la búsqueda, las tendencias y los contadores. Ponerlo en un log como Kafka (M07) deja que cada consumidor vaya a su ritmo: si la búsqueda se atrasa durante un pico de 143&#8239;000 tweets por segundo, no frena la publicación ni las timelines. En 2012 Twitter mantenía abiertas cerca de un millón de conexiones de streaming y empujaba cada tweet público por el firehose en unos 150&#8239;ms. <span class="badge badge--doc">Documentado</span></p>
+</aside>
+
+<h2 id="fallas"><span class="sec-num">30.14</span>Qué pasa cuando algo falla</h2>
+
+<p>La regla del diseño: publicar y leer la timeline cronológica tienen que funcionar aunque falle todo lo demás. Cada pieza falla de una forma distinta <span class="badge badge--ref">Diseño de referencia</span>:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Falla</th><th>Qué ve el usuario</th><th>Qué hace el sistema</th></tr></thead>
+    <tbody>
+      <tr><td>Se cae una réplica de Redis de timelines</td><td>Nada</td><td>Lee otra de las réplicas; la caída se repone copiando de las sanas</td></tr>
+      <tr><td>Se pierde un shard entero de timelines</td><td>Timelines vacías o viejas durante unos segundos</td><td>Primera página armada en lectura; reconstrucción en segundo plano, con límite de concurrencia</td></tr>
+      <tr><td>La cola de fan-out se atrasa</td><td>Los tweets llegan tarde a las timelines; publicar funciona</td><td>Prioridad para las tareas chicas, más workers, alerta por lag</td></tr>
+      <tr><td>Se cae el caché de tweets</td><td>Timelines más lentas</td><td>Single-flight hacia el almacén, respuestas parciales y load shedding si el almacén se satura</td></tr>
+      <tr><td>Se cae el ranking</td><td>Para ti muestra la cronológica</td><td>Degradación elegante</td></tr>
+      <tr><td>Se cae la búsqueda o las tendencias</td><td>Esas pantallas fallan; el resto funciona</td><td>Cada consumidor del log está aislado; al volver, recupera desde su offset</td></tr>
+      <tr><td>El reloj de un generador de ids retrocede</td><td>Algunos tweets tardan unos milisegundos más</td><td>El generador se niega a emitir y el balanceador lo saca si persiste</td></tr>
+      <tr><td>Un tweet de una cuenta famosa se vuelve viral</td><td>Nada</td><td>Caché local en cada servidor de timeline y subcontadores</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3 id="fallas-pico">El pico de 25 veces el promedio</h3>
+
+<p>En 2010, durante el Mundial, los picos de tráfico desestabilizaban el sitio. Para 2013 Twitter había pasado de un monolito en Ruby on Rails a servicios en la JVM alrededor de sus sustantivos (tweets, timelines, usuarios, grafo), con Finagle para las llamadas entre servicios, y cada máquina atendía de 10&#8239;000 a 20&#8239;000 requests por segundo, más de 10 veces que antes. Ese sistema aguantó los 143&#8239;199 tweets por segundo sin caerse. <span class="badge badge--doc">Documentado</span></p>
+
+<p>El pico se absorbe porque cada etapa tiene su propio margen (<a href="#scenario=pico">escenario "Un pico de 25 veces"</a>): la escritura del tweet es chica y está dimensionada para el pico; el fan-out, que es 100 veces más grande, puede atrasarse en el log sin perder nada; y la lectura no depende de que el fan-out esté al día. Para ti, que lee de Thunder, ni siquiera lo nota.</p>
+
+<h3 id="fallas-reconstruccion">La tormenta de reconstrucciones</h3>
+
+<p>Perder un shard de timelines no pierde datos (todo se puede reconstruir desde el grafo y los tweets), pero es el escenario más peligroso del sistema. Con 9 shards, uno es el 11&#8239;% de los usuarios: con 20 millones de timelines, 2.2 millones que reconstruir, cada una con 400 lecturas. Si todas arrancan a la vez, son 880 millones de lecturas golpeando al almacén. El remedio es el del cache stampede del M04: reconstruir solo cuando el usuario llega (no las 2.2 millones de golpe), con single-flight por usuario y un límite global de reconstrucciones por segundo. Mientras tanto, la primera página se arma en lectura con las 50 cuentas más activas que sigue el usuario.</p>
+
+<h2 id="flota"><span class="sec-num">30.15</span>Estimar la flota</h2>
+
+<p>Las cuentas de servilleta (M00) para un clon de 10 millones de usuarios activos por día, con 20 millones de usuarios activos en el mes <span class="badge badge--ref">Diseño de referencia</span>:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Magnitud</th><th>Cuenta</th><th class="r">Resultado</th></tr></thead>
+    <tbody>
+      <tr><td>Tweets por segundo: promedio y pico</td><td>10 M × 2 por día ÷ 86&#8239;400; × 3</td><td class="r">231 y 694</td></tr>
+      <tr><td>Tweets por segundo en un evento</td><td>promedio × 25</td><td class="r">5&#8239;787</td></tr>
+      <tr><td>Lecturas de timeline por segundo: promedio y pico</td><td>10 M × 20 por día ÷ 86&#8239;400; × 3</td><td class="r">2&#8239;315 y 6&#8239;944</td></tr>
+      <tr><td>Escrituras del fan-out por segundo: promedio y pico</td><td>tweets × 200 seguidores × 50&#8239;% activos</td><td class="r">23&#8239;148 y 69&#8239;444</td></tr>
+      <tr><td>Memoria de las timelines</td><td>20 M × 800 × 23 bytes (con la sobrecarga de Redis)</td><td class="r">368&#8239;GB</td></tr>
+      <tr><td>Shards de Valkey para las timelines</td><td>368&#8239;GB ÷ 42.5&#8239;GB útiles de un r7g.2xlarge</td><td class="r">9, más 9 réplicas</td></tr>
+      <tr><td>Tweets que se hidratan por segundo en el pico</td><td>6&#8239;944 × 50</td><td class="r">347&#8239;222</td></tr>
+      <tr><td>Lecturas al almacén por segundo, en promedio</td><td>2&#8239;315 × 50 × 2&#8239;% de fallos del caché</td><td class="r">2&#8239;315</td></tr>
+      <tr><td>Tweets guardados por día y por año</td><td>20 M × 1&#8239;KB</td><td class="r">20&#8239;GB y 7.3&#8239;TB</td></tr>
+      <tr><td>Respuestas de la API al mes</td><td>2&#8239;315 por segundo × 10&#8239;KB comprimidos</td><td class="r">61&#8239;TB</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>La línea que manda es la memoria de las timelines: 18 nodos de 52&#8239;GB para guardar ids. Guardar 200 entradas en lugar de 800 la divide por cuatro, a cambio de reconstruir más seguido a quien baja mucho. El fan-out del pico, 69&#8239;444 escrituras por segundo, son unas 7&#8239;700 por shard: lejos del límite de Valkey con pipeline.</p>
+
+<h2 id="implementalo"><span class="sec-num">30.16</span>Impleméntalo tú mismo: tu clon de Twitter en AWS</h2>
+
+<p>La decisión que cambia todo lo demás es dónde viven las timelines precalculadas. Tres opciones, con los números del clon de 10 millones de usuarios:</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th></th><th>ElastiCache para Valkey</th><th>DynamoDB</th><th>Solo fan-out en lectura</th></tr></thead>
+    <tbody>
+      <tr><td><b>Qué es</b></td><td>Listas en memoria: <code>LPUSH</code>, <code>LTRIM</code> y <code>LRANGE</code></td><td>Un ítem por entrada, con clave (usuario, tweet) y TTL para descartar lo viejo</td><td>Sin timelines guardadas: cada lectura junta las listas de los autores</td></tr>
+      <tr><td><b>Escribir una entrada</b></td><td>Un comando dentro de un pipeline</td><td>1 WRU: 0.625 USD por millón en on-demand</td><td>Nada</td></tr>
+      <tr><td><b>Leer 50</b></td><td>Un <code>LRANGE</code></td><td>Un Query de 50 ítems</td><td>Una lectura por cuenta seguida, y mezclar</td></tr>
+      <tr><td><b>Costo dominante</b></td><td>La RAM: 18 nodos r7g.2xlarge, unos 9&#8239;200 USD al mes</td><td>Las escrituras: 23&#8239;148 por segundo de promedio son unos 38&#8239;000 USD al mes en on-demand</td><td>CPU y latencia en cada lectura</td></tr>
+      <tr><td><b>Cuándo sirve</b></td><td>El diseño de Twitter; desde unos cientos de miles de usuarios</td><td>Un MVP sin servidores que operar, con pocas escrituras</td><td>Pocos usuarios, o cuentas que siguen a pocas</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Con Valkey para las timelines, una arquitectura de referencia sobre AWS:</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 404" role="img" aria-labelledby="f308t f308d">
+<title id="f308t">Un clon de Twitter sobre AWS</title>
+<desc id="f308d">Las apps llegan por HTTPS a un Application Load Balancer, que reparte entre el servicio de tweets, el de timeline y el de interacciones, todos en ECS con Fargate. Los medios van por CloudFront y S3. El servicio de tweets guarda en DynamoDB y publica eventos en un log de MSK. El fan-out consume el log y escribe en las timelines, en ElastiCache para Valkey. El servicio de timeline lee las timelines y el caché de tweets. Interacciones usa contadores en Valkey. Tendencias y búsqueda consumen el log; la búsqueda indexa en OpenSearch.</desc>
+<defs><marker id="f308a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="6" y="6" width="758" height="52" rx="10"/>
+<text class="dg-group" x="18" y="21" style="font-size:11.5px">Clientes</text>
+<rect class="dg-frame" x="6" y="70" width="758" height="82" rx="10"/>
+<text class="dg-group" x="18" y="85" style="font-size:11.5px">Entrada</text>
+<rect class="dg-frame" x="6" y="164" width="758" height="92" rx="10"/>
+<text class="dg-group" x="18" y="179" style="font-size:11.5px">Servicios (ECS con Fargate, ARM)</text>
+<rect class="dg-frame" x="6" y="268" width="758" height="92" rx="10"/>
+<text class="dg-group" x="18" y="283" style="font-size:11.5px">Datos y log</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="12" y="26" width="744" height="28" rx="9"/>
+<text class="dg-label" x="384.0" y="45.0" text-anchor="middle" style="font-size:12px">Apps y web</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="12" y="96" width="622" height="48" rx="9"/>
+<text class="dg-label" x="323.0" y="117.0" text-anchor="middle" style="font-size:12.5px">Application Load Balancer</text>
+<text class="dg-tiny" x="323.0" y="133.0" text-anchor="middle">HTTPS en 3 zonas, con WAF</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="642" y="96" width="118" height="48" rx="9"/>
+<text class="dg-label" x="701.0" y="117.0" text-anchor="middle" style="font-size:12px">CloudFront</text>
+<text class="dg-tiny" x="701.0" y="133.0" text-anchor="middle">fotos y videos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="12" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="71.0" y="215.0" text-anchor="middle" style="font-size:12px">Tweets</text>
+<text class="dg-tiny" x="71.0" y="231.0" text-anchor="middle">ids Snowflake</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="138" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="197.0" y="215.0" text-anchor="middle" style="font-size:12px">Timeline</text>
+<text class="dg-tiny" x="197.0" y="231.0" text-anchor="middle">leer y mezclar</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="264" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="323.0" y="215.0" text-anchor="middle" style="font-size:12px">Fan-out</text>
+<text class="dg-tiny" x="323.0" y="231.0" text-anchor="middle">consume el log</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="390" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="449.0" y="215.0" text-anchor="middle" style="font-size:12px">Interacciones</text>
+<text class="dg-tiny" x="449.0" y="231.0" text-anchor="middle">likes y follows</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="516" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="575.0" y="215.0" text-anchor="middle" style="font-size:12px">Tendencias</text>
+<text class="dg-tiny" x="575.0" y="231.0" text-anchor="middle">ventanas</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="642" y="190" width="118" height="56" rx="9"/>
+<text class="dg-label" x="701.0" y="215.0" text-anchor="middle" style="font-size:12px">Búsqueda</text>
+<text class="dg-tiny" x="701.0" y="231.0" text-anchor="middle">indexa y busca</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="12" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="71.0" y="317.0" text-anchor="middle" style="font-size:12px">Tweets y grafo</text>
+<text class="dg-tiny" x="71.0" y="333.0" text-anchor="middle">DynamoDB</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="138" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="197.0" y="317.0" text-anchor="middle" style="font-size:12px">Caché de tweets</text>
+<text class="dg-tiny" x="197.0" y="333.0" text-anchor="middle">r7g.xlarge ×6</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="264" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="323.0" y="317.0" text-anchor="middle" style="font-size:12px">Timelines</text>
+<text class="dg-tiny" x="323.0" y="333.0" text-anchor="middle">r7g.2xlarge ×18</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="390" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="449.0" y="317.0" text-anchor="middle" style="font-size:12px">Contadores</text>
+<text class="dg-tiny" x="449.0" y="333.0" text-anchor="middle">r7g.large ×2</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="516" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="575.0" y="317.0" text-anchor="middle" style="font-size:12px">Log</text>
+<text class="dg-tiny" x="575.0" y="333.0" text-anchor="middle">MSK, 3 brokers</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="642" y="292" width="118" height="56" rx="9"/>
+<text class="dg-label" x="701.0" y="317.0" text-anchor="middle" style="font-size:12px">OpenSearch</text>
+<text class="dg-tiny" x="701.0" y="333.0" text-anchor="middle">r7g.xlarge ×3</text>
+<path class="dg-edge" d="M71.0 56 V94" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M701.0 56 V94" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M71.0 146 V188" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M197.0 146 V188" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M449.0 146 V188" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M71.0 248 V290" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M197.0 248 V290" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M323.0 248 V290" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M449.0 248 V290" marker-end="url(#f308a)"/>
+<path class="dg-edge" d="M701.0 248 V290" marker-end="url(#f308a)"/>
+<path class="dg-feedback" d="M575.0 290 V250" marker-end="url(#f308a)"/>
+<text class="dg-small" x="12" y="376">Tweets e Interacciones publican cada evento en el log; fan-out, tendencias y búsqueda lo consumen a su ritmo.</text>
+<text class="dg-small" x="12" y="394">Timelines, caché y contadores: ElastiCache para Valkey. Nada de estado en los servicios.</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 30.10.</b> Un <span class="badge badge--ref">Diseño de referencia</span> para un clon de 10 millones de usuarios por día. Los servicios no guardan estado; el log separa lo que tiene que pasar ya de lo que puede esperar.</figcaption>
+</figure>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Pieza</th><th>Con qué la armas en AWS</th><th>Qué tener en cuenta</th></tr></thead>
+    <tbody>
+      <tr><td>Entrada</td><td>Route 53, un Application Load Balancer en tres zonas y AWS WAF</td><td>Límites por cuenta y por IP en el WAF y en el servicio. Las respuestas van comprimidas: la salida a internet es de las líneas más caras.</td></tr>
+      <tr><td>Servicios de tweets, timeline, interacciones y fan-out</td><td>ECS con Fargate sobre ARM; los workers de fan-out escalan con el lag del consumidor</td><td>Sin estado. MSK publica el lag de cada grupo de consumidores en CloudWatch (<code>MaxOffsetLag</code>), y con esa métrica se escala.</td></tr>
+      <tr><td>Ids Snowflake</td><td>Una biblioteca dentro del servicio de tweets; el worker id sale de un <span class="no-autolink">lease</span> en DynamoDB con escritura condicional</td><td>El reloj, con chrony y Amazon Time Sync Service. Si el proceso pierde su <span class="no-autolink">lease</span>, deja de generar.</td></tr>
+      <tr><td>Tweets, <code>user_tweets</code>, grafo y likes</td><td>DynamoDB; on-demand para empezar y capacidad provisionada cuando el tráfico se estabiliza</td><td>Seguir con <code>TransactWriteItems</code> para las dos direcciones. Las particiones calientes (una cuenta con millones de seguidores) se leen por páginas.</td></tr>
+      <tr><td>Timelines</td><td>ElastiCache para Valkey en modo clúster, cache.r7g.2xlarge, 9 shards con una réplica en otra zona</td><td>No necesitan durabilidad: si se pierden, se reconstruyen (30.6). Sí necesitan memoria: es la línea más cara.</td></tr>
+      <tr><td>Caché de tweets y autores</td><td>ElastiCache para Valkey, cache.r7g.xlarge, 3 shards con réplica</td><td>Unos 60&#8239;GB: los tweets de los últimos tres días. Caché local en cada servidor para los tweets más calientes.</td></tr>
+      <tr><td>Log de eventos</td><td>Amazon MSK, 3 brokers kafka.m7g.large en tres zonas</td><td>Un topic de tweets particionado por autor, retención de 7 días para poder reprocesar.</td></tr>
+      <tr><td>Contadores</td><td>ElastiCache para Valkey, cache.r7g.large con réplica</td><td>Suma en memoria y volcado cada segundo; conciliación desde las filas de likes.</td></tr>
+      <tr><td>Búsqueda</td><td>Amazon OpenSearch Service, 3 nodos r7g.xlarge.search, un índice por día</td><td>Con el <code>refresh_interval</code> de 1&#8239;s que trae por defecto, un tweet es buscable en un segundo. Los índices viejos se borran enteros.</td></tr>
+      <tr><td>Tendencias</td><td>Un consumidor del log en ECS con sketches en memoria, o Managed Service for Apache Flink</td><td>Ventanas de un minuto por región; el ranking se publica en Valkey cada minuto.</td></tr>
+      <tr><td>Medios</td><td>S3 con URLs prefirmadas para subir y CloudFront para servir (M09)</td><td>Con millones de usuarios, la CDN pasa a ser la línea más cara de toda la factura.</td></tr>
+      <tr><td>For You</td><td>Fuera de esta factura: modelos servidos en SageMaker o en GPUs propias (Parte II)</td><td>Empieza con la cronológica. El ranking necesita datos de interacciones que un clon nuevo no tiene.</td></tr>
+      <tr><td>Operación</td><td>CloudWatch, OpenTelemetry y alarmas</td><td>Lag del fan-out, p99 de la timeline, tasa de acierto del caché y reconstrucciones por minuto.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Un orden razonable para construirlo, donde cada paso deja algo que se puede probar:</p>
+
+<ol class="steps">
+  <li><span class="step-title">Publicar y leer un perfil</span><code>tweets</code>, <code>user_tweets</code>, Snowflake y la API con idempotency key.</li>
+  <li><span class="step-title">Seguir y la timeline en lectura</span>El grafo en las dos direcciones y la timeline armada al leer: la versión más simple y correcta para pocos usuarios.</li>
+  <li><span class="step-title">El log y el fan-out a Valkey</span>Comparar la latencia de lectura contra la versión anterior con una prueba de carga.</li>
+  <li><span class="step-title">Híbrido</span>El umbral, las listas de las cuentas famosas y la mezcla al leer, con deduplicación por id.</li>
+  <li><span class="step-title">Hidratación</span>Caché de tweets, multiget por shard y respuestas parciales. Una prueba de carga a 7&#8239;000 lecturas por segundo.</li>
+  <li><span class="step-title">Interacciones</span>Likes con su fila, contadores con suma en memoria y conciliación.</li>
+  <li><span class="step-title">Búsqueda y tendencias</span>Como consumidores del log, cada uno con su propio lag.</li>
+  <li><span class="step-title">Operación</span>Reconstrucción con límite, alarmas, y una prueba de caos: borrar un shard de timelines en el pico y medir la tormenta.</li>
+</ol>
+
+<div data-calc="bom" data-preset="m30"></div>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Qué no construir</p>
+  <ul>
+    <li><b>Tu propio motor de búsqueda.</b> Earlybird existe porque Twitter tenía 2&#8239;000 millones de consultas por día; OpenSearch alcanza para un clon.</li>
+    <li><b>Tu propio procesador de streams.</b> Storm y Heron nacieron cuando no había alternativas; hoy están Flink y Kafka Streams.</li>
+    <li><b>Tu propia base distribuida.</b> Manhattan es la respuesta de Twitter a su escala, no la tuya: DynamoDB o Cassandra.</li>
+    <li><b>Un ranking con aprendizaje automático antes de tener datos.</b> Primero la cronológica, después reglas simples y recién entonces un modelo.</li>
+  </ul>
+  <p>La factura de arriba no incluye fotos ni videos: con 10 millones de usuarios que ven unas pocas imágenes por timeline, la CDN mueve más de un petabyte al mes y pasa a ser la línea más cara. Se dimensiona como en el M09.</p>
+</aside>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m30"></div>
+
+<section class="exercise" aria-labelledby="ej-m30">
+  <p class="exercise-title" id="ej-m30">Ejercicio de diseño: la final del Mundial</p>
+  <p>Tu clon tiene 10 millones de usuarios activos por día. Durante la final, el tráfico sube a 20 veces el promedio: unos 4&#8239;600 tweets por segundo durante varios minutos tras cada gol, y 46&#8239;000 lecturas de timeline por segundo. La cuenta oficial del torneo, con 6 millones de seguidores, publica el resultado. Los tweets de los goles reciben 200&#8239;000 likes por segundo entre todos, y "#Final" tiene que estar en tendencias en menos de un minuto.</p>
+  <p>Decide qué pasa con el fan-out, la lectura, los contadores y las tendencias, y qué se degrada primero si algo no aguanta.</p>
+  <details><summary>Ver la solución de referencia</summary>
+    <ul>
+      <li><b>Escritura de tweets:</b> los ids Snowflake no necesitan coordinación: 4&#8239;600 por segundo repartidos en decenas de procesos están lejos de los 4 millones por segundo de cada uno. El servicio de tweets se dimensiona con margen para el pico: guarda, publica en el log y responde.</li>
+      <li><b>Fan-out:</b> 4&#8239;600 tweets × 100 seguidores activos son 460&#8239;000 escrituras por segundo, unas 51&#8239;000 por shard: el límite práctico. La cola absorbe lo que no entra y las timelines se atrasan unos segundos; publicar no falla. La cuenta oficial está sobre el umbral: no hace fan-out, y sus 6 millones de seguidores la leen al cargar desde una lista que cada servidor de timeline tiene en su memoria.</li>
+      <li><b>Lectura:</b> 46&#8239;000 por segundo × 50 tweets son 2.3 millones de tweets hidratados por segundo. Casi todos son los mismos pocos tweets de los goles: caché local en cada servidor. Si el caché sufre, respuestas parciales y load shedding de lo accesorio (contadores exactos, tendencias) antes que de la timeline.</li>
+      <li><b>Contadores:</b> like guardado como fila (200&#8239;000 escrituras por segundo en DynamoDB: provisionar con anticipación o aceptar el costo on-demand), suma en memoria volcada cada segundo y subcontadores para los tweets que pasan un umbral de tasa. La cifra mostrada se atrasa uno o dos segundos.</li>
+      <li><b>Tendencias:</b> la ventana de cinco minutos con línea base detecta el salto en segundos, porque "#Final" multiplica su base cientos de veces. El sketch no crece con el volumen; publicar el ranking cada minuto cumple el plazo.</li>
+      <li><b>Aislamiento:</b> búsqueda, tendencias y fan-out consumen el log, cada uno a su ritmo, con alertas sobre el lag (M11). Si algo hay que sacrificar, primero la búsqueda en tiempo real y el ranking de Para ti; nunca publicar ni la timeline cronológica.</li>
+    </ul>
+  </details>
+</section>
+
+<div data-checkpoint="m30"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m30.data.js"></script>
+<script src="../assets/js/data/maps/m30-twitter.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-feed.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
+</body>
+</html>

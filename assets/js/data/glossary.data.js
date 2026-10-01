@@ -80,7 +80,7 @@ SD.defineGlossary([
     deep: 'm00#percentiles', aliases: ['latencia de cola', 'latencias de cola', 'tail latency'],
     short: 'Los percentiles altos (p99, p99.9). Con fan-out dominan la experiencia: basta una llamada lenta para que toda la respuesta sea lenta.',
     related: ['percentil', 'fan-out'] },
-  { id: 'fan-out', term: 'Fan-out', en: 'Fan-out', cat: 'distribuidos', mods: ['m00'],
+  { id: 'fan-out', term: 'Fan-out', en: 'Fan-out', cat: 'distribuidos', mods: ['m00', 'm30'],
     deep: 'm00#percentiles', aliases: ['fanout'],
     short: 'Cuando una request o un evento se reparte en muchas llamadas, shards o destinatarios. En una lectura multiplica la carga y amplifica la latencia de cola; en mensajería, cada suscriptor recibe su copia.',
     related: ['tail-latency'] },
@@ -373,7 +373,7 @@ SD.defineGlossary([
   { id: 'xfetch', term: 'Expiración anticipada probabilística', en: 'Probabilistic early expiration (XFetch)', cat: 'datos', mods: ['m04'],
     deep: 'm04#stampede', aliases: ['XFetch', 'expiración anticipada'],
     short: 'Cada lectura cercana al vencimiento de una clave tiene una pequeña probabilidad, creciente, de recalcularla antes de tiempo. Así casi siempre se renueva antes de vencer y no hay estampida.' },
-  { id: 'hot-key', term: 'Clave caliente', en: 'Hot key', cat: 'datos', mods: ['m04'],
+  { id: 'hot-key', term: 'Clave caliente', en: 'Hot key', cat: 'datos', mods: ['m04', 'm30'],
     deep: 'm04#hot-keys', aliases: ['claves calientes', 'hot key'],
     short: 'Una clave que recibe una parte desproporcionada del tráfico y satura al único shard que la guarda. Se mitiga con caché local, réplicas de la clave o réplicas de lectura.' },
   { id: 'eviction', term: 'Política de evicción', en: 'Eviction policy', cat: 'datos', mods: ['m04'],
@@ -1043,7 +1043,7 @@ SD.defineGlossary([
     deep: 'm18#invariante', aliases: ['I-confluence', 'invariant confluence', 'invariante confluente'],
     short: 'Propiedad de un invariante que se mantiene aunque cada réplica decida sola y después se combinen los estados. "El saldo no puede quedar negativo" no la tiene: dos réplicas pueden gastar el mismo saldo. Esos invariantes exigen coordinar.',
     related: ['escrow', 'crdt'] },
-  { id: 'crdt', term: 'CRDT', en: 'Conflict-free Replicated Data Type', cat: 'distribuidos', mods: ['m06', 'm18'],
+  { id: 'crdt', term: 'CRDT', en: 'Conflict-free Replicated Data Type', cat: 'distribuidos', mods: ['m06', 'm18', 'm30'],
     deep: 'm06#crdt', aliases: ['CRDTs'],
     short: 'Estructura de datos replicada cuyas copias convergen al mismo valor sin coordinar, en cualquier orden de combinación, como un contador en el que cada réplica incrementa solo su propia entrada. Converge, pero no impide violar un límite global.',
     related: ['eventual', 'i-confluencia'] },
@@ -1283,4 +1283,24 @@ SD.defineGlossary([
     deep: 'm20#herramientas', aliases: ['sandboxes de código', 'code interpreter'],
     short: 'Entorno aislado donde corre código que no es confiable, como el que escribe un modelo: microVM o gVisor, sin red o con destinos cerrados, y con límites de CPU, memoria y tiempo.',
     related: ['microvm', 'tool-calling'] }
+]);
+
+/* ---------- M30: Twitter/X ---------- */
+SD.defineGlossary([
+  { id: 'snowflake-id', term: 'Snowflake', en: 'Snowflake ID', cat: 'distribuidos', mods: ['m30'],
+    deep: 'm30#snowflake', aliases: ['ids Snowflake', 'id Snowflake', 'Snowflake ID'],
+    short: 'Formato de id de 64 bits que publicó Twitter: 41 bits de milisegundos desde una época propia, 10 de nodo y 12 de secuencia. Cada generador emite ids únicos y ordenados por tiempo sin coordinarse con los demás.',
+    related: ['uuidv7'] },
+  { id: 'fanout-escritura', term: 'Fan-out en escritura y en lectura', en: 'Fan-out on write / on read', cat: 'distribuidos', mods: ['m30'],
+    deep: 'm30#fanout', aliases: ['fan-out en escritura', 'fan-out en lectura', 'fan-out on write', 'fan-out on read', 'timeline híbrido'],
+    short: 'Dos formas de armar un feed. En escritura, cada publicación se copia a la lista de cada seguidor y leer es barato; en lectura, se guarda una vez y cada lectura junta las fuentes. Los sistemas grandes combinan las dos según la cantidad de seguidores.',
+    related: ['fan-out', 'hot-key'] },
+  { id: 'count-min-sketch', term: 'Count-min sketch', en: 'Count-min sketch', cat: 'datos', mods: ['m30'],
+    deep: 'm30#trending', aliases: [],
+    short: 'Estructura probabilística que cuenta frecuencias de un stream en memoria fija: una matriz de contadores con varias funciones de hash. Nunca cuenta de menos y se pasa como mucho en una fracción ε del total, con probabilidad 1 − δ.',
+    related: ['fan-out'] },
+  { id: 'indice-invertido', term: 'Índice invertido', en: 'Inverted index', cat: 'datos', mods: ['m30'],
+    deep: 'm30#busqueda', aliases: ['índices invertidos', 'inverted index'],
+    short: 'Para cada término, la lista de documentos que lo contienen. Es la estructura de los motores de búsqueda como Lucene: una consulta intersecta las listas de sus términos en lugar de recorrer todos los documentos.',
+    related: ['snowflake-id'] }
 ]);

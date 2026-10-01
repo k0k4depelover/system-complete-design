@@ -93,7 +93,7 @@ window.SD.course = {
       id: 'f2', label: 'Fase 2', title: 'Más casos de estudio', line: '--line-f2', phase: 2,
       intro: 'Se construye al terminar la Fase 1: redes sociales y colaboración en tiempo real.',
       items: [
-        { id: 'm30', num: 'M30', title: 'Twitter/X', short: 'Twitter/X', mins: 90, href: 'modules/m30-twitter.html', status: 'soon',
+        { id: 'm30', num: 'M30', title: 'Twitter/X', short: 'Twitter/X', mins: 120, href: 'modules/m30-twitter.html', status: 'ready',
           summary: 'Fan-out on write vs on read, timelines híbridos, IDs Snowflake, contadores y trending.' },
         { id: 'm31', num: 'M31', title: 'Google Docs', short: 'Google Docs', mins: 90, href: 'modules/m31-google-docs.html', status: 'soon',
           summary: 'OT vs CRDT, sesión por documento, cursores y presencia, historial y permisos.' },
