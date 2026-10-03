@@ -40,7 +40,7 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 ### De las guías de proyectos (`proyectos/`)
 - **Son tutoriales precisos y funcionales, guiados de principio a fin.** Cada guía trae todos los archivos completos (`pom.xml`, `compose.yaml`, `application.yaml`, SQL, clases, pruebas y scripts), todas las configuraciones y todos los comandos, en el orden en que el lector los necesita. Lo único que no se guía es preparar el entorno de Java (JDK, IDE, Docker instalado).
 - **Claude escribe las guías, no las ejecuta.** No crea proyectos ni código para compilar en la máquina del usuario, no levanta servidores y no corre contenedores, Maven, Gatling ni Kubernetes. Lo construye y lo mide el usuario siguiendo la guía; así también revisa lo que escribió Claude.
-- **Sin ejecutar no hay mediciones nuevas.** La guía dice qué comando correr y qué tiene que aparecer en la salida (qué pasa, qué error sale, qué número comparar) y deja que el lector anote los suyos. Nunca se inventan cifras ni salidas. Lo que se puede calcular a mano se muestra con la cuenta, y lo que viene de documentación lleva `badge--doc`. Las cifras que ya están publicadas en A00–A06 se midieron antes de esta regla y se conservan.
+- **Sin ejecutar no hay mediciones nuevas.** La guía dice qué comando correr y qué tiene que aparecer en la salida (qué pasa, qué error sale, qué número comparar) y deja que el lector anote los suyos. Nunca se inventan cifras ni salidas. Lo que se puede calcular a mano se muestra con la cuenta, y lo que viene de documentación lleva `badge--doc`. Las cifras que ya están publicadas en A00–A07 se midieron antes de esta regla y se conservan.
 - **Lo que sí se usa** son las herramientas de la página: `tools/mkguide.py` para generarla, y `test-page.mjs`, `links.mjs` y `shots.mjs` para revisarla (abren la página en Chrome con `file://`, sin servidor).
 - El orden de las secciones es fijo: la excusa con una figura, los endpoints, las dependencias de Maven con su propósito, la infraestructura comentada, el paso a paso (cada paso con La decisión, Lo que descartas y Qué puede salir mal), las decisiones guiadas, cómo comprobarlo (pruebas, Gatling y fallas provocadas), tu repositorio y, al final, cómo conectar.
 - Cada proyecto funciona solo. "Cómo conectar" va al final y solo nombra proyectos anteriores en la lista, nunca posteriores, con enlaces a los módulos y al glosario (`../glosario.html#t-<id>`).
@@ -429,6 +429,16 @@ ia-system-desing
 │       │   │       m29-whatsapp.data.js
 │       │   │       m30-twitter.data.js
 │       │   │
+│       │   ├───projects
+│       │   │       a00.data.js
+│       │   │       a01.data.js
+│       │   │       a02.data.js
+│       │   │       a03.data.js
+│       │   │       a04.data.js
+│       │   │       a05.data.js
+│       │   │       a06.data.js
+│       │   │       a07.data.js
+│       │   │
 │       │   └───quizzes
 │       │           cpa.data.js
 │       │           m00.data.js
@@ -463,6 +473,8 @@ ia-system-desing
 │       │
 │       ├───pages
 │       │       home.js
+│       │       project-guide.js
+│       │       project-state.js
 │       │       projects.js
 │       │
 │       └───widgets
@@ -471,8 +483,8 @@ ia-system-desing
 │               sim-collab.js
 │               sim-context.js
 │               sim-db.js
-│               sim-feed.js
 │               sim-engine.js
+│               sim-feed.js
 │               sim-gpu.js
 │               sim-infra.js
 │               sim-jwt.js
@@ -517,7 +529,18 @@ ia-system-desing
 │       m29-whatsapp.html
 │       m30-twitter.html
 │
+├───proyectos
+│       a00-laboratorio.html
+│       a01-nginx.html
+│       a02-api.html
+│       a03-cache.html
+│       a04-replicas.html
+│       a05-dos-primarios.html
+│       a06-sharding.html
+│       a07-kubernetes.html
+│
 └───tools
+    │   mkguide.py
     │   mkpage.py
     │   seqdiag.py
     │
@@ -534,6 +557,8 @@ ia-system-desing
 | `index.html` + `assets/css/home.css` + `assets/js/pages/home.js` | Portada: mapa de la ruta del curso, "continuar donde quedaste", plan por partes y respaldo del progreso |
 | `glosario.html` | Glosario con buscador y filtro por categoría; lo arma `core/glossary.js` |
 | `proyectos.html` + `assets/css/projects.css` + `assets/js/pages/projects.js` | "Aplicación de conocimiento": índice de mini-proyectos en Java y Spring Boot, con sus datos en `data/projects.data.js` (cada proyecto con `tier`, `status`, `mods` y `repo`, obligatorio para publicarlo) |
+| `proyectos/` + `assets/js/pages/project-guide.js` + `project-state.js` | Una guía por proyecto, generada con `tools/mkguide.py` y editada después a mano. `project-guide.js` arma la ruta de proyectos y el anterior/siguiente, resalta java, yaml, xml, bash, nginx, ini y dockerfile, y le pone ruta y botón de copiar a cada `<pre data-file>`; `project-state.js` guarda el enlace al repositorio y las comprobaciones de cada guía |
+| `assets/js/data/projects/` | Las decisiones guiadas de cada guía, con `SD.defineExercise('aNN-…')` |
 | `modules/` | Una página por módulo y por checkpoint, generada con `mkpage.py` y editada después a mano |
 | `assets/css/tokens.css` | Colores semánticos en claro y oscuro, paleta de capas `--l-*`, tipografía y espacios |
 | `assets/css/layout.css` | Barra superior, sidebar, índice lateral y responsive |
@@ -544,6 +569,7 @@ ia-system-desing
 | `assets/js/widgets/` | Calculadoras y simuladores; uno o dos widgets por archivo |
 | `assets/js/data/` | `course.data.js` (estructura y estado de cada módulo), `glossary.data.js`, `llm.data.js` (modelos y GPUs), `maps/`, `quizzes/` y `exercises/` |
 | `tools/mkpage.py` | Genera la página de un módulo a partir de un fragmento con `<!--META-->` |
+| `tools/mkguide.py` | Genera la página de una guía de proyecto a partir de un fragmento con `<!--META-->`; `<!--SRC ruta-->` inserta un archivo de código ya escapado |
 | `tools/seqdiag.py` | Genera diagramas de secuencia en SVG con las clases del curso |
 | `tools/test/` | Arnés de pruebas con Chrome headless por DevTools Protocol |
 | `PLAN.md`, `PROGRESO.md` | Currículo completo y estado de traspaso entre sesiones |

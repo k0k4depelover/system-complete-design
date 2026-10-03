@@ -72,7 +72,8 @@
 
   var SH_KW = /^(if|then|else|elif|fi|for|in|do|done|while|case|esac|function|export|local|return|exec|set)$/;
   function hlBash(src) {
-    var re = /((?:^|(?<=\s))#[^\n]*)|('[^']*'|"(?:\\.|[^"\\])*")|(\$\{[^}]*\}|\$\(|\$[A-Za-z_]\w*|\$[0-9@#?])|((?:^|(?<=\s))--?[A-Za-z][\w-]*)|([A-Za-z_][\w.-]*)/gm;
+    /* Las comillas simples no cruzan líneas: en una salida, el apóstrofo de "pod's" no abre una cadena. */
+    var re = /((?:^|(?<=\s))#[^\n]*)|('[^'\n]*'|"(?:\\.|[^"\\])*")|(\$\{[^}]*\}|\$\(|\$[A-Za-z_]\w*|\$[0-9@#?])|((?:^|(?<=\s))--?[A-Za-z][\w-]*)|([A-Za-z_][\w.-]*)/gm;
     return tokens(src, re, ['c-c', 'c-s', 'c-h', 'c-n', function (w) { return SH_KW.test(w) ? span('c-m', w) : SD.escape(w); }]);
   }
 

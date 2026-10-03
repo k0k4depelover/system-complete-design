@@ -1,0 +1,1713 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A07. Kubernetes para sistemas distribuidos</title>
+<meta name="description" content="Un servicio de cuentas y sesiones en un clúster k3s de tres nodos dentro de Docker: registro local, Deployment y Service, Gateway API sobre Traefik, probes y apagado ordenado para desplegar sin errores, HPA, PodDisruptionBudget y PostgreSQL con CloudNativePG, con failover automático y PgBouncer como Pooler.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a07" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Kubernetes para sistemas distribuidos</h1>
+        <p class="lead">Un servicio de cuentas no se puede cortar cada vez que lo despliegas. Vas a montar un clúster de Kubernetes de tres nodos en tu máquina, desplegar el servicio sin perder un request, verlo escalar solo con la carga y matarle el primario a la base para medir cuánto dura el corte.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A07</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 2</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>6 a 8 h</dd></div>
+          <div><dt>Módulos</dt><dd>M03, M05, M08</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a07">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Levantar un clúster k3s de tres nodos con Docker Compose, con un registro de imágenes local y Traefik como Gateway.</li>
+          <li>Desplegar una versión nueva con carga y cero errores, y explicar qué hace cada pieza: readiness, <code>preStop</code>, apagado ordenado y <code>maxUnavailable: 0</code>.</li>
+          <li>Escalar con un HorizontalPodAutoscaler por CPU y predecir cuántos pods pide con la fórmula.</li>
+          <li>Correr PostgreSQL con CloudNativePG, drenar el nodo del primario y matarlo, y medir el corte de escrituras.</li>
+          <li>Acortar ese corte con los timeouts de Hikari y de PgBouncer.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Un servicio de cuentas: registrarse, iniciar sesión y preguntar quién eres con el token. Todas las demás partes de un producto lo llaman, así que no se puede cortar para desplegar una versión nueva, ni cuando un nodo entra en mantenimiento, ni cuando se cae el primario de su base.</p>
+
+      <p>Tiene además una carga particular: cada inicio de sesión compara la contraseña con bcrypt, que gasta CPU a propósito. Con más usuarios hacen falta más pods, y es la CPU, no la base, la que dice cuántos. Kubernetes se encarga de las tres cosas si se lo pides bien: reemplazar pods sin cortar, sumar pods con la carga y, con un operador, promover la réplica de la base.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 380" role="img" aria-labelledby="fa07t fa07d">
+<title id="fa07t">El servicio de cuentas en un clúster de tres nodos</title>
+<desc id="fa07d">Gatling y curl llaman desde tu máquina al puerto 8080, donde escucha Traefik como Gateway. Traefik manda las rutas /api al Service cuentas, que reparte entre los pods listos del Deployment, de 2 a 8 según decida el HorizontalPodAutoscaler, uno por nodo cuando se puede. Los nodos bajan la imagen del registro local. Los pods hablan con el Pooler, dos PgBouncer en modo transaction, que apuntan al primario de PostgreSQL. El primario replica a una réplica en otro nodo, y el operador CloudNativePG vigila los dos y promueve la réplica si el primario se cae.</desc>
+<defs><marker id="fa07a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="16" width="150" height="52" rx="6"/>
+<text class="dg-label" x="95" y="38" text-anchor="middle">Gatling, curl</text>
+<text class="dg-tiny" x="95" y="57" text-anchor="middle">localhost:8080</text>
+<path class="dg-edge" d="M172 42 H196" marker-end="url(#fa07a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="200" y="16" width="160" height="52" rx="6"/>
+<text class="dg-label" x="280" y="38" text-anchor="middle">Traefik</text>
+<text class="dg-tiny" x="280" y="57" text-anchor="middle">Gateway, ruta /api</text>
+<path class="dg-edge" d="M362 42 H396" marker-end="url(#fa07a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="400" y="16" width="150" height="52" rx="6"/>
+<text class="dg-label" x="475" y="38" text-anchor="middle">Service</text>
+<text class="dg-tiny" x="475" y="57" text-anchor="middle">solo pods listos</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="600" y="16" width="150" height="52" rx="6"/>
+<text class="dg-label" x="675" y="38" text-anchor="middle">registry</text>
+<text class="dg-tiny" x="675" y="57" text-anchor="middle">localhost:5000</text>
+<path class="dg-edge" d="M475 70 V136" marker-end="url(#fa07a)"/>
+<path class="dg-feedback" d="M675 70 V136" marker-end="url(#fa07a)"/>
+<text class="dg-tiny" x="685" y="94">la imagen</text>
+<rect class="dg-frame" x="200" y="110" width="550" height="96" rx="8"/>
+<text class="dg-group" x="214" y="128">Deployment: de 2 a 8 pods, los decide el HPA</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="214" y="140" width="164" height="52" rx="6"/>
+<text class="dg-label" x="296" y="162" text-anchor="middle">pod</text>
+<text class="dg-tiny" x="296" y="181" text-anchor="middle">en k3s-server</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="393" y="140" width="164" height="52" rx="6"/>
+<text class="dg-label" x="475" y="162" text-anchor="middle">pod</text>
+<text class="dg-tiny" x="475" y="181" text-anchor="middle">en k3s-agent1</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="572" y="140" width="164" height="52" rx="6"/>
+<text class="dg-label" x="654" y="162" text-anchor="middle">pod</text>
+<text class="dg-tiny" x="654" y="181" text-anchor="middle">en k3s-agent2</text>
+<path class="dg-edge" d="M296 194 V232" marker-end="url(#fa07a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="214" y="236" width="250" height="52" rx="6"/>
+<text class="dg-label" x="339" y="258" text-anchor="middle">Pooler: PgBouncer × 2</text>
+<text class="dg-tiny" x="339" y="277" text-anchor="middle">modo transaction, al primario</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="500" y="236" width="250" height="52" rx="6"/>
+<text class="dg-label" x="625" y="258" text-anchor="middle">Operador CloudNativePG</text>
+<text class="dg-tiny" x="625" y="277" text-anchor="middle">vigila y promueve la réplica</text>
+<path class="dg-edge" d="M339 290 V314" marker-end="url(#fa07a)"/>
+<path class="dg-feedback" d="M625 290 V314" marker-end="url(#fa07a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="214" y="318" width="250" height="50" rx="6"/>
+<text class="dg-label" x="339" y="339" text-anchor="middle">cuentas-db-1, primario</text>
+<text class="dg-tiny" x="339" y="358" text-anchor="middle">PostgreSQL 18, disco en su nodo</text>
+<path class="dg-edge" d="M466 343 H496" marker-end="url(#fa07a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="500" y="318" width="250" height="50" rx="6"/>
+<text class="dg-label" x="625" y="339" text-anchor="middle">cuentas-db-2, réplica</text>
+<text class="dg-tiny" x="625" y="358" text-anchor="middle">en otro nodo, por streaming</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A07.1.</b> El Gateway solo manda tráfico a los pods que pasan la readiness, y la aplicación nunca habla directo con PostgreSQL: pasa por el Pooler, que sigue al primario. Cuando el primario se cae, el operador promueve la réplica y el Pooler se reconecta.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/accounts</code></td><td>Crea una cuenta con la contraseña en bcrypt.</td><td>201, 400, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/sessions</code></td><td>Inicia sesión y devuelve un token opaco que dura una hora.</td><td>201, 400, 401</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/me</code></td><td>Quién eres, con <code>Authorization: Bearer &lt;token&gt;</code>.</td><td>200, 401</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/actuator/health/liveness</code></td><td>Para Kubernetes: el proceso está vivo.</td><td>200, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/actuator/health/readiness</code></td><td>Para Kubernetes: puede recibir tráfico.</td><td>200, 503</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/accounts</code>
+        </div>
+        <p class="ep-desc">Crea la cuenta. El correo es único sin importar mayúsculas: lo decide un índice sobre <code>lower(email)</code>. Cada respuesta dice qué pod la atendió y con qué versión.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/accounts HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{"email": "prueba@example.com", "password": "una-clave-larga"}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/1.1 201 Created
+Location: /api/accounts/1
+X-Pod: cuentas-6d7bc5c6c5-qzncm
+X-Version: 1
+
+{"id": 1, "email": "prueba@example.com", "createdAt": "…"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Cuenta creada.</span></li>
+            <li><span class="st st--4xx">400</span><span>Correo inválido, o contraseña de menos de 8 caracteres o de más de 72 bytes.</span></li>
+            <li><span class="st st--4xx">409</span><span>Ya existe una cuenta con ese correo, también si cambian las mayúsculas.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/sessions</code>
+        </div>
+        <p class="ep-desc">Compara la contraseña con bcrypt y crea una sesión. En la base queda el SHA-256 del token, nunca el token.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{"token": "…43 caracteres en base64url…", "expiresAt": "…"}</code></pre>
+          <p class="ep-sec">Respuesta 401, igual si el correo no existe o si la contraseña no coincide</p>
+<pre data-lang="http"><code>HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer
+Content-Type: application/problem+json
+
+{"detail": "Credenciales inválidas o sesión vencida", "instance": "/api/sessions", "status": 401,
+ "title": "Unauthorized", "type": "https://cuentas.example/problemas/no-autorizado"}</code></pre>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/me</code>
+        </div>
+        <p class="ep-desc">Busca la sesión por el hash del token y devuelve la cuenta. Es la lectura más frecuente: todas las demás partes del producto la llaman.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"id": 1, "email": "prueba@example.com"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>La sesión existe y no venció.</span></li>
+            <li><span class="st st--4xx">401</span><span>Sin token, token inventado o sesión vencida: el mismo ProblemDetail.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API, <code>@Email</code> y <code>@Size</code> en el cuerpo, y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-actuator</code></td><td><code>/actuator/health/liveness</code> y <code>/readiness</code>, las dos pruebas que usa Kubernetes.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td><code>JdbcClient</code> con Hikari, y las migraciones al arrancar.</td></tr>
+            <tr><td><code>spring-security-crypto</code></td><td>Solo <code>BCryptPasswordEncoder</code>, sin traer Spring Security entero.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Cuatro pruebas contra un PostgreSQL 18 de verdad.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>Registrarse, iniciar sesión y preguntar quién eres mientras despliegas, escalas y rompes cosas.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;cuentas&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.security&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-security-crypto&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+      <p>Además de Java, Maven y Docker, necesitas <code>kubectl</code> y Python 3, solo con su biblioteca estándar, para el script de escrituras. <code>kubectl</code> funciona con el servidor si las versiones no se separan en más de una versión menor <span class="badge badge--doc">Documentado</span>: con k3s 1.36, usa un <code>kubectl</code> 1.35, 1.36 o 1.37.</p>
+
+<pre data-lang="bash"><code>winget install -e --id Kubernetes.kubectl     # Windows
+brew install kubectl                         # macOS
+kubectl version --client</code></pre>
+
+      <p>En Linux, la documentación de Kubernetes da el binario con <code>curl</code> desde <code>dl.k8s.io</code>. Así queda el proyecto:</p>
+
+<pre data-lang="bash"><code>a07-kubernetes/
+├── pom.xml, Dockerfile, src/…
+├── cluster/        compose.yaml, registries.yaml, traefik-config.yaml
+├── k8s/            namespace.yaml, db.yaml, app.yaml, gateway.yaml, scaling.yaml
+│   └── experimentos/sin-cuidados.json
+└── scripts/        escrituras.py</code></pre>
+
+<pre data-lang="yaml" data-file="cluster/compose.yaml"><code># Un clúster de k3s de tres nodos en contenedores: un servidor (control plane) y dos agentes.
+# Es el mismo binario que se instala en una máquina; aquí cada "máquina" es un contenedor.
+x-node: &amp;node
+  image: rancher/k3s:v1.36.5-k3s1
+  privileged: true
+  tmpfs:
+    - /run
+    - /var/run
+  ulimits:
+    nproc: 65535
+    nofile:
+      soft: 65535
+      hard: 65535
+  restart: unless-stopped
+  environment: &amp;node-env
+    K3S_TOKEN: un-secreto-solo-para-el-lab
+  volumes:
+    - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+
+services:
+  server:
+    &lt;&lt;: *node
+    hostname: k3s-server
+    command: ["server", "--tls-san=127.0.0.1"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+      - ./traefik-config.yaml:/var/lib/rancher/k3s/server/manifests/traefik-config.yaml:ro
+      - ./kube:/output
+    ports:
+      - "6443:6443"   # API de Kubernetes
+      - "8080:80"     # Traefik: la entrada del Gateway
+
+  agent1:
+    &lt;&lt;: *node
+    hostname: k3s-agent1
+    command: ["agent"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_URL: https://server:6443
+
+  agent2:
+    &lt;&lt;: *node
+    hostname: k3s-agent2
+    command: ["agent"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_URL: https://server:6443
+
+  # Registro de imágenes local: docker push localhost:5000/cuentas:1 desde tu máquina,
+  # y los nodos la bajan de registry:5000 (ver registries.yaml).
+  registry:
+    image: registry:3
+    ports:
+      - "5000:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Tres nodos de verdad</dt><dd>Cada contenedor corre el mismo binario de k3s que instalarías en una máquina: <code>server</code> es el control plane y también acepta pods, y los dos <code>agent</code> se unen con <code>K3S_TOKEN</code>. Con tres nodos tiene sentido repartir pods, drenar uno y poner el primario y la réplica en nodos distintos.</dd></div>
+        <div><dt>Privilegiado</dt><dd>k3s arranca su propio containerd y maneja cgroups y redes dentro del contenedor, así que necesita <code>privileged</code>. Es un laboratorio: no lo hagas con contenedores que no controlas.</dd></div>
+        <div><dt>El kubeconfig, en tu carpeta</dt><dd><code>K3S_KUBECONFIG_OUTPUT</code> lo escribe en <code>cluster/kube/kubeconfig.yaml</code>, apuntando a <code>https://127.0.0.1:6443</code>. <code>--tls-san=127.0.0.1</code> mete esa dirección en el certificado del API.</dd></div>
+        <div><dt>Puertos</dt><dd>6443, el API de Kubernetes. 8080, el puerto 80 de Traefik: es la entrada de todos los requests. 5000, el registro de imágenes.</dd></div>
+        <div><dt>Versión fija</dt><dd><code>rancher/k3s:v1.36.5-k3s1</code> era la del canal estable de k3s al escribir esta guía, con Traefik en el chart 40.1.0.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="cluster/registries.yaml"><code>mirrors:
+  "localhost:5000":
+    endpoint:
+      - "http://registry:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Un nombre, dos lugares</dt><dd>Desde tu máquina empujas a <code>localhost:5000/cuentas:1</code>. Dentro de un nodo, <code>localhost</code> es el propio nodo, así que el mirror le dice a containerd que esa imagen se baja de <code>http://registry:5000</code>, el nombre del registro en la red del compose. El manifiesto usa el mismo nombre que tú.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="cluster/traefik-config.yaml"><code># k3s instala Traefik con Helm. Este HelmChartConfig le cambia los valores sin tocar el chart:
+# enciende el proveedor de Gateway API y no crea un Gateway propio (el nuestro está en k8s/gateway.yaml).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    providers:
+      kubernetesGateway:
+        enabled: true
+    gateway:
+      enabled: false</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Gateway API, no Ingress</dt><dd>k3s instala Traefik con Helm, y cualquier archivo en <code>/var/lib/rancher/k3s/server/manifests</code> se aplica solo. Este <code>HelmChartConfig</code> enciende el proveedor de Gateway API, que crea la <code>GatewayClass</code> <code>traefik</code>, y apaga el Gateway que trae el chart, porque el tuyo está en <code>k8s/gateway.yaml</code>.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: cuentas
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    # En milisegundos: sin conexión en 5 s, el request falla. Con el valor por defecto (30 s), una caída del primario cuelga cada request medio minuto.
+    hikari:
+      connection-timeout: 5000
+  mvc:
+    problemdetails:
+      enabled: true
+  # Al recibir SIGTERM, deja de aceptar requests nuevas y espera hasta 20 s a que terminen las que están en curso.
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  version: ${APP_VERSION:1}
+  bcrypt-cost: 10
+  session-ttl: 1h</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Configurado por variables</dt><dd>La URL, el usuario y la contraseña salen de <code>DB_URL</code>, <code>DB_USER</code> y <code>DB_PASSWORD</code>, con valores para correr fuera del clúster. Kubernetes los llena desde el Secret que crea CloudNativePG.</dd></div>
+        <div><dt>Apagado ordenado</dt><dd>Con <code>server.shutdown: graceful</code>, al recibir SIGTERM Tomcat deja de aceptar requests nuevos y espera hasta 20&#8239;s a que terminen los que están en curso.</dd></div>
+        <div><dt>5&#8239;s sin conexión</dt><dd>El <code>connection-timeout</code> de Hikari es cuánto espera un request por una conexión del pool. Por defecto son 30&#8239;s: durante un failover, cada request queda colgado medio minuto. Lo vas a medir.</dd></div>
+        <div><dt>Las probes</dt><dd><code>management.endpoint.health.probes.enabled</code> expone los grupos <code>liveness</code> y <code>readiness</code>. Spring Boot no mete la base en ninguno de los dos por defecto. <span class="badge badge--doc">Documentado</span></dd></div>
+      </dl>
+
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/cuentas-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM es el proceso 1 y recibe el SIGTERM de Kubernetes directamente.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el código de la aplicación: CuentasApplication, AppProps, las cuentas y PodHeaders</summary>
+        <div class="solution-body">
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__cuentas.sql"><code>CREATE TABLE accounts (
+    id            bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email         text        NOT NULL,
+    password_hash text        NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX accounts_email ON accounts (lower(email));
+
+-- Se guarda el SHA-256 del token, nunca el token.
+CREATE TABLE sessions (
+    token_hash bytea       PRIMARY KEY,
+    account_id bigint      NOT NULL REFERENCES accounts (id),
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX sessions_expires ON sessions (expires_at);</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/CuentasApplication.java"><code>package lab.cuentas;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+public class CuentasApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(CuentasApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/AppProps.java"><code>package lab.cuentas;
+
+import java.time.Duration;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties("app")
+public record AppProps(String version, int bcryptCost, Duration sessionTtl) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/Account.java"><code>package lab.cuentas.accounts;
+
+import java.time.OffsetDateTime;
+
+public record Account(long id, String email, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/Session.java"><code>package lab.cuentas.accounts;
+
+import java.time.OffsetDateTime;
+
+public record Session(String token, OffsetDateTime expiresAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/Unauthorized.java"><code>package lab.cuentas.accounts;
+
+import java.net.URI;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.ErrorResponseException;
+
+/** El mismo 401 para "no existe ese correo" y "la contraseña no coincide": no le dice a nadie qué correos hay. */
+public class Unauthorized extends ErrorResponseException {
+
+    public Unauthorized() {
+        super(HttpStatus.UNAUTHORIZED, problem(), null);
+        getHeaders().set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+    }
+
+    private static ProblemDetail problem() {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED,
+                "Credenciales inválidas o sesión vencida");
+        problem.setType(URI.create("https://cuentas.example/problemas/no-autorizado"));
+        return problem;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/AccountRepository.java"><code>package lab.cuentas.accounts;
+
+import java.time.OffsetDateTime;
+import java.util.Optional;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class AccountRepository {
+
+    public record Credentials(long id, String passwordHash) {
+    }
+
+    private final JdbcClient jdbc;
+
+    public AccountRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** Vacío si el correo ya existe, sin importar mayúsculas: lo decide el índice único sobre lower(email). */
+    public Optional&lt;Account&gt; insert(String email, String passwordHash) {
+        return jdbc.sql("""
+                INSERT INTO accounts (email, password_hash) VALUES (:email, :hash)
+                ON CONFLICT ((lower(email))) DO NOTHING
+                RETURNING id, email, created_at
+                """)
+                .param("email", email)
+                .param("hash", passwordHash)
+                .query(Account.class)
+                .optional();
+    }
+
+    public Optional&lt;Credentials&gt; credentials(String email) {
+        return jdbc.sql("SELECT id, password_hash FROM accounts WHERE lower(email) = lower(:email)")
+                .param("email", email)
+                .query(Credentials.class)
+                .optional();
+    }
+
+    public void insertSession(byte[] tokenHash, long accountId, OffsetDateTime expiresAt) {
+        jdbc.sql("INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (:hash, :account, :expires)")
+                .param("hash", tokenHash)
+                .param("account", accountId)
+                .param("expires", expiresAt)
+                .update();
+    }
+
+    public Optional&lt;Account&gt; bySession(byte[] tokenHash) {
+        return jdbc.sql("""
+                SELECT a.id, a.email, a.created_at
+                  FROM sessions s JOIN accounts a ON a.id = s.account_id
+                 WHERE s.token_hash = :hash AND s.expires_at &gt; now()
+                """)
+                .param("hash", tokenHash)
+                .query(Account.class)
+                .optional();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/AccountService.java"><code>package lab.cuentas.accounts;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Base64;
+
+import lab.cuentas.AppProps;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class AccountService {
+
+    private final AccountRepository repo;
+    private final BCryptPasswordEncoder encoder;
+    private final Duration sessionTtl;
+    private final SecureRandom random = new SecureRandom();
+    /** Se compara contra este hash cuando el correo no existe, para que las dos respuestas tarden lo mismo. */
+    private final String dummyHash;
+
+    public AccountService(AccountRepository repo, AppProps props) {
+        this.repo = repo;
+        this.encoder = new BCryptPasswordEncoder(props.bcryptCost());
+        this.sessionTtl = props.sessionTtl();
+        this.dummyHash = encoder.encode("una contraseña que nadie tiene");
+    }
+
+    public Account register(String email, String password) {
+        if (!fitsBcrypt(password)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La contraseña no puede pasar de 72 bytes");
+        }
+        // bcrypt cuesta CPU a propósito: con costo 10, su parte más cara da 2^10 = 1024 vueltas. Es lo que hace escalar este servicio.
+        String hash = encoder.encode(password);
+        return repo.insert(email, hash).orElseThrow(() -&gt;
+                new ResponseStatusException(HttpStatus.CONFLICT, "Ya existe una cuenta con ese correo"));
+    }
+
+    public Session login(String email, String password) {
+        var credentials = repo.credentials(email);
+        String hash = credentials.map(AccountRepository.Credentials::passwordHash).orElse(dummyHash);
+        // Nadie se registró con más de 72 bytes: esa contraseña no coincide con ninguna, y el encoder ni la ve.
+        boolean matches = fitsBcrypt(password) &amp;&amp; encoder.matches(password, hash);
+        if (credentials.isEmpty() || !matches) {
+            throw new Unauthorized();
+        }
+        byte[] raw = new byte[32];
+        random.nextBytes(raw);
+        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
+        OffsetDateTime expiresAt = OffsetDateTime.now(ZoneOffset.UTC).plus(sessionTtl);
+        // En la base solo queda el SHA-256 del token: quien lea la tabla no puede usar las sesiones.
+        repo.insertSession(sha256(token), credentials.get().id(), expiresAt);
+        return new Session(token, expiresAt);
+    }
+
+    public Account me(String authorization) {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            throw new Unauthorized();
+        }
+        return repo.bySession(sha256(authorization.substring(7))).orElseThrow(Unauthorized::new);
+    }
+
+    /** bcrypt solo usa los primeros 72 bytes, y en UTF-8 una ñ son dos: @Size cuenta caracteres, aquí se cuentan bytes. */
+    static boolean fitsBcrypt(String password) {
+        return password.getBytes(StandardCharsets.UTF_8).length &lt;= 72;
+    }
+
+    static byte[] sha256(String token) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/accounts/AccountController.java"><code>package lab.cuentas.accounts;
+
+import java.net.URI;
+import java.util.Map;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class AccountController {
+
+    // bcrypt solo mira los primeros 72 bytes: una contraseña más larga se rechaza en vez de recortarse en silencio.
+    // @Size cuenta caracteres; los bytes los revisa AccountService.fitsBcrypt.
+    public record NewAccount(@NotBlank @Email String email, @NotBlank @Size(min = 8, max = 72) String password) {
+    }
+
+    public record Login(@NotBlank String email, @NotBlank String password) {
+    }
+
+    private final AccountService accounts;
+
+    public AccountController(AccountService accounts) {
+        this.accounts = accounts;
+    }
+
+    @PostMapping("/api/accounts")
+    public ResponseEntity&lt;Account&gt; register(@Valid @RequestBody NewAccount body) {
+        Account account = accounts.register(body.email(), body.password());
+        return ResponseEntity.created(URI.create("/api/accounts/" + account.id())).body(account);
+    }
+
+    @PostMapping("/api/sessions")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Session login(@Valid @RequestBody Login body) {
+        return accounts.login(body.email(), body.password());
+    }
+
+    @GetMapping("/api/me")
+    public Map&lt;String, Object&gt; me(@RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        Account account = accounts.me(authorization);
+        return Map.of("id", account.id(), "email", account.email());
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/cuentas/web/PodHeaders.java"><code>package lab.cuentas.web;
+
+import java.io.IOException;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lab.cuentas.AppProps;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+/** Cada respuesta dice qué pod la atendió y con qué versión: así se ve el rolling update desde afuera. */
+@Component
+public class PodHeaders extends OncePerRequestFilter {
+
+    private final String pod;
+    private final String version;
+
+    public PodHeaders(@Value("${POD_NAME:${HOSTNAME:local}}") String pod, AppProps props) {
+        this.pod = pod;
+        this.version = props.version();
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        response.setHeader("X-Pod", pod);
+        response.setHeader("X-Version", version);
+        chain.doFilter(request, response);
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-cluster">Paso 1. El clúster</h3>
+
+<pre data-lang="bash"><code>cd cluster
+mkdir -p kube
+docker compose up -d
+# En Git Bash, kubectl.exe necesita la ruta de Windows: pwd -W la da, y en Linux o macOS se usa pwd.
+export KUBECONFIG="$(pwd -W 2&gt;/dev/null || pwd)/kube/kubeconfig.yaml"
+until [ -f kube/kubeconfig.yaml ] &amp;&amp; [ "$(kubectl get nodes --no-headers 2&gt;/dev/null | grep -c ' Ready')" = 3 ]; do sleep 2; done
+kubectl get nodes -o wide
+cd ..</code></pre>
+
+<pre data-lang="bash"><code>NAME         STATUS   ROLES           AGE   VERSION        INTERNAL-IP   EXTERNAL-IP   OS-IMAGE
+k3s-agent1   Ready    &lt;none&gt;          12s   v1.36.5+k3s1   172.21.0.2    &lt;none&gt;        K3s v1.36.5+k3s1
+k3s-agent2   Ready    &lt;none&gt;          9s    v1.36.5+k3s1   172.21.0.4    &lt;none&gt;        K3s v1.36.5+k3s1
+k3s-server   Ready    control-plane   19s   v1.36.5+k3s1   172.21.0.3    &lt;none&gt;        K3s v1.36.5+k3s1</code></pre>
+
+      <p>Los tres nodos tienen que aparecer en <code>Ready</code>, con la misma versión. Traefik tarda más: lo instala un Job de Helm. En esta corrida, 30&#8239;s después de ver los nodos, Traefik todavía estaba creando su contenedor y la <code>GatewayClass</code> acababa de aparecer, con <code>ACCEPTED</code> en <code>Unknown</code>. Cuando apliques el Gateway, en el paso 6, su <code>PROGRAMMED</code> en <code>True</code> confirma que Traefik la aceptó.</p>
+
+<pre data-lang="bash"><code>until kubectl get gatewayclass traefik &gt; /dev/null 2&gt;&amp;1; do sleep 2; done
+kubectl get gatewayclass</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>k3s dentro de Docker Compose: tres nodos en un archivo que puedes leer, con un registro al lado. k3s trae lo que un clúster necesita para este proyecto: Traefik, un provisionador de volúmenes locales (<code>local-path</code>) y <code>metrics-server</code>, que es lo que mira el HPA.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un clúster administrado en la nube, que cuesta por hora y esconde los nodos. Minikube o el Kubernetes de Docker Desktop, de un solo nodo: no se puede drenar un nodo y que el resto siga. k3d y kind, que también arman nodos en contenedores, pero con su propia herramienta encima; aquí el compose deja ver cada pieza.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el 8080, el 6443 o el 5000 ya estén ocupados: <code>docker compose up</code> falla con "port is already allocated". Que exportes <code>KUBECONFIG</code> en otra terminal: cada terminal nueva lo necesita. Y que los nodos queden en <code>NotReady</code> o que los pods se reinicien si Docker tiene poca memoria: solo los 8 pods de la app pueden llegar a 4&#8239;GiB, 8 × 512&#8239;MiB, y además corren k3s, Traefik, PostgreSQL y PgBouncer.</dd></div>
+      </dl>
+
+      <h3 id="paso-base">Paso 2. PostgreSQL con un operador</h3>
+
+<pre data-lang="yaml" data-file="k8s/namespace.yaml"><code>apiVersion: v1
+kind: Namespace
+metadata:
+  name: cuentas</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/db.yaml"><code># PostgreSQL con CloudNativePG: un primario y una réplica en nodos distintos. El operador hace el failover.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cuentas-db
+  namespace: cuentas
+spec:
+  instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+  storage:
+    size: 1Gi
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+---
+# PgBouncer delante del primario: los pods de la aplicación se conectan aquí, no a PostgreSQL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: cuentas-db-pooler-rw
+  namespace: cuentas
+spec:
+  cluster:
+    name: cuentas-db
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "20"
+      # Tras un failover, las conexiones al primario muerto se abandonan a los 3 s (por defecto, 15).
+      server_connect_timeout: "3"
+      server_login_retry: "1"</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply --server-side -f \
+  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
+kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=180s
+kubectl apply -f k8s/namespace.yaml &amp;&amp; kubectl apply -f k8s/db.yaml
+kubectl -n cuentas wait cluster/cuentas-db --for=condition=Ready --timeout=300s
+kubectl -n cuentas get pods -o wide</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>CloudNativePG 1.30.1: un operador que entiende PostgreSQL. Con un <code>Cluster</code> de dos instancias crea el primario, clona la réplica, arma la replicación por streaming, el usuario <code>app</code> con su Secret <code>cuentas-db-app</code>, y tres Services: <code>cuentas-db-rw</code>, que siempre apunta al primario, <code>cuentas-db-ro</code>, a las réplicas, y <code>cuentas-db-r</code>, a cualquiera. <span class="badge badge--doc">Documentado</span> Si el primario se cae, promueve la réplica y mueve <code>cuentas-db-rw</code>. El <code>Pooler</code> pone dos PgBouncer delante de <code>cuentas-db-rw</code>. <code>enablePodAntiAffinity</code> le pide al scheduler cada instancia en un nodo distinto. Es una preferencia, porque <code>podAntiAffinityType</code> vale <code>preferred</code> por defecto; con <code>required</code>, una instancia sin nodo libre queda en <code>Pending</code>. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un StatefulSet con la imagen de PostgreSQL. Arranca, pero el failover es tuyo: promover, crear el slot, apuntar la otra réplica y mover el tráfico, los pasos que en A04 se hacen a mano. También descartas la base fuera del clúster: es lo normal en producción, con un servicio administrado, pero aquí quieres ver el failover.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Los volúmenes de <code>local-path</code> son una carpeta en un nodo: el pod de cada instancia queda atado a su nodo. Si el nodo no vuelve, esa instancia no arranca en otro, y el operador tiene que crear una réplica nueva desde cero. Y <code>imageName</code> va fijo: sin él, cada versión del operador trae su propia imagen por defecto, y una actualización del operador cambiaría la versión de PostgreSQL.</dd></div>
+      </dl>
+
+      <h3 id="paso-imagen">Paso 3. La imagen, en el registro local</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package
+docker build -t localhost:5000/cuentas:1 .
+docker push localhost:5000/cuentas:1</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Una imagen por versión, con su número en la etiqueta, en un registro que ven los tres nodos. Docker acepta empujar a <code>localhost:5000</code> sin TLS. <span class="badge badge--doc">Documentado</span> La JVM es el proceso 1 del contenedor (<code>ENTRYPOINT</code> en forma de lista), así que le llega el SIGTERM de Kubernetes, y no a un shell que no lo pasa.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>La etiqueta <code>latest</code>. Con ella, dos pods del mismo Deployment pueden correr imágenes distintas según cuándo la bajó cada nodo, y un rollback no tiene a qué volver. También descartas cargar la imagen a mano en cada nodo: funciona, pero cada nodo nuevo la necesita.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que un pod quede en <code>ErrImagePull</code>: casi siempre es el mirror de <code>registries.yaml</code>, o una imagen que no empujaste. <code>kubectl -n cuentas describe pod</code> dice desde dónde la intentó bajar.</dd></div>
+      </dl>
+
+      <h3 id="paso-deployment">Paso 4. El Deployment: arrancar, recibir y apagarse</h3>
+
+<pre data-lang="yaml" data-file="k8s/app.yaml"><code>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cuentas
+  namespace: cuentas
+spec:
+  # Sin "replicas": las decide el HorizontalPodAutoscaler. Si estuviera aquí, cada kubectl apply lo pisaría.
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: cuentas
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1          # crea un pod nuevo antes de bajar uno viejo
+      maxUnavailable: 0    # nunca hay menos pods listos que los pedidos
+  template:
+    metadata:
+      labels:
+        app: cuentas
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: cuentas
+      containers:
+        - name: app
+          image: localhost:5000/cuentas:1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: APP_VERSION
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DB_URL
+              value: jdbc:postgresql://cuentas-db-pooler-rw:5432/app
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: cuentas-db-app, key: username }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: cuentas-db-app, key: password }
+            # Flyway va directo al primario, como en A00: en modo transaction, el SET de una migración y el ALTER que le sigue pueden caer en conexiones distintas.
+            - name: SPRING_FLYWAY_URL
+              value: jdbc:postgresql://cuentas-db-rw:5432/app
+            - name: SPRING_FLYWAY_USER
+              valueFrom:
+                secretKeyRef: { name: cuentas-db-app, key: username }
+            - name: SPRING_FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: cuentas-db-app, key: password }
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 384Mi
+            limits:
+              memory: 512Mi
+          # Mientras arranca la JVM, solo cuenta esta prueba: hasta 2 min antes de darla por muerta.
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # Lista para recibir tráfico. Si falla dos veces, el pod sale del Service, pero no se reinicia.
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Viva. Si falla tres veces seguidas, Kubernetes reinicia el contenedor.
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Antes del SIGTERM, 5 s para que el Gateway y los Endpoints se enteren de que este pod se va.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cuentas
+  namespace: cuentas
+spec:
+  selector:
+    app: cuentas
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+      <p>Hay tres pruebas, y cada una decide algo distinto:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Prueba</th><th>Pregunta</th><th>Si falla</th><th>Aquí</th></tr></thead>
+          <tbody>
+            <tr><td><code>startupProbe</code></td><td>¿Terminó de arrancar?</td><td>Mientras no pase, las otras dos no corren. Si no pasa en el plazo, reinicia el contenedor.</td><td>Cada 2&#8239;s, hasta 60 veces: 2 minutos.</td></tr>
+            <tr><td><code>readinessProbe</code></td><td>¿Puede recibir tráfico?</td><td>Saca el pod del Service. No lo reinicia.</td><td>Cada 2&#8239;s; fuera a las 2 fallas.</td></tr>
+            <tr><td><code>livenessProbe</code></td><td>¿Sigue vivo?</td><td>Reinicia el contenedor.</td><td>Cada 10&#8239;s; reinicio a las 3 fallas.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Reemplazar pods sin que nadie lo note. <code>maxSurge: 1</code> y <code>maxUnavailable: 0</code>: primero arranca un pod nuevo, y solo cuando pasa la readiness se baja uno viejo. Al bajarlo, Kubernetes lo saca de los Endpoints y le corre el <code>preStop</code> a la vez; los 5&#8239;s de <code>sleep</code> le dan tiempo a Traefik para enterarse antes de que llegue el SIGTERM. Es la acción <code>sleep</code> del propio Kubernetes, así que la imagen no necesita traer el comando. <span class="badge badge--doc">Documentado</span> Después, el apagado ordenado termina lo que estaba en curso. <code>terminationGracePeriodSeconds: 30</code> cubre los 5 más los 20, con margen.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Poner la base en las probes. Si la liveness preguntara por la base, una caída del primario reiniciaría todos los pods a la vez, y tendrían que arrancar de nuevo justo cuando la base vuelve. Si la readiness preguntara por la base, el Gateway se quedaría sin pods y respondería 503 sin decir nada; así, cada pod responde un error claro a los 5&#8239;s de Hikari. También descartas <code>replicas</code> en el Deployment: lo decide el HPA, y cada <code>kubectl apply</code> lo volvería a fijar. Y, por ahora, blue-green y canary. Blue-green tiene dos Deployments completos y cambia la ruta de golpe; canary manda un porcentaje del tráfico a la versión nueva, con pesos en el <code>HTTPRoute</code>. <span class="badge badge--doc">Documentado</span> Sirven para volver atrás en segundos o probar con poco tráfico, a cambio del doble de pods o de alguien que mueva los pesos.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Quitar el <code>preStop</code> porque "ya hay apagado ordenado". Sacar el pod de los Endpoints y mandarle el SIGTERM pasan al mismo tiempo, y Traefik tarda un momento en enterarse: sin la espera, algunos requests llegan a un pod que ya cerró el puerto, y Traefik responde 502. Lo vas a medir. Y <code>requests.cpu</code> sin <code>limits.cpu</code> deja que un pod use más CPU que la que pidió si el nodo la tiene libre, cosa que bcrypt aprovecha; la memoria sí tiene límite, y con <code>-XX:MaxRAMPercentage=75</code> el heap puede crecer hasta 384&#8239;MiB de los 512. El resto queda para lo que la JVM usa fuera del heap, como los hilos y el metaspace.</dd></div>
+      </dl>
+
+      <h3 id="paso-gateway">Paso 5. La entrada, con Gateway API</h3>
+
+<pre data-lang="yaml" data-file="k8s/gateway.yaml"><code>apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: entrada
+  namespace: cuentas
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: web
+      protocol: HTTP
+      port: 8000          # el entryPoint "web" de Traefik; afuera es el 80 del Service de Traefik
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: cuentas
+  namespace: cuentas
+spec:
+  parentRefs:
+    - name: entrada
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /api }
+      backendRefs:
+        - name: cuentas
+          port: 8080</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un <code>Gateway</code> con su listener y un <code>HTTPRoute</code> que manda <code>/api</code> al Service. Son dos recursos porque los maneja gente distinta: el Gateway es de quien opera la entrada, y cada equipo escribe sus rutas. Traefik escucha en el entryPoint <code>web</code>, que adentro es el 8000. ServiceLB, el balanceador que trae k3s, publica el Service de Traefik en el puerto 80 de cada nodo, y el compose saca el 80 del server al 8080 de tu máquina. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un <code>Ingress</code>. Funciona con Traefik, pero lo que no cabe en él, como reescrituras o pesos entre versiones, va en anotaciones propias de cada controlador. Gateway API lo pone en el recurso, igual para cualquier controlador. Y un Service <code>NodePort</code> por aplicación: un puerto por servicio, sin rutas.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Poner <code>port: 80</code> en el listener. El puerto del listener tiene que ser el de un entryPoint de Traefik, y dentro del pod Traefik no escucha en el 80: un listener que no coincide con ninguno no se programa. <span class="badge badge--doc">Documentado</span> <code>kubectl -n cuentas get gateway</code> tiene que decir <code>PROGRAMMED True</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-escalar">Paso 6. Escalar y aguantar un mantenimiento</h3>
+
+<pre data-lang="yaml" data-file="k8s/scaling.yaml"><code># Entre 2 y 8 pods, apuntando a usar el 60 % del CPU pedido (300m de los 500m de cada pod).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cuentas
+  namespace: cuentas
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cuentas
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 60
+---
+# Un drain o una actualización del nodo nunca deja menos de un pod listo.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cuentas
+  namespace: cuentas
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: cuentas</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/app.yaml -f k8s/gateway.yaml -f k8s/scaling.yaml
+kubectl -n cuentas rollout status deploy/cuentas --timeout=300s
+kubectl -n cuentas get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName
+kubectl -n cuentas get gateway,httproute
+curl -s -i -X POST localhost:8080/api/accounts -H 'Content-Type: application/json' \
+     -d '{"email": "prueba@example.com", "password": "una-clave-larga"}' | grep -E '^(HTTP|X-)'</code></pre>
+
+<pre data-lang="bash"><code>NAME                                    STATUS    NODE
+cuentas-6d7bc5c6c5-7c4b5                Running   k3s-agent1
+cuentas-6d7bc5c6c5-qzncm                Running   k3s-server
+cuentas-db-1                            Running   k3s-agent1
+cuentas-db-2                            Running   k3s-agent2
+cuentas-db-pooler-rw-84f9bcb77c-dhtw4   Running   k3s-agent2
+cuentas-db-pooler-rw-84f9bcb77c-rbtrm   Running   k3s-server
+NAME                                        CLASS     ADDRESS      PROGRAMMED   AGE
+gateway.gateway.networking.k8s.io/entrada   traefik   172.21.0.2   True         51s
+
+NAME                                          HOSTNAMES   AGE
+httproute.gateway.networking.k8s.io/cuentas               51s
+HTTP/1.1 201 Created
+X-Pod: cuentas-6d7bc5c6c5-qzncm
+X-Version: 1</code></pre>
+
+      <p>El primario y la réplica quedaron en nodos distintos, y los dos pods de la app también: es el anti-affinity de la base y el <code>topologySpreadConstraints</code> de la app.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un HPA por CPU, de 2 a 8 pods, apuntando al 60&#8239;% de lo pedido: 300m de los 500m de cada pod. La cuenta del HPA es <code>ceil(pods × uso actual / objetivo)</code>, y no cambia nada si el cociente queda a menos de un 10&#8239;% de 1. <span class="badge badge--doc">Documentado</span> <code>behavior</code> le pone freno: sube 2 pods cada 15&#8239;s como mucho, y para bajar espera 60&#8239;s de uso bajo. El PodDisruptionBudget dice que un drain, o una actualización de nodos, nunca puede sacar más de un pod de la app a la vez.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Escalar por requests por segundo o por latencia. Necesitan un adaptador de métricas, y aquí la CPU es exactamente lo que se agota: cada inicio de sesión es un bcrypt. Y un mínimo de 1 pod: un drain o un pod que se reinicia dejarían el servicio sin nadie.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el HPA llegue al máximo y siga sin alcanzar: la latencia sube y ya no hay a quién sumar. Pasa en la rampa de esta guía, y la fórmula lo predice. Y que el máximo no quepa en los nodos: 8 pods piden 4 núcleos, y si no los hay, los pods nuevos quedan en <code>Pending</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-carga">Paso 7. La carga y las escrituras</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/cuentas/CuentasSimulation.java"><code>package lab.cuentas;
+
+import static io.gatling.javaapi.core.CoreDsl.StringBody;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.atOnceUsers;
+import static io.gatling.javaapi.core.CoreDsl.exec;
+import static io.gatling.javaapi.core.CoreDsl.jsonPath;
+import static io.gatling.javaapi.core.CoreDsl.rampUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.repeat;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
+
+import io.gatling.javaapi.core.OpenInjectionStep;
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+
+/**
+ * Primero registra 200 cuentas (si ya existen, el 409 está bien) y después inicia sesión y pregunta quién es.
+ * ./mvnw gatling:test -Drps=20 -Dseconds=90 [-Dramp=60 -Dfrom=5]
+ */
+public class CuentasSimulation extends Simulation {
+
+    int rps = Integer.getInteger("rps", 20);
+    int seconds = Integer.getInteger("seconds", 90);
+    int ramp = Integer.getInteger("ramp", 0);
+    int from = Integer.getInteger("from", 1);
+    static final int ACCOUNTS = 200;
+
+    HttpProtocolBuilder protocolo = http.baseUrl(System.getProperty("baseUrl", "http://localhost:8080"))
+            .contentTypeHeader("application/json")
+            .shareConnections();
+
+    ScenarioBuilder registrar = scenario("Registrar")
+            .repeat(ACCOUNTS, "i").on(
+                    exec(http("POST cuenta").post("/api/accounts")
+                            .body(StringBody("{\"email\": \"u#{i}@example.com\", \"password\": \"clave-#{i}-segura\"}"))
+                            .check(status().in(201, 409))));
+
+    Iterator&lt;Map&lt;String, Object&gt;&gt; usuarios = Stream.generate(() -&gt;
+            Map.&lt;String, Object&gt;of("i", ThreadLocalRandom.current().nextInt(ACCOUNTS))).iterator();
+
+    ScenarioBuilder entrar = scenario("Entrar")
+            .feed(usuarios)
+            .exec(http("POST sesión").post("/api/sessions")
+                    .body(StringBody("{\"email\": \"u#{i}@example.com\", \"password\": \"clave-#{i}-segura\"}"))
+                    .check(status().is(201), jsonPath("$.token").saveAs("token")))
+            .exec(http("GET yo").get("/api/me").header("Authorization", "Bearer #{token}").check(status().is(200)));
+
+    {
+        OpenInjectionStep[] carga = ramp &gt; 0
+                ? new OpenInjectionStep[] {rampUsersPerSec(from).to(rps).during(ramp), constantUsersPerSec(rps).during(seconds)}
+                : new OpenInjectionStep[] {constantUsersPerSec(rps).during(seconds)};
+        setUp(registrar.injectOpen(atOnceUsers(1)).andThen(entrar.injectOpen(carga))).protocols(protocolo);
+    }
+}</code></pre>
+
+<pre data-lang="python" data-file="scripts/escrituras.py"><code># Uso: python scripts/escrituras.py &lt;segundos&gt; &lt;archivo.json&gt; [timeout]
+# Registra una cuenta cada 100 ms y anota en qué segundo falla cada intento.
+import json, sys, time, uuid, urllib.request, urllib.error
+secs, out = float(sys.argv[1]), sys.argv[2]
+t0 = time.time(); fails = []; ok = 0
+while time.time() - t0 &lt; secs:
+    t = time.time() - t0
+    body = json.dumps({"email": "w-%s@example.com" % uuid.uuid4().hex[:12], "password": "clave-larga-1"}).encode()
+    req = urllib.request.Request("http://localhost:8080/api/accounts", data=body, headers={"content-type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=float(sys.argv[3]) if len(sys.argv) &gt; 3 else 10).read(); ok += 1
+    except urllib.error.HTTPError as e:
+        fails.append((round(t, 1), e.code))
+    except Exception as e:
+        fails.append((round(t, 1), type(e).__name__))
+    time.sleep(max(0, 0.1 - (time.time() - t0 - t)))
+first, last = (fails[0][0], fails[-1][0]) if fails else (None, None)
+summary = {"ok": ok, "fallas": len(fails), "primera": first, "última": last,
+           "códigos": sorted({str(c) for _, c in fails})}
+json.dump({"resumen": summary, "fallas": fails}, open(out, "w"))
+print(json.dumps(summary, ensure_ascii=False))</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos mediciones distintas. Gatling mide lo que ve un usuario: registra 200 cuentas una vez y después inicia sesión y pregunta quién es, a un ritmo fijo o en rampa. <code>escrituras.py</code> mide cuándo se puede escribir en la base: un registro cada 100&#8239;ms, con un timeout corto, para ver el segundo exacto en que empieza y termina un corte. Cada corrida de Gatling deja su reporte en <code>target/gatling/cuentassimulation-&lt;fecha&gt;/index.html</code>, con los requests, los KO y los percentiles de cada request: las tablas de esta guía muestran esos números.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Medir el corte solo con Gatling. Sus inicios de sesión también escriben, pero un request que espera 30&#8239;s por una conexión aparece en el reporte como una latencia alta, no como un hueco con principio y fin.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Medir con la JVM fría: los primeros inicios de sesión tardan el doble. Antes de cada medición, deja pasar unos segundos de carga.</dd></div>
+      </dl>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a07-cuentas"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta un PostgreSQL 18 con Testcontainers, con bcrypt en costo 4 para que no tarde, y corre cuatro pruebas:</p>
+
+      <ul>
+        <li>Registrarse, ver el 409 con el mismo correo en mayúsculas, iniciar sesión con otras mayúsculas y preguntar quién eres; en la tabla está el hash del token, no el token.</li>
+        <li>El 401 de un correo que no existe y el de una contraseña mala son idénticos, byte por byte.</li>
+        <li>Una contraseña de más de 72 bytes da 400, en vez de recortarse en silencio: 73 letras, o 40 eñes, que en UTF-8 son 80 bytes.</li>
+        <li><code>/actuator/health/liveness</code> y <code>/readiness</code> responden 200.</li>
+      </ul>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver AccountApiTest.java y TestcontainersConfig.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/cuentas/accounts/AccountApiTest.java"><code>package lab.cuentas.accounts;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.cuentas.TestcontainersConfig;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+@SpringBootTest(properties = "app.bcrypt-cost=4")
+@AutoConfigureMockMvc
+@Import(TestcontainersConfig.class)
+class AccountApiTest {
+
+    @Autowired
+    MockMvcTester mvc;
+    @Autowired
+    JdbcClient jdbc;
+
+    @Test
+    void registrarseEntrarYPreguntarQuienSoy() throws Exception {
+        assertThat(post("/api/accounts", "{\"email\": \"ana@example.com\", \"password\": \"correcta-123\"}"))
+                .hasStatus(HttpStatus.CREATED);
+        assertThat(post("/api/accounts", "{\"email\": \"ANA@example.com\", \"password\": \"otra-cosa-456\"}"))
+                .hasStatus(HttpStatus.CONFLICT);
+
+        MvcTestResult login = post("/api/sessions", "{\"email\": \"Ana@Example.com\", \"password\": \"correcta-123\"}");
+        assertThat(login).hasStatus(HttpStatus.CREATED);
+        String token = JsonPath.read(login.getResponse().getContentAsString(), "$.token");
+
+        assertThat(mvc.get().uri("/api/me").header("Authorization", "Bearer " + token))
+                .hasStatusOk().bodyJson().extractingPath("$.email").isEqualTo("ana@example.com");
+        assertThat(mvc.get().uri("/api/me").header("Authorization", "Bearer inventado"))
+                .hasStatus(HttpStatus.UNAUTHORIZED).headers().hasValue("WWW-Authenticate", "Bearer");
+
+        // En la tabla está el hash del token, no el token.
+        assertThat(jdbc.sql("SELECT count(*) FROM sessions WHERE token_hash = :h")
+                .param("h", AccountService.sha256(token)).query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void elMismo401ParaCorreoInexistenteYContrasenaMala() throws Exception {
+        post("/api/accounts", "{\"email\": \"beto@example.com\", \"password\": \"correcta-123\"}");
+        MvcTestResult wrong = post("/api/sessions", "{\"email\": \"beto@example.com\", \"password\": \"mala-mala\"}");
+        MvcTestResult nobody = post("/api/sessions", "{\"email\": \"nadie@example.com\", \"password\": \"mala-mala\"}");
+        assertThat(wrong).hasStatus(HttpStatus.UNAUTHORIZED);
+        assertThat(nobody).hasStatus(HttpStatus.UNAUTHORIZED);
+        assertThat(wrong.getResponse().getContentAsString()).isEqualTo(nobody.getResponse().getContentAsString());
+    }
+
+    @Test
+    void unaContrasenaDeMasDe72BytesSeRechaza() {
+        String larga = "x".repeat(73);
+        assertThat(post("/api/accounts", "{\"email\": \"caro@example.com\", \"password\": \"" + larga + "\"}"))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+        // 40 caracteres pasan el @Size, pero en UTF-8 son 80 bytes.
+        String enies = "ñ".repeat(40);
+        assertThat(post("/api/accounts", "{\"email\": \"caro@example.com\", \"password\": \"" + enies + "\"}"))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void lasPruebasDeKubernetesResponden() {
+        assertThat(mvc.get().uri("/actuator/health/liveness")).hasStatusOk();
+        assertThat(mvc.get().uri("/actuator/health/readiness")).hasStatusOk();
+    }
+
+    MvcTestResult post(String uri, String json) {
+        return mvc.post().uri(uri).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/cuentas/TestcontainersConfig.java"><code>package lab.cuentas;
+
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-arranque">Cuánto cuesta un pod</h3>
+
+<pre data-lang="bash"><code>for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null -w "%{time_total} " -X POST localhost:8080/api/sessions -H 'Content-Type: application/json' \
+       -d '{"email": "prueba@example.com", "password": "una-clave-larga"}'
+done; echo
+kubectl -n cuentas logs deploy/cuentas | grep "Started CuentasApplication"
+kubectl -n cuentas get events --field-selector reason=Unhealthy
+kubectl top pods -n cuentas</code></pre>
+
+<pre data-lang="bash"><code>0.227995 0.106584 0.084757 0.113291 0.109726 0.087977
+… Started CuentasApplication in 9.067 seconds (process running for 10.162)
+17s     Warning   Unhealthy   pod/cuentas-6d7bc5c6c5-qzncm                Startup probe failed: Get "http://10.42.0.9:8080/actuator/health/liveness":
+                                                                          dial tcp 10.42.0.9:8080: connect: connection refused
+3m44s   Warning   Unhealthy   pod/cuentas-db-pooler-rw-84f9bcb77c-dhtw4   Readiness probe failed: dial tcp 10.42.2.4:5432: connect: connection refused
+3m45s   Warning   Unhealthy   pod/cuentas-db-pooler-rw-84f9bcb77c-rbtrm   Readiness probe failed: dial tcp 10.42.0.8:5432: connect: connection refused
+NAME                                    CPU(cores)   MEMORY(bytes)
+cuentas-6d7bc5c6c5-7c4b5                2684m        197Mi
+cuentas-6d7bc5c6c5-qzncm                1550m        189Mi
+cuentas-db-1                            25m          69Mi
+cuentas-db-2                            17m          50Mi
+cuentas-db-pooler-rw-84f9bcb77c-dhtw4   3m           27Mi
+cuentas-db-pooler-rw-84f9bcb77c-rbtrm   1m           26Mi</code></pre>
+
+      <p>Un inicio de sesión tarda entre 85 y 113&#8239;ms; el primero, 228&#8239;ms, con la JVM fría. Casi todo es bcrypt: <code>/api/me</code>, que también va a la base pero sin bcrypt, tarda 10&#8239;ms en la mediana. Un pod tarda 9&#8239;s en arrancar, y mientras tanto la <code>startupProbe</code> falla con "connection refused": es lo esperado, y por eso tiene 2 minutos de plazo. Las dos fallas del Pooler son de cuando arrancó, antes de que PgBouncer escuchara.</p>
+
+      <p>Recién arrancados, los pods de la app usaban 2.7 y 1.6 núcleos, cinco y tres veces los 500m que piden: sin <code>limits.cpu</code>, usan lo que el nodo tenga libre. Vuelve a mirar un minuto después y compara. PostgreSQL y PgBouncer casi no se mueven.</p>
+
+      <h3 id="comprueba-rollout">Desplegar con carga</h3>
+
+      <p>Para medir el despliegue sin que el HPA cambie los pods en medio, bórralo y fija 3 réplicas. Al final lo vuelves a crear con <code>kubectl apply -f k8s/scaling.yaml</code>.</p>
+
+<pre data-lang="bash"><code>kubectl -n cuentas delete hpa cuentas
+kubectl -n cuentas scale deploy/cuentas --replicas=3 &amp;&amp; kubectl -n cuentas rollout status deploy/cuentas
+./mvnw -q gatling:test -Drps=10 -Dseconds=100 &gt; target/rollout.log 2&gt;&amp;1 &amp;
+sleep 50
+time (kubectl -n cuentas set env deploy/cuentas APP_VERSION=2 &amp;&amp; kubectl -n cuentas rollout status deploy/cuentas)
+wait</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Versión 1 a 2, en 38.9&#8239;s</th><th class="r">Requests</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th></tr></thead>
+          <tbody>
+            <tr><td>POST cuenta</td><td class="r">200</td><td class="r">0</td><td class="r">87&#8239;ms</td><td class="r">123&#8239;ms</td><td class="r">173&#8239;ms</td></tr>
+            <tr><td>POST sesión</td><td class="r">1&#8239;000</td><td class="r">0</td><td class="r">122&#8239;ms</td><td class="r">172&#8239;ms</td><td class="r">208&#8239;ms</td></tr>
+            <tr><td>GET yo</td><td class="r">1&#8239;000</td><td class="r">0</td><td class="r">10&#8239;ms</td><td class="r">16&#8239;ms</td><td class="r">26&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los tres pods se reemplazaron uno por uno en 38.9&#8239;s, sin un error en 2&#8239;200 requests. Cambiar una variable del Deployment cambia su plantilla, y eso basta para que Kubernetes haga un rollout: es lo mismo que pasaría con una imagen nueva. Durante esos 39&#8239;s respondieron las dos versiones a la vez, y <code>X-Version</code> dice cuál atendió cada request.</p>
+
+      <h3 id="comprueba-sin-cuidados">Falla: desplegar sin cuidados</h3>
+
+<pre data-lang="json" data-file="k8s/experimentos/sin-cuidados.json"><code>[
+  { "op": "remove", "path": "/spec/template/spec/containers/0/readinessProbe" },
+  { "op": "remove", "path": "/spec/template/spec/containers/0/startupProbe" },
+  { "op": "remove", "path": "/spec/template/spec/containers/0/lifecycle" },
+  { "op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": { "name": "SERVER_SHUTDOWN", "value": "immediate" } },
+  { "op": "replace", "path": "/spec/strategy/rollingUpdate/maxUnavailable", "value": 1 }
+]</code></pre>
+
+      <p>El parche quita la readiness, la startup y el <code>preStop</code>, apaga el apagado ordenado con <code>SERVER_SHUTDOWN=immediate</code> y deja bajar un pod antes de que el nuevo esté listo. Aplícalo, deja que termine su propio rollout y repite la medición con la versión 3:</p>
+
+<pre data-lang="bash"><code>kubectl -n cuentas patch deploy/cuentas --type=json --patch-file k8s/experimentos/sin-cuidados.json
+kubectl -n cuentas rollout status deploy/cuentas &amp;&amp; sleep 20
+./mvnw -q gatling:test -Drps=10 -Dseconds=100 &gt; target/sin-cuidados.log 2&gt;&amp;1 &amp;
+sleep 50
+time (kubectl -n cuentas set env deploy/cuentas APP_VERSION=3 &amp;&amp; kubectl -n cuentas rollout status deploy/cuentas)
+wait</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Rollout con 3 pods y 10 usuarios por segundo</th><th class="r">Tardó</th><th class="r">Requests</th><th class="r">KO</th></tr></thead>
+          <tbody>
+            <tr><td>Con readiness, <code>preStop</code>, apagado ordenado y <code>maxUnavailable: 0</code></td><td class="r">38.9&#8239;s</td><td class="r">2&#8239;200</td><td class="r">0</td></tr>
+            <tr><td>Sin nada de eso</td><td class="r">3.8&#8239;s</td><td class="r">1&#8239;995</td><td class="r">211</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Diez veces más rápido, y el 10.6&#8239;% de los requests de esos 100&#8239;s falló: 205 inicios de sesión y 6 consultas a <code>/api/me</code>, todos con 502 de Traefik. Sin readiness, un pod recibe tráfico apenas existe, 9&#8239;s antes de que Tomcat escuche. Sin <code>preStop</code> ni apagado ordenado, un pod viejo se muere con requests a medio responder. El rollout rápido no es una virtud: es el tiempo que el servicio estuvo roto.</p>
+
+      <p>Para volver atrás, <code>kubectl apply</code> no alcanza: no borra la variable que agregó el parche, porque no está en lo último que aplicaste. Sácala a mano y vuelve a aplicar:</p>
+
+<pre data-lang="bash"><code>kubectl -n cuentas set env deploy/cuentas SERVER_SHUTDOWN-
+kubectl apply -f k8s/app.yaml -f k8s/scaling.yaml
+kubectl -n cuentas rollout status deploy/cuentas</code></pre>
+
+      <h3 id="comprueba-hpa">El HPA bajo una rampa</h3>
+
+<pre data-lang="bash"><code>./mvnw -q gatling:test -Dfrom=2 -Drps=40 -Dramp=120 -Dseconds=150 &gt; target/hpa.log 2&gt;&amp;1 &amp;
+G=$!; t0=$(date +%s)
+while kill -0 $G 2&gt;/dev/null; do
+  printf "t=%3ds %s ready=%s\n" $(( $(date +%s) - t0 )) \
+    "$(kubectl -n cuentas get hpa cuentas --no-headers | awk '{print $3, $4, "réplicas=" $7}')" \
+    "$(kubectl -n cuentas get deploy cuentas -o jsonpath='{.status.readyReplicas}')"
+  sleep 10
+done</code></pre>
+
+<pre data-lang="bash"><code>t=  0s cpu: 2%/60% réplicas=2 ready=2
+t= 11s cpu: 2%/60% réplicas=2 ready=2
+t= 21s cpu: 2%/60% réplicas=2 ready=2
+t= 31s cpu: 1%/60% réplicas=2 ready=2
+t= 42s cpu: 79%/60% réplicas=2 ready=2
+t= 52s cpu: 79%/60% réplicas=2 ready=3
+t= 63s cpu: 74%/60% réplicas=3 ready=3
+t= 73s cpu: 52%/60% réplicas=3 ready=3
+t= 84s cpu: 52%/60% réplicas=3 ready=3
+t= 94s cpu: 58%/60% réplicas=3 ready=3
+t=105s cpu: 90%/60% réplicas=3 ready=3
+t=116s cpu: 148%/60% réplicas=5 ready=3
+t=127s cpu: 148%/60% réplicas=5 ready=5
+t=137s cpu: 261%/60% réplicas=7 ready=5
+t=148s cpu: 254%/60% réplicas=8 ready=5
+t=159s cpu: 254%/60% réplicas=8 ready=6
+t=170s cpu: 268%/60% réplicas=8 ready=8
+t=181s cpu: 250%/60% réplicas=8 ready=8
+t=192s cpu: 165%/60% réplicas=8 ready=8
+t=203s cpu: 165%/60% réplicas=8 ready=8
+t=213s cpu: 148%/60% réplicas=8 ready=8
+t=224s cpu: 150%/60% réplicas=8 ready=8
+t=235s cpu: 150%/60% réplicas=8 ready=8
+t=246s cpu: 164%/60% réplicas=8 ready=8
+t=257s cpu: 158%/60% réplicas=8 ready=8
+t=268s cpu: 168%/60% réplicas=8 ready=8
+t=278s cpu: 168%/60% réplicas=8 ready=8
+t=289s cpu: 178%/60% réplicas=8 ready=8
+t=300s cpu: 182%/60% réplicas=8 ready=8</code></pre>
+
+      <p>La rampa sube de 2 a 40 usuarios por segundo en 120&#8239;s y se queda en 40 otros 150&#8239;s. Cada decisión del HPA sale de la fórmula. Con 2 pods al 79&#8239;%: <code>ceil(2 × 79 / 60) = 3</code>. Con 3 al 90&#8239;%: <code>ceil(4.5) = 5</code>. Con 5 al 148&#8239;%, la fórmula pide 13, pero <code>behavior</code> deja sumar solo 2 cada 15&#8239;s: 7, y después 8, el máximo. Los pods nuevos tardaron entre unos 10 y unos 30&#8239;s en estar listos: compara <code>réplicas</code> con <code>ready</code>.</p>
+
+      <p>Con 8 pods, el uso siguió entre 148 y 182&#8239;% de lo pedido, y la fórmula pedía entre <code>ceil(8 × 148 / 60) = 20</code> y <code>ceil(8 × 182 / 60) = 25</code> pods. Ya no había a quién sumar. La cuenta lo dice de antemano: si cada inicio de sesión gasta unos 100&#8239;ms de CPU, 40 por segundo son 4 núcleos solo en bcrypt, y a 300m por pod, el objetivo, son 14 pods. La carga no dio errores, pero el inicio de sesión pasó de un p95 de 172&#8239;ms, en el rollout, a 1&#8239;173&#8239;ms:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>La rampa, 270&#8239;s</th><th class="r">Requests</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th></tr></thead>
+          <tbody>
+            <tr><td>POST cuenta</td><td class="r">200</td><td class="r">0</td><td class="r">76&#8239;ms</td><td class="r">101&#8239;ms</td><td class="r">193&#8239;ms</td></tr>
+            <tr><td>POST sesión</td><td class="r">8&#8239;520</td><td class="r">0</td><td class="r">172&#8239;ms</td><td class="r">1&#8239;173&#8239;ms</td><td class="r">2&#8239;093&#8239;ms</td></tr>
+            <tr><td>GET yo</td><td class="r">8&#8239;520</td><td class="r">0</td><td class="r">12&#8239;ms</td><td class="r">370&#8239;ms</td><td class="r">759&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Hasta <code>/api/me</code>, que no usa bcrypt, subió a 370&#8239;ms en el p95: comparte la CPU con los inicios de sesión. Y este laboratorio tiene otro techo: los tres nodos son contenedores en la misma máquina, así que comparten los mismos núcleos, y sumar pods no suma CPU. Compara lo que anuncia cada nodo con lo que tiene Docker:</p>
+
+<pre data-lang="bash"><code>kubectl get nodes -o custom-columns=NAME:.metadata.name,CPU:.status.capacity.cpu
+docker info --format '{{.NCPU}}'</code></pre>
+
+      <h3 id="comprueba-drain">Falla: drenar el nodo del primario</h3>
+
+      <p>Un drain es lo que hace un proveedor de nube antes de actualizar un nodo: lo marca para que no reciba pods y desaloja los que tiene, respetando los PodDisruptionBudget. Busca el nodo del primario y drénalo con carga y escrituras:</p>
+
+<pre data-lang="bash"><code>P=$(kubectl -n cuentas get cluster cuentas-db -o jsonpath='{.status.currentPrimary}')
+NODO=$(kubectl -n cuentas get pod $P -o jsonpath='{.spec.nodeName}'); echo "primario $P en $NODO"
+kubectl -n cuentas get pdb
+./mvnw -q gatling:test -Drps=10 -Dseconds=120 &gt; target/drain.log 2&gt;&amp;1 &amp;
+sleep 45
+python scripts/escrituras.py 100 target/drain.json &amp;
+sleep 5
+t0=$(date +%s)
+kubectl drain $NODO --ignore-daemonsets --delete-emptydir-data --timeout=90s
+echo "drain terminó a los $(( $(date +%s) - t0 )) s"
+kubectl -n cuentas get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName | grep -E '^(NAME|cuentas-db-[0-9])'
+wait
+kubectl -n cuentas get events | grep SwitchingOver</code></pre>
+
+      <p>La salida, sin los avisos ni los desalojos de <code>kube-system</code>, y con los reintentos recortados:</p>
+
+<pre data-lang="bash"><code>primario cuentas-db-1 en k3s-agent1
+NAME                 MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+cuentas              N/A             1                 1                     15m
+cuentas-db-primary   1               N/A               0                     19m
+node/k3s-agent1 cordoned
+evicting pod cuentas/cuentas-db-1
+evicting pod cuentas/cuentas-6d7bc5c6c5-db7dq
+evicting pod cnpg-system/cnpg-controller-manager-85b486954d-458l6
+evicting pod cuentas/cuentas-6d7bc5c6c5-fj425
+error when evicting pods/"cuentas-db-1" -n "cuentas" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+error when evicting pods/"cuentas-6d7bc5c6c5-db7dq" -n "cuentas" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+pod/cnpg-controller-manager-85b486954d-458l6 evicted
+evicting pod cuentas/cuentas-db-1
+error when evicting pods/"cuentas-db-1" -n "cuentas" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+evicting pod cuentas/cuentas-6d7bc5c6c5-db7dq
+error when evicting pods/"cuentas-6d7bc5c6c5-db7dq" -n "cuentas" (will retry after 5s): Cannot evict pod as it would violate the pod's disruption budget.
+pod/cuentas-6d7bc5c6c5-fj425 evicted
+…
+drain terminó a los 32 s
+NAME           STATUS    NODE
+cuentas-db-1   Pending   &lt;none&gt;
+cuentas-db-2   Running   k3s-agent2
+{"ok": 520, "fallas": 3, "primera": 27.6, "última": 47.6, "códigos": ["TimeoutError"]}
+105s        Normal    SwitchingOver   cluster/cuentas-db   Current primary is running on unschedulable node k3s-agent1, switching over from cuentas-db-1 to cuentas-db-2</code></pre>
+
+      <p>CloudNativePG crea su propio PodDisruptionBudget, <code>cuentas-db-primary</code>, que no deja desalojar el primario: tiene 0 desalojos permitidos. El de la app también frenó a sus pods: deja bajar uno por vez, y <code>db7dq</code> tuvo que esperar mientras <code>fj425</code> salía. El drain reintentó cada 5&#8239;s hasta que el operador vio el primario en un nodo marcado e hizo un switchover por su cuenta. En esta corrida, el operador mismo estaba en ese nodo: lo desalojaron, arrancó en otro, y unos 9&#8239;s después decidió el switchover. Desde esa decisión hasta que la réplica quedó promovida pasaron 3.4&#8239;s. El drain terminó a los 32&#8239;s, y <code>cuentas-db-1</code> quedó en <code>Pending</code>: su volumen es una carpeta en el nodo drenado.</p>
+
+      <p>El switchover tardó 3.4&#8239;s, pero las escrituras fallaron durante unos 30&#8239;s: tres intentos seguidos se quedaron sin respuesta en los 10&#8239;s de timeout del script. Los inicios de sesión de Gatling también lo sintieron:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>El drain, con 10 usuarios por segundo</th><th class="r">Requests</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th></tr></thead>
+          <tbody>
+            <tr><td>POST cuenta</td><td class="r">200</td><td class="r">0</td><td class="r">65&#8239;ms</td><td class="r">77&#8239;ms</td><td class="r">83&#8239;ms</td></tr>
+            <tr><td>POST sesión</td><td class="r">1&#8239;200</td><td class="r">53</td><td class="r">120&#8239;ms</td><td class="r">28&#8239;279&#8239;ms</td><td class="r">31&#8239;064&#8239;ms</td></tr>
+            <tr><td>Todos</td><td class="r">2&#8239;547</td><td class="r">53</td><td class="r">88&#8239;ms</td><td class="r">21&#8239;596&#8239;ms</td><td class="r">30&#8239;166&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los 53 KO son inicios de sesión que respondieron 500. Las cuentas se crean al principio, antes del drain. Y cuando un inicio de sesión falla, el <code>GET /api/me</code> que le sigue no llega a salir, porque no hay <code>token</code>: el reporte lo anota aparte, en su tabla de errores. Para saber qué les pasó a esos 53, cuenta las excepciones en los logs de la app:</p>
+
+<pre data-lang="bash"><code>for p in $(kubectl -n cuentas get pods -l app=cuentas -o name); do kubectl -n cuentas logs $p; done 2&gt;/dev/null \
+  | grep -oE "SQLTransientConnectionException|PSQLException|CannotGetJdbcConnection|Connection is not available, request timed out after [0-9]+ms" \
+  | sort | uniq -c | sort -rn</code></pre>
+
+<pre data-lang="bash"><code>     56 PSQLException
+     49 CannotGetJdbcConnection
+      3 SQLTransientConnectionException
+      1 Connection is not available, request timed out after 30006ms
+      1 Connection is not available, request timed out after 30002ms
+      1 Connection is not available, request timed out after 30000ms</code></pre>
+
+      <p>Son apariciones en los logs, no requests: una excepción aparece una vez por sí misma y otra vez como causa de la que la envuelve. Y solo cuentan los pods que siguen vivos, porque los desalojados se llevaron sus logs. Las tres <code>SQLTransientConnectionException</code> son de Hikari, y esperaron sus 30&#8239;s completos. Lee en tus logs los mensajes de las <code>PSQLException</code>: dicen qué le respondió PgBouncer a la app.</p>
+
+      <p>Esta corrida fue con los valores por defecto: Hikari esperaba una conexión hasta 30&#8239;s, y PgBouncer se daba 15&#8239;s para conectarse al servidor y esperaba otros 15&#8239;s antes de reintentar un login fallido. <span class="badge badge--doc">Documentado</span> Por eso esta guía usa 5, 3 y 1&#8239;s, y tu clúster ya los tiene: mide el drain con ellos y anota tu corte. Antes de repetirlo, devuelve el nodo y espera a que la base vuelva a tener sus dos instancias:</p>
+
+<pre data-lang="bash"><code>kubectl uncordon $NODO
+kubectl -n cuentas wait cluster/cuentas-db --for=condition=Ready --timeout=300s</code></pre>
+
+      <p>Para comparar con los valores por defecto, quítale los dos parámetros al Pooler y sube el timeout de Hikari con una variable, que pesa más que el <code>application.yaml</code>. Repite todo el bloque desde el principio, porque el primario cambió de nodo, y después vuelve a los valores de la guía:</p>
+
+<pre data-lang="bash"><code># los valores por defecto
+kubectl -n cuentas patch pooler cuentas-db-pooler-rw --type=merge \
+  -p '{"spec":{"pgbouncer":{"parameters":{"server_connect_timeout":null,"server_login_retry":null}}}}'
+kubectl -n cuentas set env deploy/cuentas SPRING_DATASOURCE_HIKARI_CONNECTIONTIMEOUT=30000
+kubectl -n cuentas rollout status deploy/cuentas
+kubectl -n cuentas rollout status deploy/cuentas-db-pooler-rw
+
+# de vuelta a los de la guía
+kubectl apply -f k8s/db.yaml
+kubectl -n cuentas set env deploy/cuentas SPRING_DATASOURCE_HIKARI_CONNECTIONTIMEOUT-
+kubectl -n cuentas rollout status deploy/cuentas</code></pre>
+
+      <h3 id="comprueba-failover">Falla: matar el primario</h3>
+
+      <p>Ahora sin aviso: borrar el pod del primario a la fuerza es lo más parecido a que se apague su máquina. Espera a que la base esté lista y lanza las escrituras con un timeout de 1&#8239;s, para ver el corte segundo a segundo:</p>
+
+<pre data-lang="bash"><code>kubectl -n cuentas wait cluster/cuentas-db --for=condition=Ready --timeout=300s
+P=$(kubectl -n cuentas get cluster cuentas-db -o jsonpath='{.status.currentPrimary}'); echo "primario: $P"
+python scripts/escrituras.py 70 target/kill.json 1 &amp;
+sleep 10; date -u +"kill: %H:%M:%S.%N" | cut -c1-16     # en macOS, date no tiene %N: usa +%T
+kubectl -n cuentas delete pod $P --grace-period=0 --force
+wait
+kubectl -n cnpg-system logs deploy/cnpg-controller-manager | grep "isn't healthy"
+P2=$(kubectl -n cuentas get cluster cuentas-db -o jsonpath='{.status.currentPrimary}')
+kubectl -n cuentas logs $P2 | grep -E "WAL stream|Promoting instance"</code></pre>
+
+      <p>Los logs son JSON, con la hora en <code>ts</code>, y guardan también lo de corridas anteriores: mira solo las líneas que vienen después de la hora del kill. Así quedaron dos corridas, la primera con los valores por defecto y la segunda con los de la guía. Las fallas están en el reloj del script, y la promoción, contada desde la hora del kill:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>El primario muere en el segundo 10</th><th class="r">Fallas</th><th class="r">Primera y última</th><th class="r">Promoción</th><th class="r">Después de promover</th></tr></thead>
+          <tbody>
+            <tr><td>Hikari 30&#8239;s, PgBouncer 15 y 15&#8239;s (por defecto)</td><td class="r">32</td><td class="r">12.1 y 43.6&#8239;s</td><td class="r">19.9&#8239;s</td><td class="r">unos 14&#8239;s</td></tr>
+            <tr><td>Hikari 5&#8239;s, PgBouncer 3 y 1&#8239;s (esta guía)</td><td class="r">20</td><td class="r">12.1 y 31.3&#8239;s</td><td class="r">19.3&#8239;s</td><td class="r">unos 2&#8239;s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El corte tiene dos partes. La primera es del operador y de PostgreSQL. En la primera corrida, el operador notó el primario caído 1.1&#8239;s después del kill ("Current primary isn't healthy, initiating a failover"); en la segunda, la réplica perdió el flujo de WAL a los 2.3&#8239;s. Pero en las dos, "Promoting instance" llegó recién a los 19 o 20&#8239;s. Los timeouts de la app no tocan esa parte. CloudNativePG no espera a propósito: su <code>failoverDelay</code> vale 0 por defecto. <span class="badge badge--doc">Documentado</span> Busca en los logs del operador y de la réplica en qué se van esos segundos.</p>
+
+      <p>La segunda parte es tuya. El script corre en su propio reloj: el kill fue cerca de su segundo 10, así que la promoción cayó cerca del 30 en la primera corrida y del 29 en la segunda. Con los valores por defecto, las escrituras siguieron fallando hasta el 43.6, unos 14&#8239;s después de promover, cerca de los 15&#8239;s del <code>server_connect_timeout</code>, el plazo con que PgBouncer abandona un intento de conexión. Con los de esta guía, la última falla fue en el 31.3, unos 2&#8239;s después. El corte, de la primera a la última escritura fallida, bajó de 31.5 a 19.2&#8239;s. La medición no separa a PgBouncer de Hikari, porque cambiaron los dos juntos: si quieres saber cuánto pone cada uno, cambia uno por vez.</p>
+
+      <p>Después del failover, el operador vuelve a crear el primario viejo como réplica del nuevo, con <code>pg_rewind</code> si hace falta. <span class="badge badge--doc">Documentado</span> Es lo que evita el split brain: un primario que vuelve no vuelve como primario. Espera a que el clúster esté <code>Ready</code> antes de repetir la prueba.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a07">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a07-kubernetes</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las cuatro pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="cluster">Levantaste el clúster de tres nodos, la base con CloudNativePG y la app detrás del Gateway.</li>
+          <li data-check="rollout">Desplegaste una versión nueva con carga y 0 errores.</li>
+          <li data-check="sin-cuidados">Repetiste el despliegue sin readiness, <code>preStop</code> ni apagado ordenado, y contaste los 502.</li>
+          <li data-check="hpa">Viste escalar al HPA con una rampa y comprobaste cada decisión con la fórmula.</li>
+          <li data-check="drain">Drenaste el nodo del primario y mediste el corte de escrituras.</li>
+          <li data-check="failover">Mataste el primario con los timeouts por defecto y con los de la guía, y comparaste los cortes.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Es la misma división que en A00: la app pasa por PgBouncer en modo transaction, y Flyway va directo al primario por <code>cuentas-db-rw</code>, porque el <code>SET</code> de una migración y el <code>ALTER TABLE</code> que le sigue pueden caer en conexiones distintas del servidor. Y el workflow de A00 puede construir la imagen y empujarla a un registro con la etiqueta del commit, en vez de un número a mano.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Traefik hace aquí lo que hacía Nginx en A01, con una diferencia: Nginx descubría una réplica caída por sus errores, con <code>max_fails</code>, y Traefik se entera por la readiness, antes de mandarle tráfico. El límite de tasa de A01 tiene su equivalente en un middleware <code>RateLimit</code> de Traefik, que el <code>HTTPRoute</code> usa con un filtro <code>ExtensionRef</code>. <span class="badge badge--doc">Documentado</span> En el registro y el inicio de sesión tiene más sentido que en cualquier otra ruta: cada intento cuesta un bcrypt.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>Durante un rollout responden dos versiones a la vez, y lo mismo pasa con la base: Flyway corre la migración cuando arranca el primer pod nuevo, mientras los viejos siguen atendiendo. Cada migración tiene que funcionar con el código anterior, como la API vieja de A02 convive con la nueva hasta su <code>Sunset</code>: primero agregar, después usar y al final quitar. El 401 ya es un ProblemDetail con su <code>type</code>, como los errores de A02.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p><code>/api/me</code> es la lectura más caliente del servicio, y cada una va a la base. Una caché como la de A03, con la sesión por el hash del token y un TTL corto, la saca de ahí. Cerrar sesión pasa a ser una invalidación: si una réplica de la app no se entera, el token sigue sirviendo hasta que venza la entrada.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>CloudNativePG hace los pasos del failover manual de A04: cerrarle el paso al primario viejo, promover la réplica, mover el tráfico, que aquí es mover el Service <code>cuentas-db-rw</code>, y volver a sumar el viejo como réplica. También crea <code>cuentas-db-ro</code> para leer de las réplicas. Si <code>/api/me</code> leyera de ahí, el problema de A04 vuelve: un usuario que acaba de iniciar sesión puede no encontrar su sesión en la réplica.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A05, dos primarios</p>
+          <p>Cada sucursal de A05 sería un <code>Cluster</code> propio. CloudNativePG maneja la replicación lógica entre ellos con los recursos <code>Publication</code> y <code>Subscription</code> <span class="badge badge--doc">Documentado</span>, en vez de los comandos de <code>conectar.sh</code>. Los conflictos de A05 siguen siendo tuyos: el operador sabe mover un primario, no decidir qué venta vale.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A06, repartir los datos</p>
+          <p>Cada shard de A06 sería un <code>Cluster</code> con su Pooler, y un drain afectaría solo al shard de ese nodo. Pero la topología de A06 vive en memoria, y aquí el HPA corre entre 2 y 8 pods: cada uno tendría su propia idea de en qué fase va la migración. Antes de llevarla a Kubernetes, guárdala en un lugar compartido, con versión.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Health checks y gateways</p>
+          <p>Qué preguntar en cada prueba y quién saca de la rotación a una instancia enferma: <a href="../modules/m03-balanceo-gateways.html#health">M03. Balanceo y gateways</a>, y su sección de <a href="../modules/m03-balanceo-gateways.html#gateway">gateways</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Replicación y failover</p>
+          <p>Qué se pierde al promover una réplica asíncrona y por qué el failover automático es delicado: <a href="../modules/m05-bases-de-datos.html#replicacion">M05. Bases de datos</a> y sus <a href="../modules/m05-bases-de-datos.html#fallos">fallos</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Timeouts</p>
+          <p>Por qué un timeout por defecto de 30&#8239;s convierte una falla de 3&#8239;s en un corte de 30: <a href="../modules/m08-resiliencia.html#timeouts">M08. Resiliencia</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Tokens</p>
+          <p>Tokens opacos contra JWT, y por qué se guarda su hash: <a href="../modules/m10-seguridad.html#tokens">M10. Seguridad</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-kubernetes">Kubernetes</a>, <a href="../glosario.html#t-health-check">health check</a>, <a href="../glosario.html#t-draining">connection draining</a>, <a href="../glosario.html#t-autoscaling">autoscaling</a>, <a href="../glosario.html#t-cold-start">arranque en frío</a>, <a href="../glosario.html#t-canary">canary</a>, <a href="../glosario.html#t-blue-green">blue-green</a>, <a href="../glosario.html#t-split-brain">split brain</a> y <a href="../glosario.html#t-timeout">timeout</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a07.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

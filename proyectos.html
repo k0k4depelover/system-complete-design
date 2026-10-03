@@ -84,7 +84,7 @@
 
   <section class="pj-sec" id="stack" aria-labelledby="stack-title">
     <h2 id="stack-title">El stack</h2>
-    <p class="pj-sub">El stack que definiste, más las herramientas para medir, probar y observar. Las versiones de las guías publicadas están probadas: Java 25, Spring Boot 4.1.1, PostgreSQL 18, PgBouncer 1.26, Redis 8, Nginx 1.30, k3s 1.36 y CloudNativePG 1.30. Cada guía levanta solo lo que necesita: con 16&#8239;GB de RAM alcanza, pero el clúster, Elasticsearch y Ollama juntos no entran cómodos.</p>
+    <p class="pj-sub">El stack que definiste, más las herramientas para medir, probar y observar. Las guías publicadas usan Java 25, Spring Boot 4.1.1, PostgreSQL 18, PgBouncer 1.26 (en A07, el que trae CloudNativePG), Redis 8, Nginx 1.30, k3s 1.36 y CloudNativePG 1.30. Sus mediciones se tomaron con esas versiones, salvo un detalle: el código se compiló con el JDK 21, no con el 25, y corrió en contenedores con Java 25. Cada guía levanta solo lo que necesita: con 16&#8239;GB de RAM alcanza, pero el clúster, Elasticsearch y Ollama juntos no entran cómodos.</p>
     <div class="table-wrap">
       <table class="t">
         <thead><tr><th>Pieza</th><th>Para qué</th><th>Proyectos</th><th>Origen</th></tr></thead>

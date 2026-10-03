@@ -47,7 +47,7 @@ SD.data.projects = {
           stack: ['Redis', 'Caffeine', 'PostgreSQL + PgBouncer', 'Gatling'] },
         { id: 'a04', num: 'A04', title: 'Primario y réplicas', tier: 'core', status: 'ready', href: 'proyectos/a04-replicas.html', repo: '', repoName: 'a04-replicas', mods: ['m05'], front: false,
           excuse: 'Una red de bibliotecas: muchas consultas y pocos préstamos.',
-          learn: 'Replicación por streaming del WAL con slots, un PgBouncer para escribir y otro para leer, LazyConnectionDataSourceProxy con @Transactional(readOnly = true), el lag que te muestra datos viejos y cómo leer lo que escribiste con el LSN, réplica síncrona contra asíncrona (FIRST contra ANY), y promoción manual con pg_promote().',
+          learn: 'Replicación por streaming del WAL con slots, un PgBouncer para escribir y otro para leer, LazyConnectionDataSourceProxy con @Transactional(readOnly = true), el lag que te muestra datos viejos y cómo leer lo que escribiste con el LSN, réplica síncrona contra asíncrona (FIRST contra ANY), la promoción manual con pg_promote() y cómo volver a sumar al viejo primario como réplica con pg_rewind.',
           stack: ['PostgreSQL × 3', 'PgBouncer × 2', 'Docker Compose', 'Gatling'] },
         { id: 'a05', num: 'A05', title: 'Dos primarios', tier: 'core', status: 'ready', href: 'proyectos/a05-dos-primarios.html', repo: '', repoName: 'a05-dos-primarios', mods: ['m05', 'm06'], front: false,
           excuse: 'El inventario de dos sucursales que venden cada una por su lado.',
