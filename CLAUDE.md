@@ -9,7 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
-- **Aplicación de conocimiento** (`proyectos.html`): mini-proyectos en Java y Spring Boot para construir lo de cada módulo. Por ahora solo está el índice propuesto; las guías se escriben cuando el usuario lo aprueba.
+- **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo. Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos".
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
 
@@ -36,6 +36,14 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - **Colores solo con tokens** (`var(--label)`, `var(--l-gpu)`…). Nada de hex en JS, SVG ni HTML. La paleta de capas `--l-*` está validada contra daltonismo en claro y en oscuro: no agregues tonos sin revalidarla.
 - **Estados reservados:** `--ok`, `--warn` y `--fail`, siempre acompañados de texto o de un icono.
 - **Anclas e ids:** no pueden empezar con un dígito (`#3ds` rompe `querySelector`; se usó `#sca`).
+
+### De las guías de proyectos (`proyectos/`)
+- **Son tutoriales precisos y funcionales, guiados de principio a fin.** Cada guía trae todos los archivos completos (`pom.xml`, `compose.yaml`, `application.yaml`, SQL, clases, pruebas y scripts), todas las configuraciones y todos los comandos, en el orden en que el lector los necesita. Lo único que no se guía es preparar el entorno de Java (JDK, IDE, Docker instalado).
+- **Claude escribe las guías, no las ejecuta.** No crea proyectos ni código para compilar en la máquina del usuario, no levanta servidores y no corre contenedores, Maven, Gatling ni Kubernetes. Lo construye y lo mide el usuario siguiendo la guía; así también revisa lo que escribió Claude.
+- **Sin ejecutar no hay mediciones nuevas.** La guía dice qué comando correr y qué tiene que aparecer en la salida (qué pasa, qué error sale, qué número comparar) y deja que el lector anote los suyos. Nunca se inventan cifras ni salidas. Lo que se puede calcular a mano se muestra con la cuenta, y lo que viene de documentación lleva `badge--doc`. Las cifras que ya están publicadas en A00–A06 se midieron antes de esta regla y se conservan.
+- **Lo que sí se usa** son las herramientas de la página: `tools/mkguide.py` para generarla, y `test-page.mjs`, `links.mjs` y `shots.mjs` para revisarla (abren la página en Chrome con `file://`, sin servidor).
+- El orden de las secciones es fijo: la excusa con una figura, los endpoints, las dependencias de Maven con su propósito, la infraestructura comentada, el paso a paso (cada paso con La decisión, Lo que descartas y Qué puede salir mal), las decisiones guiadas, cómo comprobarlo (pruebas, Gatling y fallas provocadas), tu repositorio y, al final, cómo conectar.
+- Cada proyecto funciona solo. "Cómo conectar" va al final y solo nombra proyectos anteriores en la lista, nunca posteriores, con enlaces a los módulos y al glosario (`../glosario.html#t-<id>`).
 
 ### De contenido
 - Español con tú, sin voseo. Los términos técnicos quedan en inglés y se definen la primera vez que aparecen.

@@ -1,0 +1,2497 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A06. Repartir los datos</title>
+<meta name="description" content="Los pedidos de una tienda en tres PostgreSQL: particiones por mes con poda por id gracias a UUIDv7, borrar un mes con DETACH CONCURRENTLY en vez de DELETE, sharding por cliente con hashing consistente y nodos virtuales, un pool por shard, la migración de dos a tres shards con carga (doble escritura, backfill, verificación y limpieza) y los recientes de toda la tienda con un plazo y resultados parciales.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a06" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Proyectos</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Repartir los datos</h1>
+        <p class="lead">Los pedidos de una tienda en línea no caben bien en una sola base. Vas a partirlos de dos maneras: por mes dentro de cada base, para borrar lo viejo sin dolor, y por cliente entre bases, para repartir la carga. Después vas a sumar un tercer shard con la tienda vendiendo, sin perder ni duplicar un pedido.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A06</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 2</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>5 a 6 h</dd></div>
+          <div><dt>Módulos</dt><dd>M05, M06</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a06">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Partir una tabla por mes con la fecha que trae cada UUIDv7, y comprobar con <code>EXPLAIN</code> que buscar por id toca una sola partición.</li>
+          <li>Borrar un mes entero soltando su partición, y medir la diferencia con un <code>DELETE</code>.</li>
+          <li>Repartir los clientes entre shards con hashing consistente, y medir cuánto se mueve al sumar uno.</li>
+          <li>Pasar de dos a tres shards con carga, sin perder ni duplicar pedidos: doble escritura, backfill, verificación y limpieza.</li>
+          <li>Consultar todos los shards con un plazo, y conseguir que un shard congelado afecte solo a sus clientes.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una tienda en línea guarda sus pedidos en PostgreSQL. Empieza con dos bases y 10&#8239;000 clientes, y cada cliente vive entero en una de ellas: crear, listar y cancelar sus pedidos toca una sola base. La tienda crece y suma una tercera sin dejar de vender.</p>
+
+      <p>Son dos ideas que se parecen y resuelven problemas distintos. Dentro de cada base, la tabla se parte por mes: borrar un mes viejo es soltar una tabla, y una búsqueda por id va directo al mes que le toca. Entre bases, los clientes se reparten con un anillo de hashing consistente: cada base recibe un tercio de las escrituras, y sumar una cuarta mueve solo una parte de los clientes.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa06t fa06d">
+<title id="fa06t">Pedidos repartidos por cliente y por mes</title>
+<desc id="fa06d">El cliente llama a la app con su número de cliente en la ruta. La app calcula con un anillo de hashing consistente, de 128 nodos virtuales por shard, a qué shard le toca, y le habla con el pool de ese shard. Hay tres shards, s1, s2 y s3, cada uno un PostgreSQL con la tabla de pedidos partida por mes. s3 arranca vacío y se suma en vivo, con doble escritura y backfill.</desc>
+<defs><marker id="fa06a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="30" y="34" width="180" height="60" rx="6"/>
+<text class="dg-label" x="120" y="58" text-anchor="middle">Cliente 42</text>
+<text class="dg-tiny" x="120" y="78" text-anchor="middle">/api/customers/42/orders</text>
+<path class="dg-edge" d="M212 64 H266" marker-end="url(#fa06a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="270" y="14" width="250" height="104" rx="6"/>
+<text class="dg-label" x="395" y="38" text-anchor="middle">app de pedidos</text>
+<text class="dg-tiny" x="395" y="58" text-anchor="middle">anillo: SHA-256, 128 nodos virtuales</text>
+<text class="dg-tiny" x="395" y="77" text-anchor="middle">topología: en qué fase va la migración</text>
+<text class="dg-tiny" x="395" y="96" text-anchor="middle">un pool de Hikari por shard</text>
+<path class="dg-edge" d="M330 120 L170 172" marker-end="url(#fa06a)"/>
+<path class="dg-edge" d="M395 120 V172" marker-end="url(#fa06a)"/>
+<path class="dg-feedback" d="M460 120 L620 172" marker-end="url(#fa06a)"/>
+<text class="dg-tiny" x="585" y="134">se suma en vivo:</text>
+<text class="dg-tiny" x="585" y="151">doble escritura y backfill</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="40" y="176" width="220" height="108" rx="6"/>
+<text class="dg-label" x="150" y="199" text-anchor="middle">s1</text>
+<text class="dg-tiny" x="150" y="218" text-anchor="middle">PostgreSQL 18, :5441</text>
+<rect class="dg-box" x="54" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="84" y="254" text-anchor="middle">2026_08</text>
+<rect class="dg-box" x="120" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="150" y="254" text-anchor="middle">2026_09</text>
+<rect class="dg-box" x="186" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="216" y="254" text-anchor="middle">2026_10</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="285" y="176" width="220" height="108" rx="6"/>
+<text class="dg-label" x="395" y="199" text-anchor="middle">s2</text>
+<text class="dg-tiny" x="395" y="218" text-anchor="middle">PostgreSQL 18, :5442</text>
+<rect class="dg-box" x="299" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="329" y="254" text-anchor="middle">2026_08</text>
+<rect class="dg-box" x="365" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="395" y="254" text-anchor="middle">2026_09</text>
+<rect class="dg-box" x="431" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="461" y="254" text-anchor="middle">2026_10</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="530" y="176" width="220" height="108" rx="6" stroke-dasharray="6 4"/>
+<text class="dg-label" x="640" y="199" text-anchor="middle">s3</text>
+<text class="dg-tiny" x="640" y="218" text-anchor="middle">PostgreSQL 18, :5443, vacío</text>
+<rect class="dg-box" x="544" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="574" y="254" text-anchor="middle">2026_08</text>
+<rect class="dg-box" x="610" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="640" y="254" text-anchor="middle">2026_09</text>
+<rect class="dg-box" x="676" y="234" width="60" height="32" rx="4"/>
+<text class="dg-tiny" x="706" y="254" text-anchor="middle">2026_10</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A06.1.</b> El número de cliente va en la ruta, y el anillo decide a qué shard le toca: cada request habla con una sola base. Dentro de cada base, los pedidos se parten por mes. El tercer shard arranca vacío y se suma con la tienda vendiendo.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <p>La clave de sharding, el cliente, va en la ruta de cada endpoint de pedidos. Así cada request sabe a qué shard ir sin preguntarle a nadie. Solo los recientes de toda la tienda preguntan a todos los shards.</p>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/customers/{customer}/orders</code></td><td>Crea un pedido en el shard del cliente.</td><td>201, 400, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/customers/{customer}/orders/{id}</code></td><td>Un pedido, si es de ese cliente.</td><td>200, 404, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/customers/{customer}/orders</code></td><td>Los últimos pedidos del cliente, hasta 100.</td><td>200, 400, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/customers/{customer}/orders/{id}/cancel</code></td><td>Cancela un pedido nuevo.</td><td>200, 404, 409, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/orders/recent</code></td><td>Los últimos pedidos de toda la tienda, preguntando a todos los shards.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/lab/seed</code></td><td>Solo para el laboratorio: llena los shards con pedidos de los últimos 80 días.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/lab/shards</code></td><td>La topología, las filas de cada shard y las copias que fallaron.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/lab/migration/{paso}</code></td><td>Los pasos de la migración: <code>start</code>, <code>backfill</code>, <code>read-new</code>, <code>finish</code> y <code>cleanup</code>. <code>verify</code> va por GET.</td><td>200, 409</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/customers/{customer}/orders</code>
+        </div>
+        <p class="ep-desc">Crea el pedido en el shard del cliente, con un id <code>uuidv7()</code> generado por la base y la fecha sacada de ese id. Durante una migración, lo copia también al dueño nuevo.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/customers/42/orders HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{"totalCents": 15990}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/1.1 201
+Location: /api/customers/42/orders/01a10063-0c40-753b-8c29-6631f1a5c34a
+
+{"id": "01a10063-0c40-753b-8c29-6631f1a5c34a", "customerId": 42, "totalCents": 15990,
+ "status": "NEW", "version": 1, "createdAt": "2026-10-03T06:10:53.632Z"}</code></pre>
+          <p class="ep-sec">Respuesta 503, a un cliente de s2 con s2 congelado</p>
+<pre data-lang="json"><code>{"detail": "El shard s2 no responde", "instance": "/api/customers/562/orders",
+ "status": 503, "title": "Service Unavailable",
+ "type": "https://pedidos.example/problemas/shard-no-disponible", "shard": "s2"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Pedido creado.</span></li>
+            <li><span class="st st--4xx">400</span><span>Cliente que no es positivo, o <code>totalCents</code> negativo: <code>"Validation failure"</code>.</span></li>
+            <li><span class="st st--5xx">503</span><span>El shard del cliente no responde. Los clientes de los otros shards siguen comprando.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/customers/{customer}/orders/{id}/cancel</code>
+        </div>
+        <p class="ep-desc">Cancela un pedido que sigue en <code>NEW</code> y le sube la versión. La versión es lo que usa la migración para saber qué copia es la más nueva.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"id": "01a10063-0c40-753b-8c29-6631f1a5c34a", "customerId": 42, "totalCents": 15990,
+ "status": "CANCELLED", "version": 2, "createdAt": "2026-10-03T06:10:53.632Z"}</code></pre>
+          <p class="ep-sec">Respuesta 409, al cancelarlo otra vez</p>
+<pre data-lang="json"><code>{"detail": "El pedido 01a10063-0c40-753b-8c29-6631f1a5c34a ya estaba cancelado",
+ "instance": "/api/customers/42/orders/01a10063-0c40-753b-8c29-6631f1a5c34a/cancel",
+ "status": 409, "title": "Conflict"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>Cancelado.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe, o es de otro cliente: <code>GET /api/customers/43/orders/01a10063-…</code> también da 404.</span></li>
+            <li><span class="st st--4xx">409</span><span>Ya estaba cancelado.</span></li>
+            <li><span class="st st--5xx">503</span><span>El shard del cliente no responde.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/orders/recent</code>
+        </div>
+        <p class="ep-desc">Los últimos pedidos de toda la tienda. Pregunta a todos los shards a la vez y espera como mucho 300&#8239;ms. Nunca falla por un shard: si alguno no contesta, responde con lo que llegó y lo dice.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200, con todos los shards</p>
+<pre data-lang="json"><code>{"orders": [
+   {"id": "01a10063-0c40-753b-8c29-6631f1a5c34a", "customerId": 42, "status": "CANCELLED", …},
+   {"id": "01a10060-f37f-7f06-8f55-f67661264861", "customerId": 9557, "status": "NEW", …},
+   {"id": "01a10060-f37f-7c9c-a56e-c70afe564f7b", "customerId": 4768, "status": "NEW", …}],
+ "partial": false, "missingShards": []}</code></pre>
+          <p class="ep-sec">Respuesta 200, con s2 congelado, a los 313&#8239;ms</p>
+<pre data-lang="json"><code>{"orders": [ …20 pedidos de s1 y s3… ], "partial": true, "missingShards": ["s2"]}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>Siempre; <code>partial</code> dice si falta algún shard.</span></li>
+            <li><span class="st st--4xx">400</span><span><code>limit</code> fuera de 1 a 100.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API, la validación de las rutas (<code>@Positive</code>, <code>@Min</code>, <code>@Max</code>) y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code></td><td><code>JdbcClient</code>, Hikari y <code>TransactionTemplate</code>. La autoconfiguración del <code>DataSource</code> queda apagada: no hay una base, hay tres pools armados a mano.</td></tr>
+            <tr><td><code>flyway-core</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td>Flyway sin el starter: <code>Shards</code> corre las migraciones en cada shard al arrancar. Y el driver.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>testcontainers-postgresql</code> (test)</td><td>Ocho pruebas con tres PostgreSQL de verdad, uno de ellos congelado con <code>docker pause</code>.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>Comprar, cancelar y mirar los recientes mientras migras.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;pedidos&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-core&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code>x-shard: &amp;shard
+  image: postgres:18
+  environment:
+    POSTGRES_DB: app
+    POSTGRES_USER: app
+    POSTGRES_PASSWORD: app
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U app -d app"]
+    interval: 2s
+    retries: 30
+
+services:
+  s1:
+    &lt;&lt;: *shard
+    ports:
+      - "5441:5432"
+    volumes:
+      - s1:/var/lib/postgresql
+
+  s2:
+    &lt;&lt;: *shard
+    ports:
+      - "5442:5432"
+    volumes:
+      - s2:/var/lib/postgresql
+
+  # s3 arranca vacío y fuera del anillo: es el shard que se suma en vivo.
+  s3:
+    &lt;&lt;: *shard
+    ports:
+      - "5443:5432"
+    volumes:
+      - s3:/var/lib/postgresql
+
+  app:
+    build: .
+    environment:
+      APP_SHARDS_S1_URL: jdbc:postgresql://s1:5432/app?socketTimeout=5
+      APP_SHARDS_S2_URL: jdbc:postgresql://s2:5432/app?socketTimeout=5
+      APP_SHARDS_S3_URL: jdbc:postgresql://s3:5432/app?socketTimeout=5
+      APP_RING: s1,s2
+    ports:
+      - "8080:8080"
+    depends_on:
+      s1:
+        condition: service_healthy
+      s2:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+
+volumes:
+  s1:
+  s2:
+  s3:</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Tres bases iguales</dt><dd>Los tres shards salen del mismo bloque <code>x-shard</code>: misma imagen, mismo usuario y el mismo healthcheck. No se replican entre sí; cada uno tiene una parte distinta de los clientes.</dd></div>
+        <div><dt>Uno fuera del anillo</dt><dd>s3 arranca con las tablas creadas, pero vacío: <code>APP_RING</code> dice que el anillo es <code>s1,s2</code>. La app conoce los tres desde el principio, para poder sumar s3 sin reiniciarse.</dd></div>
+        <div><dt>Puertos a la vista</dt><dd>5441, 5442 y 5443, para entrar a cada shard con <code>psql</code>. La app escucha en el 8080.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: pedidos
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  # socketTimeout corta una consulta a un shard congelado a los 5 s, en vez de esperar para siempre.
+  shards:
+    s1:
+      url: jdbc:postgresql://localhost:5441/app?socketTimeout=5
+      username: app
+      password: app
+      pool-size: 10
+    s2:
+      url: jdbc:postgresql://localhost:5442/app?socketTimeout=5
+      username: app
+      password: app
+      pool-size: 10
+    s3:
+      url: jdbc:postgresql://localhost:5443/app?socketTimeout=5
+      username: app
+      password: app
+      pool-size: 10
+  ring: s1,s2
+  vnodes: 128
+  scatter-timeout: 300ms
+  migration-batch: 1000
+  partitions:
+    months-back: 3
+    months-ahead: 3
+    retention-months: 12</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Un pool por shard</dt><dd>Cada shard tiene su URL y su <code>pool-size</code>. Tres shards con 10 conexiones son 30 por instancia de la app: con varias instancias, la cuenta tiene que caber en el <code>max_connections</code> de cada base, que es 100 por defecto. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Cortar a un shard congelado</dt><dd><code>socketTimeout=5</code>, en la URL, corta una consulta que lleva 5&#8239;s sin respuesta. Sin él, el driver espera para siempre a un shard que aceptó la conexión y dejó de contestar.</dd></div>
+        <div><dt>El anillo y los plazos</dt><dd><code>ring</code> y <code>vnodes</code> definen el anillo con el que arranca la app. <code>scatter-timeout</code> es cuánto esperan los recientes a todos los shards. <code>partitions</code> dice cuántos meses crear hacia atrás y hacia adelante, y cuántos guardar.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el Dockerfile, PedidosApplication.java, ShardProps.java, los records y OrderController.java</summary>
+        <div class="solution-body">
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/pedidos-0.1.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/PedidosApplication.java"><code>package lab.pedidos;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+// No hay "la" base de datos: hay un pool por shard, que arma la clase Shards.
+@SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class PedidosApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(PedidosApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/shard/ShardProps.java"><code>package lab.pedidos.shard;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties("app")
+public record ShardProps(
+        Map&lt;String, Db&gt; shards,
+        List&lt;String&gt; ring,
+        int vnodes,
+        Duration scatterTimeout,
+        int migrationBatch,
+        Partitions partitions) {
+
+    public record Db(String url, String username, String password, int poolSize) {
+    }
+
+    public record Partitions(int monthsBack, int monthsAhead, int retentionMonths) {
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/orders/Order.java"><code>package lab.pedidos.orders;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+public record Order(UUID id, long customerId, long totalCents, String status, int version, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/orders/Recent.java"><code>package lab.pedidos.orders;
+
+import java.util.List;
+
+/** El resultado de un scatter-gather: si algún shard no contestó a tiempo, lo dice. */
+public record Recent(List&lt;Order&gt; orders, boolean partial, List&lt;String&gt; missingShards) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/orders/OrderController.java"><code>package lab.pedidos.orders;
+
+import java.net.URI;
+import java.util.List;
+import java.util.UUID;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class OrderController {
+
+    public record NewOrder(@PositiveOrZero long totalCents) {
+    }
+
+    private final OrderService orders;
+
+    public OrderController(OrderService orders) {
+        this.orders = orders;
+    }
+
+    // La clave de sharding va en la ruta: cada request sabe a qué shard ir sin preguntarle a nadie.
+    @PostMapping("/api/customers/{customer}/orders")
+    public ResponseEntity&lt;Order&gt; create(@PathVariable @Positive long customer, @Valid @RequestBody NewOrder body) {
+        Order order = orders.create(customer, body.totalCents());
+        return ResponseEntity.created(URI.create("/api/customers/" + customer + "/orders/" + order.id())).body(order);
+    }
+
+    @GetMapping("/api/customers/{customer}/orders/{id}")
+    public Order get(@PathVariable @Positive long customer, @PathVariable UUID id) {
+        return orders.get(customer, id);
+    }
+
+    @GetMapping("/api/customers/{customer}/orders")
+    public List&lt;Order&gt; list(@PathVariable @Positive long customer,
+                            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
+        return orders.list(customer, limit);
+    }
+
+    @PostMapping("/api/customers/{customer}/orders/{id}/cancel")
+    public Order cancel(@PathVariable @Positive long customer, @PathVariable UUID id) {
+        return orders.cancel(customer, id);
+    }
+
+    @GetMapping("/api/orders/recent")
+    public Recent recent(@RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
+        return orders.recent(limit);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/lab/SeedController.java"><code>package lab.pedidos.lab;
+
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
+
+import lab.pedidos.shard.Shards;
+import lab.pedidos.shard.Topology;
+import lab.pedidos.shard.Topology.State;
+
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+/** Llena los shards con pedidos repartidos en los últimos días, cada cliente en el shard que le toca. */
+@RestController
+public class SeedController {
+
+    private final Shards shards;
+    private final Topology topology;
+
+    public SeedController(Shards shards, Topology topology) {
+        this.shards = shards;
+        this.topology = topology;
+    }
+
+    @PostMapping("/api/lab/seed")
+    public Map&lt;String, Integer&gt; seed(@RequestParam(defaultValue = "10000") int customers,
+                                     @RequestParam(defaultValue = "10") int ordersEach,
+                                     @RequestParam(defaultValue = "80") int days) {
+        State st = topology.state();
+        Map&lt;String, List&lt;Long&gt;&gt; byShard = LongStream.rangeClosed(1, customers).boxed()
+                .collect(Collectors.groupingBy(st::truth, TreeMap::new, Collectors.toList()));
+        Map&lt;String, Integer&gt; inserted = new TreeMap&lt;&gt;();
+        byShard.forEach((shard, ids) -&gt; {
+            int total = 0;
+            for (int i = 0; i &lt; ids.size(); i += 1000) {
+                long[] chunk = ids.subList(i, Math.min(i + 1000, ids.size())).stream().mapToLong(Long::longValue).toArray();
+                total += shards.jdbc(shard).sql("""
+                        INSERT INTO orders (id, created_at, customer_id, total_cents, status, version)
+                        SELECT g.id, uuid_extract_timestamp(g.id), g.customer_id, (random() * 20000)::bigint, 'NEW', 1
+                          FROM (SELECT uuidv7(-(random() * make_interval(days =&gt; :days))) AS id, c AS customer_id
+                                  FROM unnest(CAST(:customers AS bigint[])) AS c
+                                 CROSS JOIN generate_series(1, :each)) AS g
+                        """)
+                        .param("customers", chunk)
+                        .param("each", ordersEach)
+                        .param("days", days)
+                        .update();
+            }
+            inserted.put(shard, total);
+        });
+        return inserted;
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-particiones">Paso 1. Una tabla partida por mes</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__orders.sql"><code>-- La tabla madre no guarda filas: cada mes vive en su propia partición (las crea PartitionMaintenance).
+-- La clave primaria tiene que incluir la columna de partición; con UUIDv7, created_at sale del id.
+CREATE TABLE orders (
+    id          uuid        NOT NULL,
+    created_at  timestamptz NOT NULL,
+    customer_id bigint      NOT NULL,
+    total_cents bigint      NOT NULL CHECK (total_cents &gt;= 0),
+    status      text        NOT NULL,
+    version     int         NOT NULL,
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- Los índices de la tabla madre se crean solos en cada partición.
+CREATE INDEX orders_customer ON orders (customer_id, created_at DESC);
+CREATE INDEX orders_recent ON orders (created_at DESC, id DESC);</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/partitions/PartitionMaintenance.java"><code>package lab.pedidos.partitions;
+
+import java.time.Clock;
+import java.time.YearMonth;
+import java.util.List;
+
+import lab.pedidos.shard.ShardProps;
+import lab.pedidos.shard.Shards;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * Cada shard parte sus pedidos por mes. Al arrancar y cada madrugada: crea las particiones de los meses
+ * que vienen y suelta las que pasaron la retención. Soltar una partición es instantáneo; borrar un mes fila por fila, no.
+ */
+@Component
+public class PartitionMaintenance implements InitializingBean {
+
+    private static final Logger log = LoggerFactory.getLogger(PartitionMaintenance.class);
+
+    private final Shards shards;
+    private final ShardProps.Partitions cfg;
+    private final Clock clock = Clock.systemUTC();
+
+    public PartitionMaintenance(Shards shards, ShardProps props) {
+        this.shards = shards;
+        this.cfg = props.partitions();
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        maintain();
+    }
+
+    @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
+    public void maintain() {
+        YearMonth now = YearMonth.now(clock);
+        for (String shard : shards.names()) {
+            JdbcClient db = shards.jdbc(shard);
+            for (int i = -cfg.monthsBack(); i &lt;= cfg.monthsAhead(); i++) {
+                create(db, now.plusMonths(i));
+            }
+            dropOlderThan(db, shard, now.minusMonths(cfg.retentionMonths()));
+        }
+    }
+
+    public static String name(YearMonth month) {
+        return "orders_%d_%02d".formatted(month.getYear(), month.getMonthValue());
+    }
+
+    private static void create(JdbcClient db, YearMonth month) {
+        db.sql("CREATE TABLE IF NOT EXISTS %s PARTITION OF orders FOR VALUES FROM ('%s 00:00+00') TO ('%s 00:00+00')"
+                .formatted(name(month), month.atDay(1), month.plusMonths(1).atDay(1))).update();
+    }
+
+    private static void dropOlderThan(JdbcClient db, String shard, YearMonth oldestToKeep) {
+        List&lt;String&gt; partitions = db.sql("""
+                SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+                 WHERE i.inhparent = 'orders'::regclass
+                 ORDER BY c.relname
+                """).query(String.class).list();
+        for (String partition : partitions) {
+            YearMonth month = YearMonth.of(Integer.parseInt(partition.substring(7, 11)),
+                    Integer.parseInt(partition.substring(12, 14)));
+            if (month.isBefore(oldestToKeep)) {
+                // CONCURRENTLY no bloquea las consultas que están leyendo orders mientras se suelta la partición.
+                db.sql("ALTER TABLE orders DETACH PARTITION " + partition + " CONCURRENTLY").update();
+                db.sql("DROP TABLE " + partition).update();
+                log.info("Shard {}: partición {} eliminada", shard, partition);
+            }
+        }
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Partir <code>orders</code> por rango de <code>created_at</code>, un mes por partición. La clave primaria de una tabla partida tiene que incluir la columna de partición, así que es <code>(id, created_at)</code>. <span class="badge badge--doc">Documentado</span> Como <code>created_at</code> sale del propio id con <code>uuid_extract_timestamp</code>, que la pareja sea única equivale a que el id lo sea, y una búsqueda por id puede decir en qué mes está el pedido. <code>PartitionMaintenance</code> crea los meses que vienen al arrancar y cada madrugada, y suelta los que pasaron la retención.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una tabla sin partir y un <code>DELETE</code> por lotes cada noche para borrar lo viejo. Escribe en el WAL cada fila que borra, deja filas muertas para el vacuum y la tabla no se achica. Lo vas a medir. También descartas partir por hash del id: reparte parejo, pero un mes queda repartido entre todas las particiones, y ya no lo puedes soltar entero.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que llegue un pedido de un mes sin partición: el <code>INSERT</code> falla. Si el mantenimiento deja de correr, los pedidos empiezan a fallar el día 1 del primer mes sin crear. Por eso crea tres meses hacia adelante, y conviene alertar si falta el siguiente. Una partición <code>DEFAULT</code> evita el error, pero después no puedes crear el mes que le falta mientras la <code>DEFAULT</code> tenga filas de ese rango. <span class="badge badge--doc">Documentado</span></dd></div>
+      </dl>
+
+      <h3 id="paso-anillo">Paso 2. Un anillo de hashing consistente</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/shard/Ring.java"><code>package lab.pedidos.shard;
+
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.List;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
+
+/**
+ * Anillo de hashing consistente. Cada shard pone "vnodes" puntos en el anillo; un cliente es del
+ * primer punto que encuentra avanzando desde su propio hash.
+ */
+public final class Ring {
+
+    private final List&lt;String&gt; nodes;
+    private final NavigableMap&lt;Long, String&gt; points = new TreeMap&lt;&gt;();
+
+    public Ring(List&lt;String&gt; nodes, int vnodes) {
+        this.nodes = List.copyOf(nodes);
+        for (String node : nodes) {
+            for (int i = 0; i &lt; vnodes; i++) {
+                points.put(hash(node + "#" + i), node);
+            }
+        }
+    }
+
+    public String owner(long customerId) {
+        Map.Entry&lt;Long, String&gt; point = points.ceilingEntry(hash(Long.toString(customerId)));
+        return (point != null ? point : points.firstEntry()).getValue();
+    }
+
+    public List&lt;String&gt; nodes() {
+        return nodes;
+    }
+
+    /** Los primeros 8 bytes del SHA-256: lento comparado con Murmur3, pero viene con el JDK. */
+    public static long hash(String key) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8));
+            return ByteBuffer.wrap(digest).getLong();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cada shard pone 128 puntos en un anillo de números de 64 bits, en el hash de <code>"s1#0"</code>, <code>"s1#1"</code>… Un cliente es del primer punto que encuentra avanzando desde el hash de su número: <code>ceilingEntry</code>, y si se pasa del último, el primero. El hash son los primeros 8 bytes del SHA-256, que da lo mismo en cualquier JVM y en cualquier lenguaje: <code>anillo.py</code> reproduce el anillo en Python.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>hash(cliente) mod N</code>. Reparte igual de bien, pero al pasar de dos a tres shards cambia de dueño dos de cada tres clientes, y con el anillo, uno de cada tres. Y una tabla que diga el shard de cada cliente: mueve exactamente lo que quieras, pero es otra base que consultar en cada request, y si se cae, se cae todo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Cambiar la función de hash o el número de nodos virtuales es una migración: mueve todos los puntos del anillo. <code>String.hashCode()</code> tiene el mismo problema si algún día otro servicio, en otro lenguaje, tiene que calcular el dueño. Y con pocos nodos virtuales, la carga queda despareja: con uno por shard, el más cargado llevó en promedio un 85&#8239;% más de lo justo.</dd></div>
+      </dl>
+
+      <h3 id="paso-pools">Paso 3. Un pool por shard</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/shard/Shards.java"><code>package lab.pedidos.shard;
+
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+import com.zaxxer.hikari.HikariDataSource;
+import org.flywaydb.core.Flyway;
+
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+/** Un pool, un JdbcClient y un TransactionTemplate por shard. Las migraciones corren en todos. */
+@Component
+public class Shards implements DisposableBean {
+
+    private final Map&lt;String, HikariDataSource&gt; pools = new TreeMap&lt;&gt;();
+    private final Map&lt;String, JdbcClient&gt; clients = new TreeMap&lt;&gt;();
+    private final Map&lt;String, TransactionTemplate&gt; transactions = new TreeMap&lt;&gt;();
+
+    public Shards(ShardProps props) {
+        props.shards().forEach((name, db) -&gt; {
+            HikariDataSource ds = new HikariDataSource();
+            ds.setPoolName("shard-" + name);
+            ds.setJdbcUrl(db.url());
+            ds.setUsername(db.username());
+            ds.setPassword(db.password());
+            ds.setMaximumPoolSize(db.poolSize());
+            // Si un shard no responde, mejor fallar en 1 s que dejar el hilo esperando 30.
+            ds.setConnectionTimeout(1000);
+            Flyway.configure().dataSource(ds).load().migrate();
+            pools.put(name, ds);
+            clients.put(name, JdbcClient.create(ds));
+            transactions.put(name, new TransactionTemplate(new DataSourceTransactionManager(ds)));
+        });
+    }
+
+    public Set&lt;String&gt; names() {
+        return clients.keySet();
+    }
+
+    public JdbcClient jdbc(String shard) {
+        JdbcClient client = clients.get(shard);
+        if (client == null) {
+            throw new IllegalArgumentException("No existe el shard " + shard);
+        }
+        return client;
+    }
+
+    public TransactionTemplate tx(String shard) {
+        return transactions.get(shard);
+    }
+
+    @Override
+    public void destroy() {
+        pools.values().forEach(HikariDataSource::close);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/shard/ShardUnavailable.java"><code>package lab.pedidos.shard;
+
+import java.net.URI;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.ErrorResponseException;
+
+/** Un shard caído afecta solo a sus clientes: ellos reciben 503 y el resto sigue. */
+public class ShardUnavailable extends ErrorResponseException {
+
+    public ShardUnavailable(String shard, Throwable cause) {
+        super(HttpStatus.SERVICE_UNAVAILABLE, problem(shard), cause);
+    }
+
+    private static ProblemDetail problem(String shard) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "El shard " + shard + " no responde");
+        problem.setType(URI.create("https://pedidos.example/problemas/shard-no-disponible"));
+        problem.setProperty("shard", shard);
+        return problem;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un <code>HikariDataSource</code>, un <code>JdbcClient</code> y un <code>TransactionTemplate</code> por shard, con Flyway corriendo en cada uno. El código pide el shard por nombre y sabe siempre a qué base le habla. <code>connectionTimeout</code> de 1&#8239;s: si el pool de un shard está agotado, la request falla en 1&#8239;s, con un 503 que dice qué shard falló.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un solo <code>DataSource</code> con <code>AbstractRoutingDataSource</code>, que elige la base según una clave guardada en el hilo. Sirve si cada request toca una sola base, pero esconde a cuál le habla cada consulta, y aquí hay requests que tocan dos, como la doble escritura, o todas, como los recientes.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>El pool separa las conexiones, no los hilos. Los hilos de Tomcat son de todos: con un shard congelado, cada request de sus clientes ocupa un hilo hasta 1&#8239;s esperando conexión, o hasta 5&#8239;s si ya la tenía. A 200 pedidos por segundo alcanzó, como vas a medir. Con más carga, los hilos se acaban y sufren también los clientes de los otros shards: ahí hace falta un bulkhead por shard, como un semáforo, o hilos virtuales.</dd></div>
+      </dl>
+
+      <h3 id="paso-ruta">Paso 4. Cada request a su shard</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/orders/OrderSql.java"><code>package lab.pedidos.orders;
+
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import lab.pedidos.shard.Topology.CopyMode;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Component;
+
+/** El SQL de los pedidos. Cada método recibe el JdbcClient del shard donde tiene que correr. */
+@Component
+public class OrderSql {
+
+    private static final String COLUMNS = "id, customer_id, total_cents, status, version, created_at";
+
+    /** created_at sale del propio UUIDv7: con el id ya se sabe en qué partición está el pedido. */
+    public Order insert(JdbcClient db, long customer, long totalCents) {
+        return db.sql("""
+                INSERT INTO orders (id, created_at, customer_id, total_cents, status, version)
+                SELECT n.id, uuid_extract_timestamp(n.id), :customer, :total, 'NEW', 1
+                  FROM (SELECT uuidv7() AS id) AS n
+                RETURNING id, customer_id, total_cents, status, version, created_at
+                """)
+                .param("customer", customer)
+                .param("total", totalCents)
+                .query(Order.class)
+                .single();
+    }
+
+    public Optional&lt;Order&gt; find(JdbcClient db, long customer, UUID id) {
+        return db.sql("SELECT " + COLUMNS + """
+                  FROM orders
+                 WHERE id = :id AND created_at = uuid_extract_timestamp(:id) AND customer_id = :customer
+                """)
+                .param("id", id)
+                .param("customer", customer)
+                .query(Order.class)
+                .optional();
+    }
+
+    public List&lt;Order&gt; byCustomer(JdbcClient db, long customer, int limit) {
+        return db.sql("SELECT " + COLUMNS + """
+                  FROM orders
+                 WHERE customer_id = :customer
+                 ORDER BY created_at DESC
+                 LIMIT :limit
+                """)
+                .param("customer", customer)
+                .param("limit", limit)
+                .query(Order.class)
+                .list();
+    }
+
+    public Optional&lt;Order&gt; cancel(JdbcClient db, long customer, UUID id) {
+        return db.sql("""
+                UPDATE orders SET status = 'CANCELLED', version = version + 1
+                 WHERE id = :id AND created_at = uuid_extract_timestamp(:id)
+                   AND customer_id = :customer AND status = 'NEW'
+                RETURNING id, customer_id, total_cents, status, version, created_at
+                """)
+                .param("id", id)
+                .param("customer", customer)
+                .query(Order.class)
+                .optional();
+    }
+
+    public List&lt;Order&gt; recent(JdbcClient db, int limit) {
+        return db.sql("SELECT " + COLUMNS + " FROM orders ORDER BY created_at DESC, id DESC LIMIT :limit")
+                .param("limit", limit)
+                .query(Order.class)
+                .list();
+    }
+
+    /** Recorre el shard por id (keyset) para el backfill, la verificación y la limpieza. */
+    public List&lt;Order&gt; pageAfter(JdbcClient db, UUID after, int limit) {
+        return db.sql("SELECT " + COLUMNS + " FROM orders WHERE id &gt; :after ORDER BY id LIMIT :limit")
+                .param("after", after)
+                .param("limit", limit)
+                .query(Order.class)
+                .list();
+    }
+
+    /**
+     * Copia filas enteras a otro shard. Con UPSERT, una fila que ya está solo se pisa si la copia es más nueva,
+     * así que no importa en qué orden lleguen el backfill y la doble escritura.
+     */
+    public int copy(JdbcClient db, List&lt;Order&gt; rows, CopyMode mode) {
+        String onConflict = mode == CopyMode.UPSERT
+                ? "DO UPDATE SET status = excluded.status, version = excluded.version WHERE orders.version &lt; excluded.version"
+                : "DO NOTHING";
+        return db.sql("""
+                INSERT INTO orders (id, created_at, customer_id, total_cents, status, version)
+                SELECT u.id, uuid_extract_timestamp(u.id), u.customer_id, u.total_cents, u.status, u.version
+                  FROM unnest(CAST(:ids AS uuid[]), CAST(:customers AS bigint[]), CAST(:totals AS bigint[]),
+                              CAST(:statuses AS text[]), CAST(:versions AS int[]))
+                       AS u (id, customer_id, total_cents, status, version)
+                ON CONFLICT (id, created_at)
+                """ + onConflict)
+                .param("ids", rows.stream().map(o -&gt; o.id().toString()).toArray(String[]::new))
+                .param("customers", rows.stream().mapToLong(Order::customerId).toArray())
+                .param("totals", rows.stream().mapToLong(Order::totalCents).toArray())
+                .param("statuses", rows.stream().map(Order::status).toArray(String[]::new))
+                .param("versions", rows.stream().mapToInt(Order::version).toArray())
+                .update();
+    }
+
+    /** La doble escritura ingenua: repetir el UPDATE en el otro shard. Si la fila todavía no llegó, no toca nada. */
+    public void naiveUpdate(JdbcClient db, Order order) {
+        db.sql("""
+                UPDATE orders SET status = :status, version = :version
+                 WHERE id = :id AND created_at = uuid_extract_timestamp(:id)
+                """)
+                .param("id", order.id())
+                .param("status", order.status())
+                .param("version", order.version())
+                .update();
+    }
+
+    public Map&lt;UUID, Integer&gt; versions(JdbcClient db, Collection&lt;UUID&gt; ids) {
+        Map&lt;UUID, Integer&gt; out = new HashMap&lt;&gt;();
+        db.sql("SELECT id, version FROM orders WHERE id = ANY(CAST(:ids AS uuid[]))")
+                .param("ids", ids.stream().map(UUID::toString).toArray(String[]::new))
+                .query(rs -&gt; {
+                    out.put(rs.getObject("id", UUID.class), rs.getInt("version"));
+                });
+        return out;
+    }
+
+    public int delete(JdbcClient db, Collection&lt;UUID&gt; ids) {
+        return db.sql("DELETE FROM orders WHERE id = ANY(CAST(:ids AS uuid[]))")
+                .param("ids", ids.stream().map(UUID::toString).toArray(String[]::new))
+                .update();
+    }
+
+    public long count(JdbcClient db) {
+        return db.sql("SELECT count(*) FROM orders").query(Long.class).single();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/orders/OrderService.java"><code>package lab.pedidos.orders;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
+
+import lab.pedidos.shard.ShardProps;
+import lab.pedidos.shard.ShardUnavailable;
+import lab.pedidos.shard.Shards;
+import lab.pedidos.shard.Topology;
+import lab.pedidos.shard.Topology.CopyMode;
+import lab.pedidos.shard.Topology.State;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class OrderService {
+
+    private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+    private static final Comparator&lt;Order&gt; NEWEST_FIRST =
+            Comparator.comparing(Order::createdAt).thenComparing(Order::id).reversed();
+
+    private final Shards shards;
+    private final Topology topology;
+    private final OrderSql sql;
+    private final Duration scatterTimeout;
+    private final ExecutorService scatter = Executors.newVirtualThreadPerTaskExecutor();
+    private final LongAdder mirrorFailures = new LongAdder();
+
+    public OrderService(Shards shards, Topology topology, OrderSql sql, ShardProps props) {
+        this.shards = shards;
+        this.topology = topology;
+        this.sql = sql;
+        this.scatterTimeout = props.scatterTimeout();
+    }
+
+    public Order create(long customer, long totalCents) {
+        State st = topology.state();
+        Order order = onShard(st.truth(customer), db -&gt; sql.insert(db, customer, totalCents));
+        mirror(st, order, false);
+        return order;
+    }
+
+    public Order get(long customer, UUID id) {
+        return onShard(topology.state().truth(customer), db -&gt; sql.find(db, customer, id))
+                .orElseThrow(() -&gt; notFound(id));
+    }
+
+    public List&lt;Order&gt; list(long customer, int limit) {
+        return onShard(topology.state().truth(customer), db -&gt; sql.byCustomer(db, customer, limit));
+    }
+
+    public Order cancel(long customer, UUID id) {
+        State st = topology.state();
+        String shard = st.truth(customer);
+        Order order = onShard(shard, db -&gt; sql.cancel(db, customer, id)).orElseThrow(() -&gt;
+                onShard(shard, db -&gt; sql.find(db, customer, id)).isPresent()
+                        ? new ResponseStatusException(HttpStatus.CONFLICT, "El pedido " + id + " ya estaba cancelado")
+                        : notFound(id));
+        mirror(st, order, true);
+        return order;
+    }
+
+    /**
+     * Scatter-gather: pregunta a todos los shards a la vez, espera como mucho scatterTimeout en total
+     * y junta lo que llegó. Un shard lento no frena la respuesta: queda en missingShards.
+     */
+    public Recent recent(int limit) {
+        State st = topology.state();
+        Map&lt;String, Future&lt;List&lt;Order&gt;&gt;&gt; asked = new TreeMap&lt;&gt;();
+        for (String shard : st.truthShards()) {
+            asked.put(shard, scatter.submit(() -&gt; sql.recent(shards.jdbc(shard), limit)));
+        }
+        long deadline = System.nanoTime() + scatterTimeout.toNanos();
+        List&lt;Order&gt; merged = new ArrayList&lt;&gt;();
+        List&lt;String&gt; missing = new ArrayList&lt;&gt;();
+        for (Map.Entry&lt;String, Future&lt;List&lt;Order&gt;&gt;&gt; answer : asked.entrySet()) {
+            try {
+                long left = Math.max(0, deadline - System.nanoTime());
+                for (Order order : answer.getValue().get(left, TimeUnit.NANOSECONDS)) {
+                    // Durante una migración, un shard guarda copias de clientes que no son suyos: se descartan.
+                    if (st.truth(order.customerId()).equals(answer.getKey())) {
+                        merged.add(order);
+                    }
+                }
+            } catch (TimeoutException | ExecutionException e) {
+                answer.getValue().cancel(true);
+                missing.add(answer.getKey());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }
+        merged.sort(NEWEST_FIRST);
+        return new Recent(List.copyOf(merged.subList(0, Math.min(limit, merged.size()))), !missing.isEmpty(), missing);
+    }
+
+    public long mirrorFailures() {
+        return mirrorFailures.sum();
+    }
+
+    /**
+     * La segunda escritura de la migración. No hay transacción entre dos shards: si la copia falla, el pedido
+     * ya existe en el shard que tiene la verdad, se anota y el backfill o la verificación lo arreglan.
+     */
+    private void mirror(State st, Order order, boolean isUpdate) {
+        st.mirror(order.customerId()).ifPresent(other -&gt; {
+            try {
+                JdbcClient db = shards.jdbc(other);
+                if (st.copy() == CopyMode.NAIVE &amp;&amp; isUpdate) {
+                    sql.naiveUpdate(db, order);
+                } else {
+                    sql.copy(db, List.of(order), st.copy());
+                }
+            } catch (DataAccessException e) {
+                mirrorFailures.increment();
+                log.warn("No se pudo copiar el pedido {} al shard {}", order.id(), other, e);
+            }
+        });
+    }
+
+    private &lt;T&gt; T onShard(String shard, Function&lt;JdbcClient, T&gt; work) {
+        try {
+            return work.apply(shards.jdbc(shard));
+        } catch (DataAccessResourceFailureException e) {
+            throw new ShardUnavailable(shard, e);
+        }
+    }
+
+    private static ResponseStatusException notFound(UUID id) {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el pedido " + id);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd><code>topology.state().truth(customer)</code> dice qué shard tiene la verdad de ese cliente, y todo el trabajo va a ese shard. Buscar y cancelar filtran por id, por <code>created_at = uuid_extract_timestamp(:id)</code>, para que el planificador vaya a un solo mes, y por cliente: un pedido pedido con otro cliente da 404.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>GET /api/orders/{id}</code>, sin el cliente. Para encontrar el pedido habría que preguntar a todos los shards, o mantener un índice global de id a shard, que es otra base en cada request.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Atrapar cualquier error como "shard caído". <code>onShard</code> convierte en 503 solo <code>DataAccessResourceFailureException</code>, que es lo que lanza Spring cuando no hay conexión o se corta. Un error de SQL sigue siendo un 500: no es culpa del shard, y reintentarlo no lo arregla.</dd></div>
+      </dl>
+
+      <h3 id="paso-scatter">Paso 5. Preguntar a todos con un plazo</h3>
+
+      <p>Este paso es <code>recent</code>, en <code>OrderService</code>: manda la consulta a todos los shards a la vez, en hilos virtuales, y espera como mucho 300&#8239;ms en total.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cada shard devuelve sus <code>limit</code> pedidos más nuevos con el índice <code>orders_recent</code>. La app los junta, los ordena por fecha y corta en <code>limit</code>. Un shard que no contestó a tiempo queda en <code>missingShards</code>, y la respuesta dice <code>partial: true</code>: sigue siendo un 200, con lo que hubo.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Esperar a todos. La latencia de los recientes sería la del shard más lento, y con un shard congelado, los 5&#8239;s del <code>socketTimeout</code>. También descartas una tabla de recientes alimentada por todos los shards: es rápida de leer, pero cada pedido se escribe dos veces, y hay que mantenerla al día.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Pedirle a cada shard <code>limit / N</code> filas. Si los diez pedidos más nuevos están todos en s1, la lista sale mal: cada shard tiene que mandar <code>limit</code>. Por la misma razón, la página 50 de los recientes le pide 50 páginas a cada shard; para paginar lejos, usa un cursor con <code>(created_at, id)</code>. Y durante una migración, un shard tiene copias de clientes que no son suyos: <code>recent</code> las descarta con <code>truth</code>, para no mostrar un pedido dos veces.</dd></div>
+      </dl>
+
+      <h3 id="paso-migracion">Paso 6. Sumar un shard en vivo</h3>
+
+      <p>La migración tiene cuatro fases, y en cada una está claro quién tiene la verdad de cada cliente y quién recibe una copia:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Fase</th><th>La verdad está en</th><th>Recibe una copia</th><th>Pasos que llevan a la siguiente</th></tr></thead>
+          <tbody>
+            <tr><td><code>STABLE</code></td><td>El anillo actual: s1 y s2</td><td>Nadie</td><td><code>start</code></td></tr>
+            <tr><td><code>DUAL_WRITE</code></td><td>El anillo actual</td><td>El dueño en el anillo nuevo, si es otro</td><td><code>backfill</code>, <code>verify</code> y <code>read-new</code></td></tr>
+            <tr><td><code>READ_NEW</code></td><td>El anillo nuevo: s1, s2 y s3</td><td>El dueño en el anillo viejo, para poder volver</td><td><code>finish</code></td></tr>
+            <tr><td><code>STABLE</code></td><td>El anillo nuevo</td><td>Nadie</td><td><code>cleanup</code> borra las copias viejas</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/shard/Topology.java"><code>package lab.pedidos.shard;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+/**
+ * Qué anillo manda y en qué fase va la migración. Vive en memoria, así que sirve para una sola
+ * instancia: en producción iría en un almacén compartido (etcd, Consul o una tabla) con versión.
+ */
+@Component
+public class Topology {
+
+    public enum Phase { STABLE, DUAL_WRITE, READ_NEW }
+
+    /** UPSERT copia la fila entera y gana la versión más alta. NAIVE repite la operación y puede perder cambios. */
+    public enum CopyMode { UPSERT, NAIVE }
+
+    public record State(Ring current, Ring target, Phase phase, CopyMode copy) {
+
+        /** El shard que tiene la verdad de este cliente. */
+        public String truth(long customer) {
+            return phase == Phase.READ_NEW ? target.owner(customer) : current.owner(customer);
+        }
+
+        /** El otro shard que recibe una copia mientras dura la migración, si es distinto. */
+        public Optional&lt;String&gt; mirror(long customer) {
+            if (phase == Phase.STABLE) {
+                return Optional.empty();
+            }
+            String other = phase == Phase.DUAL_WRITE ? target.owner(customer) : current.owner(customer);
+            return other.equals(truth(customer)) ? Optional.empty() : Optional.of(other);
+        }
+
+        /** Los shards que tienen la verdad de algún cliente: los que consulta un scatter-gather. */
+        public List&lt;String&gt; truthShards() {
+            return phase == Phase.READ_NEW ? target.nodes() : current.nodes();
+        }
+    }
+
+    private final AtomicReference&lt;State&gt; state;
+    private final Shards shards;
+    private final int vnodes;
+    private volatile boolean finishedHere;
+
+    public Topology(ShardProps props, Shards shards) {
+        this.shards = shards;
+        this.vnodes = props.vnodes();
+        requireKnown(props.ring());
+        this.state = new AtomicReference&lt;&gt;(new State(new Ring(props.ring(), vnodes), null, Phase.STABLE, CopyMode.UPSERT));
+    }
+
+    public State state() {
+        return state.get();
+    }
+
+    public synchronized State start(List&lt;String&gt; target, CopyMode copy) {
+        State now = state.get();
+        if (now.phase() != Phase.STABLE) {
+            throw conflict("Ya hay una migración en curso, en la fase " + now.phase());
+        }
+        requireKnown(target);
+        return set(new State(now.current(), new Ring(target, vnodes), Phase.DUAL_WRITE, copy));
+    }
+
+    public synchronized State readNew() {
+        State now = require(Phase.DUAL_WRITE);
+        return set(new State(now.current(), now.target(), Phase.READ_NEW, now.copy()));
+    }
+
+    public synchronized State finish() {
+        State now = require(Phase.READ_NEW);
+        finishedHere = true;
+        return set(new State(now.target(), null, Phase.STABLE, now.copy()));
+    }
+
+    /**
+     * Borrar copias solo es seguro si esta instancia terminó la migración. Si la aplicación se reinició,
+     * el anillo vuelve al de la configuración y "lo que no es mío" podría ser todo lo que se migró.
+     */
+    public boolean finishedHere() {
+        return finishedHere &amp;&amp; state.get().phase() == Phase.STABLE;
+    }
+
+    private State require(Phase phase) {
+        State now = state.get();
+        if (now.phase() != phase) {
+            throw conflict("La migración está en " + now.phase() + " y este paso necesita " + phase);
+        }
+        return now;
+    }
+
+    private State set(State next) {
+        state.set(next);
+        return next;
+    }
+
+    private void requireKnown(List&lt;String&gt; ring) {
+        if (ring.isEmpty() || !shards.names().containsAll(ring)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El anillo " + ring + " usa shards que no existen: " + shards.names());
+        }
+    }
+
+    private static ResponseStatusException conflict(String message) {
+        return new ResponseStatusException(HttpStatus.CONFLICT, message);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/migration/Migration.java"><code>package lab.pedidos.migration;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import lab.pedidos.orders.Order;
+import lab.pedidos.orders.OrderSql;
+import lab.pedidos.shard.ShardProps;
+import lab.pedidos.shard.Shards;
+import lab.pedidos.shard.Topology;
+import lab.pedidos.shard.Topology.Phase;
+import lab.pedidos.shard.Topology.State;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+/** Backfill, verificación y limpieza de una migración de anillo. */
+@Service
+public class Migration {
+
+    public record Backfill(long scanned, long copied, long ms) {
+    }
+
+    public record Verify(long checked, long missing, long stale, List&lt;UUID&gt; examples) {
+    }
+
+    private record Moved(String from, String to, Order row) {
+    }
+
+    private static final UUID FIRST = new UUID(0, 0);
+
+    private final Shards shards;
+    private final Topology topology;
+    private final OrderSql sql;
+    private final int batch;
+
+    public Migration(Shards shards, Topology topology, OrderSql sql, ShardProps props) {
+        this.shards = shards;
+        this.topology = topology;
+        this.sql = sql;
+        this.batch = props.migrationBatch();
+    }
+
+    /** Copia al shard nuevo lo que ya existía antes de empezar la doble escritura. Se puede repetir. */
+    public Backfill backfill() {
+        State st = requireMigrating();
+        long t0 = System.nanoTime();
+        long scanned = 0;
+        long copied = 0;
+        for (String source : st.current().nodes()) {
+            UUID after = FIRST;
+            List&lt;Order&gt; page;
+            while (!(page = sql.pageAfter(shards.jdbc(source), after, batch)).isEmpty()) {
+                scanned += page.size();
+                for (Map.Entry&lt;String, List&lt;Order&gt;&gt; dest : leaving(st, source, page).entrySet()) {
+                    copied += sql.copy(shards.jdbc(dest.getKey()), dest.getValue(), st.copy());
+                }
+                after = page.getLast().id();
+            }
+        }
+        return new Backfill(scanned, copied, (System.nanoTime() - t0) / 1_000_000);
+    }
+
+    /**
+     * Compara cada fila que se muda con su copia. Una diferencia puede ser una doble escritura que todavía
+     * no terminó, así que las diferencias se vuelven a mirar medio segundo después antes de contarlas.
+     */
+    public Verify verify() throws InterruptedException {
+        State st = requireMigrating();
+        long checked = 0;
+        List&lt;Moved&gt; suspects = new ArrayList&lt;&gt;();
+        for (String source : st.current().nodes()) {
+            UUID after = FIRST;
+            List&lt;Order&gt; page;
+            while (!(page = sql.pageAfter(shards.jdbc(source), after, batch)).isEmpty()) {
+                for (Map.Entry&lt;String, List&lt;Order&gt;&gt; dest : leaving(st, source, page).entrySet()) {
+                    List&lt;Order&gt; rows = dest.getValue();
+                    checked += rows.size();
+                    Map&lt;UUID, Integer&gt; copies = sql.versions(shards.jdbc(dest.getKey()), ids(rows));
+                    for (Order row : rows) {
+                        if (!Integer.valueOf(row.version()).equals(copies.get(row.id()))) {
+                            suspects.add(new Moved(source, dest.getKey(), row));
+                        }
+                    }
+                }
+                after = page.getLast().id();
+            }
+        }
+        Thread.sleep(500);
+        long missing = 0;
+        long stale = 0;
+        List&lt;UUID&gt; examples = new ArrayList&lt;&gt;();
+        for (Moved m : suspects) {
+            Integer truth = sql.versions(shards.jdbc(m.from()), List.of(m.row().id())).get(m.row().id());
+            Integer copy = sql.versions(shards.jdbc(m.to()), List.of(m.row().id())).get(m.row().id());
+            if (copy == null) {
+                missing++;
+            } else if (!copy.equals(truth)) {
+                stale++;
+            } else {
+                continue;
+            }
+            if (examples.size() &lt; 5) {
+                examples.add(m.row().id());
+            }
+        }
+        return new Verify(checked, missing, stale, examples);
+    }
+
+    /** Borra de cada shard las filas de clientes que ya no son suyos. Es lo único irreversible de la migración. */
+    public Map&lt;String, Integer&gt; cleanup() {
+        if (!topology.finishedHere()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Solo se limpia después de terminar la migración en esta misma instancia");
+        }
+        State st = topology.state();
+        Map&lt;String, Integer&gt; deleted = new TreeMap&lt;&gt;();
+        for (String shard : shards.names()) {
+            JdbcClient db = shards.jdbc(shard);
+            int count = 0;
+            UUID after = FIRST;
+            List&lt;Order&gt; page;
+            while (!(page = sql.pageAfter(db, after, batch)).isEmpty()) {
+                List&lt;UUID&gt; notMine = page.stream()
+                        .filter(o -&gt; !st.current().owner(o.customerId()).equals(shard))
+                        .map(Order::id)
+                        .toList();
+                if (!notMine.isEmpty()) {
+                    count += sql.delete(db, notMine);
+                }
+                after = page.getLast().id();
+            }
+            deleted.put(shard, count);
+        }
+        return deleted;
+    }
+
+    private State requireMigrating() {
+        State st = topology.state();
+        if (st.phase() == Phase.STABLE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "No hay ninguna migración en curso");
+        }
+        return st;
+    }
+
+    /** Las filas de esta página cuyo cliente cambia de shard en el anillo nuevo, agrupadas por destino. */
+    private static Map&lt;String, List&lt;Order&gt;&gt; leaving(State st, String source, List&lt;Order&gt; page) {
+        return page.stream()
+                .filter(o -&gt; !st.target().owner(o.customerId()).equals(source))
+                .collect(Collectors.groupingBy(o -&gt; st.target().owner(o.customerId()), HashMap::new, Collectors.toList()));
+    }
+
+    private static List&lt;UUID&gt; ids(List&lt;Order&gt; rows) {
+        return rows.stream().map(Order::id).toList();
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Primero, cada escritura va al dueño actual y se copia al dueño nuevo. Después, el backfill recorre cada shard por id, de a 1&#8239;000 filas, y copia lo que se muda. Las dos copias son la fila entera con su versión, y <code>ON CONFLICT … WHERE orders.version &lt; excluded.version</code> hace que gane siempre la más nueva: no importa cuál llegue primero. <code>verify</code> compara versiones y vuelve a mirar las diferencias medio segundo después, por si eran una copia en camino. Recién entonces se lee del anillo nuevo, y solo al final se borra.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Parar las escrituras, copiar y cambiar de anillo: el corte dura lo que tarde la copia. Y la doble escritura ingenua, el modo <code>NAIVE</code>, que repite cada operación en el otro shard: si la cancelación llega antes que el backfill, el <code>UPDATE</code> no encuentra la fila, y el backfill después copia la versión vieja. Lo vas a provocar.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>La topología vive en memoria: sirve para una sola instancia. Con dos, una puede estar en <code>READ_NEW</code> y la otra en <code>DUAL_WRITE</code>, y cada una cree que la verdad está en un lado distinto. En producción va en un lugar compartido, con versión. Si la app se reinicia a mitad, vuelve al anillo de la configuración, que todavía tiene la verdad, y la migración se empieza de nuevo. <code>cleanup</code> es lo único que no tiene vuelta atrás, y se niega si la migración no terminó en esta instancia.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver MigrationController.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/pedidos/migration/MigrationController.java"><code>package lab.pedidos.migration;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+import lab.pedidos.orders.OrderService;
+import lab.pedidos.orders.OrderSql;
+import lab.pedidos.shard.Shards;
+import lab.pedidos.shard.Topology;
+import lab.pedidos.shard.Topology.CopyMode;
+import lab.pedidos.shard.Topology.State;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/** Los pasos de la migración, uno por endpoint, para correrlos a mano y mirar qué pasa entre uno y otro. */
+@RestController
+public class MigrationController {
+
+    public record Start(@NotEmpty List&lt;String&gt; target, CopyMode copy) {
+    }
+
+    private final Topology topology;
+    private final Migration migration;
+    private final Shards shards;
+    private final OrderSql sql;
+    private final OrderService orders;
+
+    public MigrationController(Topology topology, Migration migration, Shards shards, OrderSql sql, OrderService orders) {
+        this.topology = topology;
+        this.migration = migration;
+        this.shards = shards;
+        this.sql = sql;
+        this.orders = orders;
+    }
+
+    @GetMapping("/api/lab/shards")
+    public Map&lt;String, Object&gt; shards() {
+        Map&lt;String, Long&gt; rows = new LinkedHashMap&lt;&gt;();
+        for (String shard : shards.names()) {
+            rows.put(shard, sql.count(shards.jdbc(shard)));
+        }
+        Map&lt;String, Object&gt; out = describe(topology.state());
+        out.put("rows", rows);
+        out.put("mirrorFailures", orders.mirrorFailures());
+        return out;
+    }
+
+    @PostMapping("/api/lab/migration/start")
+    public Map&lt;String, Object&gt; start(@Valid @RequestBody Start body) {
+        return describe(topology.start(body.target(), body.copy() == null ? CopyMode.UPSERT : body.copy()));
+    }
+
+    @PostMapping("/api/lab/migration/backfill")
+    public Migration.Backfill backfill() {
+        return migration.backfill();
+    }
+
+    @GetMapping("/api/lab/migration/verify")
+    public Migration.Verify verify() throws InterruptedException {
+        return migration.verify();
+    }
+
+    @PostMapping("/api/lab/migration/read-new")
+    public Map&lt;String, Object&gt; readNew() {
+        return describe(topology.readNew());
+    }
+
+    @PostMapping("/api/lab/migration/finish")
+    public Map&lt;String, Object&gt; finish() {
+        return describe(topology.finish());
+    }
+
+    @PostMapping("/api/lab/migration/cleanup")
+    public Map&lt;String, Integer&gt; cleanup() {
+        return migration.cleanup();
+    }
+
+    private static Map&lt;String, Object&gt; describe(State st) {
+        Map&lt;String, Object&gt; out = new LinkedHashMap&lt;&gt;();
+        out.put("phase", st.phase());
+        out.put("current", st.current().nodes());
+        out.put("target", st.target() == null ? null : st.target().nodes());
+        out.put("copy", st.copy());
+        return out;
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="paso-carga">Paso 7. Migrar con la tienda vendiendo</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/PedidosSimulation.java"><code>package lab.pedidos;
+
+import static io.gatling.javaapi.core.CoreDsl.StringBody;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.exec;
+import static io.gatling.javaapi.core.CoreDsl.jsonPath;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+
+/** ./mvnw gatling:test -Drps=200 -Dseconds=90 -Dcustomers=10000 */
+public class PedidosSimulation extends Simulation {
+
+    int rps = Integer.getInteger("rps", 200);
+    int seconds = Integer.getInteger("seconds", 90);
+    int customers = Integer.getInteger("customers", 10_000);
+
+    HttpProtocolBuilder protocolo = http.baseUrl("http://localhost:8080")
+            .contentTypeHeader("application/json")
+            .shareConnections();
+
+    Iterator&lt;Map&lt;String, Object&gt;&gt; clientes = Stream.generate(() -&gt; {
+        ThreadLocalRandom r = ThreadLocalRandom.current();
+        return Map.&lt;String, Object&gt;of("c", r.nextInt(1, customers + 1), "total", r.nextInt(100, 20_000));
+    }).iterator();
+
+    ScenarioBuilder comprar = scenario("Comprar")
+            .feed(clientes)
+            .exec(http("POST pedido").post("/api/customers/#{c}/orders")
+                    .body(StringBody("{\"totalCents\": #{total}}"))
+                    .check(status().is(201), jsonPath("$.id").saveAs("id")))
+            .exec(http("GET pedido").get("/api/customers/#{c}/orders/#{id}").check(status().is(200)));
+
+    // Cancela un pedido viejo del cliente: son las filas que el backfill está copiando.
+    ScenarioBuilder cancelar = scenario("Cancelar")
+            .feed(clientes)
+            .exec(http("GET pedidos del cliente").get("/api/customers/#{c}/orders?limit=20")
+                    .check(status().is(200),
+                            jsonPath("$[?(@.status == 'NEW')].id").findRandom().optional().saveAs("viejo")))
+            .doIf(session -&gt; session.contains("viejo")).then(
+                    exec(http("POST cancelar").post("/api/customers/#{c}/orders/#{viejo}/cancel")
+                            .check(status().in(200, 409))));
+
+    ScenarioBuilder recientes = scenario("Recientes")
+            .exec(http("GET recientes").get("/api/orders/recent?limit=20").check(status().is(200)));
+
+    {
+        setUp(
+                comprar.injectOpen(constantUsersPerSec(rps).during(seconds)),
+                cancelar.injectOpen(constantUsersPerSec(rps / 2.0).during(seconds)),
+                recientes.injectOpen(constantUsersPerSec(rps / 10.0).during(seconds))
+        ).protocols(protocolo);
+    }
+}</code></pre>
+
+<pre data-lang="bash" data-file="scripts/migrar.sh"><code>#!/bin/bash
+# Pasa de dos a tres shards con Gatling corriendo. Uso: bash scripts/migrar.sh [UPSERT|NAIVE]
+# Cada paso se llama a un tiempo fijo desde que arranca la carga, para que las corridas se puedan comparar.
+MODE=${1:-UPSERT}
+LAB=localhost:8080/api/lab
+mkdir -p target
+./mvnw -q gatling:test -Drps=200 -Dseconds=75 &gt; target/migrar-gatling.log 2&gt;&amp;1 &amp;
+carga=$!
+t0=$(date +%s)
+a_los() {
+  while [ $(( $(date +%s) - t0 )) -lt "$1" ]; do sleep 0.2; done
+  printf "t=%2ds " $(( $(date +%s) - t0 ))
+}
+a_los 20; echo "start:    $(curl -s -X POST $LAB/migration/start -H 'Content-Type: application/json' \
+                             -d "{\"target\": [\"s1\", \"s2\", \"s3\"], \"copy\": \"$MODE\"}")"
+a_los 25; echo "backfill: $(curl -s -X POST $LAB/migration/backfill)"
+a_los 35; echo "verify:   $(curl -s $LAB/migration/verify)"
+a_los 40; echo "read-new: $(curl -s -X POST $LAB/migration/read-new)"
+a_los 50; echo "finish:   $(curl -s -X POST $LAB/migration/finish)"
+a_los 55; echo "cleanup:  $(curl -s -X POST $LAB/migration/cleanup)"
+wait $carga
+echo "shards:   $(curl -s $LAB/shards)"
+echo "El reporte de la carga está en target/gatling/."</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Tres escenarios: comprar y leer el pedido, 200 por segundo; listar los pedidos de un cliente y cancelar uno viejo, 100 por segundo; y los recientes, 20 por segundo. <code>migrar.sh</code> llama a cada paso de la migración a un tiempo fijo desde que arranca la carga, así dos corridas se pueden comparar.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Probar la migración solo creando pedidos. La doble escritura de un pedido nuevo casi no puede fallar. Los errores aparecen al cambiar filas viejas mientras el backfill las está copiando, y eso es lo que hacen las cancelaciones.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Medir con la JVM fría. En la primera carga después de levantar la app, el p95 fue de 354&#8239;ms, contra 42&#8239;ms en caliente, y a veces aparecen 503: con el código todavía sin compilar, las requests tardan más, el pool de 10 conexiones se agota y el <code>connectionTimeout</code> de 1&#8239;s las corta. Corre una carga de 20&#8239;s antes de medir.</dd></div>
+      </dl>
+
+<pre data-lang="python" data-file="scripts/duenos.py"><code># ¿Quedó algún cliente en un shard que no es el suyo? Usa el mismo anillo que la aplicación.
+# Uso: python scripts/duenos.py s1,s2,s3     (los shards del anillo que manda)
+import bisect
+import hashlib
+import subprocess
+import sys
+
+
+def h(texto):
+    return int.from_bytes(hashlib.sha256(texto.encode()).digest()[:8], "big", signed=True)
+
+
+nodos = sys.argv[1].split(",")
+puntos = sorted((h(f"{n}#{i}"), n) for n in nodos for i in range(128))
+claves = [p[0] for p in puntos]
+
+
+def dueno(cliente):
+    return puntos[bisect.bisect_left(claves, h(str(cliente))) % len(puntos)][1]
+
+
+for shard in ("s1", "s2", "s3"):
+    clientes = subprocess.run(
+        ["docker", "compose", "exec", "-T", shard, "psql", "-U", "app", "-d", "app", "-At",
+         "-c", "SELECT DISTINCT customer_id FROM orders"],
+        capture_output=True, text=True, check=True).stdout.split()
+    ajenos = sum(dueno(int(c)) != shard for c in clientes)
+    print(f"{shard}: {len(clientes)} clientes, {ajenos} que no son suyos")</code></pre>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a06-pedidos"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta tres PostgreSQL con Testcontainers y corre ocho pruebas en 44&#8239;s:</p>
+
+      <ul>
+        <li><code>RingTest</code>: con 128 nodos virtuales, cada shard recibe entre 30&#8239;000 y 36&#8239;700 de 100&#8239;000 clientes; al sumar s3 cambia de dueño entre el 28 y el 39&#8239;%, y todos hacia s3; con <code>mod N</code>, entre el 62 y el 71&#8239;%.</li>
+        <li><code>ShardingTest</code>: un pedido vive en un solo shard; buscarlo por id toca una sola partición, según su <code>EXPLAIN</code>; los recientes juntan s1 y s2 en orden; cancelar dos veces da 409, y pedirlo con otro cliente, 404.</li>
+        <li><code>MigrationTest</code>: de dos a tres shards con pedidos creados y cancelados en cada fase. Al final, cada pedido tiene su estado correcto, existe en un solo shard, y algunos están en s3.</li>
+        <li><code>ShardDownTest</code>: con s2 congelado por <code>docker pause</code>, los recientes responden en menos de 1&#8239;s con <code>missingShards: ["s2"]</code>, un cliente de s1 recibe 200 y uno de s2, 503 con <code>"shard": "s2"</code>.</li>
+      </ul>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver las pruebas y ThreeShards.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/shard/RingTest.java"><code>package lab.pedidos.shard;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+
+class RingTest {
+
+    static final int KEYS = 100_000;
+
+    @Test
+    void con128NodosVirtualesCadaShardTieneUnTercioMasMenos10PorCiento() {
+        Ring ring = new Ring(List.of("s1", "s2", "s3"), 128);
+        Map&lt;String, Integer&gt; load = new HashMap&lt;&gt;();
+        for (long k = 1; k &lt;= KEYS; k++) {
+            load.merge(ring.owner(k), 1, Integer::sum);
+        }
+        assertThat(load.values()).allSatisfy(n -&gt; assertThat(n).isBetween(30_000, 36_700));
+    }
+
+    @Test
+    void alSumarUnTercerShardSeMudaUnTercioYSoloHaciaElNuevo() {
+        Ring before = new Ring(List.of("s1", "s2"), 128);
+        Ring after = new Ring(List.of("s1", "s2", "s3"), 128);
+        int moved = 0;
+        int movedByModulo = 0;
+        for (long k = 1; k &lt;= KEYS; k++) {
+            String from = before.owner(k);
+            String to = after.owner(k);
+            if (!from.equals(to)) {
+                moved++;
+                assertThat(to).isEqualTo("s3");
+            }
+            long h = Ring.hash(Long.toString(k));
+            if (Math.floorMod(h, 2) != Math.floorMod(h, 3)) {
+                movedByModulo++;
+            }
+        }
+        assertThat(moved / (double) KEYS).isBetween(0.28, 0.39);
+        assertThat(movedByModulo / (double) KEYS).isBetween(0.62, 0.71);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/orders/ShardingTest.java"><code>package lab.pedidos.orders;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.pedidos.ThreeShards;
+import lab.pedidos.shard.Topology;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+class ShardingTest {
+
+    @DynamicPropertySource
+    static void shards(DynamicPropertyRegistry registry) {
+        ThreeShards.register(registry);
+    }
+
+    @Autowired
+    MockMvcTester mvc;
+    @Autowired
+    Topology topology;
+
+    @Test
+    void unPedidoViveEnUnSoloShard() throws Exception {
+        String id = create(42, 1500);
+        String owner = topology.state().truth(42);
+        for (String shard : List.of("s1", "s2", "s3")) {
+            long expected = shard.equals(owner) ? 1 : 0;
+            assertThat(ThreeShards.count(shard, "SELECT count(*) FROM orders WHERE id = '" + id + "'"))
+                    .as(shard).isEqualTo(expected);
+        }
+    }
+
+    @Test
+    void buscarPorIdTocaUnaSolaParticion() throws Exception {
+        String id = create(7, 100);
+        String plan = ThreeShards.explain(topology.state().truth(7),
+                "SELECT * FROM orders WHERE customer_id = 7 AND id = '" + id
+                        + "' AND created_at = uuid_extract_timestamp('" + id + "')");
+        Set&lt;String&gt; partitions = new HashSet&lt;&gt;();
+        Matcher m = Pattern.compile("orders_\\d{4}_\\d{2}").matcher(plan);
+        while (m.find()) {
+            partitions.add(m.group());
+        }
+        assertThat(partitions).as(plan).hasSize(1);
+    }
+
+    @Test
+    void losRecientesJuntanTodosLosShardsEnOrden() throws Exception {
+        for (long c = 1; c &lt;= 20; c++) {
+            create(c, 100 * c);
+        }
+        MvcTestResult result = mvc.get().uri("/api/orders/recent?limit=10").exchange();
+        assertThat(result).hasStatusOk();
+        String json = result.getResponse().getContentAsString();
+        assertThat((Boolean) JsonPath.read(json, "$.partial")).isFalse();
+        List&lt;String&gt; dates = JsonPath.read(json, "$.orders[*].createdAt");
+        assertThat(dates).hasSize(10).isSortedAccordingTo((a, b) -&gt; b.compareTo(a));
+        List&lt;Integer&gt; customers = JsonPath.read(json, "$.orders[*].customerId");
+        Set&lt;String&gt; owners = new HashSet&lt;&gt;();
+        customers.forEach(c -&gt; owners.add(topology.state().truth(c)));
+        assertThat(owners).containsExactlyInAnyOrder("s1", "s2");
+    }
+
+    @Test
+    void cancelarDosVecesDa409() throws Exception {
+        String id = create(9, 500);
+        assertThat(mvc.post().uri("/api/customers/9/orders/" + id + "/cancel")).hasStatusOk()
+                .bodyJson().extractingPath("$.version").isEqualTo(2);
+        assertThat(mvc.post().uri("/api/customers/9/orders/" + id + "/cancel")).hasStatus(HttpStatus.CONFLICT);
+        assertThat(mvc.get().uri("/api/customers/10/orders/" + id)).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    String create(long customer, long total) throws Exception {
+        MvcTestResult r = mvc.post().uri("/api/customers/" + customer + "/orders")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"totalCents\": " + total + "}").exchange();
+        assertThat(r).hasStatus(HttpStatus.CREATED);
+        return JsonPath.read(r.getResponse().getContentAsString(), "$.id");
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/migration/MigrationTest.java"><code>package lab.pedidos.migration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.pedidos.ThreeShards;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+/** De dos a tres shards con pedidos que se crean y se cancelan en medio. Ensucia el contexto: cambia el anillo. */
+@SpringBootTest
+@AutoConfigureMockMvc
+@DirtiesContext
+class MigrationTest {
+
+    @DynamicPropertySource
+    static void shards(DynamicPropertyRegistry registry) {
+        ThreeShards.register(registry);
+    }
+
+    @Autowired
+    MockMvcTester mvc;
+
+    /** id del pedido, cliente y estado que tiene que tener al final. */
+    record Expected(String id, long customer, String status) {
+    }
+
+    final Map&lt;String, Expected&gt; expected = new LinkedHashMap&lt;&gt;();
+
+    @Test
+    void deDosATresShardsSinPerderNiDuplicarPedidos() throws Exception {
+        List&lt;String&gt; old = new ArrayList&lt;&gt;();
+        for (long c = 1000; c &lt; 1100; c++) {
+            for (int i = 0; i &lt; 3; i++) {
+                old.add(create(c));
+            }
+        }
+        for (int i = 0; i &lt; 50; i++) {
+            cancel(old.get(i * 3));
+        }
+
+        lab("/api/lab/migration/start", "{\"target\": [\"s1\", \"s2\", \"s3\"]}");
+        // Con la doble escritura encendida: pedidos nuevos y cancelaciones de pedidos viejos.
+        for (long c = 1000; c &lt; 1100; c++) {
+            create(c);
+        }
+        for (int i = 50; i &lt; 75; i++) {
+            cancel(old.get(i * 3));
+        }
+        assertThat((Integer) JsonPath.read(lab("/api/lab/migration/backfill", null), "$.copied")).isPositive();
+        String verify = get("/api/lab/migration/verify");
+        assertThat((Integer) JsonPath.read(verify, "$.missing")).as(verify).isZero();
+        assertThat((Integer) JsonPath.read(verify, "$.stale")).as(verify).isZero();
+
+        lab("/api/lab/migration/read-new", null);
+        for (int i = 75; i &lt; 100; i++) {
+            cancel(old.get(i * 3));
+        }
+        lab("/api/lab/migration/finish", null);
+        String cleanup = lab("/api/lab/migration/cleanup", null);
+        assertThat((Integer) JsonPath.read(cleanup, "$.s1") + (Integer) JsonPath.read(cleanup, "$.s2")).isPositive();
+
+        for (Expected e : expected.values()) {
+            MvcTestResult r = mvc.get().uri("/api/customers/" + e.customer() + "/orders/" + e.id()).exchange();
+            assertThat(r).as(e.id()).hasStatusOk().bodyJson().extractingPath("$.status").isEqualTo(e.status());
+        }
+        String ids = String.join("','", expected.keySet());
+        long copies = 0;
+        for (String shard : List.of("s1", "s2", "s3")) {
+            copies += ThreeShards.count(shard, "SELECT count(*) FROM orders WHERE id IN ('" + ids + "')");
+        }
+        assertThat(copies).isEqualTo(expected.size());
+        assertThat(ThreeShards.count("s3", "SELECT count(*) FROM orders WHERE id IN ('" + ids + "')")).isPositive();
+    }
+
+    String create(long customer) throws Exception {
+        MvcTestResult r = mvc.post().uri("/api/customers/" + customer + "/orders")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"totalCents\": 1000}").exchange();
+        assertThat(r).hasStatus(HttpStatus.CREATED);
+        String id = JsonPath.read(r.getResponse().getContentAsString(), "$.id");
+        expected.put(id, new Expected(id, customer, "NEW"));
+        return id;
+    }
+
+    void cancel(String id) {
+        Expected e = expected.get(id);
+        assertThat(mvc.post().uri("/api/customers/" + e.customer() + "/orders/" + id + "/cancel")).hasStatusOk();
+        expected.put(id, new Expected(id, e.customer(), "CANCELLED"));
+    }
+
+    String lab(String uri, String body) throws Exception {
+        var request = mvc.post().uri(uri);
+        if (body != null) {
+            request = request.contentType(MediaType.APPLICATION_JSON).content(body);
+        }
+        MvcTestResult r = request.exchange();
+        assertThat(r).as(uri).hasStatusOk();
+        return r.getResponse().getContentAsString();
+    }
+
+    String get(String uri) throws Exception {
+        MvcTestResult r = mvc.get().uri(uri).exchange();
+        assertThat(r).hasStatusOk();
+        return r.getResponse().getContentAsString();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/orders/ShardDownTest.java"><code>package lab.pedidos.orders;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.github.dockerjava.api.DockerClient;
+import com.jayway.jsonpath.JsonPath;
+import lab.pedidos.ThreeShards;
+import lab.pedidos.shard.Topology;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.DockerClientFactory;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+/** docker pause congela el proceso del shard: las conexiones siguen abiertas, pero nadie contesta. */
+@SpringBootTest
+@AutoConfigureMockMvc
+class ShardDownTest {
+
+    @DynamicPropertySource
+    static void shards(DynamicPropertyRegistry registry) {
+        ThreeShards.register(registry);
+    }
+
+    @Autowired
+    MockMvcTester mvc;
+    @Autowired
+    Topology topology;
+
+    @Test
+    void conUnShardCongeladoLosRecientesLleganIncompletosYSoloSusClientesFallan() throws Exception {
+        for (long c = 1; c &lt;= 10; c++) {
+            assertThat(mvc.post().uri("/api/customers/" + c + "/orders")
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"totalCents\": 100}")).hasStatus(HttpStatus.CREATED);
+        }
+        long enS1 = firstCustomerOf("s1");
+        long enS2 = firstCustomerOf("s2");
+
+        DockerClient docker = DockerClientFactory.instance().client();
+        String s2 = ThreeShards.NODES.get("s2").getContainerId();
+        docker.pauseContainerCmd(s2).exec();
+        try {
+            long t0 = System.nanoTime();
+            MvcTestResult recent = mvc.get().uri("/api/orders/recent?limit=5").exchange();
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            assertThat(recent).hasStatusOk();
+            String json = recent.getResponse().getContentAsString();
+            assertThat((Boolean) JsonPath.read(json, "$.partial")).isTrue();
+            assertThat(JsonPath.&lt;java.util.List&lt;String&gt;&gt;read(json, "$.missingShards")).containsExactly("s2");
+            assertThat(ms).isLessThan(1000);
+
+            assertThat(mvc.get().uri("/api/customers/" + enS1 + "/orders")).hasStatusOk();
+            assertThat(mvc.get().uri("/api/customers/" + enS2 + "/orders"))
+                    .hasStatus(HttpStatus.SERVICE_UNAVAILABLE)
+                    .bodyJson().extractingPath("$.shard").isEqualTo("s2");
+        } finally {
+            docker.unpauseContainerCmd(s2).exec();
+        }
+    }
+
+    long firstCustomerOf(String shard) {
+        for (long c = 1; ; c++) {
+            if (topology.state().truth(c).equals(shard)) {
+                return c;
+            }
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/pedidos/ThreeShards.java"><code>package lab.pedidos;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.util.Map;
+
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+import org.springframework.test.context.DynamicPropertyRegistry;
+
+/** Tres PostgreSQL de verdad, compartidos por todas las clases de prueba. */
+public final class ThreeShards {
+
+    public static final Map&lt;String, PostgreSQLContainer&gt; NODES = Map.of(
+            "s1", node(), "s2", node(), "s3", node());
+
+    static {
+        NODES.values().parallelStream().forEach(PostgreSQLContainer::start);
+    }
+
+    private ThreeShards() {
+    }
+
+    public static void register(DynamicPropertyRegistry registry) {
+        NODES.forEach((name, node) -&gt; {
+            registry.add("app.shards." + name + ".url", node::getJdbcUrl);
+            registry.add("app.shards." + name + ".username", node::getUsername);
+            registry.add("app.shards." + name + ".password", node::getPassword);
+        });
+    }
+
+    public static long count(String shard, String sql) throws Exception {
+        try (Connection c = connect(shard); ResultSet rs = c.createStatement().executeQuery(sql)) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    public static String explain(String shard, String sql) throws Exception {
+        StringBuilder plan = new StringBuilder();
+        try (Connection c = connect(shard); ResultSet rs = c.createStatement().executeQuery("EXPLAIN " + sql)) {
+            while (rs.next()) {
+                plan.append(rs.getString(1)).append('\n');
+            }
+        }
+        return plan.toString();
+    }
+
+    private static Connection connect(String shard) throws Exception {
+        PostgreSQLContainer node = NODES.get(shard);
+        return DriverManager.getConnection(node.getJdbcUrl(), node.getUsername(), node.getPassword());
+    }
+
+    private static PostgreSQLContainer node() {
+        return new PostgreSQLContainer("postgres:18").withDatabaseName("app").withUsername("app").withPassword("app");
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-anillo">Qué tan parejo reparte el anillo</h3>
+
+<pre data-lang="bash"><code>python scripts/anillo.py</code></pre>
+
+<pre data-lang="bash"><code>Shard más cargado con 30 000 clientes y 3 shards, en 20 anillos con nombres distintos:
+    1 nodos virtuales: +85% de media, +193% en el peor anillo
+    8 nodos virtuales: +34% de media, +81% en el peor anillo
+   32 nodos virtuales: +14% de media, +28% en el peor anillo
+  128 nodos virtuales: +7% de media, +14% en el peor anillo
+  512 nodos virtuales: +3% de media, +7% en el peor anillo
+Clientes que cambian de shard, de 100 000:
+  de 2 a 3: 33.2 % con el anillo, 66.6 % con hash mod N
+  de 3 a 4: 27.8 % con el anillo, 74.9 % con hash mod N</code></pre>
+
+      <p>Con un punto por shard, el más cargado lleva casi el doble de lo justo, y en el peor de los 20 anillos, casi el triple. Cada vez que multiplicas por cuatro los nodos virtuales, el desvío baja a la mitad: con 128, el shard más cargado lleva un 7&#8239;% de más. En este laboratorio le tocó a s2: después de la migración tiene 3&#8239;540 clientes, contra 3&#8239;224 de s1 y 3&#8239;236 de s3.</p>
+
+      <p>Al sumar un shard, lo justo es que se mude la parte que le toca al nuevo: un tercio al pasar a tres, un cuarto al pasar a cuatro. El anillo se acerca, con 33.2 y 27.8&#8239;%. Con <code>mod N</code> se mudan dos de cada tres clientes, y tres de cada cuatro: casi todo, y entre shards viejos, que no ganan nada con el cambio.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver anillo.py</summary>
+        <div class="solution-body">
+<pre data-lang="python" data-file="scripts/anillo.py"><code># El mismo anillo que Ring.java, sin levantar nada: qué tan pareja queda la carga y cuántos clientes
+# se mudan al sumar un shard. Uso: python scripts/anillo.py
+import bisect
+import hashlib
+import statistics
+
+
+def h(texto):
+    # Los primeros 8 bytes del SHA-256, con signo, como ByteBuffer.getLong() en Java.
+    return int.from_bytes(hashlib.sha256(texto.encode()).digest()[:8], "big", signed=True)
+
+
+def anillo(nodos, vnodes):
+    puntos = sorted((h(f"{n}#{i}"), n) for n in nodos for i in range(vnodes))
+    claves = [p[0] for p in puntos]
+    # bisect_left es el ceilingEntry de Java; el módulo, la vuelta al primer punto.
+    return lambda cliente: puntos[bisect.bisect_left(claves, h(str(cliente))) % len(puntos)][1]
+
+
+print("Shard más cargado con 30 000 clientes y 3 shards, en 20 anillos con nombres distintos:")
+for vnodes in (1, 8, 32, 128, 512):
+    peores = []
+    for prueba in range(20):
+        nodos = [f"p{prueba}-s{i}" for i in range(3)]
+        dueno = anillo(nodos, vnodes)
+        carga = {n: 0 for n in nodos}
+        for cliente in range(1, 30_001):
+            carga[dueno(cliente)] += 1
+        peores.append(max(carga.values()) / 10_000 - 1)
+    print(f"  {vnodes:3d} nodos virtuales: {statistics.mean(peores):+.0%} de media, {max(peores):+.0%} en el peor anillo")
+
+print("Clientes que cambian de shard, de 100 000:")
+for antes, despues in ((["s1", "s2"], ["s1", "s2", "s3"]), (["s1", "s2", "s3"], ["s1", "s2", "s3", "s4"])):
+    a, d = anillo(antes, 128), anillo(despues, 128)
+    con_anillo = sum(a(c) != d(c) for c in range(1, 100_001))
+    con_modulo = sum(h(str(c)) % len(antes) != h(str(c)) % len(despues) for c in range(1, 100_001))
+    print(f"  de {len(antes)} a {len(despues)}: {con_anillo / 1000:.1f} % con el anillo, {con_modulo / 1000:.1f} % con hash mod N")</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-particiones">Un mes por partición</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package &amp;&amp; docker compose up -d --build
+time curl -s -X POST "localhost:8080/api/lab/seed?customers=10000&amp;ordersEach=10"; echo
+q() { docker compose exec -T "$1" psql -U app -d app -qAt -c "$2"; }
+q s1 "SELECT c.relname, count(o.id) FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+      LEFT JOIN orders o ON o.tableoid = c.oid
+      WHERE i.inhparent = 'orders'::regclass GROUP BY c.relname ORDER BY c.relname"</code></pre>
+
+<pre data-lang="bash"><code>{"s1":48980,"s2":51020}
+real	0m2.636s
+orders_2026_07|10389
+orders_2026_08|18946
+orders_2026_09|18282
+orders_2026_10|1363
+orders_2026_11|0
+orders_2026_12|0
+orders_2027_01|0</code></pre>
+
+      <p>Los 100&#8239;000 pedidos de 10&#8239;000 clientes entraron en 2.6&#8239;s, cada cliente en su shard: 48&#8239;980 en s1 y 51&#8239;020 en s2. La app creó al arrancar siete particiones, de julio de 2026 a enero de 2027, y el seed llenó las de los últimos 80 días. Si lo corres otro mes, tus particiones tienen otros nombres: la app crea tres meses hacia atrás y tres hacia adelante del mes en que arranca. Ahora busca un pedido por id, sin su fecha y con ella:</p>
+
+<pre data-lang="bash"><code>ID=$(q s1 "SELECT id FROM orders ORDER BY random() LIMIT 1")
+q s1 "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF) SELECT * FROM orders WHERE id = '$ID'"
+q s1 "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF) SELECT * FROM orders
+      WHERE id = '$ID' AND created_at = uuid_extract_timestamp('$ID')"</code></pre>
+
+<pre data-lang="sql"><code>Append (actual rows=1.00 loops=1)
+  Buffers: shared hit=15
+  -&gt;  Index Scan using orders_2026_07_pkey on orders_2026_07 orders_1 (actual rows=0.00 loops=1)
+        Index Cond: (id = '01a001fa-b778-70cb-b6af-4a44726149e8'::uuid)
+  -&gt;  Index Scan using orders_2026_08_pkey on orders_2026_08 orders_2 (actual rows=1.00 loops=1)
+  …   y una búsqueda más en cada una de las otras cinco particiones
+Planning Time: 1.135 ms
+Execution Time: 0.134 ms
+
+Index Scan using orders_2026_08_created_at_id_idx on orders_2026_08 orders (actual rows=1.00 loops=1)
+  Index Cond: ((created_at = '2026-08-14 20:33:23.32+00'::timestamp with time zone)
+               AND (id = '01a001fa-b778-70cb-b6af-4a44726149e8'::uuid))
+  Buffers: shared hit=3
+Planning Time: 0.527 ms
+Execution Time: 0.050 ms</code></pre>
+
+      <p>Sin la fecha, PostgreSQL busca el id en las siete particiones y lee 15 bloques. Con ella, va directo a agosto y lee 3. La poda pasa al planificar, no al ejecutar: <code>uuid_extract_timestamp</code> es <code>IMMUTABLE</code>, así que el planificador calcula la fecha antes de elegir el plan, y las otras particiones ni aparecen. Con siete particiones son décimas de milisegundo; con la retención de 12 meses, la búsqueda sin fecha recorre 16 índices cada vez.</p>
+
+      <p>Y un pedido de un mes que no tiene partición:</p>
+
+<pre data-lang="bash"><code>q s1 "INSERT INTO orders SELECT u, uuid_extract_timestamp(u), 1, 100, 'NEW', 1 FROM uuidv7(- interval '2 years') AS u"</code></pre>
+
+<pre data-lang="bash"><code>ERROR:  no partition of relation "orders" found for row
+DETAIL:  Partition key of the failing row contains (created_at) = (2024-10-03 06:06:10.456+00).</code></pre>
+
+      <h3 id="comprueba-carga">La carga, sin migrar</h3>
+
+<pre data-lang="bash"><code>./mvnw gatling:test -Dseconds=20        # en frío, con la app recién levantada
+./mvnw gatling:test -Dseconds=75</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Corrida</th><th class="r">Requests</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th></tr></thead>
+          <tbody>
+            <tr><td>En frío, 20&#8239;s</td><td class="r">12&#8239;400</td><td class="r">0</td><td class="r">10&#8239;ms</td><td class="r">354&#8239;ms</td><td class="r">642&#8239;ms</td></tr>
+            <tr><td>Caliente, 75&#8239;s</td><td class="r">46&#8239;500</td><td class="r">0</td><td class="r">8&#8239;ms</td><td class="r">42&#8239;ms</td><td class="r">162&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Son 620 requests por segundo contra dos shards, sin errores. En frío, el p95 fue ocho veces más alto. No siempre termina sin errores: en otra sesión, la corrida en frío dio 27 respuestas 503 de 12&#8239;387. Y justo después de reconstruir la imagen y reiniciar la app, dio 923 errores de 11&#8239;659: 596 conexiones rechazadas y 327 respuestas 503, con consultas que pasaron los 5&#8239;s del <code>socketTimeout</code>. Por eso cada medición de esta guía va después de una carga corta.</p>
+
+      <h3 id="comprueba-migracion">De dos a tres shards, con la tienda vendiendo</h3>
+
+<pre data-lang="bash"><code>./mvnw gatling:test -Dseconds=20        # calentar
+bash scripts/migrar.sh UPSERT
+python scripts/duenos.py s1,s2,s3</code></pre>
+
+<pre data-lang="bash"><code>t=20s start:    {"phase":"DUAL_WRITE","current":["s1","s2"],"target":["s1","s2","s3"],"copy":"UPSERT"}
+t=25s backfill: {"scanned":124851,"copied":39440,"ms":7602}
+t=35s verify:   {"checked":40905,"missing":0,"stale":0,"examples":[]}
+t=40s read-new: {"phase":"READ_NEW","current":["s1","s2"],"target":["s1","s2","s3"],"copy":"UPSERT"}
+t=50s finish:   {"phase":"STABLE","current":["s1","s2","s3"],"target":null,"copy":"UPSERT"}
+t=55s cleanup:  {"s1":21536,"s2":20131,"s3":0}
+shards:   {"phase":"STABLE","current":["s1","s2","s3"],"target":null,"copy":"UPSERT",
+           "rows":{"s1":44158,"s2":48758,"s3":44594},"mirrorFailures":0}
+s1: 3224 clientes, 0 que no son suyos
+s2: 3540 clientes, 0 que no son suyos
+s3: 3236 clientes, 0 que no son suyos</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>46&#8239;500 requests en 75&#8239;s</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th><th class="r">Máximo</th></tr></thead>
+          <tbody>
+            <tr><td>Sin migrar</td><td class="r">0</td><td class="r">8&#8239;ms</td><td class="r">42&#8239;ms</td><td class="r">162&#8239;ms</td><td class="r">811&#8239;ms</td></tr>
+            <tr><td>Migrando</td><td class="r">0</td><td class="r">8&#8239;ms</td><td class="r">62&#8239;ms</td><td class="r">176&#8239;ms</td><td class="r">880&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El backfill recorrió 124&#8239;851 pedidos en 7.6&#8239;s y copió a s3 los 39&#8239;440 de los clientes que se mudan, el 31.6&#8239;%. La verificación revisó 40&#8239;905, porque mientras tanto la doble escritura siguió sumando pedidos, y no encontró ninguno faltante ni viejo. La limpieza borró 41&#8239;667 copias de s1 y s2, y ningún cliente quedó en un shard que no es el suyo. La carga no vio un solo error, y el p95 subió de 42 a 62&#8239;ms.</p>
+
+      <p>Para saber que no se perdió ni se duplicó nada, suma las filas de los tres shards y compáralas con los pedidos creados: los del seed más los POST que recibieron 201 en cada carga. Aquí, 100&#8239;000 más 37&#8239;510 son 137&#8239;510, exactamente las filas que quedaron en s1, s2 y s3.</p>
+
+      <h3 id="comprueba-ingenua">Falla: la doble escritura ingenua</h3>
+
+      <p>Ahora repite la migración en modo <code>NAIVE</code>. Copia los pedidos nuevos igual que <code>UPSERT</code>, pero una cancelación la repite en el otro shard como un <code>UPDATE</code>. Empieza de cero, para que las dos corridas partan de los mismos datos:</p>
+
+<pre data-lang="bash"><code>docker compose down -v &amp;&amp; docker compose up -d
+until curl -sf localhost:8080/api/lab/shards &gt; /dev/null; do sleep 1; done
+curl -s -X POST "localhost:8080/api/lab/seed?customers=10000&amp;ordersEach=10"; echo
+./mvnw -q gatling:test -Dseconds=20 &gt; target/calentar.log 2&gt;&amp;1     # calentar
+bash scripts/migrar.sh NAIVE</code></pre>
+
+<pre data-lang="bash"><code>t=20s start:    {"phase":"DUAL_WRITE","current":["s1","s2"],"target":["s1","s2","s3"],"copy":"NAIVE"}
+t=25s backfill: {"scanned":105118,"copied":33463,"ms":8087}
+t=35s verify:   {"checked":34408,"missing":0,"stale":6,"examples":["019fc6ec-5014-7bf3-855d-3f246c7ba26b",
+                 "019fdd68-5503-7920-8c78-85d51df2a813","01a03c76-3c95-7248-a51e-5dbd209c2261",
+                 "01a04269-daae-7140-b253-e7417ff2bb90","01a05754-8dea-72f4-a8dd-bba4ca0cb77f"]}
+t=40s read-new: {"phase":"READ_NEW","current":["s1","s2"],"target":["s1","s2","s3"],"copy":"NAIVE"}
+t=50s finish:   {"phase":"STABLE","current":["s1","s2","s3"],"target":null,"copy":"NAIVE"}
+t=55s cleanup:  {"s1":18256,"s2":16974,"s3":0}</code></pre>
+
+      <p>La verificación encontró 6 pedidos cuya copia en s3 tiene una versión más vieja que la verdad. Los seis se cancelaron mientras el backfill copiaba su lote:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">El backfill lee</span>Un lote de 1&#8239;000 pedidos de s1, con el pedido todavía en <code>NEW</code>, versión 1.</li>
+        <li><span class="step-title">El cliente cancela</span>s1 guarda <code>CANCELLED</code>, versión 2, y repite el <code>UPDATE</code> en s3. La fila todavía no está en s3: el <code>UPDATE</code> cambia cero filas, y eso no es un error.</li>
+        <li><span class="step-title">El backfill escribe</span>Inserta en s3 lo que leyó: <code>NEW</code>, versión 1.</li>
+      </ol>
+
+      <p>Con <code>UPSERT</code>, el orden no importa: la cancelación copia la fila entera, y la copia vieja del backfill pierde por el <code>WHERE orders.version &lt; excluded.version</code>. La carga no vio nada raro: 46&#8239;500 requests, 0 KO, p95 de 42&#8239;ms. Tampoco <code>mirrorFailures</code>, porque ninguna copia falló. Solo <code>verify</code> lo nota.</p>
+
+      <p>No sale siempre. En tres corridas dio 0, 4 y 6 pedidos viejos. Para que pase, una cancelación tiene que caer entre que el backfill lee un lote y lo escribe, y cada lote tardó unos 76&#8239;ms: 8&#8239;087&#8239;ms entre los 106 lotes de 1&#8239;000. Si te da 0, vuelve a correrla.</p>
+
+      <p><code>migrar.sh</code> sigue de largo: pasa a <code>READ_NEW</code> aunque <code>verify</code> encontró diferencias, y la limpieza borra las copias canceladas de s1 y s2. Busca en s3 uno de los ejemplos que te dio <code>verify</code>:</p>
+
+<pre data-lang="bash"><code>q s3 "SELECT status, version FROM orders WHERE id = '&lt;uno de los ejemplos&gt;'"</code></pre>
+
+      <p>Tiene que dar <code>NEW|1</code>. El cliente canceló ese pedido, recibió un 200, y ahora la tienda lo tiene como nuevo y lo va a despachar. En producción, <code>verify</code> es el punto donde se para: no pases a <code>READ_NEW</code> mientras <code>stale</code> o <code>missing</code> no sean 0.</p>
+
+      <h3 id="comprueba-congelar">Falla: un shard congelado</h3>
+
+      <p><code>docker compose pause</code> congela el proceso de s2: sus conexiones siguen abiertas, pero nadie contesta. Es peor que un shard apagado, que rechaza la conexión al instante.</p>
+
+<pre data-lang="bash"><code>EN_S1=$(q s1 "SELECT customer_id FROM orders LIMIT 1"); EN_S2=$(q s2 "SELECT customer_id FROM orders LIMIT 1")
+./mvnw -q gatling:test -Dseconds=60 &gt; target/congelar.log 2&gt;&amp;1 &amp;
+sleep 30
+docker compose pause s2; t0=$(date +%s)
+for i in 1 2 3; do
+  curl -s -o target/recientes.json -w "recientes: %{http_code} en %{time_total} s, " "localhost:8080/api/orders/recent?limit=20"
+  python -c "import json; r = json.load(open('target/recientes.json')); print('partial', r['partial'], r['missingShards'], len(r['orders']), 'pedidos')"
+done
+curl -s -o /dev/null -w "cliente $EN_S1, de s1: %{http_code} en %{time_total} s\n" "localhost:8080/api/customers/$EN_S1/orders?limit=1"
+curl -s -w "\ncliente $EN_S2, de s2: %{http_code} en %{time_total} s\n" "localhost:8080/api/customers/$EN_S2/orders?limit=1"
+sleep $(( 15 - ($(date +%s) - t0) ))
+docker compose unpause s2; echo "s2 estuvo congelado $(( $(date +%s) - t0 )) s"
+wait</code></pre>
+
+<pre data-lang="bash"><code>recientes: 200 en 0.315500 s, partial True ['s2'] 20 pedidos
+recientes: 200 en 0.312597 s, partial True ['s2'] 20 pedidos
+recientes: 200 en 0.312621 s, partial True ['s2'] 20 pedidos
+cliente 3, de s1: 200 en 0.007238 s
+{"detail":"El shard s2 no responde","instance":"/api/customers/562/orders","status":503,"title":"Service Unavailable",
+ "type":"https://pedidos.example/problemas/shard-no-disponible","shard":"s2"}
+cliente 562, de s2: 503 en 1.021865 s
+s2 estuvo congelado 16 s</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>En los 60&#8239;s de carga</th><th class="r">Total</th><th class="r">KO</th><th class="r">p99 de los OK</th><th class="r">p50 de los KO</th><th class="r">Máximo de los KO</th></tr></thead>
+          <tbody>
+            <tr><td>POST pedido</td><td class="r">12&#8239;000</td><td class="r">1&#8239;012</td><td class="r">693&#8239;ms</td><td class="r">1&#8239;019&#8239;ms</td><td class="r">5&#8239;085&#8239;ms</td></tr>
+            <tr><td>GET pedidos del cliente</td><td class="r">6&#8239;000</td><td class="r">543</td><td class="r">622&#8239;ms</td><td class="r">1&#8239;019&#8239;ms</td><td class="r">5&#8239;090&#8239;ms</td></tr>
+            <tr><td>GET recientes</td><td class="r">1&#8239;200</td><td class="r">0</td><td class="r">537&#8239;ms</td><td class="r">–</td><td class="r">–</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los recientes respondieron siempre, en 313&#8239;ms, con los 20 pedidos más nuevos de s1 y s3 y la advertencia de que falta s2. Un cliente de s1 compró en 7&#8239;ms. Uno de s2 recibió un 503 con el nombre del shard en 1.02&#8239;s: las 10 conexiones de s2 estaban atrapadas en consultas sin respuesta, y el <code>connectionTimeout</code> de 1&#8239;s cortó la espera por una. Las pocas requests que ya tenían su conexión cuando s2 se congeló esperaron los 5&#8239;s del <code>socketTimeout</code>: son los máximos de 5&#8239;085&#8239;ms.</p>
+
+      <p>Fallaron 1&#8239;012 de 12&#8239;000 compras, el 8.4&#8239;%. s2 tiene el 35&#8239;% de los clientes y estuvo congelado 16 de los 60&#8239;s: la cuenta da 9.4&#8239;%, y algo menos, porque Gatling no arranca en el segundo cero. El resto de la tienda siguió comprando, aunque no gratis: el p99 de las compras que sí funcionaron fue de 693&#8239;ms, contra 488&#8239;ms en la carga sin la falla.</p>
+
+      <h3 id="comprueba-borrar">Borrar un mes: DELETE contra DETACH</h3>
+
+      <p>Llena el mes más viejo de s1 con un millón de pedidos de relleno y bórralo de las dos maneras. Hazlo sin carga, para que el WAL que midas sea solo el del borrado. El mes más viejo depende del día en que lo corras: la app crea tres meses hacia atrás del actual, así que en octubre es julio.</p>
+
+<pre data-lang="bash"><code>q() { docker compose exec -T "$1" psql -U app -d app -qAt -c "$2"; }
+cronometrar() { docker compose exec -T s1 psql -U app -d app -q -c '\timing on' "$@"; }
+DESDE="date_trunc('month', now(), 'UTC') - interval '3 months'"
+MES=$(q s1 "SELECT to_char($DESDE, 'YYYY_MM')"); echo "mes más viejo: orders_$MES"
+LLENAR="INSERT INTO orders SELECT u, uuid_extract_timestamp(u), (random() * 9999)::bigint + 1, 100, 'NEW', 1
+          FROM (SELECT uuidv7($DESDE + random() * interval '27 days' - now()) AS u
+                  FROM generate_series(1, 1000000)) AS g"
+q s1 "$LLENAR"; q s1 "VACUUM ANALYZE orders"
+q s1 "SELECT count(*), pg_size_pretty(pg_total_relation_size('orders_$MES')) FROM orders_$MES"
+
+# Fila por fila, como un trabajo nocturno
+lsn=$(q s1 "SELECT pg_current_wal_lsn()")
+cronometrar -c "DELETE FROM orders WHERE created_at &gt;= $DESDE AND created_at &lt; $DESDE + interval '1 month'"
+q s1 "SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), '$lsn')),
+             pg_size_pretty(pg_total_relation_size('orders_$MES'))"
+
+# La partición entera
+q s1 "$LLENAR"; q s1 "VACUUM ANALYZE orders"
+lsn=$(q s1 "SELECT pg_current_wal_lsn()")
+cronometrar -c "ALTER TABLE orders DETACH PARTITION orders_$MES CONCURRENTLY" -c "DROP TABLE orders_$MES"
+q s1 "SELECT pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), '$lsn'))"</code></pre>
+
+      <p><code>uuidv7</code> recibe un corrimiento desde ahora, así que <code>$DESDE + random() * interval '27 days' - now()</code> da una fecha al azar dentro del mes más viejo; 27 días, para no pasarse ni en febrero. Son filas de relleno, de clientes al azar, escritas directo en s1: después de esta prueba no queda ninguna. Con <code>-q</code>, <code>psql</code> no imprime <code>DELETE 1000000</code> ni <code>Timing is on.</code>, solo las líneas <code>Time:</code>. <code>DETACH … CONCURRENTLY</code> no puede ir dentro de una transacción, por eso cada <code>-c</code> va por separado. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Anota tres números de cada borrado: el tiempo, el WAL y lo que ocupa el mes después. Lo que tienes que ver:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th><code>DELETE</code></th><th><code>DETACH CONCURRENTLY</code> y <code>DROP</code></th></tr></thead>
+          <tbody>
+            <tr><td>Tiempo</td><td>Crece con las filas: busca y marca cada una.</td><td>No depende de las filas.</td></tr>
+            <tr><td>WAL</td><td>Crece con las filas: un registro por fila borrada, y la página entera la primera vez que toca cada una después de un checkpoint. Cada réplica tiene que repetirlo.</td><td>Unos pocos registros, tenga la partición mil filas o un millón.</td></tr>
+            <tr><td>Lo que ocupa el mes</td><td>Lo mismo que antes, si lo mides enseguida: las filas siguen ahí, muertas, hasta que pase el vacuum, y los índices no se achican solos.</td><td>Nada: los archivos de la tabla se borran y el espacio vuelve al disco.</td></tr>
+            <tr><td>Bloqueos</td><td>Las filas borradas, hasta el commit.</td><td><code>SHARE UPDATE EXCLUSIVE</code> sobre <code>orders</code>: las lecturas y escrituras siguen. <span class="badge badge--doc">Documentado</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Si quieres seguir usando el laboratorio, reinicia la app con <code>docker compose restart app</code>: <code>PartitionMaintenance</code> vuelve a crear el mes que soltaste, vacío. Para volver a los datos del principio, <code>docker compose down -v</code>.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a06">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a06-sharding</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las ocho pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="anillo">Mediste con <code>anillo.py</code> cuánto empareja la carga cada cantidad de nodos virtuales y cuánto se mueve al sumar un shard.</li>
+          <li data-check="particiones">Comprobaste con <code>EXPLAIN</code> que buscar por id con su fecha toca una sola partición.</li>
+          <li data-check="migracion">Pasaste de dos a tres shards con carga, sin errores, y <code>duenos.py</code> no encontró clientes fuera de su shard.</li>
+          <li data-check="congelar">Congelaste un shard con carga y mediste a quién afectó.</li>
+          <li data-check="borrar">Borraste un mes con <code>DELETE</code> y con <code>DETACH</code>, y comparaste el tiempo y el WAL.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Los pedidos usan <code>uuidv7()</code>, los ids de A00, y aquí rinden el doble: además de no chocar entre shards, llevan la fecha que decide la partición. Si pones un PgBouncer de A00 delante de cada shard, haz la cuenta de nuevo: sin él, cada instancia de la app abre 10 conexiones a cada shard, y diez instancias son 100, el <code>max_connections</code> por defecto. Con él, la app puede abrir las que quiera y cada shard ve solo las del <code>default_pool_size</code> del PgBouncer. Flyway sigue yendo directo a cada base, como en A00.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Las réplicas de la app no guardan pedidos, así que cualquiera puede atender a cualquier cliente. Lo que se rompe es la topología, que vive en memoria: con tres réplicas detrás de Nginx, una puede estar en <code>READ_NEW</code> y otra en <code>DUAL_WRITE</code>. Guárdala en un lugar compartido, con un número de versión, y que cada réplica rechace una escritura si su versión quedó vieja. Nginx tiene su propio anillo, <code>hash $variable consistent</code>, con el método ketama <span class="badge badge--doc">Documentado</span>: sirve para que el mismo cliente caiga en la misma réplica, por ejemplo por su caché, no para repartir datos.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>Los recientes devuelven una sola página. Para paginarlos, usa el cursor de A02 con <code>(created_at, id)</code>: cada shard sigue desde el cursor con su índice, y la app junta y corta. Con <code>OFFSET</code>, la página 50 le pide 50 páginas a cada shard. Y el 503 del shard caído ya es un ProblemDetail con su propio <code>type</code>, como los errores de A02; súmale un <code>Retry-After</code> para que el cliente sepa cuándo volver a intentar.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>Los nodos virtuales emparejan la cantidad de clientes, no la carga: si un cliente compra por mil, todo su tráfico cae en su shard igual. Una clave caliente se arregla con una caché delante, como la de A03, o partiendo a ese cliente, no con más nodos virtuales. Los recientes son un buen candidato para esa caché: cada request le pregunta a todos los shards, y con la carga única de A03 una sola por segundo haría el fan-out.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>Cada shard puede tener sus réplicas, como en A04: si s2 se cae, su réplica se promueve y solo sus clientes ven el corte. Los recientes podrían leer de las réplicas, porque ya aceptan resultados incompletos. La verificación de la migración, no: con el lag de A04, una réplica todavía no tiene la última cancelación, y <code>verify</code> vería diferencias que no existen, o dejaría pasar las que sí.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A05, dos primarios</p>
+          <p>La replicación lógica de A05 es otra forma de hacer el backfill: s3 se suscribe a s1 y a s2 y recibe cada cambio en orden, sin la carrera del modo <code>NAIVE</code>. El problema es elegir qué filas mandar. El filtro de filas de una publicación solo admite expresiones simples, sin funciones definidas por el usuario <span class="badge badge--doc">Documentado</span>, y el anillo no es una: s3 recibiría todos los pedidos, y la limpieza tendría que borrar dos tercios.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Sharding y rebalanceo</p>
+          <p>Por rango, por hash y por directorio, y cuánto se mueve al sumar un nodo: <a href="../modules/m05-bases-de-datos.html#sharding">M05. Bases de datos</a> y su sección de <a href="../modules/m05-bases-de-datos.html#rebalanceo">rebalanceo</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Responder con lo que hay</p>
+          <p>Los recientes con <code>partial: true</code> son harvest y yield: bajar la cosecha para no bajar la disponibilidad. Está en <a href="../modules/m06-teoria-distribuida.html#cap-matices">M06. Teoría distribuida</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">El fan-out y la cola</p>
+          <p>Por qué preguntar a N shards hace que la latencia sea la del más lento, y por eso el plazo de 300&#8239;ms: <a href="../modules/m00-metodo.html#percentiles">M00. El método</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Plazos</p>
+          <p>El <code>connectionTimeout</code>, el <code>socketTimeout</code> y el plazo del scatter-gather son la misma idea en tres capas: <a href="../modules/m08-resiliencia.html#timeouts">M08. Resiliencia</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-sharding">Sharding</a>, <a href="../glosario.html#t-partition-key">partition key</a>, <a href="../glosario.html#t-consistent-hashing">hashing consistente</a>, <a href="../glosario.html#t-vnodes">nodos virtuales</a>, <a href="../glosario.html#t-fan-out">fan-out</a>, <a href="../glosario.html#t-tail-latency">latencia de cola</a>, <a href="../glosario.html#t-harvest-yield">harvest y yield</a>, <a href="../glosario.html#t-hot-key">clave caliente</a> y <a href="../glosario.html#t-bulkhead">bulkhead</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a06.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

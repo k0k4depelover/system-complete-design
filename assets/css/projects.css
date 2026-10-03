@@ -166,6 +166,10 @@ a.pj-chip--mod:hover { text-decoration: underline; }
 .pj-ep { min-width: 640px; }
 .pj-ep td:first-child { white-space: nowrap; }
 .pj-ep .ep-method { margin-right: 6px; }
+/* Tabla de claves o campos: el nombre en código no se corta a mitad de palabra. */
+.pj-keys td:first-child { white-space: nowrap; }
+/* En las tablas de las guías, un nombre en código no se corta: la tabla se desplaza en su marco. */
+.t td code { white-space: nowrap; }
 
 .pj-connect { list-style: none; margin: 0 0 var(--s-6); padding: 0; display: grid; gap: var(--s-3); }
 .pj-connect > li { margin: 0; padding: var(--s-4) var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); max-width: none; }

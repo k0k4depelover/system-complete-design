@@ -3,6 +3,79 @@ SD.defineQuiz('m01', {
   pass: 0.7,
   questions: [
     {
+      id: 'puerto', type: 'single',
+      prompt: 'Tu navegador abre seis conexiones TCP al mismo servidor, <code>104.16.132.229:443</code>. ¿Qué distingue a cada conexión de las otras cinco?',
+      options: [
+        'La IP de destino: el servidor tiene seis IPs.',
+        'El puerto de origen: el sistema operativo elige un puerto efímero distinto para cada una.',
+        'El puerto de destino: cada conexión usa uno entre 443 y 448.',
+        'Nada: las seis son en realidad la misma conexión.'
+      ],
+      answer: 1,
+      explain: 'Una conexión se identifica por la 4-tupla: IP y puerto de origen, IP y puerto de destino. Las seis comparten tres valores y se diferencian por el puerto efímero del cliente. Repasa "Puertos: a qué programa va cada paquete" (1.2).'
+    },
+    {
+      id: 'ancho', type: 'single',
+      prompt: 'Una API responde 10 kB desde un servidor a 80 ms de ida y vuelta, por una conexión ya abierta. Cambias tu plan de internet de 100 Mbps a 1 Gbps. ¿Cuánto más rápido llega la respuesta?',
+      options: [
+        'Diez veces más rápido: de ~81 ms a ~8 ms.',
+        'Casi nada: transmitir 10 kB tarda menos de 1 ms con cualquiera de los dos planes, y los 80 ms de ida y vuelta no cambian.',
+        'La mitad: de ~81 ms a ~40 ms.',
+        'Más lento, porque 1 Gbps satura los routers.'
+      ],
+      answer: 1,
+      explain: '10 kB × 8 / 100 Mbps = 0.8 ms; con 1 Gbps, 0.08 ms. La respuesta tarda lo mismo, ~81 ms, porque manda la latencia: el ancho de banda agrega carriles, no acorta la autopista. Repasa "Latencia, RTT y ancho de banda" (1.2).'
+    },
+    {
+      id: 'udp', type: 'single',
+      prompt: '¿Por qué las consultas DNS clásicas viajan por UDP y no por TCP?',
+      options: [
+        'Porque UDP está cifrado y TCP no.',
+        'Porque la pregunta y la respuesta caben en un paquete, y abrir una conexión TCP costaría una ida y vuelta más que la consulta misma.',
+        'Porque UDP garantiza que la respuesta llegue.',
+        'Porque los routers no dejan pasar TCP al puerto 53.'
+      ],
+      answer: 1,
+      explain: 'UDP no tiene handshake: la pregunta sale en el primer paquete. Si se pierde, el cliente simplemente vuelve a preguntar. UDP no cifra ni garantiza nada; para cifrar DNS están DoH y DoT. Repasa 1.2 y 1.4.'
+    },
+    {
+      id: 'refused', type: 'single',
+      prompt: 'Tu servicio de Spring Boot no arrancó. Un cliente intenta conectarse al puerto 8080 de esa máquina, que sí está encendida. ¿Qué ve el cliente?',
+      options: [
+        '<code>connection timed out</code> después de unos 2 minutos.',
+        '<code>connection refused</code> al instante: el sistema operativo responde al SYN con un RST porque nadie escucha en ese puerto.',
+        'Un <code>404 Not Found</code>.',
+        'Un error de certificado.'
+      ],
+      answer: 1,
+      explain: 'La máquina existe y su sistema operativo contesta: no hay ningún programa escuchando en el puerto, así que responde con RST. El timeout de ~2 minutos aparece cuando nadie responde, por ejemplo si un firewall descarta los paquetes. Repasa "Abrir la conexión: el handshake" (1.5).'
+    },
+    {
+      id: 'cert', type: 'single',
+      prompt: 'Alguien en el wifi de una cafetería descarga el certificado de tu banco (es público) y lo presenta haciéndose pasar por el banco. ¿Por qué falla el engaño?',
+      options: [
+        'Porque los certificados solo se pueden descargar una vez.',
+        'Porque el handshake exige una firma (<code>CertificateVerify</code>) hecha con la clave privada del banco, y el impostor no la tiene.',
+        'Porque el navegador llama al banco para preguntar.',
+        'No falla: con el certificado alcanza para hacerse pasar por el sitio.'
+      ],
+      answer: 1,
+      explain: 'El certificado une un nombre con una clave pública, pero copiarlo no da la clave privada. Sin ella, el impostor no puede firmar el handshake y el navegador corta la conexión. Repasa "Certificados" y "El handshake de TLS 1.3" (1.6).'
+    },
+    {
+      id: 'sni', type: 'multi',
+      prompt: 'Visitas <code>https://www.ejemplo.com/perfil</code> sin ECH. ¿Qué puede ver tu proveedor de internet?',
+      options: [
+        'La IP del servidor.',
+        'El nombre <code>www.ejemplo.com</code>, que viaja en el SNI del ClientHello.',
+        'La ruta <code>/perfil</code>.',
+        'Tus cookies.',
+        'El contenido de la página.'
+      ],
+      answer: [0, 1],
+      explain: 'La IP va en cada paquete y el SNI viaja sin cifrar porque el servidor lo necesita para elegir el certificado. La request HTTP (ruta, headers, cookies) y la respuesta van dentro de TLS, cifradas. ECH cifra también el SNI. Repasa "SNI: una IP, miles de sitios" (1.6).'
+    },
+    {
       id: 'rtt3', type: 'single',
       prompt: 'Un usuario abre una conexión nueva, con TCP y TLS 1.3, a un servidor que está a 80 ms de ida y vuelta. Sin contar DNS ni el tiempo del servidor, ¿cuándo recibe el primer byte de la respuesta?',
       options: ['80 ms', '160 ms', '240 ms', '320 ms'],

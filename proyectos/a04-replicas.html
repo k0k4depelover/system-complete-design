@@ -1,0 +1,1390 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A04. Primario y réplicas</title>
+<meta name="description" content="Una red de bibliotecas con muchas consultas y pocos préstamos: replicación por streaming del WAL con slots, un PgBouncer para escribir y otro para leer, LazyConnectionDataSourceProxy, el retraso que esconde lo que acabas de escribir y cómo leerlo con el LSN, réplica síncrona contra asíncrona, failover manual con pg_promote() y pg_rewind.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a04" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Proyectos</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Primario y réplicas</h1>
+        <p class="lead">Una red de bibliotecas: miles de búsquedas y pocos préstamos. Vas a levantar un primario y dos réplicas, mandar las lecturas a las réplicas y medir cuántas veces alguien pide un libro y no lo ve en su lista. Después vas a matar al primario y a promover una réplica a mano.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A04</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 1</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>5 a 6 h</dd></div>
+          <div><dt>Módulos</dt><dd>M05</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a04">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Levantar un primario y dos réplicas de PostgreSQL con replicación por streaming del WAL y un slot para cada una.</li>
+          <li>Mandar las transacciones de solo lectura a las réplicas y las demás al primario, con dos pools y <code>LazyConnectionDataSourceProxy</code>.</li>
+          <li>Medir cuántas lecturas llegan sin lo que acabas de escribir y evitarlo con la posición del WAL de tu escritura.</li>
+          <li>Elegir entre una réplica síncrona y una asíncrona, y saber qué pasa cuando se cae la síncrona.</li>
+          <li>Promover una réplica a mano, reconectar la otra y volver a sumar al viejo primario con <code>pg_rewind</code>.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una red de bibliotecas tiene mil títulos en su catálogo. La gente busca libros todo el día, mira sus préstamos y, de vez en cuando, pide uno. Las lecturas son muchas más que las escrituras, así que la base se reparte: un primario acepta los préstamos y dos réplicas responden las consultas.</p>
+
+      <p>El problema aparece en el momento más visible. Alguien pide un libro, la app le confirma el préstamo y lo lleva a "mis préstamos". Esa lista sale de una réplica que todavía no aplicó el préstamo, y el libro no está. Vas a medir cuántas veces pasa, con y sin un retraso inyectado, y a cerrarlo sin mandar todas las lecturas al primario.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa04t fa04d">
+<title id="fa04t">Arquitectura de la biblioteca</title>
+<desc id="fa04d">Gatling llama a una app de Spring Boot con dos pools de Hikari. El pool del primario lleva las escrituras a un PgBouncer que apunta al primario. El pool de las réplicas lleva las transacciones de solo lectura a otro PgBouncer, que reparte sus conexiones entre replica1 y replica2. El primario manda su WAL por streaming a las dos réplicas, cada una con su slot de replicación.</desc>
+<defs><marker id="fa04a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="118" width="120" height="64" rx="6"/>
+<text class="dg-label" x="70" y="145" text-anchor="middle">Gatling</text>
+<text class="dg-tiny" x="70" y="164" text-anchor="middle">prestar y mirar</text>
+<path class="dg-edge" d="M132 150 H166" marker-end="url(#fa04a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="170" y="60" width="170" height="180" rx="6"/>
+<text class="dg-label" x="255" y="84" text-anchor="middle">app</text>
+<text class="dg-tiny" x="255" y="102" text-anchor="middle">un proxy elige el pool</text>
+<rect class="dg-box" x="182" y="112" width="146" height="28" rx="4"/>
+<text class="dg-tiny" x="190" y="131">pool primario: escribir</text>
+<rect class="dg-box" x="182" y="172" width="146" height="28" rx="4"/>
+<text class="dg-tiny" x="190" y="191">pool réplicas: readOnly</text>
+<path class="dg-edge" d="M330 126 H360 V68 H386" marker-end="url(#fa04a)"/>
+<path class="dg-edge" d="M330 186 H360 V228 H386" marker-end="url(#fa04a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="390" y="40" width="140" height="56" rx="6"/>
+<text class="dg-label" x="460" y="64" text-anchor="middle">PgBouncer rw</text>
+<text class="dg-tiny" x="460" y="83" text-anchor="middle">un solo host</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="390" y="200" width="140" height="56" rx="6"/>
+<text class="dg-label" x="460" y="224" text-anchor="middle">PgBouncer ro</text>
+<text class="dg-tiny" x="460" y="243" text-anchor="middle">dos hosts, round robin</text>
+<path class="dg-edge" d="M532 68 H566" marker-end="url(#fa04a)"/>
+<path class="dg-edge" d="M532 222 H550 V195 H566" marker-end="url(#fa04a)"/>
+<path class="dg-edge" d="M532 234 H550 V261 H566" marker-end="url(#fa04a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="570" y="40" width="170" height="56" rx="6"/>
+<text class="dg-label" x="655" y="64" text-anchor="middle">primary</text>
+<text class="dg-tiny" x="655" y="83" text-anchor="middle">acepta escrituras</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="570" y="170" width="170" height="50" rx="6"/>
+<text class="dg-label" x="655" y="191" text-anchor="middle">replica1</text>
+<text class="dg-tiny" x="655" y="209" text-anchor="middle">solo lectura</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="570" y="236" width="170" height="50" rx="6"/>
+<text class="dg-label" x="655" y="257" text-anchor="middle">replica2</text>
+<text class="dg-tiny" x="655" y="275" text-anchor="middle">solo lectura</text>
+<path class="dg-feedback" d="M705 98 V166" marker-end="url(#fa04a)"/>
+<path class="dg-feedback" d="M742 68 H758 V261 H744" marker-end="url(#fa04a)"/>
+<text class="dg-tiny" x="695" y="128" text-anchor="end">streaming del WAL,</text>
+<text class="dg-tiny" x="695" y="146" text-anchor="end">un slot por réplica</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A04.1.</b> Las escrituras van por un PgBouncer al primario y las lecturas, por otro, a las dos réplicas. El primario manda su WAL a cada réplica, que lo aplica unos milisegundos después. Ese retraso es todo el problema de este proyecto.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/books?q=</code></td><td>Busca por título, en una réplica.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/books/{id}</code></td><td>Un libro, en una réplica.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/books/{id}/loans</code></td><td>Pide un préstamo, en el primario. Devuelve la posición del WAL en <code>X-Min-LSN</code>.</td><td>201, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/members/{member}/loans</code></td><td>Los préstamos de un socio. Con <code>X-Min-LSN</code>, nunca le falta el último. Dice quién respondió en <code>X-Served-By</code>.</td><td>200, 400</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/lab/where/read</code></td><td>Solo para el laboratorio: a qué nodo fue una transacción de solo lectura.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/lab/where/write</code></td><td>Lo mismo, para una de escritura.</td><td>200</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/books/{id}/loans</code>
+        </div>
+        <p class="ep-desc">Resta un ejemplar y guarda el préstamo en la misma transacción. Después del <code>COMMIT</code>, pregunta al primario hasta dónde escribió su WAL y lo devuelve en un encabezado.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/books/5/loans HTTP/1.1
+Content-Type: application/json
+
+{"member": "ana"}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/1.1 201
+X-Min-LSN: 0/50D0338
+Content-Type: application/json
+
+{"id": "01a1002f-be9d-7d22-a7de-7238b5dcc772", "bookId": 5, "title": "Libro 5",
+ "member": "ana", "createdAt": "2026-10-03T05:14:51.406578Z"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Préstamo creado.</span></li>
+            <li><span class="st st--4xx">400</span><span><code>member</code> vacío o de más de 100 caracteres.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe el libro.</span></li>
+            <li><span class="st st--4xx">409</span><span>No quedan ejemplares.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/members/{member}/loans</code>
+        </div>
+        <p class="ep-desc">Con <code>X-Min-LSN</code>, una réplica responde solo si ya aplicó esa posición del WAL. Si no, responde el primario.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>GET /api/members/ana/loans HTTP/1.1
+X-Min-LSN: 0/50D0508</code></pre>
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="http"><code>HTTP/1.1 200
+X-Served-By: replica1
+Content-Type: application/json
+
+[{"id": "01a1002f-bf83-76ae-bc6c-9b9999484726", "bookId": 5, "title": "Libro 5", …},
+ {"id": "01a1002f-be9d-7d22-a7de-7238b5dcc772", "bookId": 5, "title": "Libro 5", …}]</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>La lista, de la réplica o del primario.</span></li>
+            <li><span class="st st--4xx">400</span><span><code>X-Min-LSN</code> sin la forma <code>0/50D0508</code>.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API y la validación del socio y del encabezado.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code></td><td><code>JdbcClient</code>, Hikari y <code>LazyConnectionDataSourceProxy</code>, que es de <code>spring-jdbc</code>.</td></tr>
+            <tr><td><code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td>Las migraciones, contra el primario, y el driver.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>testcontainers-postgresql</code> (test)</td><td>Tres pruebas con un primario y una réplica de verdad.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>Prestar y mirar enseguida, contando a quién le faltó el préstamo.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>No hay <code>spring-boot-testcontainers</code>. <code>@ServiceConnection</code> configura el <code>DataSource</code> que arma Spring Boot, pero aquí hay dos pools con propiedades propias, <code>app.db.primary</code> y <code>app.db.replica</code>, que no conoce. Las pruebas los apuntan a los contenedores con un <code>DynamicPropertyRegistrar</code>.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;biblioteca&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code>x-postgres: &amp;postgres
+  image: postgres:18
+  environment:
+    POSTGRES_DB: app
+    POSTGRES_USER: app
+    POSTGRES_PASSWORD: app
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U app -d app"]
+    interval: 2s
+    retries: 60
+
+x-replica: &amp;replica
+  &lt;&lt;: *postgres
+  user: postgres
+  entrypoint: ["sh", "/replica-entrypoint.sh"]
+  depends_on:
+    primary:
+      condition: service_healthy
+
+services:
+  primary:
+    &lt;&lt;: *postgres
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      REPLICA_SLOTS: replica1 replica2
+    # Un slot de una réplica caída retiene WAL para siempre: max_slot_wal_keep_size pone un techo.
+    command: ["postgres", "-c", "cluster_name=primary", "-c", "max_slot_wal_keep_size=1GB"]
+    ports:
+      - "5433:5432"
+    volumes:
+      - primary:/var/lib/postgresql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+
+  replica1:
+    &lt;&lt;: *replica
+    environment:
+      SLOT: replica1
+    command: ["postgres", "-c", "cluster_name=replica1"]
+    ports:
+      - "5434:5432"
+    volumes:
+      - replica1:/var/lib/postgresql
+      - ./replica-entrypoint.sh:/replica-entrypoint.sh:ro
+
+  replica2:
+    &lt;&lt;: *replica
+    environment:
+      SLOT: replica2
+    command: ["postgres", "-c", "cluster_name=replica2"]
+    ports:
+      - "5435:5432"
+    volumes:
+      - replica2:/var/lib/postgresql
+      - ./replica-entrypoint.sh:/replica-entrypoint.sh:ro
+
+  pgbouncer-rw:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    volumes:
+      - ./pgbouncer/rw.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    ports:
+      - "6432:5432"
+    depends_on:
+      primary:
+        condition: service_healthy
+
+  pgbouncer-ro:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    volumes:
+      - ./pgbouncer/ro.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    ports:
+      - "6433:5432"
+    depends_on:
+      replica1:
+        condition: service_healthy
+      replica2:
+        condition: service_healthy
+
+  app:
+    build: .
+    environment:
+      DB_PRIMARY_URL: jdbc:postgresql://pgbouncer-rw:5432/app
+      DB_REPLICA_URL: jdbc:postgresql://pgbouncer-ro:5432/app
+      FLYWAY_URL: jdbc:postgresql://primary:5432/app
+    ports:
+      - "8080:8080"
+    depends_on:
+      - pgbouncer-rw
+      - pgbouncer-ro
+
+volumes:
+  primary:
+  replica1:
+  replica2:</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Tres PostgreSQL, una imagen</dt><dd>El primario corre los scripts de <code>initdb/</code> la primera vez que arranca. Las réplicas cambian el entrypoint por <code>replica-entrypoint.sh</code>, que copia el primario y arranca la copia como réplica. <code>cluster_name</code> le da a cada nodo un nombre que la app puede preguntar.</dd></div>
+        <div><dt>Un techo para los slots</dt><dd>Un slot obliga al primario a guardar el WAL que su réplica todavía no recibió. Si la réplica muere y nadie borra su slot, el WAL crece hasta llenar el disco del primario. <code>max_slot_wal_keep_size=1GB</code> pone un límite: pasado ese tamaño, el primario invalida el slot y la réplica tiene que copiarse de nuevo. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Puertos a la vista</dt><dd>El 5433 es el primario, para Flyway y para entrar con <code>psql</code>. El 5434 y el 5435 son las réplicas. El 6432 y el 6433 son los dos PgBouncer.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: biblioteca
+  flyway:
+    # Las migraciones van directo al primario: ni por PgBouncer ni, claro, a una réplica.
+    url: ${FLYWAY_URL:jdbc:postgresql://localhost:5433/app}
+    user: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  db:
+    primary:
+      jdbc-url: ${DB_PRIMARY_URL:jdbc:postgresql://localhost:6432/app}
+      username: ${DB_USER:app}
+      password: ${DB_PASSWORD:app}
+      pool-name: primario
+      maximum-pool-size: 10
+    replica:
+      jdbc-url: ${DB_REPLICA_URL:jdbc:postgresql://localhost:6433/app}
+      username: ${DB_USER:app}
+      password: ${DB_PASSWORD:app}
+      pool-name: replicas
+      maximum-pool-size: 10
+      read-only: true</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Flyway, directo al primario</dt><dd>Las migraciones no pasan por ningún PgBouncer: una réplica rechaza cualquier escritura, y una migración no tiene por qué compartir el pool de la app.</dd></div>
+        <div><dt>Diez conexiones por pool</dt><dd>Cada pool de Hikari abre hasta diez conexiones hacia su PgBouncer. <code>read-only: true</code> marca como de solo lectura las del pool de las réplicas.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el Dockerfile, BibliotecaApplication.java y los records</summary>
+        <div class="solution-body">
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/biblioteca-0.1.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/BibliotecaApplication.java"><code>package lab.biblioteca;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class BibliotecaApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(BibliotecaApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/Book.java"><code>package lab.biblioteca.library;
+
+public record Book(long id, String title, String author, int available) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/Loan.java"><code>package lab.biblioteca.library;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+public record Loan(UUID id, long bookId, String title, String member, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/NewLoan.java"><code>package lab.biblioteca.library;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+public record NewLoan(@NotBlank @Size(max = 100) String member) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/Served.java"><code>package lab.biblioteca.library;
+
+/** Un resultado y el nodo que lo respondió (el cluster_name de PostgreSQL). */
+public record Served&lt;T&gt;(String node, T value) {
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-replicas">Paso 1. Dos réplicas que copian el WAL</h3>
+
+<pre data-lang="bash" data-file="initdb/01-replicacion.sh"><code>#!/bin/sh
+# Solo en el primario, la primera vez que arranca: el usuario de las réplicas y un slot para cada una.
+# El slot se crea antes de la copia y reserva el WAL desde ya (el true): ninguna réplica pierde
+# un segmento aunque dos copias corran a la vez.
+set -e
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+     -c "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'replicator'"
+for slot in $REPLICA_SLOTS; do
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+       -c "SELECT pg_create_physical_replication_slot('$slot', true)"
+done
+# La replicación física necesita su propia línea en pg_hba.conf: "all" no la incluye.
+echo "host replication replicator all scram-sha-256" &gt;&gt; "$PGDATA/pg_hba.conf"</code></pre>
+
+<pre data-lang="bash" data-file="replica-entrypoint.sh"><code>#!/bin/sh
+# Una réplica nace como copia del primario. pg_basebackup -R deja standby.signal y primary_conninfo,
+# y -S usa el slot que el primario guarda para ella: no borra WAL que esta réplica todavía no recibió.
+set -e
+if [ ! -s "$PGDATA/PG_VERSION" ]; then
+  until pg_isready -h primary -q; do sleep 1; done
+  PGPASSWORD=replicator pg_basebackup -h primary -U replicator -D "$PGDATA" \
+      -R -X stream -S "$SLOT" --checkpoint=fast
+fi
+exec docker-entrypoint.sh "$@"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Replicación física por streaming. Cada réplica se copia con <code>pg_basebackup</code> y después recibe el WAL del primario a medida que se escribe, y lo aplica. <code>-R</code> deja escritos <code>standby.signal</code> y <code>primary_conninfo</code>, y <code>-S</code> usa el slot que el primario guarda para esa réplica. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>La replicación lógica, que manda cambios por tabla en lugar de páginas del WAL. Sirve para copiar parte de una base o entre versiones distintas de PostgreSQL, pero aquí quieres una copia exacta, que pueda reemplazar al primario.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>En una primera versión, cada réplica creaba su slot al copiarse, con <code>pg_basebackup -C</code>, y las dos se copiaban a la vez: una de las dos no arrancó. Con los slots creados por el primario antes de cualquier copia, y reservando el WAL desde ese momento (el <code>true</code>), las dos arrancan siempre.</dd></div>
+      </dl>
+
+      <p>La línea de <code>pg_hba.conf</code> no es un detalle. Una conexión de replicación es distinta de una conexión a una base, y la regla <code>host all all</code> que trae la imagen no la incluye: sin la línea <code>host replication</code>, <code>pg_basebackup</code> no puede conectarse. <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="paso-pgbouncer">Paso 2. Un PgBouncer para escribir y otro para leer</h3>
+
+<pre data-lang="ini" data-file="pgbouncer/rw.ini"><code>[databases]
+app = host=primary port=5432 dbname=app
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 5432
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+admin_users = app
+pool_mode = transaction
+default_pool_size = 20
+max_client_conn = 500
+ignore_startup_parameters = extra_float_digits
+; Después de un login fallido, PgBouncer rechaza a todos durante este tiempo (15 s por defecto).
+; Con 1 s, el failover no espera de más cuando el nuevo primario ya está listo.
+server_login_retry = 1</code></pre>
+
+<pre data-lang="ini" data-file="pgbouncer/ro.ini"><code>[databases]
+; Varios hosts: cada conexión nueva va al siguiente de la lista.
+app = host=replica1,replica2 port=5432 dbname=app
+
+[pgbouncer]
+listen_addr = 0.0.0.0
+listen_port = 5432
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+admin_users = app
+pool_mode = transaction
+default_pool_size = 20
+max_client_conn = 500
+ignore_startup_parameters = extra_float_digits
+; Sin esto, PgBouncer reutiliza la última conexión libre (LIFO) y casi todo cae en la misma réplica.
+server_round_robin = 1</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos PgBouncer en modo transacción. El de escritura apunta a un solo host. El de lectura tiene dos, y abre cada conexión nueva contra el siguiente de la lista. <code>server_round_robin = 1</code> hace que reparta las requests entre las conexiones libres en orden, en lugar de reutilizar siempre la última. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un balanceador TCP, como HAProxy, delante de las réplicas. Reparte conexiones igual y, con un health check, puede sacar una réplica caída o atrasada. Lo usarías en producción junto con un pool; aquí el pool ya reparte.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Creer que PgBouncer reparte consultas. Reparte conexiones al servidor, y las abre solo cuando las necesita. Recién arrancado y con una request a la vez, le alcanza con una conexión, y todas las lecturas van a la misma réplica. Lo vas a medir.</dd></div>
+      </dl>
+
+      <p><code>admin_users = app</code> abre la consola de PgBouncer, la base virtual <code>pgbouncer</code>, con <code>SHOW SERVERS</code> para ver a qué host va cada conexión. <code>server_login_retry = 1</code> importa en el failover del paso 6.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver userlist.txt</summary>
+        <div class="solution-body">
+<pre data-lang="ini" data-file="pgbouncer/userlist.txt"><code>"app" "app"</code></pre>
+        </div>
+      </details>
+
+      <h3 id="paso-pools">Paso 3. Dos pools y una sola anotación</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/db/DataSources.java"><code>package lab.biblioteca.db;
+
+import javax.sql.DataSource;
+
+import com.zaxxer.hikari.HikariDataSource;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.jdbc.DataSourceBuilder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
+
+/** Dos pools: uno hacia el primario y otro hacia las réplicas. */
+@Configuration(proxyBeanMethods = false)
+public class DataSources {
+
+    @Bean
+    @ConfigurationProperties("app.db.primary")
+    HikariDataSource primaryPool() {
+        return DataSourceBuilder.create().type(HikariDataSource.class).build();
+    }
+
+    @Bean
+    @ConfigurationProperties("app.db.replica")
+    HikariDataSource replicaPool() {
+        return DataSourceBuilder.create().type(HikariDataSource.class).build();
+    }
+
+    /**
+     * La que usa todo el resto. Pide la conexión recién en la primera consulta, cuando ya sabe si la
+     * transacción es readOnly: las de solo lectura van a las réplicas y las demás al primario.
+     */
+    @Bean
+    @Primary
+    DataSource dataSource(HikariDataSource primaryPool, HikariDataSource replicaPool) {
+        LazyConnectionDataSourceProxy routing = new LazyConnectionDataSourceProxy(primaryPool);
+        routing.setReadOnlyDataSource(replicaPool);
+        return routing;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un <code>LazyConnectionDataSourceProxy</code> con el pool del primario como destino y el de las réplicas como <code>readOnlyDataSource</code>. Un método con <code>@Transactional(readOnly = true)</code> va a una réplica; cualquier otro, al primario. El servicio no sabe que hay réplicas.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un <code>AbstractRoutingDataSource</code> que elige el pool mirando si la transacción es de solo lectura. El gestor de transacciones pide la conexión al empezar la transacción, antes de marcarla como de solo lectura, y el enrutador ve siempre una transacción normal. El proxy perezoso pide la conexión recién en la primera consulta, cuando ya lo sabe. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un método de lectura sin <code>@Transactional</code> no tiene transacción y va al primario, sin error ni aviso. Y una lectura dentro de una transacción de escritura también va al primario, que es lo que quieres. <code>/api/lab/where/read</code> y <code>/api/lab/where/write</code> te dicen adónde fue cada una.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver LabController.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/lab/LabController.java"><code>package lab.biblioteca.lab;
+
+import java.util.Map;
+
+import lab.biblioteca.library.LibraryRepository;
+
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/** ¿A qué nodo fue cada tipo de transacción? */
+@RestController
+public class LabController {
+
+    private final LibraryRepository repo;
+    private final TransactionTemplate readWrite;
+    private final TransactionTemplate readOnly;
+
+    public LabController(LibraryRepository repo, TransactionTemplate tx) {
+        this.repo = repo;
+        this.readWrite = tx;
+        this.readOnly = new TransactionTemplate(tx.getTransactionManager());
+        this.readOnly.setReadOnly(true);
+    }
+
+    @GetMapping("/api/lab/where/read")
+    public Map&lt;String, Object&gt; read() {
+        return readOnly.execute(s -&gt; Map.of("node", repo.node(), "inRecovery", repo.inRecovery()));
+    }
+
+    @GetMapping("/api/lab/where/write")
+    public Map&lt;String, Object&gt; write() {
+        return readWrite.execute(s -&gt; Map.of("node", repo.node(), "inRecovery", repo.inRecovery()));
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="paso-lsn">Paso 4. Leer lo que escribiste</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__library.sql"><code>CREATE TABLE books (
+    id        bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    title     text   NOT NULL,
+    author    text   NOT NULL,
+    available int    NOT NULL CHECK (available &gt;= 0)
+);
+
+CREATE TABLE loans (
+    id         uuid        PRIMARY KEY DEFAULT uuidv7(),
+    book_id    bigint      NOT NULL REFERENCES books (id),
+    member     text        NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX loans_member ON loans (member, created_at DESC);
+
+-- El libro 1 tiene ejemplares de sobra para las pruebas de carga.
+INSERT INTO books (title, author, available) VALUES ('Rayuela', 'Julio Cortázar', 1000000);
+INSERT INTO books (title, author, available)
+SELECT 'Libro ' || i, 'Autor ' || (i % 50), 3 FROM generate_series(2, 1000) AS i;</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/LibraryRepository.java"><code>package lab.biblioteca.library;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class LibraryRepository {
+
+    private final JdbcClient jdbc;
+
+    public LibraryRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public List&lt;Book&gt; search(String text) {
+        return jdbc.sql("""
+                SELECT id, title, author, available FROM books
+                 WHERE title ILIKE '%' || :text || '%'
+                 ORDER BY title LIMIT 20
+                """)
+                .param("text", text)
+                .query(Book.class)
+                .list();
+    }
+
+    public Optional&lt;Book&gt; find(long id) {
+        return jdbc.sql("SELECT id, title, author, available FROM books WHERE id = :id")
+                .param("id", id)
+                .query(Book.class)
+                .optional();
+    }
+
+    /** Resta un ejemplar solo si queda alguno: dos préstamos a la vez no dejan available en -1. */
+    public boolean takeCopy(long bookId) {
+        return jdbc.sql("UPDATE books SET available = available - 1 WHERE id = :id AND available &gt; 0")
+                .param("id", bookId)
+                .update() == 1;
+    }
+
+    public Loan insertLoan(long bookId, String member) {
+        return jdbc.sql("""
+                WITH l AS (
+                    INSERT INTO loans (book_id, member) VALUES (:book, :member)
+                    RETURNING id, book_id, member, created_at
+                )
+                SELECT l.id, l.book_id, b.title, l.member, l.created_at
+                  FROM l JOIN books b ON b.id = l.book_id
+                """)
+                .param("book", bookId)
+                .param("member", member)
+                .query(Loan.class)
+                .single();
+    }
+
+    public List&lt;Loan&gt; loansOf(String member) {
+        return jdbc.sql("""
+                SELECT l.id, l.book_id, b.title, l.member, l.created_at
+                  FROM loans l JOIN books b ON b.id = l.book_id
+                 WHERE l.member = :member
+                 ORDER BY l.created_at DESC
+                """)
+                .param("member", member)
+                .query(Loan.class)
+                .list();
+    }
+
+    /** Hasta dónde escribió el primario. Después del COMMIT incluye ese COMMIT. */
+    public String currentLsn() {
+        return jdbc.sql("SELECT pg_current_wal_lsn()::text").query(String.class).single();
+    }
+
+    /** En una réplica: ¿ya aplicó el WAL hasta esa posición? En el primario la función da NULL y vale true. */
+    public boolean caughtUpTo(String lsn) {
+        return jdbc.sql("SELECT coalesce(pg_last_wal_replay_lsn() &gt;= CAST(:lsn AS pg_lsn), true)")
+                .param("lsn", lsn)
+                .query(Boolean.class)
+                .single();
+    }
+
+    public String node() {
+        return jdbc.sql("SELECT current_setting('cluster_name')").query(String.class).single();
+    }
+
+    public boolean inRecovery() {
+        return jdbc.sql("SELECT pg_is_in_recovery()").query(Boolean.class).single();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/LibraryService.java"><code>package lab.biblioteca.library;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class LibraryService {
+
+    private final LibraryRepository repo;
+
+    public LibraryService(LibraryRepository repo) {
+        this.repo = repo;
+    }
+
+    @Transactional(readOnly = true)
+    public List&lt;Book&gt; search(String text) {
+        return repo.search(text);
+    }
+
+    @Transactional(readOnly = true)
+    public Book get(long id) {
+        return repo.find(id).orElseThrow(() -&gt; notFound(id));
+    }
+
+    @Transactional
+    public Loan borrow(long bookId, String member) {
+        if (!repo.takeCopy(bookId)) {
+            if (repo.find(bookId).isEmpty()) {
+                throw notFound(bookId);
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "No quedan ejemplares del libro " + bookId);
+        }
+        return repo.insertLoan(bookId, member);
+    }
+
+    /** Sin transacción: se llama después del COMMIT de borrow y va al primario. */
+    public String writePosition() {
+        return repo.currentLsn();
+    }
+
+    /**
+     * Desde una réplica, pero solo si ya aplicó la posición que trae el cliente. La comprobación y la
+     * consulta van en la misma transacción: PgBouncer les da la misma conexión y, por lo tanto, la misma réplica.
+     */
+    @Transactional(readOnly = true)
+    public Optional&lt;Served&lt;List&lt;Loan&gt;&gt;&gt; loansFromReplica(String member, String minLsn) {
+        if (minLsn != null &amp;&amp; !repo.caughtUpTo(minLsn)) {
+            return Optional.empty();
+        }
+        return Optional.of(new Served&lt;&gt;(repo.node(), repo.loansOf(member)));
+    }
+
+    @Transactional
+    public Served&lt;List&lt;Loan&gt;&gt; loansFromPrimary(String member) {
+        return new Served&lt;&gt;(repo.node(), repo.loansOf(member));
+    }
+
+    private static ResponseStatusException notFound(long id) {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el libro " + id);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/biblioteca/library/LibraryController.java"><code>package lab.biblioteca.library;
+
+import java.util.List;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class LibraryController {
+
+    private final LibraryService library;
+
+    public LibraryController(LibraryService library) {
+        this.library = library;
+    }
+
+    @GetMapping("/api/books")
+    public List&lt;Book&gt; search(@RequestParam(defaultValue = "") String q) {
+        return library.search(q);
+    }
+
+    @GetMapping("/api/books/{id}")
+    public Book get(@PathVariable long id) {
+        return library.get(id);
+    }
+
+    @PostMapping("/api/books/{id}/loans")
+    public ResponseEntity&lt;Loan&gt; borrow(@PathVariable long id, @Valid @RequestBody NewLoan body) {
+        Loan loan = library.borrow(id, body.member());
+        // La posición del WAL después del COMMIT: la réplica que ya la aplicó tiene este préstamo.
+        return ResponseEntity.status(HttpStatus.CREATED).header("X-Min-LSN", library.writePosition()).body(loan);
+    }
+
+    /** Mis préstamos. Con X-Min-LSN, nunca devuelve una lista a la que le falte lo que acabas de pedir. */
+    @GetMapping("/api/members/{member}/loans")
+    public ResponseEntity&lt;List&lt;Loan&gt;&gt; loans(
+            @PathVariable String member,
+            @RequestHeader(name = "X-Min-LSN", required = false)
+            @Pattern(regexp = "[0-9A-Fa-f]{1,8}/[0-9A-Fa-f]{1,8}") String minLsn) {
+        Served&lt;List&lt;Loan&gt;&gt; served = library.loansFromReplica(member, minLsn)
+                .orElseGet(() -&gt; library.loansFromPrimary(member));
+        return ResponseEntity.ok().header("X-Served-By", served.node()).body(served.value());
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Después del <code>COMMIT</code> del préstamo, la app pregunta <code>pg_current_wal_lsn()</code> al primario y devuelve esa posición en <code>X-Min-LSN</code>. Cuando el cliente la manda en la lectura, la réplica compara <code>pg_last_wal_replay_lsn()</code> con ella: si ya la aplicó, responde; si no, responde el primario. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Leer del primario durante unos segundos después de cada escritura. Es más simple, pero adivina: si la réplica va 10&#8239;s atrás, unos segundos no alcanzan, y si va 4&#8239;ms atrás, mandas al primario lecturas que la réplica podía responder.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Comprobar en una transacción y leer en otra. En modo transacción, PgBouncer puede darle a cada transacción una conexión distinta, y cada conexión puede ir a otra réplica: comprobarías una y leerías la otra. Por eso <code>loansFromReplica</code> hace las dos cosas dentro de la misma transacción.</dd></div>
+      </dl>
+
+      <p>La posición que devuelve <code>pg_current_wal_lsn()</code> después del <code>COMMIT</code> incluye ese <code>COMMIT</code>, y quizás algunas escrituras de otros que llegaron justo después. La comparación es conservadora: a veces manda al primario una lectura que la réplica ya podía responder, nunca al revés. <code>writePosition</code> no tiene <code>@Transactional</code> a propósito: sin transacción, el proxy la manda al primario.</p>
+
+      <h3 id="paso-sincrona">Paso 5. Síncrona o asíncrona</h3>
+
+      <p>Este paso no tiene código. Por defecto, las dos réplicas son asíncronas: el primario confirma el <code>COMMIT</code> en cuanto su WAL está en su disco, sin esperar a nadie. Dos parámetros lo cambian, y se cambian en caliente:</p>
+
+<pre data-lang="bash"><code>docker compose exec primary psql -U app -d app \
+  -c "ALTER SYSTEM SET synchronous_standby_names = 'FIRST 1 (replica1)'" \
+  -c "ALTER SYSTEM SET synchronous_commit = 'remote_apply'" \
+  -c "SELECT pg_reload_conf()"
+docker compose exec primary psql -U app -d app -c "SELECT application_name, sync_state FROM pg_stat_replication"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd><code>remote_apply</code>: el <code>COMMIT</code> espera a que la réplica síncrona haya aplicado el WAL, no solo a que lo tenga en disco. Con eso, una lectura en esa réplica ve el préstamo apenas el cliente recibe el 201. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>synchronous_commit = on</code>, que espera a que la réplica escriba el WAL en su disco. Protege el préstamo si muere el primario, pero la réplica puede no haberlo aplicado todavía, y la lectura no lo ve.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Con <code>FIRST 1 (replica1)</code>, si replica1 se cae, ningún <code>COMMIT</code> termina: esperan a una réplica que no está. Con <code>ANY 1 (replica1, replica2)</code>, alcanza con cualquiera de las dos, y la caída de una no frena las escrituras. Y la réplica síncrona solo garantiza lo suyo: la otra sigue siendo asíncrona.</dd></div>
+      </dl>
+
+      <h3 id="paso-failover">Paso 6. Promover una réplica</h3>
+
+<pre data-lang="bash"><code>docker compose kill primary                                     # el primario muere sin avisar
+docker compose exec replica1 psql -U app -d app -c "SELECT pg_promote()"
+docker compose exec replica1 psql -U app -d app \
+  -c "SELECT pg_create_physical_replication_slot('replica2', true)"
+docker compose exec replica2 psql -U app -d app \
+  -c "ALTER SYSTEM SET primary_conninfo = 'host=replica1 port=5432 user=replicator password=replicator'" \
+  -c "SELECT pg_reload_conf()"
+# El PgBouncer de escritura apunta a replica1. cat sobre el mismo archivo, porque el contenedor
+# lo monta por inodo y sed -i crearía uno nuevo que el contenedor no ve.
+sed 's/host=primary/host=replica1/' pgbouncer/rw.ini &gt; rw.tmp &amp;&amp; cat rw.tmp &gt; pgbouncer/rw.ini &amp;&amp; rm rw.tmp
+docker compose kill -s HUP pgbouncer-rw                         # SIGHUP: PgBouncer relee su configuración</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un failover a mano, paso por paso. <code>pg_promote()</code> saca a replica1 de recuperación y la deja aceptando escrituras en un timeline nuevo. replica2 cambia de origen sin copiarse de nuevo: sigue a replica1 y se pasa al timeline nuevo sola. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un failover automático con Patroni. En producción es lo que quieres: elige al nuevo primario con un almacén de consenso, como etcd, y evita que dos nodos se crean primarios a la vez. Hacerlo a mano una vez te enseña qué automatiza.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el viejo primario vuelva. Arranca como primario, porque nada le dice que dejó de serlo, y acepta escrituras que nadie más ve: es un split brain. Y no puede volver como réplica de replica1, porque su WAL se separó del nuevo timeline. Para sumarlo, primero hay que rebobinarlo con <code>pg_rewind</code>. Lo vas a probar.</dd></div>
+      </dl>
+
+      <h3 id="paso-carga">Paso 7. Prestar y mirar, en Gatling</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/biblioteca/PrestamosSimulation.java"><code>package lab.biblioteca;
+
+import static io.gatling.javaapi.core.CoreDsl.StringBody;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.jsonPath;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.header;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+import io.gatling.javaapi.http.HttpRequestActionBuilder;
+
+/**
+ * Pedir un préstamo y ver la lista enseguida.
+ * ./mvnw gatling:test -Drps=50 -Dseconds=30 -Dlsn=false   (sin -Dlsn=false, la lectura manda X-Min-LSN)
+ */
+public class PrestamosSimulation extends Simulation {
+
+    int rps = Integer.getInteger("rps", 50);
+    int seconds = Integer.getInteger("seconds", 30);
+    boolean lsn = Boolean.parseBoolean(System.getProperty("lsn", "true"));
+
+    // Quién respondió cada lectura y cuántas llegaron sin el préstamo recién pedido.
+    static final Map&lt;String, LongAdder&gt; servedBy = new ConcurrentHashMap&lt;&gt;();
+    static final Map&lt;String, LongAdder&gt; missingAt = new ConcurrentHashMap&lt;&gt;();
+
+    HttpProtocolBuilder protocolo = http.baseUrl("http://localhost:8080").shareConnections();
+
+    {
+        HttpRequestActionBuilder mirar = http("GET /api/members/{member}/loans").get("/api/members/#{member}/loans")
+                .check(status().is(200), header("X-Served-By").saveAs("node"),
+                        jsonPath("$[*]").count().saveAs("loans"));
+        if (lsn) {
+            mirar = mirar.header("X-Min-LSN", "#{lsn}");
+        }
+
+        ScenarioBuilder prestar = scenario("Prestar y mirar")
+                // Un socio nuevo por usuario: su lista tiene que traer justo el préstamo que acaba de pedir.
+                .exec(session -&gt; session.set("member", "socio-" + UUID.randomUUID()))
+                .exec(http("POST /api/books/1/loans").post("/api/books/1/loans")
+                        .header("Content-Type", "application/json")
+                        .body(StringBody("{\"member\": \"#{member}\"}"))
+                        .check(status().is(201), header("X-Min-LSN").saveAs("lsn")))
+                .exec(mirar)
+                .exec(session -&gt; {
+                    if (session.contains("node") &amp;&amp; session.contains("loans")) {
+                        String node = session.getString("node");
+                        servedBy.computeIfAbsent(node, k -&gt; new LongAdder()).increment();
+                        if (session.getInt("loans") == 0) {
+                            missingAt.computeIfAbsent(node, k -&gt; new LongAdder()).increment();
+                        }
+                    }
+                    return session;
+                });
+
+        setUp(prestar.injectOpen(constantUsersPerSec(rps).during(seconds))).protocols(protocolo);
+    }
+
+    @Override
+    public void after() {
+        System.out.println((lsn ? "Con" : "Sin") + " X-Min-LSN. Respondió: " + new TreeMap&lt;&gt;(servedBy)
+                + ". Sin el préstamo: " + new TreeMap&lt;&gt;(missingAt));
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cada usuario de Gatling es un socio nuevo, con un UUID en el nombre. Pide un préstamo del libro 1, que tiene un millón de ejemplares, y lee su lista enseguida. Si la lista llega vacía, la lectura no vio su propio préstamo: el contador lo anota junto con el nodo que respondió.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Contar los préstamos con un check de Gatling que falle cuando la lista llega vacía. Funciona, pero un KO no dice quién respondió. Con <code>-Dlsn=false</code>, la misma simulación lee sin <code>X-Min-LSN</code>, y comparas las dos.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Usar socios al azar entre unos pocos. Un socio con préstamos anteriores tiene una lista que no está vacía aunque falte el último, y la simulación no vería el problema.</dd></div>
+      </dl>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a04-replicas"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta un primario y una réplica con los mismos scripts del compose y corre tres pruebas: las lecturas van a la réplica y las escrituras al primario; con la réplica retrasada 3&#8239;s, la lista sin <code>X-Min-LSN</code> llega vacía y con <code>X-Min-LSN</code> trae el préstamo; y un libro sin ejemplares da 409.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver ReplicationTest.java y ReplicationContainers.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/biblioteca/library/ReplicationTest.java"><code>package lab.biblioteca.library;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+
+import lab.biblioteca.ReplicationContainers;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@Import(ReplicationContainers.class)
+class ReplicationTest {
+
+    @Autowired
+    MockMvcTester mvc;
+    @Autowired
+    GenericContainer&lt;?&gt; replica;
+
+    @Test
+    void lasLecturasVanALaReplicaYLasEscriturasAlPrimario() {
+        assertThat(mvc.get().uri("/api/lab/where/read")).bodyJson()
+                .extractingPath("$.node").isEqualTo("replica");
+        assertThat(mvc.get().uri("/api/lab/where/write")).bodyJson()
+                .extractingPath("$.node").isEqualTo("primary");
+    }
+
+    @Test
+    void conLagLaReplicaNoTieneElPrestamoPeroConElLsnSiLoVes() throws Exception {
+        retrasarReplica("3s");
+        try {
+            MvcTestResult prestamo = mvc.post().uri("/api/books/1/loans")
+                    .contentType(MediaType.APPLICATION_JSON).content("""
+                            {"member": "ana"}
+                            """).exchange();
+            assertThat(prestamo).hasStatus(HttpStatus.CREATED);
+            String lsn = prestamo.getResponse().getHeader("X-Min-LSN");
+
+            // Sin LSN: responde la réplica, que todavía no aplicó el préstamo.
+            MvcTestResult sinLsn = mvc.get().uri("/api/members/ana/loans").exchange();
+            assertThat(sinLsn).hasHeader("X-Served-By", "replica")
+                    .bodyJson().extractingPath("$.length()").isEqualTo(0);
+
+            // Con LSN: la réplica no llegó, así que responde el primario, que sí lo tiene.
+            MvcTestResult conLsn = mvc.get().uri("/api/members/ana/loans").header("X-Min-LSN", lsn).exchange();
+            assertThat(conLsn).hasHeader("X-Served-By", "primary")
+                    .bodyJson().extractingPath("$.length()").isEqualTo(1);
+        } finally {
+            retrasarReplica("0");
+        }
+    }
+
+    @Test
+    void sinEjemplaresEsUn409() {
+        for (int i = 0; i &lt; 3; i++) {
+            assertThat(mvc.post().uri("/api/books/7/loans").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"member\": \"beto\"}")).hasStatus(HttpStatus.CREATED);
+        }
+        assertThat(mvc.post().uri("/api/books/7/loans").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"member\": \"beto\"}")).hasStatus(HttpStatus.CONFLICT);
+    }
+
+    /** recovery_min_apply_delay: la réplica recibe el WAL enseguida pero lo aplica con retraso. */
+    private void retrasarReplica(String delay) throws Exception {
+        String url = "jdbc:postgresql://" + replica.getHost() + ":" + replica.getMappedPort(5432) + "/app";
+        try (Connection c = DriverManager.getConnection(url, "app", "app"); Statement s = c.createStatement()) {
+            s.execute("ALTER SYSTEM SET recovery_min_apply_delay = '" + delay + "'");
+            s.execute("SELECT pg_reload_conf()");
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/biblioteca/ReplicationContainers.java"><code>package lab.biblioteca;
+
+import java.time.Duration;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.MountableFile;
+
+/** Un primario y una réplica de verdad, con los mismos scripts que usa el compose. */
+@TestConfiguration(proxyBeanMethods = false)
+public class ReplicationContainers {
+
+    static final Network NETWORK = Network.newNetwork();
+
+    @Bean
+    PostgreSQLContainer primary() {
+        PostgreSQLContainer primary = new PostgreSQLContainer("postgres:18")
+                .withDatabaseName("app").withUsername("app").withPassword("app")
+                .withNetwork(NETWORK).withNetworkAliases("primary")
+                .withEnv("REPLICA_SLOTS", "replica")
+                .withCommand("postgres", "-c", "cluster_name=primary")
+                .withCopyFileToContainer(MountableFile.forHostPath("initdb/01-replicacion.sh"),
+                        "/docker-entrypoint-initdb.d/01-replicacion.sh");
+        primary.start();
+        return primary;
+    }
+
+    @Bean
+    GenericContainer&lt;?&gt; replica(PostgreSQLContainer primary) {
+        GenericContainer&lt;?&gt; replica = new GenericContainer&lt;&gt;("postgres:18")
+                .withNetwork(NETWORK)
+                .withEnv("SLOT", "replica")
+                .withCreateContainerCmdModifier(cmd -&gt; cmd.withUser("postgres"))
+                .withCopyFileToContainer(MountableFile.forHostPath("replica-entrypoint.sh"), "/replica-entrypoint.sh")
+                .withCommand("sh", "/replica-entrypoint.sh", "postgres", "-c", "cluster_name=replica")
+                .withExposedPorts(5432)
+                .waitingFor(Wait.forLogMessage(".*ready to accept read-only connections.*", 1)
+                        .withStartupTimeout(Duration.ofMinutes(2)));
+        replica.start();
+        return replica;
+    }
+
+    @Bean
+    DynamicPropertyRegistrar urls(PostgreSQLContainer primary, GenericContainer&lt;?&gt; replica) {
+        return registry -&gt; {
+            String replicaUrl = "jdbc:postgresql://" + replica.getHost() + ":" + replica.getMappedPort(5432) + "/app";
+            registry.add("app.db.primary.jdbc-url", primary::getJdbcUrl);
+            registry.add("app.db.replica.jdbc-url", () -&gt; replicaUrl);
+            registry.add("spring.flyway.url", primary::getJdbcUrl);
+        };
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-reparto">Cómo se reparten las lecturas</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package &amp;&amp; docker compose up -d --build
+cuenta() { grep -o 'replica[0-9]' | sort | uniq -c; }
+for i in $(seq 1 20); do curl -s localhost:8080/api/lab/where/read; echo; done | cuenta    # de a una
+curl -sZ --parallel-max 20 "localhost:8080/api/lab/where/read?i=[1-400]" | cuenta         # 20 a la vez
+for i in $(seq 1 20); do curl -s localhost:8080/api/lab/where/read; echo; done | cuenta    # de a una, otra vez</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Lecturas</th><th class="r">replica1</th><th class="r">replica2</th></tr></thead>
+          <tbody>
+            <tr><td>20 de a una, recién arrancado</td><td class="r">20</td><td class="r">0</td></tr>
+            <tr><td>400, de a 20 a la vez</td><td class="r">205</td><td class="r">195</td></tr>
+            <tr><td>20 de a una, después</td><td class="r">9</td><td class="r">11</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las mismas cifras en dos stacks recién levantados. De a una, a PgBouncer le alcanza con una conexión, y esa conexión va a replica1. Con 20 a la vez, abrió diez, cinco contra cada réplica, y desde ahí las reparte en orden aunque lleguen de a una. Lo que se reparte son conexiones, no lecturas.</p>
+
+      <h3 id="comprueba-ryw">Lo que acabas de pedir, en tu lista</h3>
+
+<pre data-lang="bash"><code>G="./mvnw gatling:test -Dgatling.simulationClass=lab.biblioteca.PrestamosSimulation -Drps=50 -Dseconds=30"
+$G -Dlsn=false | grep X-Min-LSN                 # 1 500 préstamos, cada uno seguido de su lectura
+$G | grep X-Min-LSN
+docker compose exec replica2 psql -U app -d app \
+  -c "ALTER SYSTEM SET recovery_min_apply_delay = '5s'" -c "SELECT pg_reload_conf()"
+$G -Dlsn=false | grep X-Min-LSN; $G | grep X-Min-LSN
+docker compose exec primary psql -U app -d app \
+  -c "SELECT application_name, write_lag, flush_lag, replay_lag FROM pg_stat_replication"</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>1 500 lecturas</th><th class="r">replica1</th><th class="r">replica2</th><th class="r">primary</th><th class="r">Sin el préstamo</th></tr></thead>
+          <tbody>
+            <tr><td>Sin retraso, sin <code>X-Min-LSN</code></td><td class="r">749</td><td class="r">751</td><td class="r">0</td><td class="r">206 (13.7&#8239;%)</td></tr>
+            <tr><td>Sin retraso, con <code>X-Min-LSN</code></td><td class="r">522</td><td class="r">583</td><td class="r">395</td><td class="r">0</td></tr>
+            <tr><td>replica2 aplica 5&#8239;s tarde, sin <code>X-Min-LSN</code></td><td class="r">748</td><td class="r">752</td><td class="r">0</td><td class="r">941 (62.7&#8239;%)</td></tr>
+            <tr><td>replica2 aplica 5&#8239;s tarde, con <code>X-Min-LSN</code></td><td class="r">551</td><td class="r">0</td><td class="r">949</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Sin retraso inyectado, a una de cada siete lecturas le faltó el préstamo; en otra corrida, a 360 de 1&#8239;500. <code>pg_stat_replication</code> dice por qué: replica1 aplica el WAL unos 4&#8239;ms después del primario, y la lectura de Gatling sale apenas llega el 201. Con un script de Python que tardaba más entre la escritura y la lectura, faltó en 2 de 500. El retraso es el mismo; lo que cambia es cuánto tarda el cliente en mirar.</p>
+
+      <p>Con 5&#8239;s de retraso en replica2, a sus 752 lecturas les faltó el préstamo, y a 189 de replica1, que no tiene retraso. Con <code>X-Min-LSN</code>, ninguna lectura llegó sin el préstamo, y el costo se ve en la columna del primario: 395 lecturas sin retraso, 949 con replica2 atrasada, que nunca alcanzó la posición a tiempo.</p>
+
+      <h3 id="comprueba-sincrona">El costo de esperar a una réplica</h3>
+
+      <p>Con <code>FIRST 1 (replica1)</code> y <code>remote_apply</code>, como en el paso 5, y la misma simulación sin <code>X-Min-LSN</code>:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Configuración</th><th class="r">POST p50</th><th class="r">POST p95</th><th class="r">Sin el préstamo</th></tr></thead>
+          <tbody>
+            <tr><td>Asíncrona, 7 corridas</td><td class="r">8 a 10&#8239;ms</td><td class="r">21 a 52&#8239;ms</td><td class="r">206 y 360, sin retraso</td></tr>
+            <tr><td>replica1 síncrona, 2 corridas sin retraso</td><td class="r">12 y 15&#8239;ms</td><td class="r">50 y 40&#8239;ms</td><td class="r">0 y 4, todas en replica2</td></tr>
+            <tr><td>replica1 síncrona, replica2 aplica 5&#8239;s tarde</td><td class="r">13&#8239;ms</td><td class="r">35&#8239;ms</td><td class="r">760, todas en replica2</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Esperar a que replica1 aplique cada préstamo le sumó unos 4&#8239;ms a la mediana. A cambio, replica1 nunca respondió una lista sin el préstamo. replica2, que sigue siendo asíncrona, sí: casi nunca sin retraso, porque aplica más o menos al mismo tiempo que replica1, y siempre con 5&#8239;s de retraso. La síncrona garantiza una réplica, no todas.</p>
+
+      <h3 id="comprueba-caida-sincrona">Falla: se cae la réplica síncrona</h3>
+
+<pre data-lang="bash"><code>docker compose exec replica2 psql -U app -d app \
+  -c "ALTER SYSTEM RESET recovery_min_apply_delay" -c "SELECT pg_reload_conf()"
+docker compose stop replica1                       # la síncrona, con FIRST 1 (replica1)
+prestar() { curl -s -m 5 -o /dev/null -w "$1: %{http_code} en %{time_total} s\n" -X POST \
+  localhost:8080/api/books/2/loans -H 'Content-Type: application/json' -d "{\"member\": \"$1\"}"; }
+prestar zoe; prestar leo
+docker compose exec primary psql -U app -d app -c "SELECT wait_event_type, wait_event, query
+  FROM pg_stat_activity WHERE backend_type = 'client backend' AND state = 'active'"
+docker compose exec primary psql -U app -d app \
+  -c "ALTER SYSTEM SET synchronous_standby_names = 'ANY 1 (replica1, replica2)'" -c "SELECT pg_reload_conf()"
+docker compose exec primary psql -U app -d app -c "SELECT member FROM loans WHERE member IN ('zoe', 'leo')"
+prestar ana</code></pre>
+
+      <p>zoe y leo recibieron <code>000</code> a los 5&#8239;s: curl se rindió. En la base, el <code>COMMIT</code> de zoe esperaba en <code>SyncRep</code>, y el <code>UPDATE</code> de leo esperaba el lock de la fila del libro 2, que zoe todavía tenía. Una transacción que espera a la réplica síncrona no suelta sus locks, así que también frena a las que no llegaron a su <code>COMMIT</code>.</p>
+
+      <p>Al cambiar a <code>ANY 1 (replica1, replica2)</code>, las dos transacciones terminaron unos 10&#8239;s después, cuando replica2 confirmó su posición; el tiempo coincide con <code>wal_receiver_status_interval</code>, que vale 10&#8239;s por defecto. <span class="badge badge--doc">Documentado</span> Los dos préstamos quedaron guardados, aunque zoe y leo vieron un error. Y ana, ya con <code>ANY 1</code>, recibió un 201 en 55&#8239;ms.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Un cliente que ve un timeout no sabe si su préstamo quedó guardado. Si zoe reintenta, tiene dos préstamos del mismo libro. Cancelar la espera de la réplica síncrona tampoco deshace nada: PostgreSQL avisa que la transacción ya está confirmada en el primario y puede no estar en la réplica. <span class="badge badge--doc">Documentado</span> Lo que cierra el problema es una clave de idempotencia en el préstamo, no un timeout más largo.</p>
+      </aside>
+
+      <h3 id="comprueba-failover">Falla: muere el primario</h3>
+
+      <p>Con las réplicas asíncronas otra vez, los comandos del paso 6, con un reloj y un préstamo de prueba entre cada uno. Las lecturas siguieron respondiendo 200 todo el tiempo, desde las réplicas.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Momento</th><th class="r">Desde la caída</th></tr></thead>
+          <tbody>
+            <tr><td>Un préstamo con el primario muerto: curl se rinde a los 3&#8239;s</td><td class="r">4.1&#8239;s</td></tr>
+            <tr><td><code>pg_promote()</code> termina en replica1</td><td class="r">5.0&#8239;s</td></tr>
+            <tr><td>replica2 apunta a replica1</td><td class="r">6.1&#8239;s</td></tr>
+            <tr><td>PgBouncer relee su configuración</td><td class="r">6.7&#8239;s</td></tr>
+            <tr><td>Primer préstamo con 201</td><td class="r">6.8&#8239;s</td></tr>
+            <tr><td>Primer préstamo con 201, con <code>server_login_retry</code> en sus 15&#8239;s por defecto</td><td class="r">16.2&#8239;s</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La promoción en sí tardó menos de un segundo. El resto es el préstamo de prueba esperando al primario muerto y el tiempo de cada <code>docker compose exec</code>. La última fila es la sorpresa: después de un login fallido contra el primario muerto, PgBouncer rechaza a todos los clientes durante <code>server_login_retry</code>, aunque ya le hayas cambiado el host. <span class="badge badge--doc">Documentado</span> Con el valor por defecto, los préstamos esperaron 9.5&#8239;s de más.</p>
+
+      <p>Al terminar, replica1 dice <code>pg_is_in_recovery() = f</code>, replica2 la sigue en el timeline 2 y <code>/api/lab/where/write</code> responde <code>replica1</code>. Mientras tanto, cada préstamo esperó una conexión en Hikari, hasta 30&#8239;s con su <code>connectionTimeout</code> por defecto: si tu failover tarda más, los clientes ven errores, y si tarda menos, solo lentitud.</p>
+
+      <h3 id="comprueba-rewind">Falla: vuelve el viejo primario</h3>
+
+<pre data-lang="bash"><code>export MSYS_NO_PATHCONV=1                          # solo en Git Bash, para que no toque las rutas;
+                                                   # mientras esté puesta, ./mvnw no arranca
+D=/var/lib/postgresql/18/docker
+en_primary() { docker compose run --rm --no-deps --user postgres --entrypoint sh primary -c "$1"; }
+listo() { until docker compose exec primary pg_isready -q; do sleep 1; done; }
+CONNINFO="primary_conninfo = 'host=replica1 port=5432 user=replicator password=replicator'"
+
+docker compose start primary; listo                # vuelve el viejo primario
+docker compose exec primary psql -U app -d app -c "SELECT pg_is_in_recovery()"
+docker compose exec primary psql -U app -d app -c "INSERT INTO loans (book_id, member) VALUES (1, 'fantasma')"
+docker compose stop primary
+
+# Primero, como réplica de replica1, sin rebobinar
+en_primary "touch $D/standby.signal &amp;&amp; echo \"$CONNINFO\" &gt;&gt; $D/postgresql.auto.conf"
+docker compose start primary; sleep 5; docker compose logs primary | grep forked | tail -1
+docker compose stop primary
+
+# Ahora sí: rebobinar, con un slot propio en replica1
+docker compose run --rm --no-deps --user postgres --entrypoint pg_rewind primary \
+  -D $D -R -P --source-server="host=replica1 user=app password=app dbname=app"
+docker compose exec replica1 psql -U app -d app -c "SELECT pg_create_physical_replication_slot('primary', true)"
+en_primary "printf '%s\n' \"$CONNINFO\" \"primary_slot_name = 'primary'\" &gt;&gt; $D/postgresql.auto.conf"
+docker compose start primary; listo
+docker compose exec primary psql -U app -d app -c "SELECT count(*) FROM loans WHERE member = 'fantasma'"
+unset MSYS_NO_PATHCONV</code></pre>
+
+      <p>El viejo primario arrancó con <code>pg_is_in_recovery() = f</code> y aceptó el préstamo de "fantasma", que replica1 no tenía: dos primarios a la vez. Aquí la app no se enteró porque su PgBouncer ya apuntaba a replica1, pero cualquier cliente con la dirección vieja habría escrito en el primario equivocado.</p>
+
+      <p>Configurado como réplica sin rebobinarlo, el viejo primario escribe en su log, una y otra vez, <code>new timeline 2 forked off current database system timeline 1 before current recovery point</code> y no avanza: tiene WAL que replica1 nunca tuvo. <code>pg_rewind</code> encontró dónde se separaron los dos, copió 85&#8239;MB de los 110&#8239;MB de la base, en 3.2&#8239;s, y lo dejó en ese punto. Funciona porque PostgreSQL 18 activa los checksums de datos por defecto, y <code>pg_rewind</code> necesita eso o <code>wal_log_hints</code>. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Al volver, el viejo primario siguió a replica1 en el timeline 2, y la consulta final dio 0: el préstamo de "fantasma" se perdió. Es lo que cuesta un split brain, y la razón de cerrarle el paso al viejo primario antes de promover a otro. Un detalle más: <code>pg_rewind</code> copió también el <code>postgresql.auto.conf</code> de replica1, con <code>host=primary</code> y su slot. Las dos líneas agregadas al final lo corrigen, porque en ese archivo gana la última.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a04">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a04-replicas</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las tres pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="ryw">Mediste cuántas lecturas llegan sin el préstamo, con y sin <code>X-Min-LSN</code>, con y sin retraso.</li>
+          <li data-check="sincrona">Mediste el costo de <code>remote_apply</code> y viste qué pasa con <code>FIRST 1</code> y con <code>ANY 1</code> cuando se cae la síncrona.</li>
+          <li data-check="failover">Promoviste replica1 a mano y anotaste cuánto tardó el primer préstamo en volver.</li>
+          <li data-check="rewind">Volviste a sumar al viejo primario como réplica con <code>pg_rewind</code>.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>A00 explicó que, en modo transacción, cada transacción puede caer en una conexión distinta. Aquí eso deja de ser una curiosidad: con dos réplicas detrás, cada conexión puede ser otra máquina, con otro retraso. Por eso la comprobación del LSN y la consulta van en la misma transacción. Y los préstamos usan <code>uuidv7()</code>, como los ids de A00.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Pon varias réplicas de la app detrás del Nginx de A01. <code>X-Min-LSN</code> sigue funcionando sin sesiones pegadas a una réplica de la app, porque la posición viaja con el cliente y no vive en la memoria de ninguna. Para un navegador, guárdala en una cookie de corta vida en lugar de un encabezado.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p><code>X-Min-LSN</code> es parte del contrato de la API, como el ETag de A02: documéntalo en el OpenAPI, con su formato y qué pasa si falta. Y la paginación con cursor de A02 sobre réplicas tiene su trampa: dos páginas pueden salir de réplicas distintas, una más atrasada que la otra. Manda la posición de la primera página junto con el cursor.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>Si el cargador de la caché de A03 lee de una réplica, después de cambiar un precio puede volver a cargar el viejo y dejarlo en Redis 60&#8239;s. La versión de A03 cumple el mismo papel que el LSN: no aceptar nada más viejo que lo último que escribiste. Después de una escritura, carga desde el primario o con la posición de esa escritura.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Replicación</p>
+          <p>Un líder, varios líderes y sin líder, síncrona contra asíncrona y el retraso de replicación: <a href="../modules/m05-bases-de-datos.html#replicacion">M05. Bases de datos</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Garantías de sesión</p>
+          <p>Read-your-writes, lecturas monótonas y por qué son más baratas que la linealizabilidad: <a href="../modules/m06-teoria-distribuida.html#sesion">M06. Teoría distribuida</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Split brain y fencing</p>
+          <p>Cómo un sistema evita dos líderes a la vez, con leases y fencing tokens: <a href="../modules/m06-teoria-distribuida.html#leases">M06. Teoría distribuida</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a04.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

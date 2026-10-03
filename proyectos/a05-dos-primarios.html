@@ -1,0 +1,1462 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A05. Dos primarios</title>
+<meta name="description" content="Dos sucursales con su propia base y replicación lógica en las dos direcciones: origin = none, los tres conflictos de tener dos primarios provocados a propósito y contados en pg_stat_subscription_stats, una replicación trabada por un choque de clave que se destraba reparando o con ALTER SUBSCRIPTION SKIP, y el diseño que los evita: filas con dueña, UUIDv7, traspasos con recibo y un solo dueño del catálogo.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a05" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Proyectos</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Dos primarios</h1>
+        <p class="lead">Dos sucursales de una tienda de café venden cada una por su lado, contra su propia base, y las dos bases se copian entre sí. Vas a provocar los tres conflictos de tener dos primarios, ver qué hace PostgreSQL con cada uno y diseñar el inventario para que no ocurran.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A05</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 2</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>4 a 5 h</dd></div>
+          <div><dt>Módulos</dt><dd>M05, M06</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a05">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Conectar dos PostgreSQL con replicación lógica en las dos direcciones, sin que los cambios reboten entre ellas.</li>
+          <li>Medir cuánto tarda una venta de una sucursal en verse en la otra.</li>
+          <li>Provocar los tres conflictos de tener dos primarios, sobre un valor, sobre un invariante y sobre una clave, y leer qué hizo PostgreSQL con cada uno.</li>
+          <li>Destrabar una replicación detenida por un choque de clave, reparando los datos o saltando la transacción.</li>
+          <li>Diseñar el esquema para no tener conflictos: cada fila con una sucursal dueña, ids UUIDv7, traspasos con recibo idempotente y un solo dueño del catálogo.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una tienda de café tiene dos sucursales, norte y sur. Cada una tiene su propia base y su propia app, y tiene que seguir vendiendo aunque se corte el enlace con la otra. Las dos bases se copian entre sí: cada sucursal ve el catálogo, el stock de la otra y todas las ventas.</p>
+
+      <p>Con dos bases que aceptan escrituras, el problema ya no es solo el retraso. Las dos pueden cambiar lo mismo a la vez, y ninguna se entera hasta que le llega el cambio de la otra. Vas a provocarlo de tres maneras y después a diseñar el inventario para que no pase: ninguna fila la escriben las dos.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="fa05t fa05d">
+<title id="fa05t">Dos sucursales con dos primarios</title>
+<desc id="fa05d">La caja de norte llama a app-norte, que escribe en la base norte. La caja de sur llama a app-sur, que escribe en la base sur. Cada base publica sus tablas y se suscribe a la otra: la suscripción desde_norte, en sur, recibe lo que se escribió en norte, y desde_sur, en norte, recibe lo que se escribió en sur. Con origin igual a none, ninguna reenvía lo que le llegó de la otra.</desc>
+<defs><marker id="fa05a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="60" y="14" width="180" height="50" rx="6"/>
+<text class="dg-label" x="150" y="36" text-anchor="middle">Caja de norte</text>
+<text class="dg-tiny" x="150" y="54" text-anchor="middle">vende y traspasa</text>
+<path class="dg-edge" d="M150 66 V92" marker-end="url(#fa05a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="60" y="96" width="180" height="52" rx="6"/>
+<text class="dg-label" x="150" y="118" text-anchor="middle">app-norte</text>
+<text class="dg-tiny" x="150" y="137" text-anchor="middle">:8081, BRANCH=norte</text>
+<path class="dg-edge" d="M150 150 V176" marker-end="url(#fa05a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="40" y="180" width="220" height="92" rx="6"/>
+<text class="dg-label" x="150" y="204" text-anchor="middle">norte</text>
+<text class="dg-tiny" x="150" y="224" text-anchor="middle">PostgreSQL 18, primario</text>
+<text class="dg-tiny" x="150" y="243" text-anchor="middle">escribe solo sus filas</text>
+<text class="dg-tiny" x="150" y="262" text-anchor="middle">y el catálogo</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="530" y="14" width="180" height="50" rx="6"/>
+<text class="dg-label" x="620" y="36" text-anchor="middle">Caja de sur</text>
+<text class="dg-tiny" x="620" y="54" text-anchor="middle">vende y traspasa</text>
+<path class="dg-edge" d="M620 66 V92" marker-end="url(#fa05a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="530" y="96" width="180" height="52" rx="6"/>
+<text class="dg-label" x="620" y="118" text-anchor="middle">app-sur</text>
+<text class="dg-tiny" x="620" y="137" text-anchor="middle">:8082, BRANCH=sur</text>
+<path class="dg-edge" d="M620 150 V176" marker-end="url(#fa05a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="510" y="180" width="220" height="92" rx="6"/>
+<text class="dg-label" x="620" y="204" text-anchor="middle">sur</text>
+<text class="dg-tiny" x="620" y="224" text-anchor="middle">PostgreSQL 18, primario</text>
+<text class="dg-tiny" x="620" y="243" text-anchor="middle">escribe solo sus filas</text>
+<path class="dg-feedback" d="M264 206 H506" marker-end="url(#fa05a)"/>
+<path class="dg-feedback" d="M506 252 H264" marker-end="url(#fa05a)"/>
+<text class="dg-tiny" x="385" y="196" text-anchor="middle">desde_norte, en sur</text>
+<text class="dg-small" x="385" y="234" text-anchor="middle">origin = none</text>
+<text class="dg-tiny" x="385" y="272" text-anchor="middle">desde_sur, en norte</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A05.1.</b> Cada sucursal escribe en su base, y cada base se suscribe a la otra. <code>origin = none</code> hace que cada una reenvíe solo lo que se escribió en ella, no lo que le llegó. Las dos aceptan escrituras: si las dos cambian la misma fila, nadie lo impide.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <p>Las dos apps corren el mismo jar. Cada una responde con lo que hay en su propia base y escribe solo en ella.</p>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/products</code></td><td>El catálogo, con el stock de cada sucursal.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/sales</code></td><td>Vende del stock de esta sucursal.</td><td>201, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/sales/{id}</code></td><td>Una venta, de cualquiera de las dos, si ya llegó a esta base.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/transfers</code></td><td>Resta stock de esta sucursal y lo manda a la otra.</td><td>201, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/api/products/{id}/price</code></td><td>Cambia un precio. Solo en norte, la dueña del catálogo.</td><td>204, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/lab/replication</code></td><td>Solo para el laboratorio: los conflictos que contó la suscripción de esta base.</td><td>200</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/sales</code>
+        </div>
+        <p class="ep-desc">Resta del stock de esta sucursal, nunca del de la otra, y guarda la venta en la misma transacción. La venta llega a la otra base por replicación.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request, a sur</p>
+<pre data-lang="http"><code>POST /api/sales HTTP/1.1
+Host: localhost:8082
+Content-Type: application/json
+
+{"productId": "01990000-0000-7000-8000-000000000002", "qty": 2}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{"id": "01a1003e-49f7-76b8-9e84-7a67b6b77678", "branch": "sur",
+ "productId": "01990000-0000-7000-8000-000000000002", "qty": 2,
+ "createdAt": "2026-10-03T05:30:44.598189Z"}</code></pre>
+          <p class="ep-sec">Respuesta 409, con 1&#8239;000 unidades</p>
+<pre data-lang="json"><code>{"detail": "En sur no quedan 1000 unidades de 01990000-0000-7000-8000-000000000002",
+ "instance": "/api/sales", "status": 409, "title": "Conflict"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Venta guardada.</span></li>
+            <li><span class="st st--4xx">400</span><span>Falta <code>productId</code> o <code>qty</code> no es positiva.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe el producto.</span></li>
+            <li><span class="st st--4xx">409</span><span>A esta sucursal no le quedan esas unidades, aunque a la otra sí.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/transfers</code>
+        </div>
+        <p class="ep-desc">Resta del stock propio y deja un traspaso. La otra sucursal lo suma cuando le llega: su receptor mira cada segundo.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request, a sur</p>
+<pre data-lang="http"><code>POST /api/transfers HTTP/1.1
+Host: localhost:8082
+Content-Type: application/json
+
+{"productId": "01990000-0000-7000-8000-000000000002", "qty": 3, "to": "norte"}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{"id": "01a1003e-4b2f-71bd-9bfc-adf4a3c9a2c6", "fromBranch": "sur", "toBranch": "norte",
+ "productId": "01990000-0000-7000-8000-000000000002", "qty": 3,
+ "createdAt": "2026-10-03T05:30:44.907461Z"}</code></pre>
+          <p class="ep-sec">En el log de app-norte, 171&#8239;ms después</p>
+<pre data-lang="bash"><code>05:30:45.078Z INFO … TransferReceiver : Recibido el traspaso 01a1003e-4b2f-71bd-9bfc-adf4a3c9a2c6: 3 unidades desde sur</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Traspaso guardado; la otra todavía no lo sumó.</span></li>
+            <li><span class="st st--4xx">400</span><span><code>to</code> vacío, <code>qty</code> no positiva o un traspaso a sí misma: <code>"No puedes traspasarte a ti misma"</code>.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe el producto.</span></li>
+            <li><span class="st st--4xx">409</span><span>No quedan esas unidades en esta sucursal.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="PUT">PUT</span>
+          <code class="ep-path">/api/products/{id}/price</code>
+        </div>
+        <p class="ep-desc">El catálogo tiene una sola dueña. En norte, cambia el precio y responde 204; el precio nuevo llega a sur por replicación. En sur, se niega.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request, a sur</p>
+<pre data-lang="http"><code>PUT /api/products/01990000-0000-7000-8000-000000000002/price HTTP/1.1
+Host: localhost:8082
+Content-Type: application/json
+
+{"priceCents": 690}</code></pre>
+          <p class="ep-sec">Respuesta 409</p>
+<pre data-lang="json"><code>{"detail": "El catálogo se edita en norte; esta sucursal es sur",
+ "instance": "/api/products/01990000-0000-7000-8000-000000000002/price",
+ "status": 409, "title": "Conflict"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">204</span><span>Precio cambiado, en norte.</span></li>
+            <li><span class="st st--4xx">400</span><span>Precio negativo.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe el producto.</span></li>
+            <li><span class="st st--4xx">409</span><span>Esta sucursal no es la dueña del catálogo.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API, la validación de los bodies y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code></td><td><code>JdbcClient</code>, Hikari y las transacciones. <code>@EnableScheduling</code>, para el receptor de traspasos, viene de <code>spring-context</code>.</td></tr>
+            <tr><td><code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td>Las mismas migraciones en las dos bases, y el driver.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>testcontainers-postgresql</code> (test)</td><td>Tres pruebas con norte y sur de verdad, conectadas entre sí.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>Las dos sucursales vendiendo y traspasando a la vez.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>No hay <code>spring-boot-testcontainers</code>. Las pruebas levantan dos contenedores en una misma red, los conectan con el <code>conectar.sh</code> del compose y apuntan la app a norte con <code>@DynamicPropertySource</code>. A sur la tocan con JDBC, como si fuera la otra app.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;sucursales&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code>x-node: &amp;node
+  image: postgres:18
+  environment:
+    POSTGRES_DB: app
+    POSTGRES_USER: app
+    POSTGRES_PASSWORD: app
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U app -d app"]
+    interval: 2s
+    retries: 30
+
+services:
+  norte:
+    &lt;&lt;: *node
+    # wal_level=logical para publicar; track_commit_timestamp para que PostgreSQL detecte quién cambió cada fila.
+    command: ["postgres", "-c", "wal_level=logical", "-c", "track_commit_timestamp=on", "-c", "cluster_name=norte"]
+    ports:
+      - "5433:5432"
+    volumes:
+      - norte:/var/lib/postgresql
+      - ./scripts:/scripts:ro
+
+  sur:
+    &lt;&lt;: *node
+    command: ["postgres", "-c", "wal_level=logical", "-c", "track_commit_timestamp=on", "-c", "cluster_name=sur"]
+    ports:
+      - "5434:5432"
+    volumes:
+      - sur:/var/lib/postgresql
+
+  app-norte:
+    build: .
+    environment:
+      BRANCH: norte
+      DB_URL: jdbc:postgresql://norte:5432/app
+    ports:
+      - "8081:8080"
+    depends_on:
+      norte:
+        condition: service_healthy
+
+  app-sur:
+    build: .
+    environment:
+      BRANCH: sur
+      DB_URL: jdbc:postgresql://sur:5432/app
+    ports:
+      - "8082:8080"
+    depends_on:
+      sur:
+        condition: service_healthy
+
+volumes:
+  norte:
+  sur:</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Dos primarios, ninguna réplica</dt><dd>Las dos bases aceptan escrituras. <code>wal_level=logical</code> agrega al WAL lo que hace falta para publicar los cambios fila por fila, por tabla. Se lee al arrancar, por eso va en el <code>command</code>. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Quién cambió cada fila</dt><dd><code>track_commit_timestamp=on</code> guarda cuándo se confirmó cada transacción y desde qué origen. Sin eso, PostgreSQL 18 no puede saber que una fila que llega de la otra base había cambiado aquí, y no cuenta ese conflicto. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Puertos a la vista</dt><dd>El 5433 es norte y el 5434 es sur, para entrar con <code>psql</code>. El 8081 es app-norte y el 8082, app-sur. Solo norte monta <code>scripts/</code>: <code>conectar.sh</code> corre desde ahí contra las dos.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: sucursales
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  branch: ${BRANCH:norte}
+  catalog-owner: norte
+  receive-every-ms: 1000</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Quién soy y quién manda</dt><dd><code>BRANCH</code> le dice a la app qué sucursal es. <code>catalog-owner</code> dice cuál edita el catálogo, y es la misma en las dos: si no coincidieran, las dos editarían precios.</dd></div>
+        <div><dt>Recibir cada segundo</dt><dd>El receptor de traspasos mira cada segundo si llegó alguno. Las pruebas lo suben a una hora y lo llaman a mano, para saber exactamente cuándo corre.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el Dockerfile, SucursalesApplication.java, Branch.java y los records</summary>
+        <div class="solution-body">
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/sucursales-0.1.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/SucursalesApplication.java"><code>package lab.sucursales;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@EnableScheduling
+public class SucursalesApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(SucursalesApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/Branch.java"><code>package lab.sucursales;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/** Quién soy y quién manda en el catálogo. Cada fila de la base tiene una sucursal dueña. */
+@Component
+public class Branch {
+
+    private final String me;
+    private final String catalogOwner;
+
+    public Branch(@Value("${app.branch}") String me, @Value("${app.catalog-owner}") String catalogOwner) {
+        this.me = me;
+        this.catalogOwner = catalogOwner;
+    }
+
+    public String me() {
+        return me;
+    }
+
+    public String catalogOwner() {
+        return catalogOwner;
+    }
+
+    public boolean ownsCatalog() {
+        return me.equals(catalogOwner);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/ProductStock.java"><code>package lab.sucursales.inventory;
+
+import java.util.Map;
+import java.util.UUID;
+
+public record ProductStock(UUID id, String sku, String name, long priceCents, Map&lt;String, Integer&gt; stock) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/Sale.java"><code>package lab.sucursales.inventory;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+public record Sale(UUID id, String branch, UUID productId, int qty, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/Transfer.java"><code>package lab.sucursales.inventory;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+public record Transfer(UUID id, String fromBranch, String toBranch, UUID productId, int qty, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/Requests.java"><code>package lab.sucursales.inventory;
+
+import java.util.UUID;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+
+public final class Requests {
+
+    private Requests() {
+    }
+
+    public record NewSale(@NotNull UUID productId, @Positive int qty) {
+    }
+
+    public record NewTransfer(@NotNull UUID productId, @Positive int qty, @NotBlank String to) {
+    }
+
+    public record NewPrice(@PositiveOrZero long priceCents) {
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/InventoryController.java"><code>package lab.sucursales.inventory;
+
+import java.util.List;
+import java.util.UUID;
+
+import jakarta.validation.Valid;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class InventoryController {
+
+    private final InventoryService inventory;
+
+    public InventoryController(InventoryService inventory) {
+        this.inventory = inventory;
+    }
+
+    @GetMapping("/api/products")
+    public List&lt;ProductStock&gt; products() {
+        return inventory.products();
+    }
+
+    @PostMapping("/api/sales")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Sale sell(@Valid @RequestBody Requests.NewSale body) {
+        return inventory.sell(body.productId(), body.qty());
+    }
+
+    @GetMapping("/api/sales/{id}")
+    public Sale sale(@PathVariable UUID id) {
+        return inventory.sale(id);
+    }
+
+    @PostMapping("/api/transfers")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Transfer send(@Valid @RequestBody Requests.NewTransfer body) {
+        return inventory.send(body.productId(), body.qty(), body.to());
+    }
+
+    @PutMapping("/api/products/{id}/price")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void changePrice(@PathVariable UUID id, @Valid @RequestBody Requests.NewPrice body) {
+        inventory.changePrice(id, body.priceCents());
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-esquema">Paso 1. Las mismas tablas y los mismos datos en las dos</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__inventory.sql"><code>CREATE TABLE products (
+    id          uuid   PRIMARY KEY,
+    sku         text   NOT NULL UNIQUE,
+    name        text   NOT NULL,
+    price_cents bigint NOT NULL CHECK (price_cents &gt;= 0)
+);
+
+-- Una fila por sucursal y producto. Solo la sucursal dueña de la fila la modifica.
+CREATE TABLE stock (
+    branch     text NOT NULL,
+    product_id uuid NOT NULL REFERENCES products (id),
+    qty        int  NOT NULL CHECK (qty &gt;= 0),
+    PRIMARY KEY (branch, product_id)
+);
+
+-- Solo se insertan, con UUIDv7 generados en cada sucursal: nunca chocan.
+CREATE TABLE sales (
+    id         uuid        PRIMARY KEY DEFAULT uuidv7(),
+    branch     text        NOT NULL,
+    product_id uuid        NOT NULL REFERENCES products (id),
+    qty        int         NOT NULL CHECK (qty &gt; 0),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE transfers (
+    id          uuid        PRIMARY KEY DEFAULT uuidv7(),
+    from_branch text        NOT NULL,
+    to_branch   text        NOT NULL,
+    product_id  uuid        NOT NULL REFERENCES products (id),
+    qty         int         NOT NULL CHECK (qty &gt; 0),
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE transfer_receipts (
+    transfer_id uuid        PRIMARY KEY REFERENCES transfers (id),
+    branch      text        NOT NULL,
+    received_at timestamptz NOT NULL DEFAULT now()
+);</code></pre>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V2__datos_iniciales.sql"><code>-- Los mismos datos en las dos sucursales: la suscripción se crea con copy_data = false.
+INSERT INTO products (id, sku, name, price_cents) VALUES
+    ('01990000-0000-7000-8000-000000000001', 'CAFE-1KG',  'Café de altura, 1 kg', 1890),
+    ('01990000-0000-7000-8000-000000000002', 'TE-VERDE',  'Té verde, 100 g',       650),
+    ('01990000-0000-7000-8000-000000000003', 'TAZA-BLAN', 'Taza blanca',            990);
+
+INSERT INTO stock (branch, product_id, qty)
+SELECT b, p.id, 10 FROM products p CROSS JOIN (VALUES ('norte'), ('sur')) AS branches (b);</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Las dos bases corren las mismas migraciones, y la V2 carga en las dos los mismos productos, con ids fijos, y el mismo stock de partida. Al suscribirse, <code>copy_data = false</code>: no hay nada que copiar. El stock es una fila por sucursal y producto, y las ventas y los traspasos tienen ids <code>uuidv7()</code> generados en cada base.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Cargar los datos en una sola y dejar que la otra los copie al suscribirse. La copia inicial no filtra por origen: si la base de la que copias ya recibió filas de la tuya, te las devuelve, y chocan con las que tienes. <span class="badge badge--doc">Documentado</span> Sirve en una dirección, contra una base vacía, y la otra suscripción va igual sin copia.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Publicar <code>FOR ALL TABLES</code>. Incluiría <code>flyway_schema_history</code>, y cada migración de una sucursal le llegaría a la otra como una fila que ya tiene. Por eso <code>conectar.sh</code> nombra las tablas una por una, y cada base lleva su propio historial de migraciones.</dd></div>
+      </dl>
+
+      <p>Cargar lo mismo en las dos tiene un efecto que vas a ver en los contadores. La primera vez que llega un cambio de la otra base a una fila de la V2, PostgreSQL lo cuenta como conflicto: esa fila se escribió aquí, en la migración. Después de la primera carga, sur ya contaba dos, uno por cada fila de stock de norte que había cambiado. El contador no distingue un conflicto real de uno inofensivo.</p>
+
+      <h3 id="paso-conectar">Paso 2. Conectar en las dos direcciones</h3>
+
+<pre data-lang="bash" data-file="scripts/conectar.sh"><code>#!/bin/sh
+# Conecta las dos sucursales: cada una publica sus tablas y se suscribe a la otra.
+#   origin = none   reenvía solo lo que se escribió en la sucursal, no lo que le llegó de la otra;
+#                   sin eso, cada cambio rebotaría entre las dos.
+#   copy_data = false  las dos ya tienen los mismos datos de partida (los puso la migración V2).
+# La tabla de Flyway no se publica: cada sucursal lleva su propio historial de migraciones.
+set -e
+export PGPASSWORD=app
+TABLAS="products, stock, sales, transfers, transfer_receipts"
+
+for node in norte sur; do
+  psql -h "$node" -U app -d app -v ON_ERROR_STOP=1 -qc "CREATE PUBLICATION inventario FOR TABLE $TABLAS"
+done
+
+psql -h norte -U app -d app -v ON_ERROR_STOP=1 -qc "CREATE SUBSCRIPTION desde_sur
+    CONNECTION 'host=sur dbname=app user=app password=app'
+    PUBLICATION inventario WITH (origin = none, copy_data = false)"
+
+psql -h sur -U app -d app -v ON_ERROR_STOP=1 -qc "CREATE SUBSCRIPTION desde_norte
+    CONNECTION 'host=norte dbname=app user=app password=app'
+    PUBLICATION inventario WITH (origin = none, copy_data = false)"
+
+echo "norte y sur conectadas"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Replicación lógica: cada base publica sus tablas y se suscribe a la otra. La suscripción abre un slot en la otra base, que le manda cada transacción confirmada, fila por fila. <code>origin = none</code> pide solo los cambios que se escribieron en esa base, sin los que le llegaron por otra suscripción. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una extensión de varios primarios, como pgactive o EDB Postgres Distributed, que suman resolución de conflictos y más herramientas. <span class="badge badge--doc">Documentado</span> Aquí ves lo que hace PostgreSQL 18 sola, que es poco, y por eso el diseño tiene que evitar los conflictos.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Olvidar <code>origin = none</code>. El valor por defecto, <code>any</code>, manda también lo que llegó de otra suscripción: sur le devolvería a norte cada venta que acaba de recibir de ella. <span class="badge badge--doc">Documentado</span> Y si una sucursal queda caída días, la otra guarda en su slot todo el WAL que no le pudo mandar: en producción, ponle un techo con <code>max_slot_wal_keep_size</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-duena">Paso 3. Cada fila de stock tiene una dueña</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/InventoryRepository.java"><code>package lab.sucursales.inventory;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class InventoryRepository {
+
+    private final JdbcClient jdbc;
+
+    public InventoryRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public List&lt;ProductStock&gt; products() {
+        Map&lt;UUID, ProductStock&gt; out = new LinkedHashMap&lt;&gt;();
+        jdbc.sql("""
+                SELECT p.id, p.sku, p.name, p.price_cents, s.branch, s.qty
+                  FROM products p JOIN stock s ON s.product_id = p.id
+                 ORDER BY p.sku, s.branch
+                """)
+                .query(rs -&gt; {
+                    UUID id = rs.getObject("id", UUID.class);
+                    ProductStock product = out.get(id);
+                    if (product == null) {
+                        product = new ProductStock(id, rs.getString("sku"), rs.getString("name"),
+                                rs.getLong("price_cents"), new LinkedHashMap&lt;&gt;());
+                        out.put(id, product);
+                    }
+                    product.stock().put(rs.getString("branch"), rs.getInt("qty"));
+                });
+        return List.copyOf(out.values());
+    }
+
+    /** Solo toca la fila de esta sucursal: es la única que esta sucursal escribe. */
+    public boolean takeFromOwnStock(String branch, UUID productId, int qty) {
+        return jdbc.sql("""
+                UPDATE stock SET qty = qty - :qty
+                 WHERE branch = :branch AND product_id = :product AND qty &gt;= :qty
+                """)
+                .param("branch", branch)
+                .param("product", productId)
+                .param("qty", qty)
+                .update() == 1;
+    }
+
+    public void addToOwnStock(String branch, UUID productId, int qty) {
+        jdbc.sql("UPDATE stock SET qty = qty + :qty WHERE branch = :branch AND product_id = :product")
+                .param("branch", branch)
+                .param("product", productId)
+                .param("qty", qty)
+                .update();
+    }
+
+    public Sale insertSale(String branch, UUID productId, int qty) {
+        return jdbc.sql("""
+                INSERT INTO sales (branch, product_id, qty) VALUES (:branch, :product, :qty)
+                RETURNING id, branch, product_id, qty, created_at
+                """)
+                .param("branch", branch)
+                .param("product", productId)
+                .param("qty", qty)
+                .query(Sale.class)
+                .single();
+    }
+
+    public Optional&lt;Sale&gt; findSale(UUID id) {
+        return jdbc.sql("SELECT id, branch, product_id, qty, created_at FROM sales WHERE id = :id")
+                .param("id", id)
+                .query(Sale.class)
+                .optional();
+    }
+
+    public Transfer insertTransfer(String from, String to, UUID productId, int qty) {
+        return jdbc.sql("""
+                INSERT INTO transfers (from_branch, to_branch, product_id, qty)
+                VALUES (:from, :to, :product, :qty)
+                RETURNING id, from_branch, to_branch, product_id, qty, created_at
+                """)
+                .param("from", from)
+                .param("to", to)
+                .param("product", productId)
+                .param("qty", qty)
+                .query(Transfer.class)
+                .single();
+    }
+
+    /** Los traspasos que llegaron por replicación y esta sucursal todavía no recibió. */
+    public List&lt;Transfer&gt; pendingTransfersTo(String branch) {
+        return jdbc.sql("""
+                SELECT t.id, t.from_branch, t.to_branch, t.product_id, t.qty, t.created_at
+                  FROM transfers t
+                 WHERE t.to_branch = :branch
+                   AND NOT EXISTS (SELECT 1 FROM transfer_receipts r WHERE r.transfer_id = t.id)
+                 ORDER BY t.id
+                """)
+                .param("branch", branch)
+                .query(Transfer.class)
+                .list();
+    }
+
+    /** El recibo es de quien recibe. ON CONFLICT hace que recibir dos veces no sume dos veces. */
+    public boolean insertReceipt(UUID transferId, String branch) {
+        return jdbc.sql("""
+                INSERT INTO transfer_receipts (transfer_id, branch) VALUES (:id, :branch)
+                ON CONFLICT (transfer_id) DO NOTHING
+                """)
+                .param("id", transferId)
+                .param("branch", branch)
+                .update() == 1;
+    }
+
+    public boolean productExists(UUID id) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM products WHERE id = :id)")
+                .param("id", id)
+                .query(Boolean.class)
+                .single();
+    }
+
+    public boolean updatePrice(UUID id, long priceCents) {
+        return jdbc.sql("UPDATE products SET price_cents = :price WHERE id = :id")
+                .param("id", id)
+                .param("price", priceCents)
+                .update() == 1;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/InventoryService.java"><code>package lab.sucursales.inventory;
+
+import java.util.List;
+import java.util.UUID;
+
+import lab.sucursales.Branch;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class InventoryService {
+
+    private final InventoryRepository repo;
+    private final Branch branch;
+
+    public InventoryService(InventoryRepository repo, Branch branch) {
+        this.repo = repo;
+        this.branch = branch;
+    }
+
+    public List&lt;ProductStock&gt; products() {
+        return repo.products();
+    }
+
+    /** Vende solo de su propio stock: la otra sucursal no puede vender estas mismas unidades. */
+    @Transactional
+    public Sale sell(UUID productId, int qty) {
+        takeOrFail(productId, qty);
+        return repo.insertSale(branch.me(), productId, qty);
+    }
+
+    public Sale sale(UUID id) {
+        return repo.findSale(id).orElseThrow(() -&gt;
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe la venta " + id));
+    }
+
+    /**
+     * Mover stock a otra sucursal: resto del mío y dejo un traspaso. No toco la fila de la otra:
+     * ella lo suma cuando el traspaso le llega.
+     */
+    @Transactional
+    public Transfer send(UUID productId, int qty, String to) {
+        if (to.equals(branch.me())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No puedes traspasarte a ti misma");
+        }
+        takeOrFail(productId, qty);
+        return repo.insertTransfer(branch.me(), to, productId, qty);
+    }
+
+    @Transactional
+    public boolean receive(Transfer transfer) {
+        if (!repo.insertReceipt(transfer.id(), branch.me())) {
+            return false;
+        }
+        repo.addToOwnStock(branch.me(), transfer.productId(), transfer.qty());
+        return true;
+    }
+
+    public List&lt;Transfer&gt; pendingTransfers() {
+        return repo.pendingTransfersTo(branch.me());
+    }
+
+    /** El catálogo tiene una sola dueña. Si las dos lo editaran, cada una terminaría con el precio de la otra. */
+    @Transactional
+    public void changePrice(UUID id, long priceCents) {
+        if (!branch.ownsCatalog()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "El catálogo se edita en " + branch.catalogOwner() + "; esta sucursal es " + branch.me());
+        }
+        if (!repo.updatePrice(id, priceCents)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el producto " + id);
+        }
+    }
+
+    private void takeOrFail(UUID productId, int qty) {
+        if (!repo.takeFromOwnStock(branch.me(), productId, qty)) {
+            if (!repo.productExists(productId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el producto " + productId);
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "En " + branch.me() + " no quedan " + qty + " unidades de " + productId);
+        }
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Solo la sucursal dueña cambia su fila de stock: <code>takeFromOwnStock</code> filtra por <code>branch = me</code>, y la condición <code>qty &gt;= :qty</code> va en el mismo <code>UPDATE</code>, así que dos ventas a la vez en la misma sucursal no bajan de cero. Las ventas y los traspasos solo se insertan, con UUIDv7 que no chocan. Ninguna fila la escriben las dos, así que no hay conflicto que resolver.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una sola fila de stock por producto, compartida. Cada sucursal resta de su copia, y la última en llegar pisa a la otra. Lo vas a provocar: 20 tazas vendidas de 10.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que una sucursal se quede sin stock mientras la otra tiene. En la carga, norte respondió 409 a 221 ventas de café con 90 unidades en sur. Es el precio de no compartir la fila: cada una vende lo suyo, y para equilibrar se traspasa. Y la fila es caliente: todas las ventas de café de una sucursal esperan su lock, una tras otra.</dd></div>
+      </dl>
+
+      <h3 id="paso-traspasos">Paso 4. Traspasos con recibo</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/sucursales/inventory/TransferReceiver.java"><code>package lab.sucursales.inventory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/** Cada segundo, suma al stock propio los traspasos que llegaron de la otra sucursal. */
+@Component
+public class TransferReceiver {
+
+    private static final Logger log = LoggerFactory.getLogger(TransferReceiver.class);
+
+    private final InventoryService inventory;
+
+    public TransferReceiver(InventoryService inventory) {
+        this.inventory = inventory;
+    }
+
+    @Scheduled(fixedDelayString = "${app.receive-every-ms}")
+    public int receivePending() {
+        int received = 0;
+        for (Transfer t : inventory.pendingTransfers()) {
+            if (inventory.receive(t)) {
+                received++;
+                log.info("Recibido el traspaso {}: {} unidades desde {}", t.id(), t.qty(), t.fromBranch());
+            }
+        }
+        return received;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Para mover stock, sur resta de su fila y deja un traspaso. Norte lo recibe por replicación y, en una transacción, guarda un recibo y suma a su fila. El recibo tiene el id del traspaso como clave, y <code>ON CONFLICT DO NOTHING</code> hace que recibir dos veces sume una sola. El recibo vuelve a sur por replicación: sur sabe que llegó.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Que sur sume directamente en la fila de norte. Rompe la regla de una dueña por fila: una venta de norte al mismo tiempo pisaría la suma, o la suma a la venta.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Unidades en camino. Si norte está caída, el traspaso espera en sur, y esas unidades no están en ningún stock. <code>cuadrar.sql</code> las cuenta aparte. Cancelar un traspaso tampoco es simple: sur tendría que saber que norte no lo recibió, y eso solo lo sabe norte.</dd></div>
+      </dl>
+
+      <h3 id="paso-catalogo">Paso 5. Un solo dueño del catálogo</h3>
+
+      <p>Este paso es <code>changePrice</code>, en <code>InventoryService</code>: si la sucursal no es <code>catalog-owner</code>, responde 409.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Los precios y las altas de productos se editan solo en norte. Es un primario único dentro de un sistema con dos: el catálogo cambia poco, y que una sucursal no pueda cambiar un precio durante un corte es aceptable.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Dejar que las dos editen y confiar en que PostgreSQL elija. PostgreSQL 18 no elige: siempre aplica el cambio que llega. <span class="badge badge--doc">Documentado</span> Si las dos cambian el mismo precio durante un corte, cada una termina con el de la otra. Lo vas a medir.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Dar de alta productos en las dos. Dos SKU iguales chocan con la restricción <code>UNIQUE</code>, y la replicación se detiene hasta que alguien la destraba. También lo vas a provocar.</dd></div>
+      </dl>
+
+      <h3 id="paso-carga">Paso 6. Vender en las dos a la vez, en Gatling</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/sucursales/SucursalesSimulation.java"><code>package lab.sucursales;
+
+import static io.gatling.javaapi.core.CoreDsl.StringBody;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.exec;
+import static io.gatling.javaapi.core.CoreDsl.percent;
+import static io.gatling.javaapi.core.CoreDsl.randomSwitch;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+
+/**
+ * Las dos sucursales venden café y se traspasan té a la vez, cada una contra su propia base.
+ * ./mvnw gatling:test -Drps=40 -Dseconds=30   (rps por sucursal)
+ */
+public class SucursalesSimulation extends Simulation {
+
+    static final String CAFE = "01990000-0000-7000-8000-000000000001";
+    static final String TE = "01990000-0000-7000-8000-000000000002";
+
+    int rps = Integer.getInteger("rps", 40);
+    int seconds = Integer.getInteger("seconds", 30);
+
+    static ScenarioBuilder sucursal(String me, String other) {
+        return scenario(me).exec(randomSwitch().on(
+                percent(80.0).then(exec(http("POST /api/sales en " + me).post("/api/sales")
+                        .header("Content-Type", "application/json")
+                        .body(StringBody("{\"productId\": \"" + CAFE + "\", \"qty\": 1}"))
+                        .check(status().is(201)))),
+                percent(20.0).then(exec(http("POST /api/transfers desde " + me).post("/api/transfers")
+                        .header("Content-Type", "application/json")
+                        .body(StringBody("{\"productId\": \"" + TE + "\", \"qty\": 1, \"to\": \"" + other + "\"}"))
+                        .check(status().is(201))))));
+    }
+
+    {
+        setUp(
+                sucursal("norte", "sur").injectOpen(constantUsersPerSec(rps).during(seconds))
+                        .protocols(http.baseUrl("http://localhost:8081").shareConnections()),
+                sucursal("sur", "norte").injectOpen(constantUsersPerSec(rps).during(seconds))
+                        .protocols(http.baseUrl("http://localhost:8082").shareConnections()));
+    }
+}</code></pre>
+
+<pre data-lang="sql" data-file="scripts/cuadrar.sql"><code>-- Cuadra el inventario en una sucursal. Uso: docker compose exec -T norte psql -U app -d app &lt; scripts/cuadrar.sql
+-- Cada unidad está en el stock de alguna sucursal, se vendió o va en un traspaso que todavía no se recibió.
+SELECT p.sku,
+       (SELECT sum(qty) FROM stock s WHERE s.product_id = p.id)                       AS en_stock,
+       (SELECT coalesce(sum(qty), 0) FROM sales v WHERE v.product_id = p.id)          AS vendidas,
+       (SELECT coalesce(sum(qty), 0) FROM transfers t
+         WHERE t.product_id = p.id
+           AND NOT EXISTS (SELECT 1 FROM transfer_receipts r WHERE r.transfer_id = t.id)) AS en_camino
+  FROM products p
+ ORDER BY p.sku;
+
+-- Una huella de cada tabla: si las dos sucursales convergieron, salen iguales.
+SELECT 'stock' AS tabla, count(*) AS filas, md5(string_agg(t::text, ',' ORDER BY t::text)) AS huella FROM stock t
+UNION ALL
+SELECT 'sales', count(*), md5(string_agg(t::text, ',' ORDER BY t::text)) FROM sales t
+UNION ALL
+SELECT 'transfers', count(*), md5(string_agg(t::text, ',' ORDER BY t::text)) FROM transfers t
+UNION ALL
+SELECT 'transfer_receipts', count(*), md5(string_agg(t::text, ',' ORDER BY t::text)) FROM transfer_receipts t;</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos escenarios, uno por sucursal, cada uno contra su app: el 80&#8239;% vende café y el 20&#8239;% traspasa té a la otra. Lo que se prueba no es la latencia: es que al terminar cada unidad esté en algún lado. <code>cuadrar.sql</code> suma, en cada base, el stock, lo vendido y lo que va en camino, y saca una huella de cada tabla para comparar las dos bases.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Comparar solo cuántas filas hay. Dos bases pueden tener las mismas 3&#8239;910 ventas y un stock distinto. La huella <code>md5</code> de las filas ordenadas cambia con cualquier diferencia.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Cuadrar mientras hay traspasos sin recibir. Aparecen en <code>en_camino</code>, no como faltantes, pero las huellas de las dos bases todavía no coinciden. Espera un par de segundos a que el receptor los sume.</dd></div>
+      </dl>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a05-sucursales"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta norte y sur con Testcontainers, las conecta con <code>conectar.sh</code> y corre tres pruebas: una venta de norte aparece en sur; norte no vende 1&#8239;000 unidades que no tiene, y responde 409; y un traspaso de sur se suma una sola vez en norte, aunque el receptor corra dos veces, y su recibo llega a sur.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver BranchesTest.java y TwoBranches.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/sucursales/inventory/BranchesTest.java"><code>package lab.sucursales.inventory;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.UUID;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.sucursales.TwoBranches;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+/** La aplicación corre como norte; sur se toca con JDBC, como si fuera la otra aplicación. */
+@SpringBootTest(properties = {"app.branch=norte", "app.receive-every-ms=3600000"})
+@AutoConfigureMockMvc
+class BranchesTest {
+
+    static final String CAFE = "01990000-0000-7000-8000-000000000001";
+    static final String TE = "01990000-0000-7000-8000-000000000002";
+
+    @DynamicPropertySource
+    static void norte(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", TwoBranches.NORTE::getJdbcUrl);
+    }
+
+    @Autowired
+    MockMvcTester mvc;
+    @Autowired
+    TransferReceiver receiver;
+
+    @Test
+    void unaVentaEnNorteLlegaASur() throws Exception {
+        MvcTestResult venta = mvc.post().uri("/api/sales").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"productId\": \"" + CAFE + "\", \"qty\": 1}").exchange();
+        assertThat(venta).hasStatus(HttpStatus.CREATED);
+        String id = JsonPath.read(venta.getResponse().getContentAsString(), "$.id");
+
+        assertThat(esperarEnSur("SELECT count(*) FROM sales WHERE id = '" + id + "'", 1)).isTrue();
+    }
+
+    @Test
+    void norteNoVendeLoQueNoTiene() {
+        assertThat(mvc.post().uri("/api/sales").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"productId\": \"" + TE + "\", \"qty\": 1000}"))
+                .hasStatus(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void unTraspasoDesdeSurSeSumaUnaSolaVezEnNorte() throws Exception {
+        int antes = stockEnNorte();
+        UUID traspaso = UUID.randomUUID();
+        try (Connection sur = sur(); Statement s = sur.createStatement()) {
+            // Lo mismo que haría la aplicación de sur: resta de su fila y deja el traspaso.
+            s.execute("BEGIN");
+            s.execute("UPDATE stock SET qty = qty - 2 WHERE branch = 'sur' AND product_id = '" + TE + "'");
+            s.execute("INSERT INTO transfers (id, from_branch, to_branch, product_id, qty) VALUES ('"
+                    + traspaso + "', 'sur', 'norte', '" + TE + "', 2)");
+            s.execute("COMMIT");
+        }
+        assertThat(esperarEnNorte("SELECT count(*) FROM transfers WHERE id = '" + traspaso + "'")).isTrue();
+
+        assertThat(receiver.receivePending()).isEqualTo(1);
+        assertThat(receiver.receivePending()).isZero();
+        assertThat(stockEnNorte()).isEqualTo(antes + 2);
+        assertThat(esperarEnSur("SELECT count(*) FROM transfer_receipts WHERE transfer_id = '" + traspaso + "'", 1))
+                .isTrue();
+    }
+
+    private int stockEnNorte() throws Exception {
+        try (Connection c = DriverManager.getConnection(TwoBranches.NORTE.getJdbcUrl(), "app", "app");
+             ResultSet rs = c.createStatement().executeQuery(
+                     "SELECT qty FROM stock WHERE branch = 'norte' AND product_id = '" + TE + "'")) {
+            rs.next();
+            return rs.getInt(1);
+        }
+    }
+
+    private boolean esperarEnNorte(String countSql) throws Exception {
+        return esperar(TwoBranches.NORTE.getJdbcUrl(), countSql, 1);
+    }
+
+    private boolean esperarEnSur(String countSql, int expected) throws Exception {
+        return esperar(TwoBranches.SUR.getJdbcUrl(), countSql, expected);
+    }
+
+    private static boolean esperar(String url, String countSql, int expected) throws Exception {
+        try (Connection c = DriverManager.getConnection(url, "app", "app")) {
+            for (int i = 0; i &lt; 100; i++) {
+                try (ResultSet rs = c.createStatement().executeQuery(countSql)) {
+                    rs.next();
+                    if (rs.getInt(1) == expected) {
+                        return true;
+                    }
+                }
+                Thread.sleep(50);
+            }
+        }
+        return false;
+    }
+
+    private static Connection sur() throws Exception {
+        return DriverManager.getConnection(TwoBranches.SUR.getJdbcUrl(), "app", "app");
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/sucursales/TwoBranches.java"><code>package lab.sucursales;
+
+import org.flywaydb.core.Flyway;
+import org.testcontainers.containers.Network;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.MountableFile;
+
+/** Norte y sur de verdad, conectadas con el mismo script que usa el compose. */
+public final class TwoBranches {
+
+    public static final PostgreSQLContainer NORTE = node("norte");
+    public static final PostgreSQLContainer SUR = node("sur");
+
+    static {
+        NORTE.start();
+        SUR.start();
+        for (PostgreSQLContainer node : new PostgreSQLContainer[] {NORTE, SUR}) {
+            Flyway.configure().dataSource(node.getJdbcUrl(), "app", "app").load().migrate();
+        }
+        try {
+            var result = NORTE.execInContainer("sh", "/scripts/conectar.sh");
+            if (result.getExitCode() != 0) {
+                throw new IllegalStateException(result.getStderr());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudieron conectar las sucursales", e);
+        }
+    }
+
+    private TwoBranches() {
+    }
+
+    private static PostgreSQLContainer node(String name) {
+        return new PostgreSQLContainer("postgres:18")
+                .withDatabaseName("app").withUsername("app").withPassword("app")
+                .withNetwork(Network.SHARED).withNetworkAliases(name)
+                .withCommand("postgres", "-c", "wal_level=logical", "-c", "track_commit_timestamp=on",
+                        "-c", "cluster_name=" + name)
+                .withCopyFileToContainer(MountableFile.forHostPath("scripts/conectar.sh"), "/scripts/conectar.sh");
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-retraso">Cuánto tarda una venta en llegar a la otra</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package &amp;&amp; docker compose up -d --build
+# MSYS_NO_PATHCONV=1 solo hace falta en Git Bash, y solo en esta línea: exportada, ./mvnw no arranca.
+MSYS_NO_PATHCONV=1 docker compose exec norte sh /scripts/conectar.sh
+CAFE=01990000-0000-7000-8000-000000000001; TE=01990000-0000-7000-8000-000000000002
+TAZA=01990000-0000-7000-8000-000000000003
+q() { docker compose exec -T "$1" psql -U app -d app -qAt -c "$2"; }
+for b in norte sur; do       # cada sucursal sube solo su propio stock
+  q $b "UPDATE stock SET qty = 2000 WHERE branch = '$b' AND product_id IN ('$CAFE', '$TE')"
+done
+python scripts/retraso.py          # tres veces, una por fila de la tabla</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>100 ventas en norte</th><th class="r">p50</th><th class="r">p99</th><th class="r">Máximo</th><th class="r">No estaban en la primera consulta</th></tr></thead>
+          <tbody>
+            <tr><td>Primera corrida</td><td class="r">8.1&#8239;ms</td><td class="r">13.1&#8239;ms</td><td class="r">130.4&#8239;ms</td><td class="r">0</td></tr>
+            <tr><td>Segunda</td><td class="r">8.2&#8239;ms</td><td class="r">12.6&#8239;ms</td><td class="r">29.4&#8239;ms</td><td class="r">1</td></tr>
+            <tr><td>Tercera</td><td class="r">7.8&#8239;ms</td><td class="r">9.9&#8239;ms</td><td class="r">17.8&#8239;ms</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Los 8&#8239;ms son, sobre todo, lo que tarda el GET mismo: 50 GET seguidos a <code>/api/products</code> de sur tardaron 10.2&#8239;ms de media. En 299 de las 300 ventas, sur ya la tenía en la primera consulta. El retraso de la replicación entre dos contenedores de la misma máquina queda por debajo de lo que un cliente HTTP puede ver, y el máximo de 130&#8239;ms es una consulta lenta: en esa corrida, todas las ventas estaban en la primera.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver retraso.py</summary>
+        <div class="solution-body">
+<pre data-lang="python" data-file="scripts/retraso.py"><code># Cuánto tarda en verse en sur una venta hecha en norte. Uso: python scripts/retraso.py
+import json
+import time
+import urllib.error
+import urllib.request
+
+CAFE = "01990000-0000-7000-8000-000000000001"
+
+
+def vender():
+    req = urllib.request.Request("http://localhost:8081/api/sales", method="POST",
+                                 data=json.dumps({"productId": CAFE, "qty": 1}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)["id"]
+
+
+retrasos, tarde = [], 0
+for _ in range(100):
+    venta = vender()
+    t0, intentos = time.perf_counter(), 0
+    while True:
+        try:
+            urllib.request.urlopen("http://localhost:8082/api/sales/" + venta).close()
+            break
+        except urllib.error.HTTPError:            # 404: sur todavía no la tiene
+            intentos += 1
+    retrasos.append((time.perf_counter() - t0) * 1000)
+    tarde += intentos &gt; 0
+
+retrasos.sort()
+print(f"100 ventas: p50 {retrasos[50]:.1f} ms, p99 {retrasos[98]:.1f} ms, máximo {retrasos[-1]:.1f} ms; "
+      f"{tarde} no estaban en la primera consulta")</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-carga">Las dos venden a la vez</h3>
+
+<pre data-lang="bash"><code>./mvnw gatling:test -Drps=40 -Dseconds=30          # 40 por segundo en cada sucursal
+sleep 3
+for b in norte sur; do docker compose exec -T $b psql -U app -d app &lt; scripts/cuadrar.sql; done</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>2&#8239;400 requests</th><th class="r">KO</th><th class="r">p50</th><th class="r">p95</th><th class="r">p99</th></tr></thead>
+          <tbody>
+            <tr><td>Primera corrida</td><td class="r">0</td><td class="r">11&#8239;ms</td><td class="r">29&#8239;ms</td><td class="r">628&#8239;ms</td></tr>
+            <tr><td>Segunda corrida</td><td class="r">221, todos 409 en ventas de norte</td><td class="r">13&#8239;ms</td><td class="r">26&#8239;ms</td><td class="r">467&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El p99 alto viene de pocas requests: en la primera corrida, 9 de 2&#8239;400 pasaron de 800&#8239;ms. En la segunda, norte se quedó sin café: las 300 ventas de <code>retraso.py</code>, las 960 de la primera corrida y 740 de esta suman sus 2&#8239;000. Las otras 221 recibieron 409, aunque sur todavía tenía 90. Ninguna sucursal vendió una unidad de la otra. Las dos bases dieron lo mismo:</p>
+
+<pre data-lang="sql"><code>    sku    | en_stock | vendidas | en_camino
+-----------+----------+----------+-----------
+ CAFE-1KG  |       90 |     3910 |         0
+ TAZA-BLAN |       20 |        0 |         0
+ TE-VERDE  |     4000 |        0 |         0
+
+       tabla       | filas |              huella
+-------------------+-------+----------------------------------
+ stock             |     6 | c0189ea5f284651e269b8a39a3360308
+ sales             |  3910 | ec726e8c0c94b65b923eb061d47609cc
+ transfers         |   969 | d0ad6bf05d1cc17e730e742065a2ee13</code></pre>
+
+      <p>Cuadra: 90 en stock y 3&#8239;910 vendidos son los 4&#8239;000 cafés de partida, y los 4&#8239;000 tés siguen en algún stock después de 969 traspasos, todos con su recibo. Las huellas salieron iguales en norte y en sur.</p>
+
+      <h3 id="comprueba-precio">Falla: las dos cambian el mismo precio</h3>
+
+      <p>Para provocar los conflictos, cortas el enlace pausando las dos suscripciones, escribes en las dos y lo vuelves a abrir. Los cambios van directo a la base, sin pasar por la app, para ver qué haría PostgreSQL sin las reglas del diseño.</p>
+
+<pre data-lang="bash"><code>pausar()   { q norte "ALTER SUBSCRIPTION desde_sur DISABLE"; q sur "ALTER SUBSCRIPTION desde_norte DISABLE"; }
+reanudar() { q norte "ALTER SUBSCRIPTION desde_sur ENABLE";  q sur "ALTER SUBSCRIPTION desde_norte ENABLE"; sleep 3; }
+pausar
+q norte "UPDATE products SET price_cents = 700 WHERE id = '$TE'"
+q sur   "UPDATE products SET price_cents = 720 WHERE id = '$TE'"
+reanudar
+for n in norte sur; do echo "$n: $(q $n "SELECT price_cents FROM products WHERE id = '$TE'")"; done
+curl -s localhost:8081/api/lab/replication; echo
+docker compose logs norte | grep -A1 update_origin_differs | tail -2 | cut -c1-220</code></pre>
+
+<pre data-lang="bash"><code>norte: 720
+sur: 700
+{"branch":"norte","subscriptions":[{"subname":"desde_sur","apply_error_count":0,"confl_insert_exists":0,
+ "confl_update_origin_differs":3, …}]}
+LOG:  conflict detected on relation "public.products": conflict=update_origin_differs
+DETAIL:  Updating the row that was modified locally in transaction 6637 at 2026-10-03 05:39:54.825948+00.</code></pre>
+
+      <p>Cada sucursal terminó con el precio de la otra, y así quedan: nada las vuelve a juntar hasta que alguien cambie ese precio otra vez. PostgreSQL detectó el conflicto, lo anotó en el log y en <code>confl_update_origin_differs</code>, y aplicó el cambio que llegaba, como hace siempre. <span class="badge badge--doc">Documentado</span> No es last-write-wins: con LWW, las dos habrían quedado en 720, el precio de sur, que escribió último. El contador de norte dio 3: este conflicto y dos de filas de la V2.</p>
+
+      <h3 id="comprueba-sobreventa">Falla: las dos venden las mismas tazas</h3>
+
+<pre data-lang="bash"><code>pausar
+for n in norte sur; do
+  q $n "BEGIN; UPDATE stock SET qty = qty - 10 WHERE branch = 'norte' AND product_id = '$TAZA' AND qty &gt;= 10;
+        INSERT INTO sales (branch, product_id, qty) VALUES ('$n', '$TAZA', 10); COMMIT"
+done
+reanudar
+for n in norte sur; do
+  echo "$n: stock de norte $(q $n "SELECT qty FROM stock WHERE branch = 'norte' AND product_id = '$TAZA'"), vendidas $(q $n "SELECT sum(qty) FROM sales WHERE product_id = '$TAZA'")"
+done</code></pre>
+
+<pre data-lang="bash"><code>norte: stock de norte 0, vendidas 20
+sur: stock de norte 0, vendidas 20</code></pre>
+
+      <p>Las dos vendieron las 10 tazas de la fila de norte, cada una contra su copia, y las dos bases convergieron: coinciden en que quedan 0 y se vendieron 20. La replicación llevó las dos bases al mismo estado, y ese estado viola el invariante. Ninguna regla de resolución lo arregla después, porque las dos ventas ya se hicieron. Lo único que lo impide es que una sola base decida sobre esas tazas: la dueña de la fila.</p>
+
+      <h3 id="comprueba-sku">Falla: el mismo SKU en las dos</h3>
+
+<pre data-lang="bash"><code>pausar
+q norte "INSERT INTO products (id, sku, name, price_cents) VALUES (uuidv7(), 'MATE-500', 'Yerba mate (norte)', 1200)"
+q sur   "INSERT INTO products (id, sku, name, price_cents) VALUES (uuidv7(), 'MATE-500', 'Yerba mate (sur)', 1250)"
+reanudar
+curl -s -X POST localhost:8082/api/sales -H 'Content-Type: application/json' -d "{\"productId\": \"$TE\", \"qty\": 1}" &gt; /dev/null
+sleep 5
+for n in norte sur; do echo "$n: ventas de té $(q $n "SELECT count(*) FROM sales WHERE product_id = '$TE'"), errores $(q $n 'SELECT apply_error_count FROM pg_stat_subscription_stats')"; done
+docker compose logs norte | grep -m1 -A3 insert_exists | cut -c1-240</code></pre>
+
+<pre data-lang="bash"><code>norte: ventas de té 0, errores 3
+sur: ventas de té 1, errores 3
+ERROR:  conflict detected on relation "public.products": conflict=insert_exists
+DETAIL:  Key already exists in unique index "products_sku_key", modified locally in transaction 6645 at 2026-10-03 05:40:16.932485+00.
+	Key (sku)=(MATE-500); existing local row (01a10047-05a4-…, MATE-500, Yerba mate (norte), 1200); remote row (01a10047-08ec-…, MATE-500, Yerba mate (sur), 1250).
+CONTEXT:  processing remote data for replication origin "pg_16495" during message type "INSERT" for replication target relation "public.products" in transaction 6645, finished at 0/1EF48F0</code></pre>
+
+      <p>Esta vez PostgreSQL no aplica nada: un <code>INSERT</code> que choca con una restricción única es un error, y la suscripción se detiene. <span class="badge badge--doc">Documentado</span> El worker vuelve a arrancar cada 5&#8239;s, lo intenta con la misma transacción y falla otra vez; <code>apply_error_count</code> sube con cada intento. Todo lo que viene después espera: la venta de té que sur hizo un segundo más tarde nunca llegó a norte. Un SKU repetido frena la replicación entera, no solo el catálogo.</p>
+
+      <h3 id="comprueba-destrabar">Destrabar: saltar o reparar</h3>
+
+      <p>Hay dos salidas. La primera es saltar la transacción que choca, con la posición del WAL que trae la línea <code>CONTEXT</code>, en <code>finished at</code>:</p>
+
+<pre data-lang="bash"><code>for par in "norte desde_sur" "sur desde_norte"; do
+  set -- $par
+  lsn=$(docker compose logs $1 | grep -A3 insert_exists | grep -o 'finished at [0-9A-F]*/[0-9A-F]*' | tail -1 | cut -d' ' -f3)
+  echo "$1 salta la transacción que termina en $lsn"
+  q $1 "ALTER SUBSCRIPTION $2 SKIP (lsn = '$lsn')"
+done
+sleep 6
+for n in norte sur; do echo "$n: ventas de té $(q $n "SELECT count(*) FROM sales WHERE product_id = '$TE'"), MATE-500 = $(q $n "SELECT name FROM products WHERE sku = 'MATE-500'")"; done</code></pre>
+
+<pre data-lang="bash"><code>norte salta la transacción que termina en 0/1EF48F0
+sur salta la transacción que termina en 0/1EEE108
+norte: ventas de té 1, MATE-500 = Yerba mate (norte)
+sur: ventas de té 1, MATE-500 = Yerba mate (sur)</code></pre>
+
+      <p>La replicación siguió y la venta de té llegó a norte. Pero cada base se quedó con su propia yerba, con ids distintos: las dos divergen para siempre en esa fila, y nada lo avisa.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p><code>SKIP</code> descarta la transacción remota entera, no solo la fila que choca. <span class="badge badge--doc">Documentado</span> Si esa transacción traía también una venta, la venta no llega nunca a la otra sucursal, y el inventario deja de cuadrar sin ningún error.</p>
+      </aside>
+
+      <p>La otra salida es reparar los datos para que la transacción que llega ya no choque. Con otro SKU repetido, cada sucursal renombra su propia fila:</p>
+
+<pre data-lang="bash"><code>pausar
+q norte "INSERT INTO products (id, sku, name, price_cents) VALUES (uuidv7(), 'MIEL-250', 'Miel (norte)', 900)"
+q sur   "INSERT INTO products (id, sku, name, price_cents) VALUES (uuidv7(), 'MIEL-250', 'Miel (sur)', 950)"
+reanudar
+for n in norte sur; do echo "$n errores: $(q $n 'SELECT apply_error_count FROM pg_stat_subscription_stats')"; done
+# Cada sucursal renombra su propia fila: la transacción remota ya no choca y se aplica entera.
+q norte "UPDATE products SET sku = 'MIEL-250-N' WHERE sku = 'MIEL-250'"
+q sur   "UPDATE products SET sku = 'MIEL-250-S' WHERE sku = 'MIEL-250'"
+sleep 8
+for n in norte sur; do echo "$n: $(q $n "SELECT string_agg(sku || ' ' || name, ', ' ORDER BY sku) FROM products WHERE sku LIKE 'MIEL%'") errores $(q $n 'SELECT apply_error_count FROM pg_stat_subscription_stats')"; done</code></pre>
+
+<pre data-lang="bash"><code>norte errores: 5
+sur errores: 5
+norte: MIEL-250-N Miel (norte), MIEL-250-S Miel (sur) errores 6
+sur: MIEL-250-N Miel (norte), MIEL-250-S Miel (sur) errores 6</code></pre>
+
+      <p>Las dos bases terminaron con los dos productos, y la replicación siguió sola, sin perder nada: el worker volvió a intentar y esta vez la transacción entró. El contador pasó de 5 a 6 por un último intento fallido antes del arreglo, y después no subió más. Reparar cuesta más que saltar, porque tienes que decidir qué hacer con cada fila, pero no pierde ninguna otra escritura.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a05">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a05-dos-primarios</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las tres pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="retraso">Mediste cuánto tarda una venta de norte en verse en sur.</li>
+          <li data-check="carga">Corriste la carga en las dos sucursales, cuadraste el inventario y las huellas salieron iguales.</li>
+          <li data-check="conflictos">Provocaste los tres conflictos y anotaste qué hizo PostgreSQL con cada uno.</li>
+          <li data-check="destrabar">Destrabaste la replicación de las dos maneras: saltando con <code>SKIP</code> y reparando los datos.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Las ventas y los traspasos usan <code>uuidv7()</code>, los ids de A00. Con dos primarios dejan de ser una preferencia: cada base genera los suyos sin preguntarle a la otra y no chocan. Con un <code>bigserial</code>, las dos secuencias empezarían en 1 y la primera venta de cada sucursal chocaría con la otra. Si pones el PgBouncer de A00 delante de cada base, ponlo solo para la app: las suscripciones se conectan directo a la otra base.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Pon varias réplicas de cada app detrás de un Nginx, pero un upstream por sucursal. Repartir las cajas de norte entre las dos apps no es balancear: una venta que entra por sur resta del stock de sur. Aquí, a qué app va cada request es una decisión de negocio.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>El 409 de sur al cambiar un precio ya es un ProblemDetail, como los errores de A02: dale un <code>type</code> propio para que el cliente sepa que tiene que ir a norte. Y el <code>If-Match</code> de A02 solo protege dentro de una base: comprueba la versión de norte, no un cambio de sur que todavía no llegó. Es otra razón para que el catálogo tenga una sola dueña.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>Si cada sucursal cachea el catálogo como en A03, la app de sur nunca se entera de un cambio de precio: el cambio llega por replicación, no por su API, y nadie publica la invalidación. Un trigger en sur no alcanza por defecto, porque los cambios que aplica una suscripción no disparan los triggers comunes; hay que marcarlo con <code>ENABLE REPLICA</code> o <code>ENABLE ALWAYS</code>. <span class="badge badge--doc">Documentado</span> O que norte publique la invalidación en un canal que las dos escuchen.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>Cada sucursal puede tener su réplica física, como en A04, para sobrevivir a la caída de su base. Pero el slot de la suscripción de la otra sucursal vive en el primario: si promueves la réplica, el slot no está, y la otra sucursal deja de recibir. Desde PostgreSQL 17, una suscripción con <code>failover = true</code> y <code>sync_replication_slots</code> en la réplica conservan el slot. <span class="badge badge--doc">Documentado</span></p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Varios líderes</p>
+          <p>Un líder, varios líderes y sin líder, y qué conflictos trae cada uno: <a href="../modules/m05-bases-de-datos.html#replicacion">M05. Bases de datos</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Convergir no es tener razón</p>
+          <p>Last-write-wins, CRDTs y por qué ninguno protege un invariante como las 10 tazas: <a href="../modules/m06-teoria-distribuida.html#crdt">M06. Teoría distribuida</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Relojes</p>
+          <p>Por qué resolver por timestamp es peligroso cuando un reloj se adelanta: <a href="../modules/m06-teoria-distribuida.html#relojes-fisicos">M06. Teoría distribuida</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Invariantes que exigen coordinar</p>
+          <p>Cuándo un límite global, como el stock o una cuota, no se puede repartir sin coordinar: <a href="../modules/m18-cuotas-tokens.html#invariante">M18. Cuotas de tokens</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-lww">Last-write-wins</a>, <a href="../glosario.html#t-crdt">CRDT</a>, <a href="../glosario.html#t-i-confluencia">confluencia de invariantes</a> y <a href="../glosario.html#t-eventual">consistencia eventual</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a05.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

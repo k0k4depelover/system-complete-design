@@ -1,0 +1,1523 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A03. Caché que aguanta un pico</title>
+<meta name="description" content="Una tienda en su día de ofertas: cache-aside en dos niveles con Caffeine y Redis, TTL con jitter, stampede contenido con un lock y lo vencido, invalidación por Pub/Sub, write-through del precio y write-behind de las visitas en lotes idempotentes, medidos con Gatling y con caídas inyectadas.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a03" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Proyectos</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Caché que aguanta un pico</h1>
+        <p class="lead">Una tienda en su día de ofertas: diez productos se llevan ocho de cada diez visitas, y la ficha de cada uno cuesta 50 ms de base. Vas a escribir la caché a mano, en dos niveles, y a medir qué pasa cuando vence una clave caliente, cuando cambia un precio y cuando la app se cae a mitad de pasar las visitas a la base.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A03</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 1</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>5 a 6 h</dd></div>
+          <div><dt>Módulos</dt><dd>M04</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a03">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Leer en tres escalones, la memoria de la réplica, Redis y PostgreSQL, y contar de dónde salió cada lectura.</li>
+          <li>Contener un cache stampede con un lock en Redis y sirviendo lo vencido, y medir cuántas veces llega a la base.</li>
+          <li>Repartir el vencimiento de las claves con jitter y avisar a las otras réplicas con Pub/Sub cuando cambia un precio.</li>
+          <li>Evitar que un lector lento deje en la caché un precio más viejo que el que se acaba de guardar.</li>
+          <li>Pasar un contador a la base en lotes con write-behind, sin perder ni duplicar visitas aunque la réplica muera a mitad.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una tienda en línea tiene mil productos y un día de ofertas: diez productos rebajados se llevan ocho de cada diez visitas. Armar la ficha de un producto cuesta 50&#8239;ms de base, porque junta reseñas, stock por bodega y opciones de envío. A 300 fichas por segundo, sin caché, serían 15 conexiones ocupadas todo el tiempo, de las 20 que hay, sin margen para el pico.</p>
+
+      <p>Hay dos datos más con reglas distintas. El precio cambia pocas veces, pero cuando cambia nadie debería ver el viejo por mucho tiempo. Las visitas de cada producto cambian todo el tiempo, y a nadie le importa si la base las ve unos segundos tarde.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="fa03t fa03d">
+<title id="fa03t">Arquitectura de la tienda</title>
+<desc id="fa03d">Gatling manda el 80 por ciento de las visitas a 10 productos, repartidas entre dos réplicas iguales de Spring Boot. Cada réplica guarda los productos dos segundos en memoria con Caffeine y pasa las visitas a la base en un lote cada dos segundos. Las dos comparten Redis 8, con AOF y fsync cada segundo, donde hay un hash por producto con el JSON y la versión, un lock por producto con SET NX de tres segundos, el hash views:pending que acumula visitas con HINCRBY y el canal products:invalidate de Pub/Sub, que avisa a las réplicas. Las réplicas leen y escriben PostgreSQL 18 a través de PgBouncer, con las tablas products y view_flushes.</desc>
+<defs><marker id="fa03a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="118" width="128" height="64" rx="6"/>
+<text class="dg-label" x="74" y="145" text-anchor="middle">Gatling</text>
+<text class="dg-tiny" x="74" y="164" text-anchor="middle">80&#8239;% a 10 productos</text>
+<path class="dg-edge" d="M140 150 H166" marker-end="url(#fa03a)"/>
+<rect class="dg-frame" x="170" y="24" width="192" height="246" rx="10" fill="none"/>
+<text class="dg-small" x="184" y="42">dos réplicas iguales</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="186" y="54" width="160" height="88" rx="6"/>
+<text class="dg-label" x="266" y="80" text-anchor="middle">app1</text>
+<text class="dg-tiny" x="266" y="100" text-anchor="middle">Caffeine, 2 s</text>
+<text class="dg-tiny" x="266" y="118" text-anchor="middle">un lote cada 2 s</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="186" y="166" width="160" height="88" rx="6"/>
+<text class="dg-label" x="266" y="192" text-anchor="middle">app2</text>
+<text class="dg-tiny" x="266" y="212" text-anchor="middle">Caffeine, 2 s</text>
+<text class="dg-tiny" x="266" y="230" text-anchor="middle">un lote cada 2 s</text>
+<path class="dg-edge" d="M364 100 H406" marker-end="url(#fa03a)"/>
+<path class="dg-feedback" d="M408 173 H366" marker-end="url(#fa03a)"/>
+<path class="dg-edge" d="M364 250 H406" marker-end="url(#fa03a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="410" y="20" width="220" height="176" rx="6"/>
+<text class="dg-label" x="520" y="42" text-anchor="middle">Redis 8</text>
+<text class="dg-tiny" x="520" y="58" text-anchor="middle">AOF, fsync cada segundo</text>
+<rect class="dg-box" x="422" y="68" width="196" height="26" rx="4"/>
+<text class="dg-tiny" x="430" y="86">product:{id}: JSON y versión</text>
+<rect class="dg-box" x="422" y="98" width="196" height="26" rx="4"/>
+<text class="dg-tiny" x="430" y="116">lock:product:{id}: SET NX, 3 s</text>
+<rect class="dg-box" x="422" y="128" width="196" height="26" rx="4"/>
+<text class="dg-tiny" x="430" y="146">views:pending: HINCRBY</text>
+<rect class="dg-box" x="422" y="158" width="196" height="26" rx="4"/>
+<text class="dg-tiny" x="430" y="176">products:invalidate: Pub/Sub</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="410" y="222" width="150" height="56" rx="6"/>
+<text class="dg-label" x="485" y="246" text-anchor="middle">PgBouncer</text>
+<text class="dg-tiny" x="485" y="265" text-anchor="middle">hasta 20</text>
+<path class="dg-edge" d="M562 250 H596" marker-end="url(#fa03a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="600" y="222" width="160" height="56" rx="6"/>
+<text class="dg-label" x="680" y="246" text-anchor="middle">PostgreSQL 18</text>
+<text class="dg-tiny" x="680" y="265" text-anchor="middle">products, view_flushes</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A03.1.</b> Las lecturas bajan por tres escalones: la memoria de la réplica, Redis y la base. Las visitas suben al revés: se acumulan en Redis y bajan a PostgreSQL en lotes. La línea punteada es el aviso de Pub/Sub cuando cambia un precio.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/products/{id}</code></td><td>La ficha, desde el primer escalón que la tenga.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/api/products/{id}/price</code></td><td>Cambia el precio en la base y en Redis, y avisa a las otras réplicas.</td><td>200, 400, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/products/{id}/views</code></td><td>Cuenta una visita. Llega a la base en el próximo lote.</td><td>202</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/lab/stats</code></td><td>Solo para el laboratorio: de dónde salió cada lectura en esta réplica.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/lab/stats/reset</code></td><td>Pone los contadores en cero.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="DELETE">DELETE</span><code>/api/lab/local-cache</code></td><td>Vacía la memoria de esta réplica.</td><td>200</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/lab/stats</code>
+        </div>
+        <p class="ep-desc">Los contadores de una réplica después de una carga. Las cinco salidas posibles de una lectura suman el total de lecturas.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"instance": "app1",
+ "counters": {"localHits": 7023, "redisHits": 1457, "staleServed": 3, "waits": 0, "dbLoads": 517}}</code></pre>
+          <p class="ep-sec">Qué cuenta cada uno</p>
+          <div class="table-wrap">
+            <table class="t pj-keys">
+              <tbody>
+                <tr><td><code>localHits</code></td><td>La ficha estaba en la memoria de la réplica.</td></tr>
+                <tr><td><code>redisHits</code></td><td>Estaba fresca en Redis.</td></tr>
+                <tr><td><code>staleServed</code></td><td>Estaba vencida en Redis, otra request la estaba recargando y se sirvió la vieja.</td></tr>
+                <tr><td><code>waits</code></td><td>No estaba en Redis y otra request la estaba cargando: esperó.</td></tr>
+                <tr><td><code>dbLoads</code></td><td>Fue a la base.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API y la validación del precio.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td>La base, como en los proyectos anteriores.</td></tr>
+            <tr><td><code>spring-boot-starter-data-redis</code></td><td><code>StringRedisTemplate</code> sobre Lettuce, los scripts de Lua y el listener de Pub/Sub.</td></tr>
+            <tr><td><code>caffeine</code></td><td>La caché en memoria de cada réplica. La versión la fija Spring Boot.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Seis pruebas contra PostgreSQL 18 y Redis 8 reales. Redis corre en un <code>GenericContainer</code>, que Spring Boot conecta con <code>@ServiceConnection(name = "redis")</code>.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>El día de ofertas y la estampida.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>No hay <code>spring-boot-starter-cache</code>. Con <code>@Cacheable</code> tendrías cache-aside en una línea, pero no el lock, ni lo vencido, ni la comparación de versiones, que son justo lo que este proyecto quiere que veas. Cuando lo entiendas a mano, sabrás qué hace y qué no hace la anotación.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;ofertas&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-data-redis&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;com.github.ben-manes.caffeine&lt;/groupId&gt;
+      &lt;artifactId&gt;caffeine&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code>x-app: &amp;app
+  build: .
+  depends_on:
+    pgbouncer:
+      condition: service_started
+    redis:
+      condition: service_healthy
+
+x-app-env: &amp;app-env
+  DB_URL: jdbc:postgresql://pgbouncer:5432/app
+  FLYWAY_URL: jdbc:postgresql://postgres:5432/app
+  REDIS_HOST: redis
+  STAMPEDE_PROTECTION: ${STAMPEDE_PROTECTION:-true}
+  PUBSUB: ${PUBSUB:-true}
+  LOCAL_TTL: ${LOCAL_TTL:-2s}
+  TTL_JITTER: ${TTL_JITTER:-0.1}
+  HALT_AT: ${HALT_AT:-none}
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      retries: 30
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 20
+      MAX_CLIENT_CONN: 500
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:8
+    # AOF con fsync cada segundo: si Redis se cae, pierdes como mucho un segundo de visitas.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  app1:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      INSTANCE: app1
+    ports:
+      - "8081:8080"
+  app2:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      INSTANCE: app2
+    ports:
+      - "8082:8080"
+
+volumes:
+  pgdata:
+  redisdata:</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Las variables del laboratorio</dt><dd>Cada experimento apaga o cambia una pieza desde la línea de comandos: <code>STAMPEDE_PROTECTION=false docker compose up -d app1 app2</code> recrea las réplicas sin el lock. <code>PUBSUB</code>, <code>LOCAL_TTL</code>, <code>TTL_JITTER</code> y <code>HALT_AT</code> funcionan igual.</dd></div>
+        <div><dt>Redis con AOF</dt><dd>Redis guarda cada escritura en un archivo y lo sincroniza con el disco cada segundo. Si Redis se cae, pierdes como mucho un segundo de visitas. <span class="badge badge--doc">Documentado</span> Para una caché pura no haría falta, pero aquí Redis también guarda visitas que la base todavía no tiene.</dd></div>
+        <div><dt>Puertos a la vista</dt><dd>Las réplicas publican el 8081 y el 8082 para que Gatling y curl elijan a cuál hablar. Delante de ellas iría un balanceador, como el Nginx de A01.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: ofertas
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:6432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      maximum-pool-size: 10
+  flyway:
+    url: ${FLYWAY_URL:jdbc:postgresql://localhost:5433/app}
+    user: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  instance: ${INSTANCE:local}
+  db-delay-ms: ${DB_DELAY_MS:50}
+  cache:
+    ttl: 60s
+    jitter: ${TTL_JITTER:0.1}
+    stale: 5m
+    local-ttl: ${LOCAL_TTL:2s}
+    stampede-protection: ${STAMPEDE_PROTECTION:true}
+    pubsub: ${PUBSUB:true}
+  views:
+    flush-every-ms: 2000
+    halt-at: ${HALT_AT:none}</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el Dockerfile, OfertasApplication.java y CacheProps.java</summary>
+        <div class="solution-body">
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/ofertas-0.1.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/OfertasApplication.java"><code>package lab.ofertas;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class OfertasApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(OfertasApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/CacheProps.java"><code>package lab.ofertas;
+
+import java.time.Duration;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+/**
+ * ttl: cuánto vale fresca una entrada en Redis. jitter: cuánto varía ese ttl (0.1 = ±10 %).
+ * stale: cuánto más se guarda vencida, para servirla mientras alguien la recarga.
+ * localTtl: vida en la caché local de cada réplica; es la red de seguridad si se pierde un aviso de Pub/Sub.
+ */
+@ConfigurationProperties("app.cache")
+public record CacheProps(Duration ttl, double jitter, Duration stale, Duration localTtl,
+                         boolean stampedeProtection, boolean pubsub) {
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-ficha">Paso 1. La ficha cara</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__products.sql"><code>CREATE TABLE products (
+    id          bigint PRIMARY KEY,
+    name        text   NOT NULL,
+    price_cents bigint NOT NULL CHECK (price_cents &gt;= 0),
+    views       bigint NOT NULL DEFAULT 0,
+    version     int    NOT NULL DEFAULT 1
+);
+
+-- Un registro por lote de visitas aplicado: hace idempotente el write-behind.
+CREATE TABLE view_flushes (
+    batch_id   text        PRIMARY KEY,
+    flushed_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO products (id, name, price_cents)
+SELECT i, 'Producto ' || i, 1000 + (i * 37) % 90000
+FROM generate_series(1, 1000) AS i;</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/ProductRepository.java"><code>package lab.ofertas.products;
+
+import java.util.Optional;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class ProductRepository {
+
+    private final JdbcClient jdbc;
+    private final double delaySeconds;
+
+    public ProductRepository(JdbcClient jdbc, @Value("${app.db-delay-ms}") long delayMs) {
+        this.jdbc = jdbc;
+        this.delaySeconds = delayMs / 1000.0;
+    }
+
+    /** La ficha. pg_sleep hace de la consulta cara de verdad: reseñas, stock por bodega y envíos. */
+    public Optional&lt;Product&gt; find(long id) {
+        return jdbc.sql("""
+                SELECT id, name, price_cents, views, version
+                  FROM products CROSS JOIN pg_sleep(:delay)
+                 WHERE id = :id
+                """)
+                .param("id", id)
+                .param("delay", delaySeconds)
+                .query(Product.class)
+                .optional();
+    }
+
+    public Optional&lt;Product&gt; updatePrice(long id, long priceCents) {
+        return jdbc.sql("""
+                UPDATE products SET price_cents = :price, version = version + 1
+                 WHERE id = :id
+                RETURNING id, name, price_cents, views, version
+                """)
+                .param("id", id)
+                .param("price", priceCents)
+                .query(Product.class)
+                .optional();
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Simular la consulta cara con <code>pg_sleep</code> dentro del mismo <code>SELECT</code>: la conexión queda ocupada 50&#8239;ms en la base, como con una consulta real, y el pool se llena igual.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un <code>Thread.sleep</code> en Java. La request tardaría lo mismo, pero la conexión no estaría ocupada y no verías lo que importa: 20 conexiones para todas las cargas a la vez.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Creer que <code>pg_sleep</code> es una base cargada. Duerme sin gastar CPU ni disco. Una consulta real de 50&#8239;ms, repetida 200 veces a la vez, sí los gasta, y entonces todas tardan más. Por eso, en la estampida, mira cuántas veces se llega a la base y no solo la latencia.</dd></div>
+      </dl>
+
+      <h3 id="paso-redis">Paso 2. Redis: fresco, vencido y versionado</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/RedisProducts.java"><code>package lab.ofertas.products;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
+import lab.ofertas.CacheProps;
+import tools.jackson.databind.json.JsonMapper;
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.stereotype.Component;
+
+/** La caché compartida: un hash por producto con el JSON, la versión y hasta cuándo está fresco. */
+@Component
+public class RedisProducts {
+
+    public record Entry(Product product, boolean fresh) {
+    }
+
+    // Escribe solo si lo guardado no es más nuevo. Así un lector lento no pisa el precio que se acaba de cambiar.
+    private static final RedisScript&lt;Long&gt; PUT_IF_NOT_OLDER = RedisScript.of("""
+            local current = redis.call('HGET', KEYS[1], 'version')
+            if current and tonumber(current) &gt; tonumber(ARGV[1]) then
+              return 0
+            end
+            redis.call('HSET', KEYS[1], 'version', ARGV[1], 'json', ARGV[2], 'freshUntil', ARGV[3])
+            redis.call('PEXPIRE', KEYS[1], ARGV[4])
+            return 1
+            """, Long.class);
+
+    // Borra el lock solo si sigue siendo nuestro: si venció y lo tomó otro, no se lo quitamos.
+    private static final RedisScript&lt;Long&gt; UNLOCK = RedisScript.of("""
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+              return redis.call('DEL', KEYS[1])
+            end
+            return 0
+            """, Long.class);
+
+    private static final Duration LOCK_TTL = Duration.ofSeconds(3);
+
+    private final StringRedisTemplate redis;
+    private final JsonMapper json;
+    private final CacheProps props;
+
+    public RedisProducts(StringRedisTemplate redis, JsonMapper json, CacheProps props) {
+        this.redis = redis;
+        this.json = json;
+        this.props = props;
+    }
+
+    public Optional&lt;Entry&gt; get(long id) {
+        List&lt;Object&gt; fields = redis.opsForHash().multiGet(key(id), List.of("json", "freshUntil"));
+        if (fields.get(0) == null) {
+            return Optional.empty();
+        }
+        Product product = json.readValue((String) fields.get(0), Product.class);
+        boolean fresh = System.currentTimeMillis() &lt; Long.parseLong((String) fields.get(1));
+        return Optional.of(new Entry(product, fresh));
+    }
+
+    public boolean putIfNotOlder(Product product) {
+        long ttl = jittered(props.ttl()).toMillis();
+        long freshUntil = System.currentTimeMillis() + ttl;
+        long keepFor = ttl + props.stale().toMillis();
+        Long written = redis.execute(PUT_IF_NOT_OLDER, List.of(key(product.id())),
+                Integer.toString(product.version()), json.writeValueAsString(product),
+                Long.toString(freshUntil), Long.toString(keepFor));
+        return Long.valueOf(1).equals(written);
+    }
+
+    /** Con jitter de 0.1, un ttl de 60 s queda entre 54 y 66 s: las claves cargadas juntas no vencen juntas. */
+    Duration jittered(Duration ttl) {
+        if (props.jitter() &lt;= 0) {
+            return ttl;
+        }
+        double factor = 1 + ThreadLocalRandom.current().nextDouble(-props.jitter(), props.jitter());
+        return Duration.ofMillis(Math.round(ttl.toMillis() * factor));
+    }
+
+    public Optional&lt;String&gt; tryLock(long id) {
+        String token = UUID.randomUUID().toString();
+        Boolean acquired = redis.opsForValue().setIfAbsent(lockKey(id), token, LOCK_TTL);
+        return Boolean.TRUE.equals(acquired) ? Optional.of(token) : Optional.empty();
+    }
+
+    public void unlock(long id, String token) {
+        redis.execute(UNLOCK, List.of(lockKey(id)), token);
+    }
+
+    static String key(long id) {
+        return "product:" + id;
+    }
+
+    private static String lockKey(long id) {
+        return "lock:product:" + id;
+    }
+}</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver Product.java y NewPrice.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/Product.java"><code>package lab.ofertas.products;
+
+public record Product(long id, String name, long priceCents, long views, int version) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/NewPrice.java"><code>package lab.ofertas.products;
+
+import jakarta.validation.constraints.PositiveOrZero;
+
+public record NewPrice(@PositiveOrZero long priceCents) {
+}</code></pre>
+        </div>
+      </details>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos vencimientos. <code>freshUntil</code>, dentro del hash, dice hasta cuándo la ficha vale fresca: 60&#8239;s, más o menos un 10&#8239;% de jitter. <code>PEXPIRE</code> borra la clave 5 minutos después. Entre los dos, la ficha está vencida pero sigue ahí, para servirla mientras alguien la recarga.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un solo TTL de Redis. Cuando vence, la clave desaparece, y todas las requests que llegan en ese instante encuentran el vacío a la vez. Con lo vencido a mano, solo una tiene que ir a la base.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un lector lento pisa un precio nuevo. Lee la versión 4 de la base, se demora, y mientras tanto alguien guarda la versión 5 en la base y en Redis. Cuando el lector escribe su versión 4, la caché queda con el precio viejo durante un minuto. El script <code>PUT_IF_NOT_OLDER</code> compara versiones dentro de Redis, que ejecuta cada script de Lua sin intercalar otros comandos <span class="badge badge--doc">Documentado</span>, y descarta la escritura vieja.</dd></div>
+      </dl>
+
+      <p>El jitter importa cuando muchas claves se cargan juntas, como al arrancar o después de vaciar Redis. Sin jitter, vencen juntas 60&#8239;s después, y la base recibe todas las recargas en el mismo segundo. Lo vas a medir.</p>
+
+      <h3 id="paso-estampida">Paso 3. Una sola carga en el pico</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/ProductService.java"><code>package lab.ofertas.products;
+
+import java.util.Optional;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import lab.ofertas.CacheProps;
+import lab.ofertas.lab.CacheStats;
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+
+/** Lecturas en tres escalones: memoria de la réplica, Redis y PostgreSQL. */
+@Service
+public class ProductService {
+
+    public static final String INVALIDATIONS = "products:invalidate";
+
+    private final ProductRepository db;
+    private final RedisProducts shared;
+    private final StringRedisTemplate redis;
+    private final CacheProps props;
+    private final CacheStats stats;
+    private final Cache&lt;Long, Product&gt; local;
+
+    public ProductService(ProductRepository db, RedisProducts shared, StringRedisTemplate redis,
+                          CacheProps props, CacheStats stats) {
+        this.db = db;
+        this.shared = shared;
+        this.redis = redis;
+        this.props = props;
+        this.stats = stats;
+        this.local = Caffeine.newBuilder().maximumSize(10_000).expireAfterWrite(props.localTtl()).build();
+    }
+
+    public Product get(long id) {
+        Product inMemory = local.getIfPresent(id);
+        if (inMemory != null) {
+            stats.localHits.increment();
+            return inMemory;
+        }
+
+        Optional&lt;RedisProducts.Entry&gt; cached = shared.get(id);
+        if (cached.isPresent() &amp;&amp; cached.get().fresh()) {
+            stats.redisHits.increment();
+            return remember(cached.get().product());
+        }
+        if (!props.stampedeProtection()) {
+            return load(id);
+        }
+
+        Optional&lt;String&gt; lock = shared.tryLock(id);
+        if (lock.isPresent()) {
+            try {
+                // Mira otra vez: quien tenía el lock pudo dejarla en Redis entre tu lectura y tu lock.
+                Optional&lt;RedisProducts.Entry&gt; again = shared.get(id);
+                if (again.isPresent() &amp;&amp; again.get().fresh()) {
+                    stats.redisHits.increment();
+                    return remember(again.get().product());
+                }
+                return load(id);
+            } finally {
+                shared.unlock(id, lock.get());
+            }
+        }
+        if (cached.isPresent()) {
+            // Vencida, pero otra request ya la está recargando: servimos la vieja en lugar de esperar.
+            stats.staleServed.increment();
+            return remember(cached.get().product());
+        }
+        return waitForTheOneLoading(id);
+    }
+
+    /** Nada en Redis y otro tiene el lock: esperamos hasta medio segundo a que la deje ahí. */
+    private Product waitForTheOneLoading(long id) {
+        stats.waits.increment();
+        for (int i = 0; i &lt; 25; i++) {
+            sleep(20);
+            Optional&lt;RedisProducts.Entry&gt; cached = shared.get(id);
+            if (cached.isPresent()) {
+                return remember(cached.get().product());
+            }
+        }
+        return load(id);   // el que cargaba tardó demasiado: mejor ir a la base que fallar
+    }
+
+    private Product load(long id) {
+        stats.dbLoads.increment();
+        Product product = db.find(id).orElseThrow(() -&gt;
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el producto " + id));
+        shared.putIfNotOlder(product);
+        return remember(product);
+    }
+
+    /** Write-through: la base y Redis quedan con el precio nuevo; las otras réplicas se enteran por Pub/Sub. */
+    public Product updatePrice(long id, long priceCents) {
+        Product updated = db.updatePrice(id, priceCents).orElseThrow(() -&gt;
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el producto " + id));
+        shared.putIfNotOlder(updated);
+        local.invalidate(id);
+        if (props.pubsub()) {
+            redis.convertAndSend(INVALIDATIONS, Long.toString(id));
+        }
+        return updated;
+    }
+
+    public void evictLocal(long id) {
+        local.invalidate(id);
+    }
+
+    public void evictAllLocal() {
+        local.invalidateAll();
+    }
+
+    private Product remember(Product product) {
+        local.put(product.id(), product);
+        return product;
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cuando la ficha no está fresca, la request intenta tomar <code>lock:product:{id}</code> con <code>SET NX</code> y 3&#8239;s de vida. La que lo consigue mira otra vez Redis y, si sigue sin estar, carga de la base. Las demás sirven la ficha vencida si la hay, y si no, esperan hasta medio segundo a que aparezca.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un lock en la memoria de cada réplica, como un <code>ConcurrentHashMap</code> de futuros. Funciona dentro de una réplica, y Caffeine lo hace solo con <code>get(key, loader)</code>, pero con dos réplicas cargan dos, y con cuarenta, cuarenta. El lock en Redis lo comparten todas.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Dos cosas. Si la carga tarda más de 3&#8239;s, el lock vence, otra request lo toma y la primera, al terminar, no puede borrar un lock que ya no es suyo: por eso <code>UNLOCK</code> compara el token antes de borrar. Y si la carga tarda más de medio segundo, las que esperaban se cansan y van a la base, todas juntas. La espera tiene que ser mayor que la carga más lenta que aceptes.</dd></div>
+      </dl>
+
+      <p>La segunda mirada a Redis, dentro del lock, no es redundante. Entre que una request vio la ficha vencida y consiguió el lock, otra pudo cargarla y soltar el lock. Sin esa mirada, cada request que llega justo después de una carga haría otra.</p>
+
+      <h3 id="paso-precio">Paso 4. Cambiar el precio sin mostrar el viejo</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/Invalidations.java"><code>package lab.ofertas.products;
+
+import java.nio.charset.StandardCharsets;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+
+/** Cada réplica escucha el canal y borra de su memoria el producto que cambió en otra. */
+@Configuration
+public class Invalidations {
+
+    @Bean
+    RedisMessageListenerContainer invalidationListener(RedisConnectionFactory connections, ProductService products) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connections);
+        container.addMessageListener((message, pattern) -&gt; {
+            long id = Long.parseLong(new String(message.getBody(), StandardCharsets.UTF_8));
+            products.evictLocal(id);
+        }, new ChannelTopic(ProductService.INVALIDATIONS));
+        return container;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/products/ProductController.java"><code>package lab.ofertas.products;
+
+import jakarta.validation.Valid;
+
+import lab.ofertas.views.ViewCounter;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/products")
+public class ProductController {
+
+    private final ProductService products;
+    private final ViewCounter views;
+
+    public ProductController(ProductService products, ViewCounter views) {
+        this.products = products;
+        this.views = views;
+    }
+
+    @GetMapping("/{id}")
+    public Product get(@PathVariable long id) {
+        return products.get(id);
+    }
+
+    @PutMapping("/{id}/price")
+    public Product changePrice(@PathVariable long id, @Valid @RequestBody NewPrice body) {
+        return products.updatePrice(id, body.priceCents());
+    }
+
+    /** 202: la visita queda contada en Redis y llega a PostgreSQL en el próximo lote. */
+    @PostMapping("/{id}/views")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void view(@PathVariable long id) {
+        views.increment(id);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Write-through: <code>updatePrice</code> guarda en la base y, en la misma request, deja la ficha nueva en Redis. Después borra la suya de memoria y publica el id en <code>products:invalidate</code>, para que las otras réplicas borren la suya.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Borrar la ficha de Redis en lugar de escribirla. Es más simple, pero la lectura siguiente va a la base y, en un producto rebajado, es una estampida que provocas tú.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Pub/Sub entrega cada mensaje como mucho una vez: si una réplica está reconectándose cuando se publica, no lo recibe nunca. <span class="badge badge--doc">Documentado</span> La red de seguridad es el TTL local de 2&#8239;s. Ese número es el tiempo máximo que una réplica puede mostrar un precio viejo, y es el que decides con negocio.</dd></div>
+      </dl>
+
+      <h3 id="paso-visitas">Paso 5. Las visitas, en lotes</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/views/ViewCounter.java"><code>package lab.ofertas.views;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * Write-behind: cada visita es un HINCRBY en Redis y un proceso las pasa a PostgreSQL en lotes.
+ * Un lote se aparta con RENAME, se aplica en una transacción y recién después se borra.
+ */
+@Component
+public class ViewCounter {
+
+    private static final Logger log = LoggerFactory.getLogger(ViewCounter.class);
+
+    static final String PENDING = "views:pending";
+    static final String FLUSHING = "views:flushing:";
+
+    private static final RedisScript&lt;Long&gt; RENAME_IF_EXISTS = RedisScript.of("""
+            if redis.call('EXISTS', KEYS[1]) == 1 then
+              redis.call('RENAME', KEYS[1], KEYS[2])
+              return 1
+            end
+            return 0
+            """, Long.class);
+
+    private final StringRedisTemplate redis;
+    private final ViewStore store;
+    private final String haltAt;
+
+    public ViewCounter(StringRedisTemplate redis, ViewStore store, @Value("${app.views.halt-at}") String haltAt) {
+        this.redis = redis;
+        this.store = store;
+        this.haltAt = haltAt;
+    }
+
+    public void increment(long productId) {
+        redis.opsForHash().increment(PENDING, Long.toString(productId), 1);
+    }
+
+    @Scheduled(fixedDelayString = "${app.views.flush-every-ms}")
+    public void flush() {
+        // Primero, los lotes que alguien apartó y no terminó: una réplica que se cayó a mitad de camino.
+        try (Cursor&lt;String&gt; leftovers = redis.scan(ScanOptions.scanOptions().match(FLUSHING + "*").count(100).build())) {
+            leftovers.forEachRemaining(this::flushBatch);
+        }
+        // Después, lo acumulado. Las visitas que lleguen desde ahora van a un views:pending nuevo.
+        String batch = FLUSHING + UUID.randomUUID();
+        if (Long.valueOf(1).equals(redis.execute(RENAME_IF_EXISTS, List.of(PENDING, batch)))) {
+            haltIf("rename");
+            flushBatch(batch);
+        }
+    }
+
+    void flushBatch(String batch) {
+        Map&lt;Object, Object&gt; counts = redis.opsForHash().entries(batch);
+        if (!counts.isEmpty()) {
+            long[] ids = new long[counts.size()];
+            long[] views = new long[counts.size()];
+            int i = 0;
+            for (Map.Entry&lt;Object, Object&gt; e : counts.entrySet()) {
+                ids[i] = Long.parseLong((String) e.getKey());
+                views[i] = Long.parseLong((String) e.getValue());
+                i++;
+            }
+            boolean applied = store.apply(batch.substring(FLUSHING.length()), ids, views);
+            haltIf("commit");
+            log.info("Lote {}: {} productos, {}", batch, ids.length, applied ? "aplicado" : "ya estaba aplicado");
+        }
+        redis.delete(batch);
+    }
+
+    /** Falla inyectada para el laboratorio: la réplica muere en seco en ese punto. */
+    private void haltIf(String point) {
+        if (point.equals(haltAt)) {
+            log.warn("Falla inyectada: la réplica se detiene después de {}", point);
+            Runtime.getRuntime().halt(1);
+        }
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/views/ViewStore.java"><code>package lab.ofertas.views;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+@Repository
+public class ViewStore {
+
+    private final JdbcClient jdbc;
+
+    public ViewStore(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * Aplica un lote una sola vez. Si la réplica se cae después del COMMIT y antes de borrar el lote
+     * de Redis, el reintento encuentra el batch_id y no vuelve a sumar.
+     */
+    @Transactional
+    public boolean apply(String batchId, long[] productIds, long[] counts) {
+        int first = jdbc.sql("INSERT INTO view_flushes (batch_id) VALUES (:batch) ON CONFLICT DO NOTHING")
+                .param("batch", batchId)
+                .update();
+        if (first == 0) {
+            return false;
+        }
+        jdbc.sql("""
+                UPDATE products p
+                   SET views = p.views + v.n
+                  FROM unnest(CAST(:ids AS bigint[]), CAST(:counts AS bigint[])) AS v(id, n)
+                 WHERE p.id = v.id
+                """)
+                .param("ids", productIds)
+                .param("counts", counts)
+                .update();
+        return true;
+    }
+
+    public long views(long productId) {
+        return jdbc.sql("SELECT views FROM products WHERE id = :id").param("id", productId).query(Long.class).single();
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Write-behind. Cada visita es un <code>HINCRBY</code> en <code>views:pending</code>, y cada 2&#8239;s la réplica aparta el hash con <code>RENAME</code> a un nombre único, lo aplica en la base en una transacción y recién entonces lo borra. Las visitas que llegan durante el lote van a un <code>views:pending</code> nuevo.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un <code>UPDATE products SET views = views + 1</code> por visita. A 300 visitas por segundo, 240 caen en los mismos diez productos, y cada <code>UPDATE</code> toma el lock de su fila: las visitas se forman en fila detrás del lock. En lote, son diez <code>UPDATE</code> cada 2&#8239;s.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>La réplica muere entre el <code>COMMIT</code> y el borrado del lote. Al volver, encuentra el lote con <code>SCAN</code> y lo aplicaría de nuevo: el doble de visitas. La tabla <code>view_flushes</code> lo evita: el id del lote se guarda en la misma transacción que las visitas, y un lote que ya está ahí no se vuelve a sumar.</dd></div>
+      </dl>
+
+      <p>Las dos réplicas pasan lotes a la vez, y la una puede encontrar con <code>SCAN</code> el lote que la otra está aplicando en ese momento. No pasa nada: el segundo <code>INSERT</code> en <code>view_flushes</code> espera a que el primero confirme, no inserta nada, y ese lote no se suma dos veces. La idempotencia sirve para las caídas y para la concurrencia, con el mismo código.</p>
+
+      <h3 id="paso-carga">Paso 6. El día de ofertas, en Gatling</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/ofertas/OfertasSimulation.java"><code>package lab.ofertas;
+
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+
+/** ./mvnw gatling:test -Drps=300 -Dseconds=60 */
+public class OfertasSimulation extends Simulation {
+
+    int rps = Integer.getInteger("rps", 300);
+    int seconds = Integer.getInteger("seconds", 60);
+
+    // Cada usuario virtual elige una de las dos réplicas. shareConnections reutiliza las conexiones:
+    // sin él, 18 000 usuarios abren 18 000 conexiones y Windows se queda sin puertos.
+    HttpProtocolBuilder protocolo = http.baseUrls("http://localhost:8081", "http://localhost:8082")
+            .shareConnections();
+
+    // El día de ofertas: 8 de cada 10 visitas van a los 10 productos rebajados; el resto, a cualquiera de los 1 000.
+    Iterator&lt;Map&lt;String, Object&gt;&gt; productos = Stream.generate(() -&gt; {
+        ThreadLocalRandom r = ThreadLocalRandom.current();
+        int id = r.nextInt(100) &lt; 80 ? r.nextInt(1, 11) : r.nextInt(1, 1001);
+        return Map.&lt;String, Object&gt;of("id", id);
+    }).iterator();
+
+    ScenarioBuilder verProducto = scenario("Ver producto")
+            .feed(productos)
+            .exec(http("GET /api/products/{id}").get("/api/products/#{id}").check(status().is(200)))
+            .exec(http("POST /api/products/{id}/views").post("/api/products/#{id}/views").check(status().is(202)));
+
+    {
+        setUp(verProducto.injectOpen(constantUsersPerSec(rps).during(seconds))).protocols(protocolo);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/test/java/lab/ofertas/StampedeSimulation.java"><code>package lab.ofertas;
+
+import static io.gatling.javaapi.core.CoreDsl.atOnceUsers;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+
+/**
+ * Muchas lecturas del mismo producto en el mismo instante, justo después de vaciar su caché.
+ * ./mvnw gatling:test -Dgatling.simulationClass=lab.ofertas.StampedeSimulation -Dusers=400 -Did=1
+ */
+public class StampedeSimulation extends Simulation {
+
+    int users = Integer.getInteger("users", 400);
+    int id = Integer.getInteger("id", 1);
+
+    HttpProtocolBuilder protocolo = http.baseUrls("http://localhost:8081", "http://localhost:8082");
+
+    ScenarioBuilder mismaClave = scenario("Misma clave")
+            .exec(http("GET /api/products/" + id).get("/api/products/" + id).check(status().is(200)));
+
+    {
+        setUp(mismaClave.injectOpen(atOnceUsers(users))).protocols(protocolo);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos simulaciones. La del día de ofertas manda 300 usuarios por segundo, cada uno con una ficha y una visita, y 8 de cada 10 eligen uno de los diez rebajados. La de la estampida lanza 400 lecturas del mismo producto en el mismo instante, después de vaciar su caché.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un script con un pool de hilos para la estampida. Las requests salen escalonadas, no a la vez, y la estampida que mides es más chica que la real. <code>atOnceUsers(400)</code> las lanza todas en el mismo instante.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Sin <code>shareConnections</code>, cada uno de los 18&#8239;000 usuarios abre su conexión y la cierra al terminar. En Windows, 3&#8239;599 de las 36&#8239;000 requests fallaron con <code>Connection refused</code> y <code>Address already in use</code>; con <code>shareConnections</code>, ninguna. El problema eran las conexiones nuevas del generador de carga, no la tienda.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver CacheStats.java y LabController.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/lab/CacheStats.java"><code>package lab.ofertas.lab;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.LongAdder;
+
+import org.springframework.stereotype.Component;
+
+/** Contadores de esta réplica para los experimentos: de dónde salió cada lectura. */
+@Component
+public class CacheStats {
+
+    public final LongAdder localHits = new LongAdder();
+    public final LongAdder redisHits = new LongAdder();
+    public final LongAdder staleServed = new LongAdder();
+    public final LongAdder waits = new LongAdder();
+    public final LongAdder dbLoads = new LongAdder();
+
+    public Map&lt;String, Long&gt; snapshot() {
+        Map&lt;String, Long&gt; out = new LinkedHashMap&lt;&gt;();
+        out.put("localHits", localHits.sum());
+        out.put("redisHits", redisHits.sum());
+        out.put("staleServed", staleServed.sum());
+        out.put("waits", waits.sum());
+        out.put("dbLoads", dbLoads.sum());
+        return out;
+    }
+
+    public void reset() {
+        localHits.reset();
+        redisHits.reset();
+        staleServed.reset();
+        waits.reset();
+        dbLoads.reset();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/ofertas/lab/LabController.java"><code>package lab.ofertas.lab;
+
+import java.util.Map;
+
+import lab.ofertas.products.ProductService;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/lab")
+public class LabController {
+
+    private final CacheStats stats;
+    private final ProductService products;
+    private final String instance;
+
+    public LabController(CacheStats stats, ProductService products, @Value("${app.instance}") String instance) {
+        this.stats = stats;
+        this.products = products;
+        this.instance = instance;
+    }
+
+    @GetMapping("/stats")
+    public Map&lt;String, Object&gt; stats() {
+        return Map.of("instance", instance, "counters", stats.snapshot());
+    }
+
+    @PostMapping("/stats/reset")
+    public void reset() {
+        stats.reset();
+    }
+
+    /** Vacía la memoria de esta réplica (Redis se vacía aparte, con redis-cli). */
+    @DeleteMapping("/local-cache")
+    public void clearLocal() {
+        products.evictAllLocal();
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a03-cache"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> corre seis pruebas contra PostgreSQL y Redis reales: la segunda lectura no va a la base, cien lecturas a la vez van una sola vez, una versión vieja no pisa la nueva, cambiar el precio deja la caché al día, las visitas llegan en un lote y el mismo lote no se aplica dos veces.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver ProductCacheTest.java, ViewCounterTest.java y TestcontainersConfig.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/ofertas/products/ProductCacheTest.java"><code>package lab.ofertas.products;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+import lab.ofertas.TestcontainersConfig;
+import lab.ofertas.lab.CacheStats;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+@SpringBootTest
+@Import(TestcontainersConfig.class)
+class ProductCacheTest {
+
+    @Autowired
+    ProductService products;
+    @Autowired
+    RedisProducts shared;
+    @Autowired
+    StringRedisTemplate redis;
+    @Autowired
+    CacheStats stats;
+
+    @BeforeEach
+    void empezarDeCero() {
+        products.evictAllLocal();
+        stats.reset();
+    }
+
+    @Test
+    void laSegundaLecturaNoVaALaBase() {
+        products.get(1);
+        products.get(1);
+        products.evictAllLocal();
+        products.get(1);
+
+        assertThat(stats.dbLoads.sum()).isEqualTo(1);
+        assertThat(stats.localHits.sum()).isEqualTo(1);
+        assertThat(stats.redisHits.sum()).isEqualTo(1);
+    }
+
+    @Test
+    void cienLecturasALaVezVanUnaSolaVezALaBase() throws Exception {
+        redis.delete(RedisProducts.key(2));
+        List&lt;Callable&lt;Product&gt;&gt; lecturas = new ArrayList&lt;&gt;();
+        for (int i = 0; i &lt; 100; i++) {
+            lecturas.add(() -&gt; products.get(2));
+        }
+        try (ExecutorService pool = Executors.newFixedThreadPool(100)) {
+            for (Future&lt;Product&gt; f : pool.invokeAll(lecturas)) {
+                assertThat(f.get().id()).isEqualTo(2);
+            }
+        }
+        assertThat(stats.dbLoads.sum()).isEqualTo(1);
+    }
+
+    @Test
+    void unaVersionViejaNoPisaLaNueva() {
+        shared.putIfNotOlder(new Product(3, "Nueva", 900, 0, 5));
+        boolean escrita = shared.putIfNotOlder(new Product(3, "Vieja", 1000, 0, 4));
+
+        assertThat(escrita).isFalse();
+        assertThat(shared.get(3)).get().extracting(e -&gt; e.product().name()).isEqualTo("Nueva");
+    }
+
+    @Test
+    void cambiarElPrecioDejaLaCacheAlDia() {
+        products.get(4);
+        Product cambiado = products.updatePrice(4, 1);
+        stats.reset();
+
+        assertThat(products.get(4).priceCents()).isEqualTo(1);
+        assertThat(products.get(4).version()).isEqualTo(cambiado.version());
+        assertThat(stats.dbLoads.sum()).isZero();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/ofertas/views/ViewCounterTest.java"><code>package lab.ofertas.views;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import lab.ofertas.TestcontainersConfig;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+
+@SpringBootTest
+@Import(TestcontainersConfig.class)
+class ViewCounterTest {
+
+    @Autowired
+    ViewCounter counter;
+    @Autowired
+    ViewStore store;
+
+    @Test
+    void lasVisitasLleganALaBaseEnUnLote() {
+        long antes = store.views(10);
+        for (int i = 0; i &lt; 100; i++) {
+            counter.increment(10);
+        }
+        counter.flush();
+        assertThat(store.views(10)).isEqualTo(antes + 100);
+    }
+
+    @Test
+    void elMismoLoteNoSeAplicaDosVeces() {
+        long antes = store.views(11);
+        assertThat(store.apply("lote-de-prueba", new long[] {11}, new long[] {7})).isTrue();
+        assertThat(store.apply("lote-de-prueba", new long[] {11}, new long[] {7})).isFalse();
+        assertThat(store.views(11)).isEqualTo(antes + 7);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/ofertas/TestcontainersConfig.java"><code>package lab.ofertas;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer&lt;?&gt; redis() {
+        return new GenericContainer&lt;&gt;("redis:8").withExposedPorts(6379);
+    }
+
+    @Bean
+    DynamicPropertyRegistrar flywayEnElContenedor(PostgreSQLContainer postgres) {
+        return registry -&gt; {
+            registry.add("spring.flyway.url", postgres::getJdbcUrl);
+            registry.add("spring.flyway.user", postgres::getUsername);
+            registry.add("spring.flyway.password", postgres::getPassword);
+        };
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-carga">El día de ofertas</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package &amp;&amp; docker compose up -d --build
+./mvnw gatling:test -Dgatling.simulationClass=lab.ofertas.OfertasSimulation -Drps=300 -Dseconds=60
+curl -s localhost:8081/api/lab/stats; curl -s localhost:8082/api/lab/stats
+docker compose exec postgres psql -U app -d app -c "SELECT sum(views) FROM products"</code></pre>
+
+      <p>300 usuarios por segundo durante 60&#8239;s, cada uno con una ficha y una visita: 36&#8239;000 requests por corrida, ninguna con error, en tres corridas en una laptop.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Corrida</th><th class="r">GET p50</th><th class="r">GET p95</th><th class="r">GET p99</th><th class="r">POST p50</th><th class="r">POST p95</th><th class="r">POST p99</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="r">3&#8239;ms</td><td class="r">57&#8239;ms</td><td class="r">70&#8239;ms</td><td class="r">4&#8239;ms</td><td class="r">6&#8239;ms</td><td class="r">16&#8239;ms</td></tr>
+            <tr><td>2</td><td class="r">4&#8239;ms</td><td class="r">70&#8239;ms</td><td class="r">670&#8239;ms</td><td class="r">4&#8239;ms</td><td class="r">23&#8239;ms</td><td class="r">274&#8239;ms</td></tr>
+            <tr><td>3</td><td class="r">4&#8239;ms</td><td class="r">63&#8239;ms</td><td class="r">621&#8239;ms</td><td class="r">5&#8239;ms</td><td class="r">10&#8239;ms</td><td class="r">94&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En la primera corrida, de las 18&#8239;000 fichas, 13&#8239;946 salieron de la memoria de la réplica (77.5&#8239;%), 3&#8239;015 de Redis (16.8&#8239;%), 4 vencidas, 51 esperaron a otra carga y 984 fueron a la base (5.5&#8239;%). Las otras dos corridas repartieron casi igual. Ese 5.5&#8239;% explica el p95 de unos 60&#8239;ms en las tres: la request del percentil 95 ya es una de las que fue a la base, casi siempre un producto del 20&#8239;% de visitas que se reparte entre los mil y se carga una vez cada uno.</p>
+
+      <p>El p99 es otra historia: 70&#8239;ms en la primera corrida y más de 600&#8239;ms en las otras dos. Que también suban los POST, que solo hacen un <code>HINCRBY</code> en Redis, apunta a la máquina y no a la caché: Gatling, Docker y las dos réplicas comparten la misma laptop, y el p99 mide también a los vecinos. Corre la carga varias veces antes de creerle a un p99. La suma de <code>views</code> en la base, en cambio, dio exacta en cada corrida: 18&#8239;000 visitas más por corrida.</p>
+
+      <h3 id="comprueba-estampida">La estampida</h3>
+
+<pre data-lang="bash"><code>prep() {
+  docker compose exec redis redis-cli DEL product:1
+  for p in 8081 8082; do
+    curl -s -X DELETE localhost:$p/api/lab/local-cache; curl -s -X POST localhost:$p/api/lab/stats/reset
+  done
+}
+prep; ./mvnw gatling:test -Dgatling.simulationClass=lab.ofertas.StampedeSimulation -Dusers=400 -Did=1
+curl -s localhost:8081/api/lab/stats; curl -s localhost:8082/api/lab/stats
+
+STAMPEDE_PROTECTION=false docker compose up -d app1 app2     # y repite</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>400 lecturas a la vez del producto 1</th><th class="r">Corrida 1</th><th class="r">Corrida 2</th><th class="r">Corrida 3</th></tr></thead>
+          <tbody>
+            <tr><td>Con el lock: veces que fue a la base</td><td class="r">1</td><td class="r">1</td><td class="r">1</td></tr>
+            <tr><td>Con el lock: requests que esperaron</td><td class="r">315</td><td class="r">36</td><td class="r">4</td></tr>
+            <tr><td>Sin el lock: veces que fue a la base</td><td class="r">209</td><td class="r">26</td><td class="r">36</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con el lock, las dos réplicas juntas llegaron una sola vez a la base en cada corrida. Sin el lock, entre 26 y 209 veces: depende de cuántas de las 400 lleguen antes de que la primera carga termine, y la primera corrida, con las réplicas recién arrancadas y el JIT de Java sin calentar, fue la más lenta. Las que esperaron también bajan en cada corrida, por la misma razón.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>En la laptop, la latencia de la estampida con y sin lock se parece: los <code>pg_sleep</code> no compiten por CPU, y 209 cargas de 50&#8239;ms en 20 conexiones son medio segundo. En una base real, esas 209 consultas compiten con todas las demás y la tienda entera se pone lenta. El lock cuesta la espera de unas pocas requests; la estampida, la base de todos.</p>
+      </aside>
+
+      <h3 id="comprueba-pubsub">El precio en la otra réplica</h3>
+
+<pre data-lang="bash"><code>PUBSUB=false LOCAL_TTL=30s docker compose up -d app1 app2
+curl -s localhost:8082/api/products/500 &gt; /dev/null                 # app2 lo guarda en memoria
+curl -s -X PUT localhost:8081/api/products/500/price \
+  -H 'Content-Type: application/json' -d '{"priceCents": 20776}'      # app1 cambia el precio
+for i in $(seq 1 35); do curl -s localhost:8082/api/products/500 | grep -o '"priceCents":[0-9]*'; sleep 1; done</code></pre>
+
+      <p>Con un TTL local de 30&#8239;s, para que se note: sin Pub/Sub, app2 mostró el precio viejo durante 29&#8239;s, hasta que venció su memoria. Con Pub/Sub, la primera lectura de app2 después del cambio ya trajo el precio nuevo.</p>
+
+      <h3 id="comprueba-jitter">El jitter</h3>
+
+<pre data-lang="bash"><code>TTL_JITTER=0 docker compose up -d app1 app2
+docker compose exec redis redis-cli FLUSHALL
+# Las mil fichas, 20 a la vez en cada réplica, con un solo curl por réplica
+curl -sZ --parallel-max 20 "localhost:8081/api/products/[1-500]" &gt; /dev/null &amp;
+curl -sZ --parallel-max 20 "localhost:8082/api/products/[501-1000]" &gt; /dev/null; wait
+docker compose exec -T redis redis-cli EVAL "local out = {} for _, k in ipairs(redis.call('KEYS', 'product:*')) \
+  do table.insert(out, redis.call('HGET', k, 'freshUntil')) end return out" 0 \
+  | awk '{ n[int($1 / 1000)]++ } END { for (s in n) if (n[s] &gt; m) m = n[s]; print length(n), "segundos, pico de", m }'</code></pre>
+
+      <p>Las mil fichas se cargaron en unos 3&#8239;s. Sin jitter, sus vencimientos cayeron en 4 segundos distintos, con un pico de unas 390 claves en el mismo segundo. Con el jitter de 0.1, en 15 o 16 segundos, con un pico de unas 100. Son las cifras de tres corridas en una laptop, y se repiten: sin jitter, el minuto siguiente trae el mismo pico que la carga inicial; con jitter, el pico baja a la cuarta parte.</p>
+
+      <p>Un curl por réplica con <code>-Z</code> manda las requests en paralelo desde un solo proceso. Con un curl por request, en Windows, solo arrancar los procesos tarda más de 20&#8239;s, y la carga se reparte sola en el tiempo: el jitter no se nota.</p>
+
+      <h3 id="comprueba-caida">Falla: la réplica muere a mitad de un lote</h3>
+
+<pre data-lang="bash"><code>docker compose stop app2                       # que solo app1 pase lotes
+HALT_AT=commit docker compose up -d app1       # muere después del COMMIT, antes de borrar el lote
+sleep 20                                       # que termine de arrancar
+for i in $(seq 1 400); do                      # hasta que la réplica deje de responder
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8081/api/products/777/views || break
+done | grep -c 202                             # cuántas visitas aceptó antes de morir
+docker compose exec redis redis-cli KEYS 'views:*'
+docker compose up -d app1                      # sin HALT_AT: vuelve y encuentra el lote
+docker compose logs app1 | grep Lote
+docker compose exec postgres psql -U app -d app -c "SELECT views FROM products WHERE id = 777"</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde muere</th><th class="r">Visitas aceptadas</th><th class="r">En la base, al morir</th><th class="r">En la base, al volver</th></tr></thead>
+          <tbody>
+            <tr><td>Después del <code>RENAME</code>, antes de aplicar</td><td class="r">199</td><td class="r">+0</td><td class="r">+199</td></tr>
+            <tr><td>Después del <code>COMMIT</code>, antes de borrar</td><td class="r">315</td><td class="r">+269</td><td class="r">+315</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las cifras de la tabla son de una corrida con 10 clientes a la vez. Con el bucle de curl, de a una request, llegan menos antes de que muera la réplica, 26 en la misma laptop, y la cuenta cierra igual: 24 en la base al morir y 26 al volver.</p>
+
+      <p>En los dos casos el lote apartado quedó en Redis, y <code>views:pending</code> con las visitas que llegaron después. Al volver, app1 encontró el lote con <code>SCAN</code>. En el primer caso lo aplicó; en el segundo, el log dijo "ya estaba aplicado" y solo lo borró. La base terminó con las visitas aceptadas, ni una más ni una menos.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a03">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a03-cache</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las seis pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="carga">Corriste el día de ofertas y anotaste los percentiles y de dónde salió cada lectura.</li>
+          <li data-check="estampida">Mediste la estampida con y sin el lock y contaste las veces que fue a la base.</li>
+          <li data-check="pubsub">Viste cuánto tarda la otra réplica en ver el precio nuevo, con y sin Pub/Sub.</li>
+          <li data-check="caida">Mataste la réplica después del <code>COMMIT</code> y la base terminó con las visitas exactas.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>El paso de lotes no necesita un lock para correr en dos réplicas: <code>RENAME</code> es atómico y la tabla <code>view_flushes</code> descarta lo repetido. Compáralo con el advisory lock de sesión que A00 mostró filtrándose por PgBouncer. Si un día necesitas que un trabajo corra en una sola réplica, ya sabes que el lock va dentro de la transacción. Y las 984 cargas pasan por el mismo pool: dos réplicas con 10 conexiones de Hikari cada una, para las 20 reales de PgBouncer.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Pon las dos réplicas detrás del Nginx de A01 y Gatling apuntando a <code>https://localhost</code>. Nginx puede agregar un escalón más, antes de la memoria de la réplica: <code>proxy_cache</code> guarda la respuesta entera unos segundos, y <code>proxy_cache_lock on</code> deja pasar una sola request por clave mientras se llena, que es la misma protección contra la estampida de este proyecto. <span class="badge badge--doc">Documentado</span> El precio, en cambio, ya no se invalida con Pub/Sub en ese escalón: su TTL es el máximo que alguien puede ver el viejo.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>Cada ficha ya tiene <code>version</code>, la misma que usa <code>PUT_IF_NOT_OLDER</code>. Úsala como ETag, como en A02: un <code>If-None-Match</code> que coincide con la versión de la memoria de la réplica se responde con un 304 sin tocar Redis ni la base. Y el cambio de precio puede exigir <code>If-Match</code>, para que dos personas rebajando el mismo producto no se pisen.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Caché</p>
+          <p>Cache-aside, write-through y write-behind, TTL y jitter, el stampede y sus remedios, y por qué la invalidación es el problema difícil: <a href="../modules/m04-cache.html">M04. Caché</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Mensajería</p>
+          <p>Por qué Pub/Sub sin persistencia entrega como mucho una vez, y qué cambia con un log como Kafka: <a href="../modules/m07-mensajeria.html">M07. Mensajería</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Idempotencia</p>
+          <p>El lote con id que no se aplica dos veces es el mismo patrón que la clave de idempotencia de una API: <a href="../modules/m02-apis.html">M02. APIs</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a03.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

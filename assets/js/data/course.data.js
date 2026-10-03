@@ -9,7 +9,7 @@ window.SD.course = {
       items: [
         { id: 'm00', num: 'M00', title: 'El método: cómo se diseña un sistema real', short: 'El método', mins: 50, href: 'modules/m00-metodo.html', status: 'ready',
           summary: 'Requisitos medibles, estimaciones, SLO y error budgets, disponibilidad compuesta y design docs.' },
-        { id: 'm01', num: 'M01', title: 'El viaje de una request', short: 'Viaje de una request', mins: 60, href: 'modules/m01-viaje-request.html', status: 'ready',
+        { id: 'm01', num: 'M01', title: 'El viaje de una request', short: 'Viaje de una request', mins: 120, href: 'modules/m01-viaje-request.html', status: 'ready',
           summary: 'DNS, TCP, TLS 1.3, HTTP/1.1, 2 y 3, y en qué se va cada milisegundo.' },
         { id: 'm02', num: 'M02', title: 'Protocolos y diseño de APIs', short: 'APIs y protocolos', mins: 70, href: 'modules/m02-apis.html', status: 'ready',
           summary: 'REST, gRPC, GraphQL, WebSockets, SSE y webhooks; paginación, versionado, errores e idempotencia.' },
