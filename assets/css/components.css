@@ -500,6 +500,47 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-sub); line
 .tenants-table td, .tenants-table th { font-size: var(--fs-sm); }
 .ten-sw { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; }
 
+/* Simulador de OT (M31) */
+.ot-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-3); margin-top: var(--s-3); }
+.ot-col { min-width: 0; padding: var(--s-3); background: var(--bg); border-radius: var(--radius-m); }
+.ot-col-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: var(--s-2); }
+.ot-name { margin: 0 !important; font-weight: 700; }
+.ot-chip { padding: 2px 9px; border-radius: var(--radius-pill); background: var(--fill); color: var(--label-2); font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ot-chip.is-ok { background: var(--ok-tint); color: var(--ok); }
+.ot-chip.is-warn { background: var(--warn-tint); color: var(--warn); }
+.ot-doc {
+  display: block; width: 100%; min-height: 66px; margin: 0 !important; padding: 8px 10px; resize: vertical;
+  font: 500 var(--fs-sub)/1.45 var(--f-mono); color: var(--label); background: var(--bg-2);
+  border: 1px solid var(--separator-strong); border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.ot-doc:focus { outline: none; border-color: var(--accent-fill); box-shadow: 0 0 0 4px var(--focus-ring); }
+.ot-doc--ro { border-style: dashed; }
+.ot-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; margin: var(--s-2) 0 0; font-size: var(--fs-xs); }
+.ot-meta dt { color: var(--label-3); }
+.ot-meta dd { margin: 0; font-family: var(--f-mono); overflow-wrap: anywhere; }
+.ot-sub { margin: var(--s-3) 0 6px !important; font-weight: 600; font-size: var(--fs-sm); color: var(--label-2); }
+.ot-revs { list-style: none; max-height: 140px; overflow-y: auto; margin: 0 !important; padding: 0 !important; font-size: var(--fs-xs); }
+.ot-revs li { margin: 0 !important; padding: 4px 0; border-bottom: 0.5px solid var(--separator); font-family: var(--f-mono); overflow-wrap: anywhere; max-width: none !important; }
+.ot-revs li:last-child { border-bottom: 0; }
+.ot-revs li.is-empty, .ot-msg.is-empty { color: var(--label-3); font-family: var(--f-body); }
+.ot-wire { list-style: none; display: grid; gap: 6px; margin: 0 !important; padding: 0 !important; }
+.ot-msg { display: grid; grid-template-columns: 9.5em minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; margin: 0 !important; padding: 8px 12px; background: var(--bg); border-radius: var(--radius-s); font-size: var(--fs-sm); max-width: none !important; }
+.ot-msg.is-next { box-shadow: inset 3px 0 0 var(--accent-fill); }
+.ot-msg.is-empty { display: block; }
+.ot-route { font-weight: 600; }
+.ot-what { font-family: var(--f-mono); font-size: 0.78rem; overflow-wrap: anywhere; }
+.ot-eta { color: var(--label-3); font-size: var(--fs-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ot-bar { grid-column: 1 / -1; height: 3px; background: var(--fill); border-radius: 2px; overflow: hidden; }
+.ot-bar span { display: block; height: 100%; background: var(--accent-fill); }
+.ot-verdict { margin: var(--s-3) 0 0 !important; padding: 9px 14px; border-radius: var(--radius-s); background: var(--fill); font-size: var(--fs-sub); font-weight: 600; max-width: none !important; overflow-wrap: anywhere; }
+.ot-verdict.is-ok { background: var(--ok-tint); color: var(--ok); }
+.ot-verdict.is-fail { background: var(--fail-tint); color: var(--fail); }
+@media (max-width: 760px) {
+  .ot-grid { grid-template-columns: 1fr; }
+  .ot-msg { grid-template-columns: minmax(0, 1fr) auto; }
+  .ot-what { grid-column: 1 / -1; }
+}
+
 /* ---------- Quiz (lista agrupada) ---------- */
 
 .quiz { margin: var(--s-6) 0; background: var(--bg-2); border-radius: var(--radius-l); padding-bottom: var(--s-2); }

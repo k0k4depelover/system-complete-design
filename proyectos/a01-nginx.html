@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A01. Detrás de Nginx</title>
+<meta name="description" content="Un acortador de enlaces con tres réplicas detrás de Nginx: TLS local, HTTP/2, keepalive, X-Forwarded-*, round robin contra least_conn con una réplica lenta, fallas pasivas compartidas entre workers y límite de tasa, medidos con Gatling.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a01" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Proyectos</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Detrás de Nginx</h1>
+        <p class="lead">Un acortador de enlaces con tres réplicas, una de ellas lenta a propósito, detrás de un Nginx que termina TLS. Vas a medir cuánto cambia el algoritmo de balanceo, qué detecta Nginx solo y qué no detecta nunca.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A01</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 1</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>4 a 5 h</dd></div>
+          <div><dt>Módulos</dt><dd>M01, M03</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a01">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Poner Nginx delante de varias réplicas con TLS, HTTP/2 y conexiones keepalive hacia el upstream.</li>
+          <li>Hacer que la aplicación arme sus URLs con el esquema y el host que vio el cliente, y no con los del proxy.</li>
+          <li>Medir round robin contra least_conn con una réplica lenta y explicar por qué el p99 casi no cambia.</li>
+          <li>Ver cómo Nginx deja de mandar tráfico a una réplica que no responde, y por qué sin <code>zone</code> pagan el timeout tres veces más requests.</li>
+          <li>Cortar una ráfaga de escrituras con <code>limit_req</code> y un 429.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Un acortador de enlaces: le das una URL larga, te devuelve una de siete caracteres, y quien abre la corta recibe un 302 hacia la larga. Casi todo el tráfico son redirecciones, que son lecturas baratas, así que el servicio escala agregando réplicas. Lo interesante no está en el código del acortador, que es corto, sino en lo que pasa entre el navegador y las réplicas.</p>
+
+      <p>Hay tres réplicas iguales salvo por un detalle: la tercera tarda 200&#8239;ms más en cada request, como una máquina con un disco que se está muriendo o un vecino ruidoso. Así es un día normal en producción: nada está caído, pero algo está lento.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa01t fa01d">
+<title id="fa01t">Arquitectura del acortador</title>
+<desc id="fa01d">El navegador, curl o Gatling llaman por HTTPS a Nginx, que termina TLS con HTTP/2, responde 301 en el puerto 80 y reparte con least_conn y un límite de tasa entre tres réplicas de Spring Boot. La tercera réplica tarda 200 milisegundos más en cada request. Las tres réplicas usan PgBouncer en modo transacción, que reparte hasta 20 conexiones con PostgreSQL 18. Todo menos el cliente corre en Docker Compose.</desc>
+<defs><marker id="fa01a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="150" y="12" width="614" height="282" rx="10" fill="none"/>
+<text class="dg-small" x="164" y="32">docker compose</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="118" width="118" height="64" rx="6"/>
+<text class="dg-label" x="69" y="145" text-anchor="middle">Navegador</text>
+<text class="dg-tiny" x="69" y="164" text-anchor="middle">curl, Gatling</text>
+<path class="dg-edge" d="M130 150 H172" marker-end="url(#fa01a)"/>
+<text class="dg-tiny" x="151" y="142" text-anchor="middle">HTTPS</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="176" y="96" width="152" height="108" rx="6"/>
+<text class="dg-label" x="252" y="124" text-anchor="middle">Nginx 1.30</text>
+<text class="dg-tiny" x="252" y="144" text-anchor="middle">:443, TLS y HTTP/2</text>
+<text class="dg-tiny" x="252" y="162" text-anchor="middle">least_conn, limit_req</text>
+<text class="dg-tiny" x="252" y="180" text-anchor="middle">:80 responde 301</text>
+<path class="dg-edge" d="M330 138 L390 74" marker-end="url(#fa01a)"/>
+<path class="dg-edge" d="M330 150 H390" marker-end="url(#fa01a)"/>
+<path class="dg-edge" d="M330 162 L390 226" marker-end="url(#fa01a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="394" y="44" width="128" height="56" rx="6"/>
+<text class="dg-label" x="458" y="68" text-anchor="middle">app1</text>
+<text class="dg-tiny" x="458" y="87" text-anchor="middle">Spring Boot, :8080</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="394" y="122" width="128" height="56" rx="6"/>
+<text class="dg-label" x="458" y="146" text-anchor="middle">app2</text>
+<text class="dg-tiny" x="458" y="165" text-anchor="middle">Spring Boot, :8080</text>
+<rect class="dg-warnbox" x="394" y="200" width="128" height="56" rx="6"/>
+<text class="dg-label" x="458" y="224" text-anchor="middle">app3</text>
+<text class="dg-tiny" x="458" y="243" text-anchor="middle">lenta: +200 ms</text>
+<path class="dg-edge" d="M524 72 L582 92" marker-end="url(#fa01a)"/>
+<path class="dg-edge" d="M524 150 L582 104" marker-end="url(#fa01a)"/>
+<path class="dg-edge" d="M524 228 L582 116" marker-end="url(#fa01a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="586" y="72" width="164" height="56" rx="6"/>
+<text class="dg-label" x="668" y="96" text-anchor="middle">PgBouncer</text>
+<text class="dg-tiny" x="668" y="115" text-anchor="middle">transacción, hasta 20</text>
+<path class="dg-edge" d="M668 130 V186" marker-end="url(#fa01a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="586" y="190" width="164" height="56" rx="6"/>
+<text class="dg-label" x="668" y="214" text-anchor="middle">PostgreSQL 18</text>
+<text class="dg-tiny" x="668" y="233" text-anchor="middle">:5433 en tu máquina</text>
+<text class="dg-tiny" x="458" y="282" text-anchor="middle">cada respuesta lleva X-Instance</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A01.1.</b> Nginx es lo único que ve el cliente. Las réplicas solo hablan HTTP plano dentro de la red de Docker, y saben quién llamó por las cabeceras X-Forwarded-*.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <p>Todo entra por <code>https://localhost</code>. Cada respuesta trae la cabecera <code>X-Instance</code> con la réplica que la atendió, para que veas el reparto sin abrir logs.</p>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/links</code></td><td>Acorta una URL que empieza con <code>http://</code> o <code>https://</code>, de hasta 2&#8239;048 caracteres.</td><td>201 con <code>Location</code>, 400, 429 si pasas el límite</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/links/{code}</code></td><td>Los datos de un enlace.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/{code}</code></td><td>La redirección: siete caracteres de <code>[0-9A-Za-z]</code>.</td><td>302 con <code>Location</code>, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>http://localhost/…</code></td><td>Cualquier request por HTTP plano.</td><td>301 a la misma ruta en HTTPS</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/actuator/health</code></td><td>Si la réplica está viva y llega a la base.</td><td>200, 503</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/links</code>
+        </div>
+        <p class="ep-desc">La respuesta arma <code>shortUrl</code> con el esquema y el host que vio el cliente, aunque la réplica solo recibió HTTP plano.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/links HTTP/2
+Host: localhost
+Content-Type: application/json
+
+{"url": "https://example.com/articulo/1"}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/2 201
+location: https://localhost/WOpCtYw
+x-instance: app1
+content-type: application/json
+
+{"code": "WOpCtYw", "url": "https://example.com/articulo/1",
+ "shortUrl": "https://localhost/WOpCtYw", "createdAt": "2026-10-02T18:09:41.517-06:00"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Creado; <code>Location</code> es la URL corta.</span></li>
+            <li><span class="st st--4xx">400</span><span>La URL no empieza con <code>http://</code> o <code>https://</code>, o es demasiado larga.</span></li>
+            <li><span class="st st--4xx">429</span><span>Lo responde Nginx: más de 10 escrituras por segundo desde tu IP, con una ráfaga de 20.</span></li>
+            <li><span class="st st--5xx">502</span><span>Ninguna réplica aceptó la conexión, ni siquiera en el reintento.</span></li>
+            <li><span class="st st--5xx">504</span><span>La réplica no respondió en 5&#8239;s. Un <code>POST</code> no se reintenta en otra.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <p>El acortador es una aplicación Spring Boot 4.1.1 con Java 25 y estas dependencias, todas con la versión que fija el padre salvo Gatling:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code></td><td>Spring MVC sobre Tomcat. Tomcat es quien lee las cabeceras X-Forwarded-*.</td></tr>
+            <tr><td><code>spring-boot-starter-validation</code></td><td><code>@Pattern</code> y <code>@Size</code> sobre la URL.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code></td><td>HikariCP y <code>JdbcClient</code>.</td></tr>
+            <tr><td><code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code></td><td>La tabla y los cien enlaces fijos para la carga.</td></tr>
+            <tr><td><code>postgresql</code> (runtime)</td><td>El driver JDBC.</td></tr>
+            <tr><td><code>spring-boot-starter-actuator</code></td><td><code>/actuator/health</code>.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Pruebas contra un PostgreSQL 18 real.</td></tr>
+            <tr><td><code>gatling-charts-highcharts</code> 3.16.0 (test) y <code>gatling-maven-plugin</code> 4.21.12</td><td>La carga contra Nginx, en Java.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;acortador&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;gatling.version&gt;3.16.0&lt;/gatling.version&gt;
+    &lt;gatling-maven-plugin.version&gt;4.21.12&lt;/gatling-maven-plugin.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.gatling.highcharts&lt;/groupId&gt;
+      &lt;artifactId&gt;gatling-charts-highcharts&lt;/artifactId&gt;
+      &lt;version&gt;${gatling.version}&lt;/version&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;io.gatling&lt;/groupId&gt;
+        &lt;artifactId&gt;gatling-maven-plugin&lt;/artifactId&gt;
+        &lt;version&gt;${gatling-maven-plugin.version}&lt;/version&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+      <p>Seis contenedores: PostgreSQL, PgBouncer, las tres réplicas y Nginx. Las réplicas comparten su definición con un ancla de YAML (<code>x-app</code>) y solo cambian en <code>INSTANCE</code> y, la tercera, en <code>SLOW_MS</code>.</p>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code>x-app: &amp;app
+  build: .
+  environment: &amp;app-env
+    DB_URL: jdbc:postgresql://pgbouncer:5432/app
+    FLYWAY_URL: jdbc:postgresql://postgres:5432/app
+  depends_on:
+    pgbouncer:
+      condition: service_started
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      retries: 30
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 20
+      MAX_CLIENT_CONN: 500
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app1:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      INSTANCE: app1
+  app2:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      INSTANCE: app2
+  app3:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      INSTANCE: app3
+      SLOW_MS: 200            # la réplica lenta: 200 ms extra en cada request
+
+  nginx:
+    image: nginx:1.30
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - app1
+      - app2
+      - app3
+
+volumes:
+  pgdata:</code></pre>
+
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/acortador-0.1.0.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Sin puertos en las réplicas</dt><dd>Las réplicas no publican el 8080: solo Nginx las alcanza, por la red interna de Compose, con los nombres <code>app1</code>, <code>app2</code> y <code>app3</code>. Si las publicaras, alguien podría saltarse el límite de tasa y las cabeceras del proxy.</dd></div>
+        <div><dt>Flyway tres veces</dt><dd>Las tres réplicas corren Flyway al arrancar contra el mismo PostgreSQL. No se pisan: Flyway toma un lock en la base antes de migrar, y las otras dos esperan y encuentran la migración hecha.</dd></div>
+        <div><dt>La imagen</dt><dd>Un JRE de Java 25 y el jar. Construyes el jar con <code>./mvnw -DskipTests package</code> antes de <code>docker compose up --build</code>.</dd></div>
+      </dl>
+
+      <p>El certificado es autofirmado, para <code>localhost</code>. Lo generas una vez con OpenSSL dentro de un contenedor, así no lo tienes que instalar:</p>
+
+<pre data-lang="bash"><code>mkdir -p nginx/certs
+docker run --rm -v "$PWD/nginx/certs:/certs" alpine/openssl req -x509 -newkey rsa:2048 -nodes \
+  -days 365 -keyout /certs/localhost.key -out /certs/localhost.crt \
+  -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+# En Git Bash de Windows: MSYS_NO_PATHCONV=1 delante y "$(pwd -W)" en lugar de "$PWD".</code></pre>
+
+      <p>Sin <code>MSYS_NO_PATHCONV=1</code>, Git Bash convierte <code>/certs/localhost.key</code> en una ruta de Windows antes de pasársela a Docker, y OpenSSL escribe en un lugar que no existe. Agrega <code>nginx/certs/</code> al <code>.gitignore</code>: una clave privada no va al repositorio, ni siquiera una de prueba.</p>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-codigos">Paso 1. Códigos cortos que no chocan</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__links.sql"><code>CREATE TABLE links (
+    code       varchar(7)  PRIMARY KEY,
+    url        text        NOT NULL CHECK (length(url) &lt;= 2048),
+    created_at timestamptz NOT NULL DEFAULT now()
+);</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/CodeGenerator.java"><code>package lab.acortador.links;
+
+import java.security.SecureRandom;
+
+import org.springframework.stereotype.Component;
+
+/** Códigos de 7 caracteres en base 62: 62^7 ≈ 3.5 billones de combinaciones. */
+@Component
+public class CodeGenerator {
+
+    private static final String ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    private static final int LENGTH = 7;
+
+    private final SecureRandom random = new SecureRandom();
+
+    public String next() {
+        StringBuilder code = new StringBuilder(LENGTH);
+        for (int i = 0; i &lt; LENGTH; i++) {
+            code.append(ALPHABET.charAt(random.nextInt(ALPHABET.length())));
+        }
+        return code.toString();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/LinkRepository.java"><code>package lab.acortador.links;
+
+import java.util.Optional;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class LinkRepository {
+
+    private final JdbcClient jdbc;
+
+    public LinkRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** Vacío si el código ya existía: ON CONFLICT evita la excepción y el rollback. */
+    public Optional&lt;Link&gt; insert(String code, String url) {
+        return jdbc.sql("""
+                INSERT INTO links (code, url) VALUES (:code, :url)
+                ON CONFLICT (code) DO NOTHING
+                RETURNING code, url, created_at
+                """)
+                .param("code", code)
+                .param("url", url)
+                .query(Link.class)
+                .optional();
+    }
+
+    public Optional&lt;Link&gt; find(String code) {
+        return jdbc.sql("SELECT code, url, created_at FROM links WHERE code = :code")
+                .param("code", code)
+                .query(Link.class)
+                .optional();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/LinkService.java"><code>package lab.acortador.links;
+
+import java.util.Optional;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class LinkService {
+
+    private static final int MAX_ATTEMPTS = 5;
+
+    private final LinkRepository links;
+    private final CodeGenerator codes;
+
+    public LinkService(LinkRepository links, CodeGenerator codes) {
+        this.links = links;
+        this.codes = codes;
+    }
+
+    public Link create(String url) {
+        // Con un millón de enlaces, la chance de chocar es de 1 en 3.5 millones por intento.
+        for (int attempt = 0; attempt &lt; MAX_ATTEMPTS; attempt++) {
+            Optional&lt;Link&gt; created = links.insert(codes.next(), url);
+            if (created.isPresent()) {
+                return created.get();
+            }
+        }
+        throw new IllegalStateException("No se encontró un código libre en " + MAX_ATTEMPTS + " intentos");
+    }
+
+    public Optional&lt;Link&gt; find(String code) {
+        return links.find(code);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Siete caracteres al azar en base 62, con <code>SecureRandom</code>, y <code>INSERT … ON CONFLICT (code) DO NOTHING</code>. Si el código ya existe, el insert no devuelve fila y el servicio prueba otro. 62<sup>7</sup> son unos 3.5 billones de códigos; con un millón de enlaces, un intento choca una vez en 3.5 millones.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un id secuencial codificado en base 62. No choca nunca, pero los códigos se pueden recorrer: quien conoce <code>aaaaab</code> prueba <code>aaaaac</code> y lee los enlaces de otros. Descartas también capturar la excepción de clave duplicada: en PostgreSQL un error aborta la transacción, y <code>ON CONFLICT</code> lo evita.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un bucle de reintentos sin tope. Si un día la tabla se llena o el generador se rompe y devuelve siempre lo mismo, el bucle no termina. Con 5 intentos, el servicio falla con un error claro.</dd></div>
+      </dl>
+
+      <h3 id="paso-redireccion">Paso 2. La redirección y la URL corta</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/LinkController.java"><code>package lab.acortador.links;
+
+import java.net.URI;
+
+import jakarta.validation.Valid;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+
+@RestController
+public class LinkController {
+
+    private final LinkService links;
+
+    public LinkController(LinkService links) {
+        this.links = links;
+    }
+
+    @PostMapping("/api/links")
+    public ResponseEntity&lt;LinkView&gt; create(@Valid @RequestBody NewLink body) {
+        LinkView view = view(links.create(body.url()));
+        return ResponseEntity.created(URI.create(view.shortUrl())).body(view);
+    }
+
+    @GetMapping("/api/links/{code}")
+    public LinkView get(@PathVariable String code) {
+        return view(find(code));
+    }
+
+    /** La redirección. 302 y no 301: un 301 lo guarda el navegador y ya no vuelve a pasar por aquí. */
+    @GetMapping("/{code:[0-9A-Za-z]{7}}")
+    public ResponseEntity&lt;Void&gt; redirect(@PathVariable String code) {
+        return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(find(code).url())).build();
+    }
+
+    private Link find(String code) {
+        return links.find(code).orElseThrow(() -&gt;
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el enlace " + code));
+    }
+
+    private static LinkView view(Link link) {
+        // fromCurrentContextPath usa el esquema y el host que llegaron en X-Forwarded-Proto y X-Forwarded-Host.
+        String shortUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                .path("/{code}").buildAndExpand(link.code()).toUriString();
+        return new LinkView(link.code(), link.url(), shortUrl, link.createdAt());
+    }
+}</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver Link.java, NewLink.java y LinkView.java</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/Link.java"><code>package lab.acortador.links;
+
+import java.time.OffsetDateTime;
+
+public record Link(String code, String url, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/NewLink.java"><code>package lab.acortador.links;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+
+public record NewLink(
+        @NotBlank @Size(max = 2048) @Pattern(regexp = "https?://.+", message = "debe empezar con http:// o https://")
+        String url) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/acortador/links/LinkView.java"><code>package lab.acortador.links;
+
+import java.time.OffsetDateTime;
+
+/** Lo que devuelve la API: el enlace más su URL corta, armada con el host que vio el cliente. */
+public record LinkView(String code, String url, String shortUrl, OffsetDateTime createdAt) {
+}</code></pre>
+        </div>
+      </details>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>302 Found. El navegador vuelve a pasar por el acortador cada vez, y puedes contar visitas, cambiar el destino o borrar un enlace abusivo.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>301 Moved Permanently. Es más rápido para quien repite, porque el navegador lo guarda en su caché y no vuelve a preguntar, pero por eso mismo un 301 publicado no se puede deshacer. El 301 se queda para lo que de verdad es permanente, como pasar de HTTP a HTTPS.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Armar <code>shortUrl</code> con lo que la réplica cree que es su dirección: <code>http://app1:8080/WOpCtYw</code>. El cliente no conoce <code>app1</code>, y no llegó por HTTP. El paso 4 lo arregla.</dd></div>
+      </dl>
+
+      <h3 id="paso-replicas">Paso 3. Tres réplicas, una lenta</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/acortador/web/InstanceFilter.java"><code>package lab.acortador.web;
+
+import java.io.IOException;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+/** Marca cada respuesta con la réplica que la atendió y, si se pide, la hace lenta a propósito. */
+@Component
+public class InstanceFilter extends OncePerRequestFilter {
+
+    private final String instance;
+    private final long slowMs;
+
+    public InstanceFilter(@Value("${app.instance}") String instance, @Value("${app.slow-ms}") long slowMs) {
+        this.instance = instance;
+        this.slowMs = slowMs;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        response.setHeader("X-Instance", instance);
+        if (slowMs &gt; 0 &amp;&amp; !request.getRequestURI().startsWith("/actuator")) {
+            try {
+                Thread.sleep(slowMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        chain.doFilter(request, response);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un filtro que marca cada respuesta con <code>X-Instance</code> y que, si <code>SLOW_MS</code> es mayor que 0, duerme antes de atender. La lentitud es de la réplica entera, no de un endpoint, y no toca a <code>/actuator</code>, como pasa con una máquina degradada que sigue respondiendo su health check.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Apagar la réplica para simular una falla. Una réplica caída es el caso fácil: la conexión se rechaza y Nginx la saca enseguida. La réplica lenta es la que engaña a los balanceadores.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Olvidar el filtro en producción. <code>X-Instance</code> le dice a cualquiera cuántas réplicas tienes y cómo se llaman; en un servicio real, el id de la réplica va en los logs y en las trazas, no en la respuesta.</dd></div>
+      </dl>
+
+      <h3 id="paso-nginx">Paso 4. Nginx: TLS, keepalive y cabeceras</h3>
+
+<pre data-lang="nginx" data-file="nginx/nginx.conf"><code>worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Una línea por request: a qué réplica fue y cuánto tardó cada tramo.
+    log_format upstream '$remote_addr "$request" $status up=$upstream_addr '
+                        'up_t=$upstream_response_time t=$request_time rid=$request_id';
+    access_log /var/log/nginx/access.log upstream;
+
+    # Límite de tasa por IP: 10 requests por segundo, con ráfagas de hasta 20.
+    limit_req_zone $binary_remote_addr zone=por_ip:10m rate=10r/s;
+    limit_req_status 429;
+
+    upstream acortador {
+        zone acortador 64k;                           # fallas y conexiones compartidas entre workers
+        least_conn;                                   # bórrala para volver a round robin
+        server app1:8080 max_fails=3 fail_timeout=10s;
+        server app2:8080 max_fails=3 fail_timeout=10s;
+        server app3:8080 max_fails=3 fail_timeout=10s;
+        keepalive 32;                                 # conexiones abiertas hacia las réplicas
+    }
+
+    server {
+        listen 80;
+        server_name localhost;
+        return 301 https://$host$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name localhost;
+
+        ssl_certificate     /etc/nginx/certs/localhost.crt;
+        ssl_certificate_key /etc/nginx/certs/localhost.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+
+        # Se heredan en los dos location: keepalive real hacia upstream y las cabeceras X-Forwarded-*.
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Request-ID $request_id;
+
+        proxy_connect_timeout 1s;
+        proxy_read_timeout 5s;
+        proxy_next_upstream error timeout http_502 http_503;
+        proxy_next_upstream_tries 2;
+
+        location /api/ {
+            limit_req zone=por_ip burst=20 nodelay;
+            proxy_pass http://acortador;
+        }
+
+        location / {
+            proxy_pass http://acortador;
+        }
+    }
+}</code></pre>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: acortador
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:6432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      maximum-pool-size: 10
+  flyway:
+    url: ${FLYWAY_URL:jdbc:postgresql://localhost:5433/app}
+    user: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  # Tomcat lee X-Forwarded-For, -Proto y -Host solo si llegan desde una IP privada (el proxy).
+  forward-headers-strategy: native
+
+app:
+  instance: ${INSTANCE:local}
+  slow-ms: ${SLOW_MS:0}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Nginx termina TLS y habla HTTP/1.1 con keepalive hacia las réplicas: <code>keepalive 32</code> en el upstream, más <code>proxy_http_version 1.1</code> y <code>Connection ""</code>. Las réplicas confían en X-Forwarded-* con <code>server.forward-headers-strategy: native</code>, y la URL corta sale con <code>https://localhost</code>.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>TLS hasta cada réplica. Dentro de una red privada de Docker no protege de nada que importe en el laboratorio, y obliga a manejar certificados en cada réplica. En producción, con redes compartidas o requisitos de cumplimiento, se cifra también ese tramo, como explica M10.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Por defecto, Nginx habla HTTP/1.0 con el upstream y manda <code>Connection: close</code>: abre y cierra una conexión TCP por request, aunque escribas <code>keepalive 32</code>. Sin las dos líneas de <code>proxy_*</code>, el keepalive no hace nada y no lo vas a notar hasta que se acaben los puertos efímeros.</dd></div>
+      </dl>
+
+      <p>Tomcat solo acepta X-Forwarded-* cuando la request llega desde una IP privada, como la de Nginx en la red de Docker. <span class="badge badge--doc">Documentado</span> Si el cliente manda <code>X-Forwarded-For</code> directo a una réplica desde internet, Tomcat lo ignora. Y Nginx no reemplaza lo que el cliente mandó: <code>$proxy_add_x_forwarded_for</code> lo agrega al final, así que la IP en la que puedes confiar es la última, la que puso tu proxy.</p>
+
+      <p><code>proxy_next_upstream error timeout http_502 http_503</code> reintenta en otra réplica cuando una falla o no responde en 5&#8239;s, como mucho una vez más (<code>proxy_next_upstream_tries 2</code>). No reintenta un <code>POST</code> que ya llegó al upstream: Nginx no reintenta métodos no idempotentes salvo que agregues <code>non_idempotent</code>. <span class="badge badge--doc">Documentado</span> Sin esa regla, un timeout en la creación podría crear dos enlaces.</p>
+
+      <h3 id="paso-limite">Paso 5. Un límite de tasa para las escrituras</h3>
+
+      <p>En el mismo <code>nginx.conf</code>, <code>limit_req_zone</code> define una zona de 10&#8239;MB con un contador por IP, a 10 requests por segundo, y <code>limit_req … burst=20 nodelay</code> la aplica solo a <code>/api/</code>.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Limitar solo las escrituras y la API, por IP, con una ráfaga de 20 que pasa sin esperar (<code>nodelay</code>) y un 429 para lo demás. Las redirecciones no tienen límite: son el producto.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Limitar en la aplicación. Cada réplica contaría por su lado, y con tres réplicas el límite real sería el triple. Nginx lo cuenta en una zona compartida entre sus workers; con varios Nginx necesitarías un contador central, por ejemplo en Redis.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Limitar por IP detrás de otro proxy o de una CDN. Todas las requests llegan con la IP de la CDN, y el límite se lo comen todos tus usuarios juntos. Ahí la IP real sale de una cabecera, con <code>real_ip_header</code> y <code>set_real_ip_from</code> para las IPs de la CDN y de nadie más.</dd></div>
+      </dl>
+
+      <p><code>limit_req</code> es un leaky bucket: deja salir requests a ritmo constante y la ráfaga es el tamaño del balde. Se parece al token bucket de M08 y se configura igual en la práctica: un ritmo y un tamaño de ráfaga.</p>
+
+      <h3 id="paso-carga">Paso 6. La carga</h3>
+
+<pre data-lang="java" data-file="src/test/java/lab/acortador/RedirectSimulation.java"><code>package lab.acortador;
+
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
+import static io.gatling.javaapi.core.CoreDsl.scenario;
+import static io.gatling.javaapi.http.HttpDsl.http;
+import static io.gatling.javaapi.http.HttpDsl.status;
+
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
+
+import io.gatling.javaapi.core.ScenarioBuilder;
+import io.gatling.javaapi.core.Simulation;
+import io.gatling.javaapi.http.HttpProtocolBuilder;
+
+/** ./mvnw gatling:test -Dgatling.simulationClass=lab.acortador.RedirectSimulation -Drps=200 */
+public class RedirectSimulation extends Simulation {
+
+    int rps = Integer.getInteger("rps", 200);
+
+    HttpProtocolBuilder protocolo = http
+            .baseUrl(System.getProperty("baseUrl", "https://localhost"))
+            .disableFollowRedirect()
+            .shareConnections();
+
+    // demo001 a demo100: los crea la migración V2.
+    Iterator&lt;Map&lt;String, Object&gt;&gt; codigos = Stream.generate(() -&gt; Map.&lt;String, Object&gt;of(
+            "code", "demo%03d".formatted(ThreadLocalRandom.current().nextInt(1, 101)))).iterator();
+
+    ScenarioBuilder redirigir = scenario("Redirigir")
+            .feed(codigos)
+            .exec(http("GET /{code}").get("/#{code}").check(status().is(302)));
+
+    {
+        setUp(redirigir.injectOpen(constantUsersPerSec(rps).during(60))).protocols(protocolo);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>200 redirecciones por segundo durante 60&#8239;s sobre los cien enlaces fijos de la migración V2, sin seguir el 302 (<code>disableFollowRedirect</code>) y con <code>shareConnections</code>: los usuarios virtuales comparten un pool de conexiones, como lo haría un cliente HTTP con keepalive.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una conexión por usuario virtual, que es lo que hace Gatling por defecto. Con 200 usuarios nuevos por segundo serían 200 handshakes TLS por segundo: medirías el costo de TLS y no el balanceo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Seguir las redirecciones. Gatling iría a <code>example.com</code> 200 veces por segundo, medirías internet y le mandarías carga a un dominio que no es tuyo.</dd></div>
+      </dl>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver V2__demo_links.sql, LinkApiTest.java y TestcontainersConfig.java</summary>
+        <div class="solution-body">
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V2__demo_links.sql"><code>-- Cien enlaces fijos (demo001 a demo100) para las pruebas de carga.
+INSERT INTO links (code, url)
+SELECT 'demo' || lpad(i::text, 3, '0'), 'https://example.com/articulo/' || i
+FROM generate_series(1, 100) AS i;</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/acortador/links/LinkApiTest.java"><code>package lab.acortador.links;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import lab.acortador.TestcontainersConfig;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@Import(TestcontainersConfig.class)
+class LinkApiTest {
+
+    @Autowired
+    MockMvcTester mvc;
+
+    @Test
+    void creaUnEnlaceYRedirige() {
+        MvcTestResult created = mvc.post().uri("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"url": "https://spring.io"}
+                        """)
+                .exchange();
+        assertThat(created).hasStatus(HttpStatus.CREATED);
+        String code = created.getResponse().getHeader("Location").substring("http://localhost/".length());
+
+        assertThat(mvc.get().uri("/" + code))
+                .hasStatus(HttpStatus.FOUND)
+                .hasHeader("Location", "https://spring.io");
+    }
+
+    @Test
+    void unCodigoQueNoExisteEsUn404() {
+        assertThat(mvc.get().uri("/zzzzzzz")).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void unaUrlSinEsquemaEsUn400() {
+        assertThat(mvc.post().uri("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"url": "spring.io"}
+                        """))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void cadaRespuestaDiceQueReplicaLaAtendio() {
+        assertThat(mvc.get().uri("/demo001")).hasHeader("X-Instance", "local");
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/acortador/TestcontainersConfig.java"><code>package lab.acortador;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+
+    @Bean
+    DynamicPropertyRegistrar flywayEnElContenedor(PostgreSQLContainer postgres) {
+        return registry -&gt; {
+            registry.add("spring.flyway.url", postgres::getJdbcUrl);
+            registry.add("spring.flyway.user", postgres::getUsername);
+            registry.add("spring.flyway.password", postgres::getPassword);
+        };
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a01-nginx"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+<pre data-lang="bash"><code>./mvnw verify                        # cuatro pruebas contra un PostgreSQL de verdad
+./mvnw -DskipTests package
+docker compose up -d --build
+curl -sk -i -X POST https://localhost/api/links \
+  -H 'Content-Type: application/json' -d '{"url": "https://example.com/articulo/1"}'
+curl -sk -i https://localhost/demo001          # 302, con X-Instance
+curl -s -i http://localhost/demo001            # 301 a https://localhost/demo001</code></pre>
+
+      <h3 id="comprueba-algoritmos">Round robin contra least_conn</h3>
+
+      <p>Corre la carga con <code>least_conn</code>, después comenta esa línea, recarga Nginx sin reiniciarlo y vuelve a correrla. El log de Nginx dice a qué réplica fue cada request:</p>
+
+<pre data-lang="bash"><code>./mvnw gatling:test -Dgatling.simulationClass=lab.acortador.RedirectSimulation -Drps=200
+docker compose logs nginx | grep -o 'up=[^ ]*' | sort | uniq -c
+
+# round robin: comenta least_conn en nginx/nginx.conf y recarga
+docker compose exec nginx nginx -s reload</code></pre>
+
+      <p>Con 12&#8239;000 redirecciones y la tercera réplica 200&#8239;ms más lenta, en una laptop:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Algoritmo</th><th class="r">A la lenta</th><th class="r">p50</th><th class="r">p75</th><th class="r">p95</th><th class="r">p99</th><th class="r">Media</th></tr></thead>
+          <tbody>
+            <tr><td>Round robin</td><td class="r">4&#8239;000 (33&#8239;%)</td><td class="r">7&#8239;ms</td><td class="r">206&#8239;ms</td><td class="r">210&#8239;ms</td><td class="r">244&#8239;ms</td><td class="r">77&#8239;ms</td></tr>
+            <tr><td>least_conn</td><td class="r">1&#8239;500 (12.5&#8239;%)</td><td class="r">7&#8239;ms</td><td class="r">9&#8239;ms</td><td class="r">209&#8239;ms</td><td class="r">213&#8239;ms</td><td class="r">35&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Round robin le da un tercio a cada réplica sin mirar nada, y desde el p75 todo es lento. least_conn ve que la réplica lenta tiene requests acumuladas y le manda menos: la media baja a menos de la mitad y el p75 vuelve a 9&#8239;ms. Pero el p95 y el p99 casi no cambian, porque una de cada ocho requests sigue yendo a la réplica lenta, y eso es más que el 5&#8239;% que mira el p95.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>least_conn reduce cuánto tráfico recibe una réplica lenta, pero no la saca. Las fallas pasivas de Nginx tampoco: <code>max_fails</code> cuenta errores y timeouts, y una réplica que responde bien en 200&#8239;ms no comete ninguno. Para sacarla hace falta algo que compare latencias, como la detección de outliers de Envoy, o una persona mirando el p99 por réplica. M03 compara los algoritmos y explica por qué power of two choices se acerca a least_conn con menos estado.</p>
+      </aside>
+
+      <h3 id="comprueba-pausa">Falla: una réplica que no responde</h3>
+
+      <p><code>docker compose pause app2</code> congela la réplica: el kernel sigue aceptando conexiones TCP, pero nadie contesta. Es peor que apagarla, porque Nginx no recibe un rechazo y tiene que esperar el <code>proxy_read_timeout</code> de 5&#8239;s. Con app2 congelada, manda 300 redirecciones, una cada 100&#8239;ms, y cuenta las que tardan más de 1&#8239;s.</p>
+
+<pre data-lang="bash"><code>docker compose pause app2
+for i in $(seq 1 300); do
+  curl -sk -o /dev/null -w "%{time_total}\n" https://localhost/demo001 &amp;
+  sleep 0.1
+done | awk '$1 &gt; 1 { n++ } END { print n, "lentas" }'
+docker compose unpause app2</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Configuración</th><th class="r">Requests de más de 1&#8239;s</th><th class="r">La más lenta</th></tr></thead>
+          <tbody>
+            <tr><td>Sin <code>zone</code> en el upstream</td><td class="r">24 de 300</td><td class="r">5&#8239;274&#8239;ms</td></tr>
+            <tr><td>Con <code>zone acortador 64k</code></td><td class="r">8 de 300</td><td class="r">5&#8239;255&#8239;ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cada request lenta esperó los 5&#8239;s del timeout antes de que Nginx la reintentara en otra réplica. Nginx corre un worker por núcleo con <code>worker_processes auto</code>, 12 en la laptop de la medición, y sin <code>zone</code> cada worker lleva su propia cuenta de fallas y de conexiones abiertas: cada uno descubre por su lado que app2 no responde, y mientras tanto le sigue mandando requests. Con <code>zone</code>, las cuentas viven en memoria compartida y las ven todos los workers.</p>
+
+      <p>least_conn también ayuda aquí: mientras app2 tiene una request colgada, tiene más conexiones abiertas que las otras réplicas y no recibe la siguiente. Las 8 lentas que quedan se reparten a lo largo de los 30&#8239;s, porque un chequeo pasivo solo aprende con requests reales, y cada intento le cuesta 5&#8239;s a un usuario.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Los health checks activos, que prueban cada réplica con requests propias y la sacan antes de que la toque un usuario, son de la versión comercial, NGINX Plus, con la directiva <code>health_check</code>. <span class="badge badge--doc">Documentado</span> Con el Nginx abierto tienes las fallas pasivas, un <code>proxy_read_timeout</code> tan corto como permitan tus requests más lentas, o un proxy que los traiga, como HAProxy o Envoy.</p>
+      </aside>
+
+      <h3 id="comprueba-limite">Falla: una ráfaga de escrituras</h3>
+
+<pre data-lang="bash"><code>seq 1 60 | xargs -P 60 -I{} curl -sk -o /dev/null -w "%{http_code}\n" -X POST https://localhost/api/links \
+  -H 'Content-Type: application/json' -d '{"url": "https://example.com"}' | sort | uniq -c</code></pre>
+
+      <p>De 60 POST a la vez, 25 recibieron 201 y 35 recibieron 429. Pasan la primera, las 20 de la ráfaga y unas pocas más que el balde deja salir, a 10 por segundo, mientras llegan las demás. El número exacto depende de cuánto tarden tus 60 en salir.</p>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a01">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a01-nginx</code>, sin la carpeta <code>nginx/certs</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="https"><code>shortUrl</code> sale con <code>https://localhost</code> y el puerto 80 responde 301.</li>
+          <li data-check="keepalive">Explicas en el README qué pasa con el keepalive si quitas <code>Connection ""</code>.</li>
+          <li data-check="algoritmos">Mediste round robin contra least_conn con la réplica lenta y anotaste el reparto y los percentiles.</li>
+          <li data-check="zone">Congelaste una réplica con y sin <code>zone</code> y contaste las requests lentas.</li>
+          <li data-check="limite">Viste los 429 de <code>limit_req</code> con una ráfaga de escrituras.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior, esto es lo que cambia:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Pon la API de notas detrás de este Nginx con tres réplicas. Ahora son 3 pools de Hikari de 10, 30 clientes para las 20 conexiones reales de PgBouncer, y en modo transacción alcanza. Pero los tres errores que mediste en A00 se multiplican: un <code>SET</code> filtrado o un advisory lock de sesión ya no afecta a una réplica sino a la que reciba esa conexión, que puede ser cualquiera. Y vuelve a correr <code>NotasSimulation</code> contra <code>https://localhost</code>: el p99 que fijaste incluye ahora TLS y un salto más.</p>
+        </li>
+      </ul>
+
+      <p>La teoría detrás de cada pieza está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">El viaje de una request</p>
+          <p>DNS, TCP, TLS 1.3, HTTP/2 y por qué el keepalive ahorra un RTT en cada request: <a href="../modules/m01-viaje-request.html">M01. El viaje de una request</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Balanceo y gateways</p>
+          <p>L4 contra L7, least_conn, power of two choices, health checks activos y pasivos, detección de outliers y connection draining: <a href="../modules/m03-balanceo-gateways.html">M03. Balanceo y gateways</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Límites de tasa</p>
+          <p>Token bucket, leaky bucket, y por qué un 429 debería llevar <code>Retry-After</code>: <a href="../modules/m08-resiliencia.html">M08. Resiliencia</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a01.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

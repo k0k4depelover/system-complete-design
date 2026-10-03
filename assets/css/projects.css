@@ -1,0 +1,181 @@
+/* ==========================================================================
+   Aplicación de conocimiento: índice de mini-proyectos (proyectos.html).
+   Se carga junto con home.css: reutiliza el hero, los bloques por parte y how-grid.
+   ========================================================================== */
+
+.pj-sec { margin: var(--s-8) 0 var(--s-7); }
+.pj-sec > h2 { font-family: var(--f-head); font-weight: 700; font-size: var(--fs-xl); margin: 0 0 var(--s-2); letter-spacing: -0.018em; }
+.pj-sub { margin: 0 0 var(--s-5); color: var(--label-2); font-size: var(--fs-sub); max-width: 70ch; }
+.pj-count { margin: var(--s-2) 0 0; color: var(--label-3); font-size: var(--fs-sm); }
+
+/* ---------- Cómo es cada guía ---------- */
+
+.pj-format { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: var(--s-6); align-items: start; }
+.pj-format .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.pj-format .steps > li { color: var(--label-2); font-size: var(--fs-sub); }
+.pj-format .how-grid { grid-template-columns: 1fr; }
+
+/* ---------- Lista de proyectos ---------- */
+
+.pj-tracks { display: grid; gap: var(--s-7); }
+.pj-list { list-style: none; margin: 0; padding: 0; position: relative; background: var(--bg-2); border-radius: var(--radius-l); overflow: hidden; }
+.pj-list::before { content: ''; position: absolute; left: 23px; top: 30px; bottom: 30px; width: 2px; background: var(--line); border-radius: 1px; }
+.pj-list:has(> .pj-row:only-child)::before { display: none; }
+
+.pj-row {
+  position: relative; display: grid; grid-template-columns: 3.4em minmax(0, 1fr) 6.5em; gap: 2px var(--s-3); align-items: baseline;
+  padding: 16px var(--s-4) 18px 44px; scroll-margin-top: calc(var(--topbar-h) + 16px);
+}
+.pj-row + .pj-row::after { content: ''; position: absolute; left: 44px; right: 0; top: 0; height: 0.5px; background: var(--separator); }
+.pj-row::before {
+  content: ''; position: absolute; left: 17px; top: 21px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--bg-2); border: 2px solid var(--line); box-sizing: border-box; z-index: 1;
+}
+.pj-row[data-tier="extra"]::before { border-style: dashed; border-color: color-mix(in srgb, var(--line) 55%, var(--bg-2)); }
+.pj-row:target { background: var(--accent-tint); }
+
+.pj-num { font-weight: 700; font-size: var(--fs-sm); color: var(--label-3); font-variant-numeric: tabular-nums; }
+.pj-title { margin: 0; font-family: var(--f-body); font-weight: 600; font-size: var(--fs-md); line-height: 1.3; letter-spacing: -0.012em; color: var(--label); }
+.pj-excuse { margin: 4px 0 0; font-size: var(--fs-sub); color: var(--label-2); line-height: 1.45; max-width: 72ch; }
+.pj-k { font-weight: 600; color: var(--label); }
+.pj-learn { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--label-2); line-height: 1.55; max-width: 72ch; }
+.pj-tier { font-weight: 600; font-size: var(--fs-xs); color: var(--label-2); text-align: right; }
+.pj-row[data-tier="extra"] .pj-tier { color: var(--label-3); }
+
+.pj-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.pj-meta-label { font-size: var(--fs-xs); font-weight: 600; color: var(--label-3); margin: 0 2px 0 0; }
+.pj-stack { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 6px 0 0; padding: 0; }
+.pj-stack > li { margin: 0; }
+.pj-chip {
+  display: inline-block; font-size: var(--fs-xs); line-height: 1.6; color: var(--label-2);
+  padding: 1px 9px; background: var(--fill); border-radius: var(--radius-pill); white-space: nowrap;
+}
+.pj-chip--mod { color: var(--accent); background: var(--accent-tint); text-decoration: none; }
+a.pj-chip--mod:hover { text-decoration: underline; }
+.pj-chip--mod.is-soon { color: var(--label-3); background: var(--fill); }
+.pj-chip--front { color: var(--label); background: transparent; box-shadow: inset 0 0 0 1px var(--separator-strong); }
+
+/* ---------- Sistemas completos ---------- */
+
+.pj-caps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s-3); }
+.pj-cap { padding: var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); scroll-margin-top: calc(var(--topbar-h) + 16px); }
+.pj-cap-num { margin: 0; font-weight: 700; font-size: var(--fs-sm); color: var(--label-3); }
+.pj-cap-title { margin: 2px 0 var(--s-2); font-family: var(--f-head); font-weight: 700; font-size: var(--fs-lg); letter-spacing: -0.016em; }
+.pj-cap .pj-meta-label { margin-top: var(--s-3); }
+
+/* ---------- Decisiones ---------- */
+
+.pj-decisions dd .pj-rec { display: block; margin-top: var(--s-2); color: var(--label); font-weight: 600; }
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 900px) {
+  .pj-format { grid-template-columns: 1fr; }
+  .pj-caps { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .pj-row { grid-template-columns: 3em minmax(0, 1fr); padding-right: var(--s-3); }
+  .pj-tier { grid-column: 2; grid-row: 1; justify-self: end; }
+  .pj-main { grid-column: 1 / -1; }
+  .pj-chip { white-space: normal; }
+}
+
+/* ---------- Estado de cada proyecto en el índice ---------- */
+
+.pj-title a { color: inherit; }
+.pj-title a:hover { color: var(--accent); text-decoration: none; }
+.pj-state { display: inline-block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 600; color: var(--label-3); }
+.pj-state[data-state="new"], .pj-state[data-state="started"] { color: var(--accent); }
+.pj-state[data-state="done"] { color: var(--ok); }
+.pj-guide-link { display: inline-block; margin-top: 8px; font-size: var(--fs-sm); font-weight: 600; }
+.pj-blocks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s-3); list-style: none; margin: 0; padding: 0; }
+.pj-blocks > li { margin: 0; padding: var(--s-4) var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); max-width: none; }
+.pj-block-name { margin: 0; font-weight: 600; color: var(--label); }
+.pj-block-items { margin: 2px 0 var(--s-2); font-size: var(--fs-sm); color: var(--label-2); font-variant-numeric: tabular-nums; }
+.pj-block-state { margin: 0; font-size: var(--fs-xs); font-weight: 600; color: var(--label-3); }
+.pj-block-state.is-ready { color: var(--ok); }
+
+/* ==========================================================================
+   Guías (proyectos/aNN-*.html)
+   ========================================================================== */
+
+.pj-route-index { margin: 0 0 var(--s-4); font-size: var(--fs-sm); font-weight: 600; }
+.pj-route-index a { display: inline-flex; align-items: center; min-height: 32px; }
+
+/* Bloque de código con la ruta del archivo */
+.code-file { margin: 0 0 var(--s-5); background: var(--bg-2); border-radius: var(--radius-m); overflow: hidden; }
+.code-file-head {
+  display: flex; align-items: center; gap: var(--s-3); padding: 6px 8px 6px var(--s-5);
+  border-bottom: 0.5px solid var(--separator); min-width: 0;
+}
+.code-file-path {
+  flex: 1; min-width: 0; font-family: var(--f-mono); font-size: 0.75rem; color: var(--label-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
+}
+.code-copy {
+  flex: none; font: inherit; font-size: var(--fs-xs); font-weight: 600; color: var(--accent);
+  background: none; border: 0; border-radius: var(--radius-s); padding: 4px 10px; cursor: pointer; min-height: 28px;
+}
+.code-copy:hover { background: var(--fill); }
+.code-copy:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.code-file > pre { margin: 0; border-radius: 0; background: none; }
+.solution-body .code-file, .solution-body pre { background: var(--bg); }
+.solution-body .code-file > pre { background: none; }
+@media (pointer: coarse) { .code-copy { min-height: 44px; padding: 0 14px; } }
+
+/* La decisión de cada paso: qué se decide, qué se descarta y qué puede salir mal */
+.pj-why { display: grid; gap: 0; margin: var(--s-4) 0 var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); overflow: hidden; }
+.pj-why > div { display: grid; grid-template-columns: 11.5em minmax(0, 1fr); gap: var(--s-4); padding: var(--s-3) var(--s-5); }
+.pj-why > div + div { border-top: 0.5px solid var(--separator); }
+.pj-why dt { font-weight: 600; font-size: var(--fs-sm); color: var(--label-2); padding-top: 2px; }
+.pj-why dd { margin: 0; }
+.pj-why dd > :last-child { margin-bottom: 0; }
+
+/* Tu repositorio */
+.pj-repo { margin: var(--s-5) 0 var(--s-6); padding: var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); }
+.pj-repo-head { margin: 0 0 var(--s-4); color: var(--label-2); }
+.pj-repo-form { margin: 0 0 var(--s-5); }
+.pj-repo-label { display: block; font-weight: 600; margin-bottom: 6px; }
+.pj-repo-row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.pj-repo-input {
+  flex: 1 1 18em; min-width: 0; font: inherit; font-size: var(--fs-sub); color: var(--label);
+  background: var(--bg); border: 1px solid var(--separator-strong); border-radius: var(--radius-m); padding: 9px 12px; min-height: 40px;
+}
+.pj-repo-input:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 0; border-color: var(--accent); }
+.pj-repo-input[aria-invalid="true"] { border-color: var(--fail); }
+.pj-repo-msg { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--label-2); min-height: 1.4em; }
+.pj-repo-msg.is-error { color: var(--fail-text, var(--fail)); }
+.pj-repo-published { margin: 0 0 var(--s-4); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.pj-checks { list-style: none; margin: 0 0 var(--s-4); padding: 0; }
+.pj-checks > li { display: flex; align-items: flex-start; gap: 10px; margin: 0; padding: 8px 0; max-width: none; }
+.pj-checks > li + li { border-top: 0.5px solid var(--separator); }
+.pj-checks input { flex: none; width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--accent-fill); }
+.pj-checks label { cursor: pointer; }
+.pj-repo-state { margin: 0; font-weight: 600; color: var(--label-2); }
+.pj-repo-state.is-done { color: var(--ok); }
+.pj-repo-state.is-done::before { content: '✓ '; }
+@media (pointer: coarse) {
+  .pj-checks > li { min-height: 44px; align-items: center; }
+  .pj-checks input { width: 22px; height: 22px; margin: 0; }
+  .pj-repo-input { min-height: 44px; }
+}
+
+/* Cómo conectar */
+/* Tabla de endpoints: el método y la ruta en una sola línea; la tabla se desplaza en su marco si no cabe. */
+.pj-ep { min-width: 640px; }
+.pj-ep td:first-child { white-space: nowrap; }
+.pj-ep .ep-method { margin-right: 6px; }
+
+.pj-connect { list-style: none; margin: 0 0 var(--s-6); padding: 0; display: grid; gap: var(--s-3); }
+.pj-connect > li { margin: 0; padding: var(--s-4) var(--s-5); background: var(--bg-2); border-radius: var(--radius-l); max-width: none; }
+.pj-connect-title { margin: 0 0 4px; font-weight: 600; }
+.pj-connect > li > p:last-child { margin-bottom: 0; }
+
+@media (max-width: 900px) {
+  .pj-blocks { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .pj-why > div { grid-template-columns: 1fr; gap: 2px; }
+  .code-file-head { padding-left: var(--s-4); }
+}

@@ -9,6 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
+- **Aplicación de conocimiento** (`proyectos.html`): mini-proyectos en Java y Spring Boot para construir lo de cada módulo. Por ahora solo está el índice propuesto; las guías se escriben cuando el usuario lo aprueba.
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
 
@@ -20,6 +21,11 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 2. Abre el módulo publicado más parecido al que vas a hacer y copia su estructura: `modules/m15-motores-inferencia.html` para la Parte II, `modules/m29-whatsapp.html` para un caso de estudio con mapa.
 3. Actualiza `PROGRESO.md` al terminar cada módulo. Si el uso del plan se acerca al 95 %, deja `PROGRESO.md` al día y detente.
 4. No hagas commits ni push salvo que el usuario lo pida.
+
+## Cómo trabaja Claude en este proyecto
+
+- **Caveman, siempre en el chat.** Usa la skill `caveman:caveman` en nivel `full` en todas las respuestas del chat; si no está activa, actívala con `/caveman full`. Frases cortas, sin relleno, con los términos técnicos, rutas, comandos y errores exactos. Vale solo para el chat: las páginas del curso, `PROGRESO.md`, `CLAUDE.md`, los commits y los comentarios del código van en prosa normal. Las advertencias de seguridad y las acciones irreversibles se escriben en prosa clara.
+- **RTK para los comandos.** Sigue `~/.claude/RTK.md`: la salida de los comandos llega condensada y se trata como completa. Corre los comandos normalmente y agrupa los relacionados en una sola llamada. Repite un comando como `rtk proxy <cmd>` solo si su resultado no sirve: vacío cuando se esperaba salida, contradictorio con su código de salida o ilegible.
 
 ## Reglas que no se rompen
 
@@ -367,6 +373,7 @@ ia-system-desing
 │   index.html
 │   PLAN.md
 │   PROGRESO.md
+│   proyectos.html
 │   Referencias.md
 │
 ├───.github
@@ -381,6 +388,7 @@ ia-system-desing
 │   │       home.css
 │   │       layout.css
 │   │       map.css
+│   │       projects.css
 │   │       tokens.css
 │   │
 │   └───js
@@ -396,6 +404,7 @@ ia-system-desing
 │       │   │   course.data.js
 │       │   │   glossary.data.js
 │       │   │   llm.data.js
+│       │   │   projects.data.js
 │       │   │
 │       │   ├───exercises
 │       │   │       m06.data.js
@@ -446,10 +455,12 @@ ia-system-desing
 │       │
 │       ├───pages
 │       │       home.js
+│       │       projects.js
 │       │
 │       └───widgets
 │               calculators.js
 │               sim-cache.js
+│               sim-collab.js
 │               sim-context.js
 │               sim-db.js
 │               sim-feed.js
@@ -514,6 +525,7 @@ ia-system-desing
 |---|---|
 | `index.html` + `assets/css/home.css` + `assets/js/pages/home.js` | Portada: mapa de la ruta del curso, "continuar donde quedaste", plan por partes y respaldo del progreso |
 | `glosario.html` | Glosario con buscador y filtro por categoría; lo arma `core/glossary.js` |
+| `proyectos.html` + `assets/css/projects.css` + `assets/js/pages/projects.js` | "Aplicación de conocimiento": índice de mini-proyectos en Java y Spring Boot, con sus datos en `data/projects.data.js` (cada proyecto con `tier`, `status`, `mods` y `repo`, obligatorio para publicarlo) |
 | `modules/` | Una página por módulo y por checkpoint, generada con `mkpage.py` y editada después a mano |
 | `assets/css/tokens.css` | Colores semánticos en claro y oscuro, paleta de capas `--l-*`, tipografía y espacios |
 | `assets/css/layout.css` | Barra superior, sidebar, índice lateral y responsive |

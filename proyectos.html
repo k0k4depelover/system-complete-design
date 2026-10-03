@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aplicación de conocimiento: diseño de sistemas reales</title>
+<meta name="description" content="Mini-proyectos en Java y Spring Boot para construir lo que enseña cada módulo del curso: Nginx, una API que no se rompe, caché, réplicas, dos primarios, sharding, Kubernetes con k3s, colas, idempotencia, OAuth, observabilidad y un ChatGPT en una CPU.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<link rel="stylesheet" href="assets/css/home.css">
+<link rel="stylesheet" href="assets/css/projects.css">
+</head>
+<body data-root="" class="page-projects">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="index.html">Curso</a>
+    <a href="proyectos.html" aria-current="page">Proyectos</a>
+    <a href="glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<main class="home" id="contenido">
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-text">
+      <h1 id="hero-title">Aplicación de conocimiento</h1>
+      <p class="lead">Mini-proyectos para construir lo que estudiaste, en Java y Spring Boot. Cada uno trae una excusa, el diagrama de arquitectura, los endpoints antes de empezar, las dependencias justas y un paso a paso con las decisiones de diseño explicadas. Cada proyecto se construye solo, sin código de otro: tú lo construyes, lo subes a tu repositorio y lo enlazas desde su página.</p>
+      <div class="hero-actions">
+        <a class="btn btn--primary btn--lg" href="proyectos/a00-laboratorio.html">Empezar por A00</a>
+        <a class="btn btn--ghost btn--lg" href="#indice">Ver el índice</a>
+        <p class="continue-where" data-projects-count></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="pj-sec" id="formato" aria-labelledby="formato-title">
+    <h2 id="formato-title">Cómo es cada guía</h2>
+    <p class="pj-sub">Todas siguen el mismo orden, para que sepas dónde está cada cosa. La guía te acompaña como un tutor: explica por qué se toma cada decisión, no solo qué escribir.</p>
+    <div class="pj-format">
+      <ol class="steps">
+        <li><span class="step-title">La excusa y el diagrama</span>Qué vas a construir y para qué, con el diagrama de arquitectura y el papel de cada pieza.</li>
+        <li><span class="step-title">Los endpoints, antes de empezar</span>Una tabla con cada endpoint: método, ruta, qué hace y qué responde. Es tu mapa para no perderte.</li>
+        <li><span class="step-title">Las dependencias</span>Solo las coordenadas de Maven que hacen falta y para qué sirve cada una. Crear el proyecto no se explica.</li>
+        <li><span class="step-title">La infraestructura</span>El <code>docker-compose.yml</code> o los manifiestos de Kubernetes, comentados.</li>
+        <li><span class="step-title">El paso a paso</span>Cada paso dice qué decisión toma, qué alternativa descarta y qué puede salir mal.</li>
+        <li><span class="step-title">Decisiones guiadas</span>Antes de los pasos importantes, una pregunta como las de los ejercicios del curso: eliges y la guía te explica.</li>
+        <li><span class="step-title">Cómo comprobar que funciona</span>Pruebas, carga con Gatling y fallas inyectadas, con los números que deberías ver.</li>
+        <li><span class="step-title">Tu repositorio</span>El enlace va en la página del proyecto y es obligatorio: sin él, el proyecto no se marca como terminado.</li>
+        <li><span class="step-title">Cómo conectar</span>Al final, y solo con proyectos anteriores de la lista: qué cambia si juntas este proyecto con uno que ya hiciste, con enlaces a los módulos y al glosario.</li>
+      </ol>
+      <dl class="how-grid">
+        <div>
+          <dt>Java y Spring Boot en el backend</dt>
+          <dd>Todo el backend es Java. La única excepción es el servidor de autorización de A13, en TypeScript sobre Cloudflare Workers, porque Workers no ejecuta la JVM.</dd>
+        </div>
+        <div>
+          <dt>Cada proyecto se construye solo</dt>
+          <dd>Ninguna guía necesita el código de otra: cada una trae su compose o su clúster y su propia excusa. Las piezas se juntan solo en los dos sistemas completos, cada uno en su repositorio.</dd>
+        </div>
+        <div>
+          <dt>Nada de reinventar</dt>
+          <dd>Se usan las librerías estándar de Spring y de su ecosistema. Se programa a mano solo lo que enseña algo, como la tabla de claves de idempotencia o la verificación de una URL firmada.</dd>
+        </div>
+        <div>
+          <dt>Decisiones con fundamento</dt>
+          <dd>Cada decisión se apoya en un módulo del curso y en un número que vas a medir al final.</dd>
+        </div>
+        <div>
+          <dt>Frontend solo si enseña</dt>
+          <dd>Un HTML con JavaScript mínimo cuando el navegador es parte de la lección: cookies, subidas directas, claves de idempotencia y streaming.</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="pj-sec" id="stack" aria-labelledby="stack-title">
+    <h2 id="stack-title">El stack</h2>
+    <p class="pj-sub">El stack que definiste, más las herramientas para medir, probar y observar. Las versiones de las guías publicadas están probadas: Java 25, Spring Boot 4.1.1, PostgreSQL 18, PgBouncer 1.26, Redis 8, Nginx 1.30, k3s 1.36 y CloudNativePG 1.30. Cada guía levanta solo lo que necesita: con 16&#8239;GB de RAM alcanza, pero el clúster, Elasticsearch y Ollama juntos no entran cómodos.</p>
+    <div class="table-wrap">
+      <table class="t">
+        <thead><tr><th>Pieza</th><th>Para qué</th><th>Proyectos</th><th>Origen</th></tr></thead>
+        <tbody>
+          <tr><td>Java 25 y Spring Boot 4</td><td>Todo el backend. Las versiones exactas se fijan al escribir cada guía.</td><td>Todos</td><td>Tu stack</td></tr>
+          <tr><td>PostgreSQL y PgBouncer</td><td>La base relacional. PgBouncer va delante en las guías con base de datos, salvo donde la lección es la replicación o el sharding.</td><td>A00 a A09, A11, A14 a A18, A21</td><td>Tu stack</td></tr>
+          <tr><td>PostGIS</td><td>Consultas geográficas.</td><td>A17, C2</td><td>Tu stack</td></tr>
+          <tr><td>Redis</td><td>Caché, sesiones, rate limiting, Streams, Pub/Sub y posiciones.</td><td>A03, A09 a A12, A15, A17, A22</td><td>Tu stack</td></tr>
+          <tr><td>Nginx</td><td>Reverse proxy, TLS y balanceo fuera del clúster.</td><td>A01, A12, A21, A26</td><td>Tu stack</td></tr>
+          <tr><td>Spring Cloud Gateway</td><td>Gateway de API: rutas, rate limiting y BFF con OAuth.</td><td>A10, A13, A21, A22</td><td>Tu stack</td></tr>
+          <tr><td>Docker y Kubernetes (k3s)</td><td>Contenedores en todos; Kubernetes para lo distribuido: réplicas, líderes, failover y despliegues. k3s corre dentro de Docker, con la entrada por Gateway API sobre el Traefik que trae k3s.</td><td>A07, A08, A19, A23, A25, C1, C2</td><td>Tu stack</td></tr>
+          <tr><td>Disco local y Cloudflare R2</td><td>Archivos y URLs firmadas. La capa gratuita de R2 incluye 10&#8239;GB de almacenamiento al mes y la salida no se cobra. <span class="badge badge--doc">Documentado</span></td><td>A11, A25, A26</td><td>Tu stack</td></tr>
+          <tr><td>Cloudflare Workers y D1</td><td>El servidor de autorización, en TypeScript. La capa gratuita da 100&#8239;000 requests por día y 10&#8239;ms de CPU por request. <span class="badge badge--doc">Documentado</span></td><td>A13, A26</td><td>Tu stack</td></tr>
+          <tr><td>Kafka</td><td>El log de eventos, con topics de reintento, una DLQ y consumidores idempotentes.</td><td>A18, C1</td><td>Agregado</td></tr>
+          <tr><td>git y GitHub Actions</td><td>Versiones, integración continua en cada proyecto y entrega continua con GitOps.</td><td>A00, A19</td><td>Tu stack</td></tr>
+          <tr><td>Gatling y Testcontainers</td><td>Carga con un DSL en Java y pruebas contra PostgreSQL y Redis de verdad.</td><td>Todos</td><td>Propuesto</td></tr>
+          <tr><td>Resilience4j, Toxiproxy y Mailpit</td><td>Circuit breaker y reintentos, fallas de red inyectadas y correo local.</td><td>A09, A10</td><td>Propuesto</td></tr>
+          <tr><td>Prometheus, Grafana, Tempo y Loki</td><td>Métricas, traces y logs con OpenTelemetry.</td><td>A10, A14, A22</td><td>Propuesto</td></tr>
+          <tr><td>Elasticsearch</td><td>La búsqueda que pediste.</td><td>A16, A24, C2</td><td>Propuesto</td></tr>
+          <tr><td>Ollama y Spring AI</td><td>El modelo en la CPU y el cliente desde Spring.</td><td>A20 a A22</td><td>Propuesto</td></tr>
+          <tr><td>CloudNativePG y Argo CD</td><td>PostgreSQL con failover en Kubernetes y despliegue GitOps.</td><td>A07, A19, C1</td><td>Propuesto</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="pj-sec" id="indice" aria-labelledby="indice-title">
+    <h2 id="indice-title">Índice de mini-proyectos</h2>
+    <p class="pj-sub">Uno por concepto clave, en el orden del curso. Los de núcleo son el mínimo; los de ampliación se escriben si los quieres. Cada uno enlaza los módulos donde está la teoría, y los que tienen guía muestran tu estado: sin empezar, en curso o terminado.</p>
+    <div class="pj-tracks" data-projects></div>
+  </section>
+
+  <section class="pj-sec" id="plan" aria-labelledby="plan-title">
+    <h2 id="plan-title">El plan por bloques</h2>
+    <p class="pj-sub">Las guías se escriben por bloques. Cada bloque se aprueba antes de empezar el siguiente.</p>
+    <ul class="pj-blocks" data-project-blocks></ul>
+  </section>
+
+  <section class="pj-sec" id="sistemas" aria-labelledby="sistemas-title">
+    <h2 id="sistemas-title">Sistemas completos</h2>
+    <p class="pj-sub">Al final, dos sistemas que juntan varios proyectos en uno solo, con las decisiones de diseño que aparecen cuando las piezas tienen que convivir. Son los únicos que reutilizan lo que construiste, y cada uno tiene su propio repositorio.</p>
+    <div class="pj-caps" data-capstones></div>
+  </section>
+
+  <section class="pj-sec" id="decisiones" aria-labelledby="decisiones-title">
+    <h2 id="decisiones-title">Decisiones tomadas</h2>
+    <p class="pj-sub">Lo que se decidió antes de escribir las guías, y por qué.</p>
+    <dl class="how-grid pj-decisions">
+      <div>
+        <dt>El servidor de autorización va en TypeScript</dt>
+        <dd>Workers ejecuta JavaScript, TypeScript, Python y WebAssembly, no la JVM. A13 escribe el servidor en TypeScript y entra en la capa gratuita: D1 permite 5 millones de filas leídas y 100&#8239;000 escritas por día. <span class="badge badge--doc">Documentado</span> Todo lo demás sigue en Java.</dd>
+      </div>
+      <div>
+        <dt>Kafka entra al núcleo</dt>
+        <dd>A09 enseña colas con Redis Streams y A18 enseña Kafka con los patrones de producción: topics de reintento con backoff, una DLQ y cómo reinyectar sus mensajes, y un consumidor idempotente.</dd>
+      </div>
+      <div>
+        <dt>Un repositorio por proyecto</dt>
+        <dd>El objetivo es saber hacer cada pieza, no armar un sistema grande. Cada proyecto tiene su repositorio, y C1 y C2 tienen el suyo, donde las piezas se juntan.</dd>
+      </div>
+      <div>
+        <dt>Write-behind</dt>
+        <dd>A03 implementa write-through para el precio y write-behind para el contador de visitas, que llega a PostgreSQL en lotes idempotentes aunque la aplicación se caiga a mitad de un lote.</dd>
+      </div>
+      <div>
+        <dt>Kubernetes con k3s</dt>
+        <dd>k3s corre dentro de Docker con un servidor, dos agentes y un registro de imágenes local. Trae Traefik, y la entrada se arma con Gateway API, porque ingress-nginx se retiró en marzo de 2026. <span class="badge badge--doc">Documentado</span></dd>
+      </div>
+      <div>
+        <dt>Cada proyecto, independiente</dt>
+        <dd>Ninguna guía depende del código de otra. "Cómo conectar", al final de cada guía, solo nombra proyectos anteriores de la lista, y las piezas se juntan de verdad en C1 y C2.</dd>
+      </div>
+      <div>
+        <dt>Gatling y Testcontainers</dt>
+        <dd>La carga se escribe con el DSL de Gatling en Java y las pruebas corren contra PostgreSQL y Redis de verdad, así que todo queda en el mismo lenguaje.</dd>
+      </div>
+      <div>
+        <dt>Búsqueda y observabilidad</dt>
+        <dd>Elasticsearch para A16, con Spring Data Elasticsearch. Prometheus, Grafana, Tempo y Loki con OpenTelemetry para A14: para empezar, la imagen <code>grafana/otel-lgtm</code> los trae juntos.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <footer class="site-foot home-foot">
+    <p>Las guías publicadas tienen su página en la carpeta proyectos. Tu estado se guarda en este navegador; para dejar publicado el enlace a tu repositorio, ponlo en el campo <code>repo</code> de <code>assets/js/data/projects.data.js</code>.</p>
+  </footer>
+</main>
+
+<script src="assets/js/core/sd.js"></script>
+<script src="assets/js/data/course.data.js"></script>
+<script src="assets/js/data/projects.data.js"></script>
+<script src="assets/js/core/progress.js"></script>
+<script src="assets/js/core/nav.js"></script>
+<script src="assets/js/pages/project-state.js"></script>
+<script src="assets/js/pages/projects.js"></script>
+</body>
+</html>

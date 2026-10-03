@@ -60,6 +60,7 @@ def build(frag_path):
   </a>
   <nav class="topnav" aria-label="Principal">
     <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
     <a href="../glosario.html">Glosario</a>
     <span class="top-progress" data-top-progress></span>
   </nav>
