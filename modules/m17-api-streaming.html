@@ -131,7 +131,7 @@
 <text class="dg-small" x="12" y="296">que tiene que dejar pasar los eventos sin acumularlos y avisar cuando el otro extremo se va.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.1.</b> Una request de chat atraviesa cinco etapas y vuelve convertida en cientos de eventos. Esta parte del curso cubre cada caja: las cuotas en el M18, el router en el M19, el motor en el M15 y el metering en el M21.</figcaption>
+        <figcaption><b>Figura 17.1.</b> Una request de chat atraviesa cinco etapas y vuelve convertida en cientos de eventos. Esta parte del curso cubre cada caja: las cuotas en el M18, el router en el M19, el motor en el M15 y el metering en el <a href="m21-metering.html#arquitectura">M21</a>.</figcaption>
       </figure>
 
       <p>Una decisión de fondo atraviesa todo el módulo: el modelo no guarda estado entre requests (M12). En la API clásica de chat, cada request manda la conversación entera y el servidor la puede olvidar apenas responde. Eso simplifica mucho la operación, porque cualquier réplica atiende cualquier request, pero traslada el costo al cliente, que reenvía y paga todo el historial en cada turno (M16). Las APIs más nuevas ofrecen guardar el estado en el servidor; en 17.2 ves qué se gana y qué se paga.</p>
@@ -221,7 +221,7 @@ Content-Type: application/json
           <thead><tr><th>Parámetro</th><th>Qué controla</th></tr></thead>
           <tbody>
             <tr><td><code>model</code></td><td>Qué modelo responde. En producción conviene fijar una versión concreta y no un alias que el proveedor actualiza solo</td></tr>
-            <tr><td><code>messages</code></td><td>Toda la conversación, en orden, con roles <code>system</code>, <code>user</code>, <code>assistant</code> y <code>tool</code>. Cada mensaje puede traer texto, imágenes o archivos (M23)</td></tr>
+            <tr><td><code>messages</code></td><td>Toda la conversación, en orden, con roles <code>system</code>, <code>user</code>, <code>assistant</code> y <code>tool</code>. Cada mensaje puede traer texto, imágenes o archivos (<a href="m23-multimodal.html#entrada">M23</a>)</td></tr>
             <tr><td><code>max_completion_tokens</code></td><td>Techo de la salida. Además de cortar la respuesta, decide cuánta cuota se reserva al entrar (M18)</td></tr>
             <tr><td><code>temperature</code>, <code>top_p</code></td><td>Cómo se muestrea el próximo token (M12)</td></tr>
             <tr><td><code>stop</code></td><td>Secuencias que cortan la generación</td></tr>
@@ -237,7 +237,7 @@ Content-Type: application/json
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>Cambiar de modelo cambia el comportamiento, la latencia y el costo, así que se hace como un deploy: con evaluaciones, canary y la posibilidad de volver atrás (M22). Por eso se fija una versión con fecha y no un alias que apunta siempre al último modelo. Los proveedores anuncian con meses de anticipación cuándo retiran un modelo; esa fecha tiene que estar en el calendario del equipo, no aparecer como un 404 un lunes a la mañana.</p>
+        <p>Cambiar de modelo cambia el comportamiento, la latencia y el costo, así que se hace como un deploy: con evaluaciones, canary y la posibilidad de volver atrás (<a href="m22-operar-modelos.html#canary">M22</a>). Por eso se fija una versión con fecha y no un alias que apunta siempre al último modelo. Los proveedores anuncian con meses de anticipación cuándo retiran un modelo; esa fecha tiene que estar en el calendario del equipo, no aparecer como un 404 un lunes a la mañana.</p>
       </aside>
 
       <h3 id="tres-apis">Chat Completions, Responses y Messages</h3>
@@ -626,7 +626,7 @@ for (;;) {
         <li><span class="step-title">El motor libera la GPU</span>vLLM aborta la request cuando se cierra la conexión con su servidor HTTP: la saca del batch y libera sus bloques del KV cache. En noviembre de 2024 se reportó que, con un middleware agregado, esa detección fallaba y las GPUs seguían generando para nadie. <span class="badge badge--doc">Documentado</span></li>
       </ol>
 
-      <p>En los modos en segundo plano la conexión no es la señal, porque justamente se quiere que la generación siga sin ella. Por eso hay un endpoint explícito, <code>POST /v1/responses/{id}/cancel</code>, idempotente: cancelar dos veces devuelve el mismo objeto final. <span class="badge badge--doc">Documentado</span> Lo que ya se generó hasta que el motor se enteró gastó GPU; cómo se cobra depende del proveedor, y tu sistema tiene que registrar ese uso parcial igual (M21).</p>
+      <p>En los modos en segundo plano la conexión no es la señal, porque justamente se quiere que la generación siga sin ella. Por eso hay un endpoint explícito, <code>POST /v1/responses/{id}/cancel</code>, idempotente: cancelar dos veces devuelve el mismo objeto final. <span class="badge badge--doc">Documentado</span> Lo que ya se generó hasta que el motor se enteró gastó GPU; cómo se cobra depende del proveedor, y tu sistema tiene que registrar ese uso parcial igual (<a href="m21-metering.html#emitir-cortes">M21</a>).</p>
 
       <aside class="callout callout--tradeoff">
         <p class="callout-label">Trade-off</p>
@@ -775,7 +775,7 @@ for (;;) {
 
       <p>Responses y Messages hacen lo mismo con otros nombres: un ítem <code>function_call</code> que se responde con <code>function_call_output</code>, o un bloque <code>tool_use</code> que se responde con <code>tool_result</code>. Lo que importa es lo que queda de tu lado:</p>
       <ul>
-        <li><b>Los argumentos no son una autorización.</b> El modelo puede equivocarse o ser manipulado por un texto que leyó (prompt injection, M22 y M25). Si pide el pedido 8812, tu servicio verifica que ese pedido sea del usuario de la sesión, igual que con cualquier request de un cliente (BOLA, M10).</li>
+        <li><b>Los argumentos no son una autorización.</b> El modelo puede equivocarse o ser manipulado por un texto que leyó (prompt injection, <a href="m22-operar-modelos.html#injection">M22</a> y M25). Si pide el pedido 8812, tu servicio verifica que ese pedido sea del usuario de la sesión, igual que con cualquier request de un cliente (BOLA, M10).</li>
         <li><b>Las acciones con efectos necesitan idempotencia.</b> Si una herramienta cobra, envía un correo o crea un ticket, deriva una idempotency key del id de la llamada: un reintento no puede cobrar dos veces (M02, M27).</li>
         <li><b>Los errores vuelven al modelo.</b> Si la herramienta falla o tarda demasiado, se le devuelve el error como resultado ("el servicio de pedidos no responde") para que responda con lo que tiene o proponga otra cosa.</li>
         <li><b>Las llamadas pueden venir juntas.</b> Con <code>parallel_tool_calls</code>, el modelo pide varias en un mismo turno: se ejecutan en paralelo y cada una se responde con su id.</li>

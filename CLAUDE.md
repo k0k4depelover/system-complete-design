@@ -18,7 +18,7 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 ## Antes de empezar
 
 1. Lee `PROGRESO.md`: estado, pendientes y el pedido vigente.
-2. Abre el módulo publicado más parecido al que vas a hacer y copia su estructura: `modules/m15-motores-inferencia.html` para la Parte II, `modules/m29-whatsapp.html` para un caso de estudio con mapa.
+2. Abre el módulo publicado más parecido al que vas a hacer y copia su estructura: `modules/m15-motores-inferencia.html` para la Parte II, `modules/m29-whatsapp.html` para un caso de estudio con mapa. Lee también el módulo anterior y el siguiente en la ruta, para encadenar los ejemplos.
 3. Actualiza `PROGRESO.md` al terminar cada módulo. Si el uso del plan se acerca al 95 %, deja `PROGRESO.md` al día y detente.
 4. No hagas commits ni push salvo que el usuario lo pida.
 
@@ -52,6 +52,28 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - El código de ejemplo va en Python en la Parte II; también se usan bloques JSON, HTTP, SSE y SQL.
 - **Cada módulo trae:** objetivos, secciones numeradas, quiz (se aprueba con 70 %), ejercicio de diseño con solución plegable (estático o guiado) y checkpoint.
 
+### Conexión entre módulos
+Los módulos forman un currículo encadenado, no artículos sueltos. Cada módulo nuevo, y cada ampliación de uno publicado, cumple estas reglas:
+
+- **Recupera el contexto antes de planear.** Lee:
+  - la fila del módulo en `PLAN.md`;
+  - en `PROGRESO.md`, el pedido vigente y los indicios que se dejaron para ese módulo;
+  - los planes anteriores de `~/.claude/plans/` que lo mencionen.
+
+  Después busca las promesas que otros módulos ya hicieron sobre él, con `grep -n "MNN" modules/*.html` (por ejemplo, "el tope de gasto se lleva con el metering (M21)").
+- **Planea en detalle antes de escribir.** El plan junta todo eso y trae:
+  - las secciones con su id;
+  - las figuras, los widgets, el mapa, el quiz, los ejercicios, los términos y las fuentes por verificar;
+  - dos listas: las promesas que cumple el módulo y las secciones anteriores que retoma.
+- **Conecta en lugar de repetir.** Un concepto ya explicado se retoma con un enlace a la sección exacta, como `<a href="m18-cuotas-tokens.html#una-vez">M18</a>`, y una frase de recordatorio; después se extiende, sin volver a explicarlo. Los ejemplos se encadenan: se reutilizan los números y los casos anteriores cuando sirven (las 125 réplicas de M19, el ledger de M27).
+- **Cierra las promesas al publicar.** Las menciones "(MNN)" en texto plano de los módulos anteriores pasan a ser enlaces a la sección exacta. A un módulo no publicado se lo nombra en texto plano, nunca con un enlace.
+- **Deja indicios:**
+  - dentro del módulo, una mención "(MNN)" donde el tema sigue en un módulo posterior;
+  - en `PROGRESO.md`, un bloque "Siguiente" para los dos módulos que vienen, con el esbozo de secciones, los prerrequisitos, los widgets, los términos candidatos (revisados contra los ids que ya existen) y las fuentes por verificar.
+- **Revisa el glosario.** Si el módulo explica a fondo un término creado en otro módulo, su `deep` pasa a la sección nueva.
+
+Las guías de `proyectos/` tienen su propia regla de conexión: "Cómo conectar", en "De las guías de proyectos".
+
 ### De diseño (Apple HIG)
 - Tipografía del sistema. El modo claro u oscuro sigue al sistema, sin interruptor propio.
 - El vidrio va solo en la barra superior y en el sidebar; el contenido usa superficies sólidas.
@@ -64,9 +86,24 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - Lo básico (caché, DNS, REST, timeout) lleva `basic: true` y no se enlaza. Las palabras ambiguas llevan `noauto: true` en el glosario, o `class="no-autolink"` en el elemento.
 - Revisa con `node tools/test/links.mjs modules/<archivo>.html` que ningún término se enlace con otro sentido.
 
+## Módulos en dos niveles
+
+Un tema muy complejo puede dividirse en una versión esencial y una a fondo. Hoy solo está dividido M06 (M06 y M06.1). No dividas otro módulo sin que el usuario lo pida.
+
+- **Nombres.** La versión esencial conserva el id, la URL y el lugar en el progreso (`m06`, `m06-teoria-distribuida.html`). La versión a fondo es `mNN1` con número `MNN.1` (`m061`, `m061-teoria-distribuida-a-fondo.html`) y va en `course.data.js` justo después, con `kind: 'deep'`.
+- **Qué hace `kind: 'deep'`.** No cuenta para el progreso (`SD.countable`), no entra en el anterior/siguiente de los demás módulos (su propio pager vuelve a la versión esencial y sigue con el módulo siguiente), aparece en la ruta con la etiqueta "opcional", y la portada lo omite del mapa y lo marca "Opcional" en la lista por partes.
+- **La esencial:** entre 60 y 80 minutos, lo indispensable para seguir el curso, una analogía por concepto abstracto, figuras simples, quiz de 8 o 9 preguntas, ejercicio estático y checkpoint que cuenta. Cada sección cierra con `<p class="more-link">Para profundizar: …</p>`, que enlaza a la sección equivalente de la a fondo.
+- **La a fondo:** todo el contenido, sin recortes, más contexto, analogías (`callout--analogy`), figuras y widgets, con quiz propio (las preguntas anteriores más las nuevas) y los ejercicios guiados. Lleva su propio checkpoint, que no cuenta.
+- **Avisos.** Las dos páginas llevan un `level-switch` arriba (después del `header`) y otro abajo (después del checkpoint) que enlaza a la otra versión.
+- **Reutilizar, no duplicar.** La esencial puede copiar figuras de la a fondo y reutiliza los widgets. Los datos de los ejercicios guiados se cargan solo en la a fondo.
+- **Glosario.** Los términos avanzados llevan `deep` a la a fondo; los básicos que la esencial explica (en M06: CAP, PACELC, consistencia eventual y causal) siguen en la esencial. Los términos de la a fondo suman su id a `mods`. Los enlaces desde otros módulos a temas avanzados van a la a fondo.
+- **Palabras con dos sentidos.** Si un término cambia de significado respecto de lo que el lector ya conoce (síncrono y asíncrono en programación contra en teoría distribuida), se presenta el cambio de paradigma antes de usarlo y se fija una convención para el resto de la página ("replicación con espera" y "replicación en segundo plano").
+- **Al dividir,** actualiza `course.data.js`, el glosario, los enlaces entrantes, la estructura de este archivo, `PLAN.md` y `PROGRESO.md`, y corre `links.mjs` sobre todo el sitio.
+
 ## Cómo se agrega un módulo
 
-1. **Fragmento.** Escribe el contenido en un archivo aparte (fuera de `modules/`), con esta cabecera:
+1. **Contexto y plan.** Recupera el contexto, busca las promesas de otros módulos y escribe el plan detallado (ver "Conexión entre módulos").
+2. **Fragmento.** Escribe el contenido en un archivo aparte (fuera de `modules/`), con esta cabecera:
 
    ```html
    <!--META {"id":"m17","num":"M17","file":"m17-api-streaming.html","title":"…","desc":"…",
@@ -76,12 +113,12 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 
    `css`, `data`, `scripts` y `quiz` son opcionales; `"exercises": true` carga `data/exercises/<id>.data.js` y `core/exercise.js` para los ejercicios guiados. `<!--INCLUDE figura.svg-->` inserta un archivo relativo al fragmento.
 
-2. **Página.** Genérala con `python tools/mkpage.py fragmento.html`, que escribe `modules/<file>`. Desde ese momento, la página en `modules/` es la fuente de verdad y se edita directamente.
-3. **Quiz.** Créalo en `assets/js/data/quizzes/<id>.data.js`.
-4. **Glosario.** Agrega los términos nuevos al final de `assets/js/data/glossary.data.js`, en un bloque `/* ---------- MNN: … ---------- */`. Todo `data-term` que uses tiene que existir.
-5. **Publicación.** En `assets/js/data/course.data.js`, cambia `status: 'soon'` por `'ready'`. La ruta, el anterior/siguiente y la portada se actualizan solos.
-6. **Pruebas.** Corre `test-page.mjs` y `links.mjs` (ver "Pruebas") y mira las capturas en claro, en oscuro y a 390 px.
-7. **Traspaso.** Actualiza `PROGRESO.md`.
+3. **Página.** Genérala con `python tools/mkpage.py fragmento.html`, que escribe `modules/<file>`. Desde ese momento, la página en `modules/` es la fuente de verdad y se edita directamente.
+4. **Quiz.** Créalo en `assets/js/data/quizzes/<id>.data.js`.
+5. **Glosario.** Agrega los términos nuevos al final de `assets/js/data/glossary.data.js`, en un bloque `/* ---------- MNN: … ---------- */`. Todo `data-term` que uses tiene que existir.
+6. **Publicación.** En `assets/js/data/course.data.js`, cambia `status: 'soon'` por `'ready'`. La ruta, el anterior/siguiente y la portada se actualizan solos.
+7. **Pruebas.** Corre `test-page.mjs` y `links.mjs` (ver "Pruebas") y mira las capturas en claro, en oscuro y a 390 px.
+8. **Traspaso.** Convierte en enlaces las menciones "(MNN)" que otros módulos hacían a este. Actualiza `PROGRESO.md` y deja el bloque "Siguiente" para los dos módulos que vienen.
 
 ## Componentes de uso general
 
@@ -112,6 +149,21 @@ Todos están en `assets/css/components.css`; los interactivos, en `assets/js/`. 
 ```
 
 La tarjeta de definición completa (`callout--def`) suma `p.def-term` (con `span.def-en` para el nombre en inglés), `p.def-one` (la definición en una frase) y un `dl.def-rows` con Intuición, Ejemplo y "Por qué importa en producción". Hay un ejemplo en `m00-metodo.html` (percentiles).
+
+### Analogía y cambio de nivel
+
+```html
+<aside class="callout callout--analogy">
+  <p class="callout-label">Analogía</p>
+  <p>Un puente desde algo cotidiano: un tren suizo, un grupo de chat, la tarjeta de un hotel.</p>
+</aside>
+
+<aside class="level-switch" data-toc="skip">          <!-- solo en módulos en dos niveles -->
+  <p><b>Esta es la versión esencial.</b> …</p>
+  <a class="btn" href="m061-teoria-distribuida-a-fondo.html">Ir a la versión a fondo (M06.1)</a>
+</aside>
+<p class="more-link">Para profundizar: <a href="…#ancla">…</a>, en M06.1.</p>
+```
 
 ### Badges
 
@@ -258,7 +310,7 @@ SD.defineExercise('m06-planificador', {
 
 - Los scripts: `data/exercises/<id>.data.js` después de los datos del quiz, y `core/exercise.js` después de `core/quiz.js` (usa `SD.quizKit`). Con `mkpage.py`, alcanza con `"exercises": true` en el META; en una página existente se agregan a mano (así está en M18).
 - El glosario no enlaza dentro de `[data-exercise]`: los términos se explican en el texto del módulo.
-- Ejercicios publicados: siete en M06, uno en M18 y uno en M19.
+- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21 y cinco en M22 (incidentes).
 
 ### Quiz y checkpoint
 
@@ -310,10 +362,18 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 |---|---|---|
 | `data-calc="envelope"`, `"availability"`, `"tail"` | `widgets/calculators.js` | Back-of-envelope, disponibilidad compuesta y latencia de cola con fan-out (M00) |
 | `data-sim="lb"` | `widgets/sim-lb.js` | Algoritmos de balanceo con un servidor lento (M03) |
-| `data-sim="stampede"` | `widgets/sim-cache.js` | Cache stampede y sus mitigaciones (M04) |
+| `data-sim="httpver"` | `widgets/sim-http.js` | HTTP/1.1, HTTP/2 y HTTP/3 lado a lado, con pérdida de paquetes (M01) |
+| `data-sim="paginate"`, `"protobuf"` | `widgets/sim-api.js` | Paginación por OFFSET contra cursor mientras la tabla cambia, y un mensaje de Protobuf byte por byte comparado con JSON (M02) |
+| `data-sim="slowstart"` | `widgets/sim-slowstart.js` | Una instancia nueva entra a la flota, sin slow start y con ventanas de 30 y 60 s (M03) |
+| `data-sim="cachepat"` | `widgets/sim-cachepat.js` | Seis patrones de caché animados con cliente, servidor, caché y base; un botón alterna lento, rápido y pausa (M04) |
+| `data-sim="lease"` | `widgets/sim-lease.js` | Leases de caché como diagrama de secuencia animado, en cuatro casos (M04) |
+| `data-sim="stampede"` | `widgets/sim-cache.js` | Cache stampede animado: 20 instancias, la clave y la base, con la explicación de cada estrategia en la tarjeta (M04) |
 | `data-sim="isolation"`, `"quorum"`, `"ring"` | `widgets/sim-db.js` | Aislamiento, quórum y hashing consistente (M05) |
+| `data-sim="txlife"`, `"idxlookup"`, `"mvcc"`, `"replsync"`, `"quorumflow"` | `widgets/sim-dbflow.js` | Ciclo de vida de una transacción, búsqueda en índice clusterizado contra heap, MVCC, replicación síncrona y asíncrona, y quórum paso a paso; define `SD.flowAnim`, el motor genérico de nodos y mensajes con escenas (M05) |
+| `data-sim="cqrs"`, `"twopc"`, `"saga"`, `data-calc="igid"` | `widgets/sim-dtx.js` | CQRS, two-phase commit, sagas coreografiadas y orquestadas, e id de 64 bits al estilo de Instagram; necesita `sim-dbflow.js` (M05) |
 | `data-sim="raft"` | `widgets/sim-raft.js` | Elecciones, log y particiones de Raft (M06) |
 | `data-sim="lin"` | `widgets/sim-lin.js` | ¿Es linealizable? Historias editables y verificador exhaustivo, linealizable y secuencial; lógica en `SD.linCore` (M06) |
+| `data-sim="consist"`, `"replat"` | `widgets/sim-consist.js` | Una historia con cinco veredictos (linealizable, secuencial, causal, de sesión y eventual), y la latencia de una escritura según a cuántas de N réplicas espera, con una réplica lenta (M06.1) |
 | `data-sim="kafka"` | `widgets/sim-kafka.js` | Particiones, consumer group, lag y rebalanceo (M07) |
 | `data-sim="bucket"`, `"retry"` | `widgets/sim-resil.js` | Token bucket y tormenta de reintentos (M08) |
 | `data-sim="signurl"` | `widgets/sim-signurl.js` | URL firmada SigV4; expone `SD.crypto` (SHA-256 y HMAC en JS puro) (M09) |
@@ -327,8 +387,10 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="sse"`, `data-calc="streamcap"` | `widgets/sim-sse.js` | Un stream SSE evento por evento en tres formatos, y streams abiertos con la ley de Little (M17) |
 | `data-sim="reserve"`, `"tenants"`, `data-calc="escrow"` | `widgets/sim-quota.js` | Reservar y reconciliar tokens, cuatro clientes sobre una flota, y contador central contra escrow; lógica en `SD.quotaCore` (M18) |
 | `data-sim="router"`, `data-calc="coldstart"` | `widgets/sim-router.js` | Cinco políticas de routing con prefix caching y carga, y cold start con colchón de réplicas; lógica en `SD.routerCore` (M19) |
+| `data-calc="pricing"`, `data-sim="credits"`, `"usagepipe"` | `widgets/sim-meter.js` | Costo de una request por tipo de token con redondeo por línea, saldo de créditos con streams en vuelo y reservas, y el viaje de un evento de uso (normal, duplicado, tardío, perdido); `usagepipe` necesita `sim-dbflow.js`; lógica en `SD.meterCore` (M21) |
+| `data-calc="evalsize"`, `data-sim="canarymodel"`, `"shadowflow"`, `"injection"` | `widgets/sim-modelops.js` | Ejemplos que hacen falta en un eval (independiente y pareado), canary con una regresión escondida, shadow traffic con y sin efectos, y prompt injection indirecta con dos defensas; los dos últimos necesitan `sim-dbflow.js`; lógica en `SD.opsCore` (M22) |
 | `data-calc="snowflake"`, `data-calc="fanout"` | `widgets/sim-feed.js` | Id Snowflake bit por bit, y escrituras y lecturas del fan-out en escritura, en lectura e híbrido (M30) |
-| `data-calc="bom" data-preset="m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
+| `data-calc="bom" data-preset="m21\|m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
 
 Para escribir un widget nuevo:
 
@@ -415,15 +477,19 @@ ia-system-desing
 │       │   │   projects.data.js
 │       │   │
 │       │   ├───exercises
+│       │   │       m02.data.js
 │       │   │       m06.data.js
 │       │   │       m18.data.js
 │       │   │       m19.data.js
+│       │   │       m21.data.js
+│       │   │       m22.data.js
 │       │   │
 │       │   ├───maps
 │       │   │       m01-request.data.js
 │       │   │       m04-cache.data.js
 │       │   │       m09-objetos.data.js
 │       │   │       m19-flota.data.js
+│       │   │       m21-metering.data.js
 │       │   │       m27-pagos.data.js
 │       │   │       m28-cloudflare.data.js
 │       │   │       m29-whatsapp.data.js
@@ -438,6 +504,9 @@ ia-system-desing
 │       │   │       a05.data.js
 │       │   │       a06.data.js
 │       │   │       a07.data.js
+│       │   │       a08.data.js
+│       │   │       a09.data.js
+│       │   │       a10.data.js
 │       │   │
 │       │   └───quizzes
 │       │           cpa.data.js
@@ -448,6 +517,7 @@ ia-system-desing
 │       │           m04.data.js
 │       │           m05.data.js
 │       │           m06.data.js
+│       │           m061.data.js
 │       │           m07.data.js
 │       │           m08.data.js
 │       │           m09.data.js
@@ -462,6 +532,8 @@ ia-system-desing
 │       │           m18.data.js
 │       │           m19.data.js
 │       │           m20.data.js
+│       │           m21.data.js
+│       │           m22.data.js
 │       │           m27.data.js
 │       │           m28.data.js
 │       │           m29.data.js
@@ -479,19 +551,28 @@ ia-system-desing
 │       │
 │       └───widgets
 │               calculators.js
+│               sim-api.js
 │               sim-cache.js
+│               sim-cachepat.js
 │               sim-collab.js
 │               sim-context.js
+│               sim-consist.js
 │               sim-db.js
+│               sim-dbflow.js
+│               sim-dtx.js
 │               sim-engine.js
 │               sim-feed.js
 │               sim-gpu.js
+│               sim-http.js
 │               sim-infra.js
 │               sim-jwt.js
 │               sim-kafka.js
 │               sim-lb.js
+│               sim-lease.js
 │               sim-lin.js
 │               sim-llm.js
+│               sim-meter.js
+│               sim-modelops.js
 │               sim-obs.js
 │               sim-quant.js
 │               sim-quota.js
@@ -499,6 +580,7 @@ ia-system-desing
 │               sim-resil.js
 │               sim-router.js
 │               sim-signurl.js
+│               sim-slowstart.js
 │               sim-sse.js
 │
 ├───modules
@@ -510,6 +592,7 @@ ia-system-desing
 │       m04-cache.html
 │       m05-bases-de-datos.html
 │       m06-teoria-distribuida.html
+│       m061-teoria-distribuida-a-fondo.html
 │       m07-mensajeria.html
 │       m08-resiliencia.html
 │       m09-objetos.html
@@ -524,6 +607,8 @@ ia-system-desing
 │       m18-cuotas-tokens.html
 │       m19-router-flota.html
 │       m20-producto-chatgpt.html
+│       m21-metering.html
+│       m22-operar-modelos.html
 │       m27-pagos-stripe.html
 │       m28-cloudflare.html
 │       m29-whatsapp.html
@@ -538,6 +623,9 @@ ia-system-desing
 │       a05-dos-primarios.html
 │       a06-sharding.html
 │       a07-kubernetes.html
+│       a08-lider.html
+│       a09-colas.html
+│       a10-circuit-breaker.html
 │
 └───tools
     │   mkguide.py

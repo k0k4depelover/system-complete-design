@@ -1,5 +1,5 @@
 /* Widgets de las secciones "Impleméntalo tú mismo" de los casos de estudio:
-   <div data-calc="bom" data-preset="m27|m28|m29|m30">  factura mensual estimada de un clon en AWS, en tres escalas
+   <div data-calc="bom" data-preset="m21|m23|m24|m27|m28|m29|m30">  factura mensual estimada de un clon en AWS, en tres escalas
    <div data-calc="gateways">                     cuántos gateways de conexión necesita un clon de WhatsApp
    Precios: lista on-demand aproximada de us-east-1 (septiembre de 2026). Son editables porque cambian. */
 (function () {
@@ -12,6 +12,32 @@
   /* Cada fila: c componente, s servicio o instancia, u unidad de precio, p precio (número o uno por escala), q cantidad por escala.
      Con u = 'h' la cantidad es cuántos recursos corren todo el mes (instancias, balanceadores, nodos). */
   var PRESETS = {
+    m21: {
+      title: 'Factura mensual de tu metering',
+      scales: ['MVP', 'Producción', 'Gran escala'],
+      scaleNote: [
+        '1 millón de requests por día: Kafka mínimo y una aplicación de Flink de 2 KPU.',
+        'La flota del M19: 17 millones de requests y 22.5 millones de eventos de uso por día.',
+        'Diez veces más: 225 millones de eventos por día, unos 2 600 por segundo en promedio.'
+      ],
+      rows: [
+        { c: 'Log de eventos', s: 'MSK kafka.m7g.large, un broker', u: 'h', p: 0.204, q: [3, 3, 6] },
+        { c: 'Almacenamiento de MSK', s: 'GB al mes (7 días de retención, tres réplicas)', u: 'GB', p: 0.1, q: [100, 300, 3000] },
+        { c: 'Dedupe y ventanas', s: 'Managed Service for Apache Flink, KPU-hora (más una de orquestación)', u: 'h', p: 0.11, q: [3, 9, 65] },
+        { c: 'Estado de Flink', s: 'almacenamiento de la aplicación, 50 GB por KPU', u: 'GB', p: 0.1, q: [100, 400, 3200] },
+        { c: 'Log crudo', s: 'S3 Standard, GB al mes (un año acumulado)', u: 'GB', p: 0.023, q: [300, 5000, 50000] },
+        { c: 'Agregados', s: 'ClickHouse en EC2 r7g.xlarge, r7g.2xlarge a gran escala; con réplica', u: 'h', p: [0.2142, 0.2142, 0.4284], q: [2, 2, 6] },
+        { c: 'Discos de ClickHouse', s: 'EBS gp3, GB al mes', u: 'GB', p: 0.08, q: [200, 1000, 6000] },
+        { c: 'Ledger, saldos y catálogo', s: 'Aurora PostgreSQL db.r7g.large', u: 'h', p: 0.276, q: [2, 2, 4] },
+        { c: 'Almacenamiento de Aurora', s: 'por GB al mes', u: 'GB', p: 0.1, q: [20, 200, 2000] },
+        { c: 'Operaciones de E/S de Aurora', s: 'por millón', u: 'M', p: 0.2, q: [10, 200, 2000] },
+        { c: 'Saldo en caliente y topes', s: 'ElastiCache (Valkey) cache.r7g.large', u: 'h', p: 0.175, q: [0, 2, 4] },
+        { c: 'Saldo, topes, facturas y conciliación', s: 'Fargate ARM, tarea de 1 vCPU y 2 GB', u: 'h', p: 0.0395, q: [3, 8, 30] },
+        { c: 'Webhooks de Stripe', s: 'SQS, por millón de requests', u: 'M', p: 0.4, q: [1, 5, 50] },
+        { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [10, 200, 1500] }
+      ],
+      foot: 'No incluye Stripe Billing, que en pago por uso cobra el 0.7 % del volumen facturado, ni las GPUs. Con 22.5 millones de eventos por día, el metering cuesta una fracción mínima de la flota que mide: la dificultad está en la exactitud, no en la infraestructura.'
+    },
     m28: {
       title: 'Factura mensual de tu propia red de borde',
       scales: ['Prueba', 'Producción', 'Gran escala'],
@@ -96,6 +122,57 @@
         { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [20, 1000, 8000] }
       ],
       foot: 'APNs y FCM no cobran por notificación; un servicio propio que les habla directo cuesta unas pocas instancias, contra unos 0.50 USD por millón con SNS. Los medios dominan la factura: por eso se cifran una vez, se reenvían sin volver a subirse y se borran del servidor tras la descarga o a los 30 días.'
+    },
+    m23: {
+      title: 'Factura mensual de tu servicio de generación de imágenes',
+      scales: ['MVP', 'Producción', 'Gran escala'],
+      scaleNote: [
+        '100 000 imágenes por día con un DiT de 12 B a 7 s de GPU por imagen: 24 H100 en 3 nodos.',
+        '3 millones de imágenes por día, pico al doble del promedio y 70 % de uso en el pico: 695 H100 en 87 nodos.',
+        '30 millones de imágenes por día: 6 945 H100 en 869 nodos, todo lo demás por diez.'
+      ],
+      rows: [
+        { c: 'Workers de generación', s: 'EC2 p5.48xlarge (8 H100), on-demand', u: 'h', p: 55.04, q: [3, 87, 869] },
+        { c: 'Moderación de entrada y salida', s: 'EC2 g6.xlarge (1 L4)', u: 'h', p: 0.8048, q: [2, 5, 50] },
+        { c: 'Plano de control de Kubernetes', s: 'EKS, por clúster', u: 'h', p: 0.10, q: [1, 1, 2] },
+        { c: 'API de jobs', s: 'Fargate ARM, tarea de 1 vCPU y 2 GB', u: 'h', p: 0.0395, q: [2, 6, 40] },
+        { c: 'Entrada HTTPS', s: 'Application Load Balancer', u: 'h', p: 0.0225, q: [1, 1, 2] },
+        { c: 'Capacidad del ALB', s: 'LCU-hora (promedio)', u: 'h', p: 0.008, q: [1, 10, 100] },
+        { c: 'Colas por prioridad', s: 'SQS, por millón de requests (4 por job)', u: 'M', p: 0.4, q: [12, 365, 3650] },
+        { c: 'Estado de los jobs: escrituras', s: 'DynamoDB on-demand, por millón de WRU (5 por job)', u: 'M', p: 0.625, q: [15, 456, 4563] },
+        { c: 'Estado de los jobs: lecturas', s: 'DynamoDB on-demand, por millón de RRU (polling)', u: 'M', p: 0.125, q: [12, 365, 3650] },
+        { c: 'Imágenes guardadas', s: 'S3 Standard, PNG de los últimos 30 días, promedio por tramos', u: 'GB', p: [0.023, 0.0224, 0.0214], q: [4720, 141600, 1416000] },
+        { c: 'Escrituras en S3', s: 'S3 PUT, por millón (PNG y WebP)', u: 'M', p: 5, q: [6.1, 182.5, 1825] },
+        { c: 'Entrega de las imágenes', s: 'CloudFront, WebP de 300 kB y 3 vistas, promedio por tramos', u: 'GB', p: [0.085, 0.073, 0.041], q: [2740, 82125, 821250] },
+        { c: 'Webhooks', s: 'Lambda, por millón de invocaciones', u: 'M', p: 0.2, q: [3.04, 91.25, 912.5] },
+        { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [10, 200, 2000] }
+      ],
+      foot: 'Las GPUs son el 99 % de la factura: un modelo destilado de 4 pasos la divide por 12, y la capacidad reservada o spot para batch la baja bastante más que cualquier otra línea. No incluye la duración de las Lambdas, NAT ni transferencia entre zonas, que no cambian el orden de magnitud.'
+    },
+    m24: {
+      title: 'Factura mensual de tu agente de voz en cascada',
+      scales: ['MVP', 'Producción', 'Gran escala'],
+      scaleNote: [
+        '300 sesiones simultáneas en el pico (150 en promedio): 6.57 millones de minutos al mes. El LLM es un nodo de 8 H100 casi ocioso.',
+        'La flota de referencia de 24.1: 30 000 sesiones en el pico y 657 millones de minutos al mes; 27 réplicas del LLM, en 14 nodos en el pico.',
+        '300 000 sesiones en el pico: todo por diez, con algo de economía de escala en la salida a internet.'
+      ],
+      rows: [
+        { c: 'LLM de la conversación', s: 'EC2 p5.48xlarge (8 H100), réplicas de 4 GPUs', u: 'h', p: 55.04, q: [1, 12, 105] },
+        { c: 'Llamadas telefónicas entrantes', s: 'Chime SDK Voice Connector, millón de minutos (10 % de los minutos)', u: 'M', p: 2216, q: [0.657, 65.7, 657] },
+        { c: 'Workers de voz', s: 'EC2 m7g.2xlarge (8 vCPU), 80 sesiones cada uno', u: 'h', p: 0.3264, q: [4, 325, 3250] },
+        { c: 'TTS en streaming', s: 'EC2 g6.xlarge (1 L4), 200 sesiones cada una', u: 'h', p: 0.8048, q: [2, 130, 1300] },
+        { c: 'STT en streaming', s: 'EC2 g6.xlarge (1 L4), 300 sesiones cada una', u: 'h', p: 0.8048, q: [2, 88, 868] },
+        { c: 'Audio hacia los usuarios', s: 'Salida a internet, 52 kbps por sesión, promedio por tramos', u: 'GB', p: [0.09, 0.0652, 0.0515], q: [2562, 256230, 2562300] },
+        { c: 'SFU', s: 'EC2 c7gn.2xlarge, 1 000 sesiones cada uno', u: 'h', p: 0.4992, q: [2, 40, 400] },
+        { c: 'TURN (coturn)', s: 'EC2 c7gn.xlarge, dos por región', u: 'h', p: 0.2496, q: [2, 6, 30] },
+        { c: 'Grabaciones con consentimiento', s: 'S3 Standard, 10 % de los minutos, 90 días', u: 'GB', p: [0.023, 0.023, 0.0221], q: [473, 47304, 473040] },
+        { c: 'Estado de las sesiones', s: 'ElastiCache (Valkey) cache.r7g.large', u: 'h', p: 0.175, q: [2, 6, 18] },
+        { c: 'Eventos de uso (M21)', s: 'MSK kafka.m7g.large, un broker', u: 'h', p: 0.204, q: [0, 3, 6] },
+        { c: 'Plano de control de Kubernetes', s: 'EKS, un clúster por región', u: 'h', p: 0.10, q: [1, 3, 6] },
+        { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [10, 300, 3000] }
+      ],
+      foot: 'Supuestos de diseño de referencia, para medir con tus modelos: un SFU cada 1 000 sesiones, un worker de 8 vCPU cada 80, una L4 de STT cada 300 sesiones y una de TTS cada 200; los pools que escalan siguen la curva del día y promedian el 65 % del pico. El 10 % de los minutos entra por teléfono y el 10 % se graba (Opus a 32 kbps). En producción sale a 0.13 centavos por minuto, unas 40 veces menos que la Realtime API con caché, sin contar al equipo que lo opera ni el entrenamiento de los modelos.'
     },
     m30: {
       title: 'Factura mensual de tu clon de Twitter',

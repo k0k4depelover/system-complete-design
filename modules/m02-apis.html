@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M02. Protocolos y diseño de APIs</title>
-<meta name="description" content="REST, gRPC, GraphQL, WebSockets, SSE y webhooks; métodos, códigos de estado, paginación por cursor, versionado, errores e idempotencia.">
+<meta name="description" content="REST, RPC y gRPC, SOAP y WS-Security, GraphQL, WebSockets, SSE y webhooks: cómo funciona cada uno en el cable, métodos y códigos de estado, paginación por cursor con inserts concurrentes, versionado, errores e idempotencia.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -38,11 +38,11 @@
 
       <header class="title-block">
         <h1>Protocolos y diseño de APIs</h1>
-        <p class="lead">Una API es un contrato que otros van a usar durante años, con reintentos, redes que se cortan y versiones viejas del cliente. Este módulo compara los protocolos de comunicación y baja al detalle que separa una API que aguanta producción de una que no: semántica de métodos, errores, paginación, versionado e idempotencia.</p>
+        <p class="lead">Una API es un contrato que otros van a usar durante años, con reintentos, redes que se cortan y versiones viejas del cliente. Este módulo compara los protocolos de comunicación, abre cada uno para ver qué viaja por el cable (frames de HTTP/2, bytes de Protobuf, sobres de SOAP firmados, frames de WebSocket) y baja al detalle que separa una API que aguanta producción de una que no: semántica de métodos, errores, paginación con la tabla en movimiento, versionado e idempotencia.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M02</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M01</dd></div>
           <div><dt>Estado</dt><dd data-status="m02">Sin empezar</dd></div>
         </dl>
@@ -50,9 +50,12 @@
 <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
-          <li>Elegir entre REST, gRPC, GraphQL, SSE, WebSockets y webhooks según el problema.</li>
+          <li>Elegir entre REST, gRPC, SOAP, GraphQL, SSE, WebSockets y webhooks según el problema, y explicar de dónde salió cada uno.</li>
           <li>Usar los métodos y códigos de estado HTTP por lo que garantizan, no por costumbre.</li>
-          <li>Paginar con cursores, versionar sin romper clientes y devolver errores útiles.</li>
+          <li>Calcular por qué OFFSET se vuelve lento y el cursor no, y decidir qué hacer con los inserts que llegan mientras alguien pagina.</li>
+          <li>Leer una llamada gRPC frame por frame y un mensaje Protobuf byte por byte.</li>
+          <li>Distinguir seguridad de transporte (TLS) de seguridad de mensaje (WS-Security), y reconocer sus ataques.</li>
+          <li>Versionar sin romper clientes y devolver errores útiles.</li>
           <li>Implementar idempotency keys con una tabla y control de concurrencia optimista con ETags.</li>
           <li>Diseñar el envío y la recepción de webhooks que sobreviven a reintentos y desorden.</li>
         </ul>
@@ -69,9 +72,11 @@
             <tr><td><dfn data-term="rest">REST</dfn> sobre HTTP</td><td>Cliente pide</td><td>JSON</td><td>APIs públicas, CRUD, todo lo cacheable</td><td>Muchas idas y vueltas para pantallas complejas</td></tr>
             <tr><td><dfn data-term="grpc">gRPC</dfn></td><td>Cliente pide; streaming en ambos sentidos</td><td>Protobuf (binario)</td><td>Tráfico entre servicios internos</td><td>No es nativo en navegadores; cachés HTTP no lo entienden</td></tr>
             <tr><td><dfn data-term="graphql">GraphQL</dfn></td><td>Cliente pide</td><td>JSON</td><td>Frontends que combinan muchos recursos</td><td>Costo de queries arbitrarias, caché difícil, N+1</td></tr>
+            <tr><td><dfn data-term="soap">SOAP</dfn></td><td>Cliente pide</td><td>XML dentro de un sobre (<code>Envelope</code>)</td><td>Integraciones entre empresas, bancos y gobierno con contratos formales</td><td>Verboso, herramientas pesadas y ataques propios de XML</td></tr>
+            <tr><td><dfn data-term="json-rpc">JSON-RPC</dfn></td><td>Cliente pide; también notificaciones sin respuesta</td><td>JSON</td><td>Llamar funciones con poca ceremonia, sobre cualquier transporte</td><td>Sin semántica HTTP: errores, reintentos y caché van por tu cuenta</td></tr>
             <tr><td>SSE</td><td>Servidor empuja</td><td>Texto (eventos)</td><td>Notificaciones, tokens de un LLM, precios</td><td>Solo servidor → cliente</td></tr>
-            <tr><td><dfn data-term="websocket">WebSocket</dfn></td><td>Ambos, en cualquier momento</td><td>Mensajes (texto o binario)</td><td>Chat, colaboración, juegos</td><td>Conexiones con estado: escalar y balancear es más difícil</td></tr>
-            <tr><td><dfn data-term="long-polling">Long polling</dfn></td><td>Servidor responde cuando hay algo</td><td>JSON</td><td>Entornos donde nada más funciona</td><td>Una request por mensaje; latencia de reconexión</td></tr>
+            <tr><td>WebSocket</td><td>Ambos, en cualquier momento</td><td>Mensajes (texto o binario)</td><td>Chat, colaboración, juegos</td><td>Conexiones con estado: escalar y balancear es más difícil</td></tr>
+            <tr><td>Long polling</td><td>Servidor responde cuando hay algo</td><td>JSON</td><td>Entornos donde nada más funciona</td><td>Una request por mensaje; latencia de reconexión</td></tr>
             <tr><td><dfn data-term="webhook">Webhooks</dfn></td><td>Tu sistema llama al de otro</td><td>JSON firmado</td><td>Avisar eventos a sistemas de clientes</td><td>Entrega al menos una vez, desorden, receptores caídos</td></tr>
           </tbody>
         </table>
@@ -161,9 +166,224 @@ data: {"finish_reason": "stop"}</code></pre>
 {"type": "ping"}</code></pre>
           <p>Como no hay semántica HTTP por mensaje, tienes que reinventar lo que HTTP te daba: correlación (<code>request_id</code>), errores, reintentos e idempotencia.</p>
         </section>
+        <section data-tab="SOAP">
+          <p>Todo es un POST a una sola URL. Lo que se quiere hacer va dentro del XML, en un sobre con una cabecera (para seguridad y ruteo) y un cuerpo. Es SOAP 1.2; la sección 2.7 lo desarma.</p>
+<pre><code>POST /chat HTTP/1.1
+Host: servicios.ejemplo.com
+Content-Type: application/soap+xml; charset=utf-8; action="urn:chat:EnviarMensaje"
+
+&lt;soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"
+               xmlns:c="urn:ejemplo:chat:v1"&gt;
+  &lt;soap:Header&gt;…&lt;/soap:Header&gt;
+  &lt;soap:Body&gt;
+    &lt;c:EnviarMensaje&gt;
+      &lt;c:conversacion&gt;conv_42&lt;/c:conversacion&gt;
+      &lt;c:contenido&gt;Hola&lt;/c:contenido&gt;
+    &lt;/c:EnviarMensaje&gt;
+  &lt;/soap:Body&gt;
+&lt;/soap:Envelope&gt;
+
+HTTP/1.1 200 OK
+Content-Type: application/soap+xml; charset=utf-8
+
+&lt;soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"
+               xmlns:c="urn:ejemplo:chat:v1"&gt;
+  &lt;soap:Body&gt;
+    &lt;c:EnviarMensajeResponse&gt;&lt;c:id&gt;msg_18&lt;/c:id&gt;&lt;/c:EnviarMensajeResponse&gt;
+  &lt;/soap:Body&gt;
+&lt;/soap:Envelope&gt;</code></pre>
+          <p>Compara el tamaño con la pestaña REST: el mismo dato, con varias veces más bytes. A cambio, el contrato está escrito en un WSDL y el sobre admite firma y cifrado por partes.</p>
+        </section>
+        <section data-tab="JSON-RPC">
+          <p>Un método, parámetros y un <code>id</code> para emparejar la respuesta con la llamada. No depende de HTTP: funciona igual sobre un WebSocket o sobre la entrada estándar de un proceso.</p>
+<pre data-lang="json"><code>// llamada
+{"jsonrpc": "2.0", "method": "chat.enviar", "params": {"conversation_id": "conv_42", "content": "Hola"}, "id": 7}
+
+// respuesta: el mismo id
+{"jsonrpc": "2.0", "result": {"message_id": "msg_18"}, "id": 7}
+
+// error, con un código estándar
+{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 7}
+
+// notificación: sin id, el servidor no responde
+{"jsonrpc": "2.0", "method": "chat.escribiendo", "params": {"conversation_id": "conv_42"}}</code></pre>
+          <p>La especificación 2.0 define los códigos −32700 (JSON inválido), −32600 (request inválida), −32601 (método inexistente), −32602 (parámetros inválidos) y −32603 (error interno), y permite mandar un arreglo de llamadas en un solo envío. <span class="badge badge--doc">Documentado</span> La usan el Language Server Protocol de los editores y el Model Context Protocol, con el que los asistentes de IA llaman a herramientas. <span class="badge badge--doc">Documentado</span></p>
+        </section>
       </div>
 
+      <h3 id="historia">De dónde sale cada uno</h3>
+      <p>Los protocolos no aparecieron todos juntos: cada uno respondió a los problemas del anterior, y entender esa historia explica por qué conviven hoy.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 318" role="img" aria-labelledby="f2tlt f2tld">
+<title id="f2tlt">Cuarenta años de protocolos de API</title>
+<desc id="f2tld">Línea de tiempo de 1980 a 2020: RPC de Birrell y Nelson en 1984, ONC RPC en 1988, CORBA en 1991, Java RMI en 1997, XML-RPC en 1998, SOAP 1.1 y la tesis de REST en 2000, SOAP 1.2 en 2003, WS-Security en 2004, Thrift en 2007, JSON-RPC 2.0 en 2010, WebSocket en 2011, y GraphQL, gRPC y HTTP/2 en 2015.</desc>
+<defs><marker id="f2tla" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="dg-edge" d="M30 160 H745"/>
+<path class="dg-edge" d="M40.0 156 V164"/>
+<text class="dg-num" x="40.0" y="178" text-anchor="middle">1980</text>
+<path class="dg-edge" d="M127.5 156 V164"/>
+<text class="dg-num" x="127.5" y="178" text-anchor="middle">1985</text>
+<path class="dg-edge" d="M215.0 156 V164"/>
+<text class="dg-num" x="215.0" y="178" text-anchor="middle">1990</text>
+<path class="dg-edge" d="M302.5 156 V164"/>
+<text class="dg-num" x="302.5" y="178" text-anchor="middle">1995</text>
+<path class="dg-edge" d="M390.0 156 V164"/>
+<text class="dg-num" x="390.0" y="178" text-anchor="middle">2000</text>
+<path class="dg-edge" d="M477.5 156 V164"/>
+<text class="dg-num" x="477.5" y="178" text-anchor="middle">2005</text>
+<path class="dg-edge" d="M565.0 156 V164"/>
+<text class="dg-num" x="565.0" y="178" text-anchor="middle">2010</text>
+<path class="dg-edge" d="M652.5 156 V164"/>
+<text class="dg-num" x="652.5" y="178" text-anchor="middle">2015</text>
+<path class="dg-edge" d="M740.0 156 V164"/>
+<text class="dg-num" x="740.0" y="178" text-anchor="middle">2020</text>
+<path d="M110.0 160 V120" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="110.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="110.0" y="102" text-anchor="middle">1984</text>
+<text class="dg-tiny" x="110.0" y="115" text-anchor="middle">RPC (Birrell y Nelson)</text>
+<path d="M180.0 160 V244" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="180.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="180.0" y="257" text-anchor="middle">1988</text>
+<text class="dg-tiny" x="180.0" y="271" text-anchor="middle">ONC RPC, RFC 1057</text>
+<path d="M232.5 160 V80" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="232.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="232.5" y="62" text-anchor="middle">1991</text>
+<text class="dg-tiny" x="232.5" y="75" text-anchor="middle">CORBA 1.0</text>
+<path d="M337.5 160 V204" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="337.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="337.5" y="217" text-anchor="middle">1997</text>
+<text class="dg-tiny" x="337.5" y="231" text-anchor="middle">Java RMI</text>
+<path d="M355.0 160 V120" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="355.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="355.0" y="102" text-anchor="middle">1998</text>
+<text class="dg-tiny" x="355.0" y="115" text-anchor="middle">XML-RPC</text>
+<path d="M390.0 160 V244" stroke="var(--l-queue)" stroke-width="1.5"/>
+<circle cx="390.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-queue)" stroke-width="2.5"/>
+<text class="dg-num" x="390.0" y="257" text-anchor="middle">2000</text>
+<text class="dg-tiny" x="390.0" y="271" text-anchor="middle">SOAP 1.1</text>
+<path d="M390.0 160 V80" stroke="var(--l-client)" stroke-width="1.5"/>
+<circle cx="390.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-client)" stroke-width="2.5"/>
+<text class="dg-num" x="430.0" y="62" text-anchor="end">2000</text>
+<text class="dg-tiny" x="430.0" y="75" text-anchor="end">REST (tesis de Fielding)</text>
+<path d="M442.5 160 V40" stroke="var(--l-queue)" stroke-width="1.5"/>
+<circle cx="442.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-queue)" stroke-width="2.5"/>
+<text class="dg-num" x="442.5" y="22" text-anchor="middle">2003</text>
+<text class="dg-tiny" x="442.5" y="35" text-anchor="middle">SOAP 1.2 (W3C)</text>
+<path d="M460.0 160 V204" stroke="var(--l-queue)" stroke-width="1.5"/>
+<circle cx="460.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-queue)" stroke-width="2.5"/>
+<text class="dg-num" x="460.0" y="217" text-anchor="middle">2004</text>
+<text class="dg-tiny" x="460.0" y="231" text-anchor="middle">WS-Security (OASIS)</text>
+<path d="M512.5 160 V120" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="512.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="512.5" y="102" text-anchor="middle">2007</text>
+<text class="dg-tiny" x="512.5" y="115" text-anchor="middle">Thrift (Facebook)</text>
+<path d="M565.0 160 V244" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="565.0" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="565.0" y="257" text-anchor="middle">2010</text>
+<text class="dg-tiny" x="565.0" y="271" text-anchor="middle">JSON-RPC 2.0</text>
+<path d="M582.5 160 V80" stroke="var(--l-edge)" stroke-width="1.5"/>
+<circle cx="582.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-edge)" stroke-width="2.5"/>
+<text class="dg-num" x="582.5" y="62" text-anchor="middle">2011</text>
+<text class="dg-tiny" x="582.5" y="75" text-anchor="middle">WebSocket, RFC 6455</text>
+<path d="M652.5 160 V120" stroke="var(--l-db)" stroke-width="1.5"/>
+<circle cx="652.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-db)" stroke-width="2.5"/>
+<text class="dg-num" x="644.5" y="102" text-anchor="end">2015</text>
+<text class="dg-tiny" x="644.5" y="115" text-anchor="end">GraphQL</text>
+<path d="M652.5 160 V204" stroke="var(--l-service)" stroke-width="1.5"/>
+<circle cx="652.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-num" x="652.5" y="217" text-anchor="middle">2015</text>
+<text class="dg-tiny" x="652.5" y="231" text-anchor="middle">gRPC</text>
+<path d="M652.5 160 V40" stroke="var(--l-client)" stroke-width="1.5"/>
+<circle cx="652.5" cy="160" r="5" fill="var(--bg)" stroke="var(--l-client)" stroke-width="2.5"/>
+<text class="dg-num" x="652.5" y="22" text-anchor="middle">2015</text>
+<text class="dg-tiny" x="652.5" y="35" text-anchor="middle">HTTP/2, RFC 7540</text>
+<circle cx="40" cy="304" r="5" fill="var(--bg)" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-small" x="50" y="308">RPC</text>
+<circle cx="100.16" cy="304" r="5" fill="var(--bg)" stroke="var(--l-queue)" stroke-width="2.5"/>
+<text class="dg-small" x="110.16" y="308">SOAP y WS-*</text>
+<circle cx="214.07999999999998" cy="304" r="5" fill="var(--bg)" stroke="var(--l-client)" stroke-width="2.5"/>
+<text class="dg-small" x="224.07999999999998" y="308">HTTP y REST</text>
+<circle cx="328.0" cy="304" r="5" fill="var(--bg)" stroke="var(--l-db)" stroke-width="2.5"/>
+<text class="dg-small" x="338.0" y="308">GraphQL</text>
+<circle cx="415.04" cy="304" r="5" fill="var(--bg)" stroke="var(--l-edge)" stroke-width="2.5"/>
+<text class="dg-small" x="425.04" y="308">Tiempo real</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.1.</b> Las tres familias se alternan: RPC (llamar funciones), documentos sobre HTTP (REST) y consultas (GraphQL). Los colores agrupan los protocolos por familia.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>1984, la idea de RPC.</b> Andrew Birrell y Bruce Nelson, en Xerox PARC, publicaron cómo hacer que llamar a una función de otra máquina se viera igual que llamar a una local. <span class="badge badge--doc">Documentado</span> Casi todo lo que vino después es una variante de esa idea.</li>
+        <li><b>Años noventa, RPC atado a un ecosistema.</b> ONC RPC (Sun, la base de NFS), CORBA y Java RMI funcionaban, pero cada uno exigía su propio runtime, se llevaba mal con los firewalls y, en el caso de RMI, solo hablaba Java.</li>
+        <li><b>1998 a 2004, RPC por HTTP y XML.</b> XML-RPC y después SOAP usaron HTTP como transporte para pasar los firewalls, y XML para que cualquier lenguaje pudiera leer el mensaje. SOAP sumó contratos formales (WSDL) y la familia WS-*, con seguridad a nivel de mensaje (WS-Security, 2004). <span class="badge badge--doc">Documentado</span></li>
+        <li><b>2000, REST.</b> Roy Fielding, uno de los autores de HTTP, describió en su tesis el estilo de arquitectura que había hecho escalar la web. Con JSON y los navegadores, se volvió la forma por defecto de las APIs públicas. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>2015, vuelta al RPC binario.</b> Google publicó gRPC, derivado de Stubby, el RPC que usaba internamente, porque entre servicios propios importan más el rendimiento y los contratos tipados que leer el mensaje a ojo. El mismo año, Facebook publicó GraphQL, que usaba desde 2012 en su app móvil. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
       <h2 id="rest"><span class="sec-num">2.2</span>REST bien hecho: métodos y códigos de estado</h2>
+
+      <h3 id="rest-fielding">Qué es REST, según quien lo definió</h3>
+      <p>REST no es "JSON por HTTP". Es un <b>estilo de arquitectura</b>: un conjunto de restricciones que Roy Fielding describió en su tesis doctoral del año 2000 para explicar por qué la web había escalado tanto. <span class="badge badge--doc">Documentado</span> Cada restricción tiene una consecuencia práctica:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Restricción</th><th>Qué exige</th><th>Qué te da en producción</th></tr></thead>
+          <tbody>
+            <tr><td>Cliente-servidor</td><td>La interfaz y los datos evolucionan por separado</td><td>Una app móvil y una web sobre la misma API</td></tr>
+            <tr><td>Sin estado</td><td>Cada request trae todo lo necesario: credencial, cursor, versión</td><td>Cualquier instancia atiende cualquier request: el balanceo es trivial y escalar es agregar instancias (M03)</td></tr>
+            <tr><td>Cacheable</td><td>Cada respuesta dice si se puede guardar y cuánto (<code>Cache-Control</code>, <code>ETag</code>)</td><td>CDNs, proxies y navegadores te ahorran requests (M04)</td></tr>
+            <tr><td>Interfaz uniforme</td><td>Recursos con URL, representaciones (JSON, HTML), mensajes que se describen solos (método, headers, tipo de contenido) e hipermedia</td><td>Un proxy que no conoce tu API igual sabe que un GET se puede reintentar y cachear</td></tr>
+            <tr><td>Sistema en capas</td><td>El cliente no sabe si habla con el servidor o con un intermediario</td><td>Puedes meter una CDN, un gateway o un balanceador sin cambiar al cliente</td></tr>
+            <tr><td>Código bajo demanda (opcional)</td><td>El servidor puede enviar código que el cliente ejecuta</td><td>El JavaScript de una página web</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>En 2008, Leonard Richardson propuso una escala para medir qué tan "REST" es una API, que Martin Fowler popularizó con el nombre de modelo de madurez de Richardson. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 316" role="img" aria-labelledby="f2rmt f2rmd">
+<title id="f2rmt">Modelo de madurez de Richardson</title>
+<desc id="f2rmd">Cuatro escalones. Nivel 0: un solo endpoint y todo por POST, como SOAP o XML-RPC. Nivel 1: una URL por recurso. Nivel 2: métodos y códigos de estado HTTP con su significado. Nivel 3: la respuesta trae enlaces a las acciones posibles (hipermedia). La mayoría de las APIs que se llaman REST están en el nivel 2.</desc>
+<defs><marker id="f2rma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="14" y="180" width="178" height="120" rx="8"/>
+<text class="dg-num" x="26" y="200">Nivel 0</text>
+<text class="dg-label" x="26" y="218">Un endpoint, todo POST</text>
+<text class="dg-tiny" x="26" y="240" style="font-family:var(--f-mono);white-space:pre">POST /api</text>
+<text class="dg-tiny" x="26" y="255" style="font-family:var(--f-mono);white-space:pre">{&quot;op&quot;: &quot;reservar&quot;,</text>
+<text class="dg-tiny" x="26" y="270" style="font-family:var(--f-mono);white-space:pre"> &quot;sala&quot;: 42}</text>
+<text class="dg-small" x="26" y="288">SOAP y XML-RPC viven aquí</text>
+<rect class="dg-box" x="200" y="130" width="178" height="170" rx="8"/>
+<text class="dg-num" x="212" y="150">Nivel 1</text>
+<text class="dg-label" x="212" y="168">Recursos</text>
+<text class="dg-tiny" x="212" y="190" style="font-family:var(--f-mono);white-space:pre">POST /salas/42</text>
+<text class="dg-tiny" x="212" y="205" style="font-family:var(--f-mono);white-space:pre">{&quot;op&quot;: &quot;reservar&quot;}</text>
+<text class="dg-small" x="212" y="288">Una URL por cosa</text>
+<rect class="dg-box--em dg-box" x="386" y="80" width="178" height="220" rx="8"/>
+<text class="dg-num" x="398" y="100">Nivel 2</text>
+<text class="dg-label" x="398" y="118">Métodos y códigos</text>
+<text class="dg-tiny" x="398" y="140" style="font-family:var(--f-mono);white-space:pre">GET /salas/42  200</text>
+<text class="dg-tiny" x="398" y="155" style="font-family:var(--f-mono);white-space:pre">POST /reservas  201</text>
+<text class="dg-tiny" x="398" y="170" style="font-family:var(--f-mono);white-space:pre">DELETE /reservas/7  204</text>
+<text class="dg-small" x="398" y="288">Casi todas las APIs &quot;REST&quot;</text>
+<rect class="dg-box" x="572" y="30" width="178" height="270" rx="8"/>
+<text class="dg-num" x="584" y="50">Nivel 3</text>
+<text class="dg-label" x="584" y="68">Hipermedia</text>
+<text class="dg-tiny" x="584" y="90" style="font-family:var(--f-mono);white-space:pre">&quot;_links&quot;: {</text>
+<text class="dg-tiny" x="584" y="105" style="font-family:var(--f-mono);white-space:pre"> &quot;cancelar&quot;: {</text>
+<text class="dg-tiny" x="584" y="120" style="font-family:var(--f-mono);white-space:pre">  &quot;href&quot;: &quot;/reservas/7&quot;}}</text>
+<text class="dg-small" x="584" y="288">La API guía al cliente</text>
+<path class="dg-feedback" d="M30 165 L600 15" marker-end="url(#f2rma)"/>
+<text class="dg-small" x="20" y="40">más del contrato vive en el protocolo y en las respuestas</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.2.</b> Cada escalón mueve parte del contrato al protocolo. SOAP y XML-RPC están en el nivel 0: HTTP es solo un transporte. Casi todas las APIs que se llaman REST se quedan en el 2.</figcaption>
+      </figure>
+
+      <p>El nivel 3, <dfn data-term="hateoas">HATEOAS</dfn> (hipermedia como motor del estado de la aplicación), es el que Fielding considera obligatorio y el que casi nadie implementa por completo: la respuesta trae enlaces a lo que se puede hacer a continuación, y el cliente navega por ellos en lugar de armar URLs. Lo que sí se ve a menudo es una versión parcial, útil y barata: la API de GitHub incluye en sus respuestas las URLs de los recursos relacionados (<code>url</code>, <code>html_url</code>, <code>comments_url</code>), y la paginación devuelve el enlace a la página siguiente en el header <code>Link</code>. <span class="badge badge--doc">Documentado</span> La sección siguiente se queda en el nivel 2, que es donde están las decisiones que más pesan.</p>
+
+      <h3 id="metodos">Lo que promete cada método</h3>
 
       <p>Los métodos HTTP no son sinónimos con distinto nombre: cada uno promete propiedades que la infraestructura aprovecha. Un proxy puede reintentar un GET porque es <dfn data-term="metodo-seguro">seguro e idempotente</dfn>; una CDN puede cachearlo; un navegador puede precargarlo. Si usas GET para algo que modifica datos, tarde o temprano alguien lo va a repetir por ti.</p>
 
@@ -247,6 +467,403 @@ CREATE INDEX posts_feed_cursor ON posts (feed_id, created_at DESC, id DESC);</co
 
       <p>El id va en el cursor como desempate: dos filas pueden tener el mismo <code>created_at</code> y, sin desempate, una de ellas se perdería entre páginas. Lo que el cursor no permite es "saltar a la página 37". Casi nunca hace falta; cuando sí (paneles de administración), se acepta el offset con un límite máximo de profundidad.</p>
 
+      <h3 id="paginacion-costo">Cuánto cuesta cada una, y por qué</h3>
+      <p>La documentación de PostgreSQL lo dice sin rodeos: "las filas que se saltea un OFFSET igual se tienen que calcular dentro del servidor; por eso un OFFSET grande puede ser ineficiente". <span class="badge badge--doc">Documentado</span> La razón está en cómo es un índice. Un <span data-term="btree">B-tree</span> está ordenado y sabe <b>buscar por valor</b>: desde la raíz, en cada nivel elige la rama que contiene el valor, hasta llegar a una hoja. Lo que no sabe es <b>buscar por posición</b>: ningún nodo guarda cuántas filas hay debajo de cada rama, así que "la fila número 100&#8239;000" solo se encuentra contando desde la primera. Y en PostgreSQL, además, cada fila contada puede exigir visitar la tabla para comprobar si es visible para tu transacción (por MVCC: cada versión de una fila guarda qué transacciones la pueden ver, M05).</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 350" role="img" aria-labelledby="f2btt f2btd">
+<title id="f2btt">OFFSET contra keyset en un índice B-tree</title>
+<desc id="f2btd">A la izquierda, OFFSET baja hasta la primera hoja del índice y recorre hoja por hoja las 100 000 entradas que va a descartar antes de devolver 20. A la derecha, la condición del cursor baja del root a la hoja exacta donde está la marca y lee solo las 20 entradas que devuelve.</desc>
+<defs><marker id="f2bta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f2btf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f2bto" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--ok)"/></marker></defs>
+<rect class="dg-box" x="10" y="10" width="365" height="330" rx="10" style="fill:var(--bg)"/>
+<text class="dg-label" x="192" y="34" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre;font-weight:600">OFFSET 100 000 LIMIT 20</text>
+<rect class="dg-box" x="162" y="52" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="192" y="69" text-anchor="middle">raíz</text>
+<rect class="dg-box" x="50" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="80" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M192 78 L80 110" style="stroke-width:2.2;stroke:var(--label)"/>
+<rect class="dg-box" x="162" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="192" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M192 78 L192 110"/>
+<rect class="dg-box" x="274" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="304" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M192 78 L304 110"/>
+<rect class="dg-bad" x="24" y="190" width="36" height="46" rx="4"/>
+<path d="M30 200 H54" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M30 212 H54" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M30 224 H54" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M80 138 L42 188" style="stroke-width:2.2;stroke:var(--label)"/>
+<rect class="dg-bad" x="67" y="190" width="36" height="46" rx="4"/>
+<path d="M73 200 H97" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M73 212 H97" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M73 224 H97" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M80 138 L85 188" style="opacity:0.45"/>
+<rect class="dg-bad" x="110" y="190" width="36" height="46" rx="4"/>
+<path d="M116 200 H140" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M116 212 H140" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M116 224 H140" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M80 138 L128 188" style="opacity:0.45"/>
+<rect class="dg-bad" x="153" y="190" width="36" height="46" rx="4"/>
+<path d="M159 200 H183" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M159 212 H183" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M159 224 H183" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M192 138 L171 188" style="opacity:0.45"/>
+<rect class="dg-bad" x="196" y="190" width="36" height="46" rx="4"/>
+<path d="M202 200 H226" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M202 212 H226" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M202 224 H226" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M192 138 L214 188" style="opacity:0.45"/>
+<rect class="dg-bad" x="239" y="190" width="36" height="46" rx="4"/>
+<path d="M245 200 H269" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M245 212 H269" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M245 224 H269" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M192 138 L257 188" style="opacity:0.45"/>
+<rect class="dg-bad" x="282" y="190" width="36" height="46" rx="4"/>
+<path d="M288 200 H312" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M288 212 H312" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M288 224 H312" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M304 138 L300 188" style="opacity:0.45"/>
+<rect class="dg-ok" x="325" y="190" width="36" height="46" rx="4"/>
+<path d="M331 200 H355" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M331 212 H355" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M331 224 H355" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M304 138 L343 188" style="opacity:0.45"/>
+<path class="dg-edge" d="M61 252 L66 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M104 252 L109 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M147 252 L152 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M190 252 L195 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M233 252 L238 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M276 252 L281 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<path class="dg-edge" d="M319 252 L324 252" marker-end="url(#f2btf)" style="stroke:var(--fail)"/>
+<text class="dg-fail-text dg-tiny" x="24" y="278">hoja por hoja: 100 000 entradas leídas y descartadas</text>
+<text class="dg-small" x="24" y="298">costo: O(offset + limit). Crece con cada página.</text>
+<text class="dg-small" x="24" y="318">Página 5 000 = 100 020 entradas para devolver 20.</text>
+<rect class="dg-box" x="395" y="10" width="365" height="330" rx="10" style="fill:var(--bg)"/>
+<text class="dg-label" x="577" y="34" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre;font-weight:600">WHERE (created_at, id) &lt; cursor LIMIT 20</text>
+<rect class="dg-box" x="547" y="52" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="577" y="69" text-anchor="middle">raíz</text>
+<rect class="dg-box" x="435" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="465" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M577 78 L465 110"/>
+<rect class="dg-box--em dg-box" x="547" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="577" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M577 78 L577 110" style="stroke-width:2.2;stroke:var(--label)"/>
+<rect class="dg-box" x="659" y="112" width="60" height="26" rx="5"/>
+<text class="dg-tiny" x="689" y="129" text-anchor="middle">interno</text>
+<path class="dg-edge" d="M577 78 L689 110"/>
+<rect class="dg-box" x="409" y="190" width="36" height="46" rx="4"/>
+<path d="M415 200 H439" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M415 212 H439" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M415 224 H439" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M465 138 L427 188" style="opacity:0.45"/>
+<rect class="dg-box" x="452" y="190" width="36" height="46" rx="4"/>
+<path d="M458 200 H482" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M458 212 H482" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M458 224 H482" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M465 138 L470 188" style="opacity:0.45"/>
+<rect class="dg-box" x="495" y="190" width="36" height="46" rx="4"/>
+<path d="M501 200 H525" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M501 212 H525" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M501 224 H525" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M465 138 L513 188" style="opacity:0.45"/>
+<rect class="dg-box" x="538" y="190" width="36" height="46" rx="4"/>
+<path d="M544 200 H568" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M544 212 H568" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M544 224 H568" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M577 138 L556 188" style="opacity:0.45"/>
+<rect class="dg-ok" x="581" y="190" width="36" height="46" rx="4"/>
+<path d="M587 200 H611" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M587 212 H611" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M587 224 H611" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M577 138 L599 188" style="stroke-width:2.2;stroke:var(--label)"/>
+<rect class="dg-box" x="624" y="190" width="36" height="46" rx="4"/>
+<path d="M630 200 H654" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M630 212 H654" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M630 224 H654" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M577 138 L642 188" style="opacity:0.45"/>
+<rect class="dg-box" x="667" y="190" width="36" height="46" rx="4"/>
+<path d="M673 200 H697" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M673 212 H697" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M673 224 H697" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M689 138 L685 188" style="opacity:0.45"/>
+<rect class="dg-box" x="710" y="190" width="36" height="46" rx="4"/>
+<path d="M716 200 H740" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M716 212 H740" stroke="var(--label-3)" stroke-width="1"/>
+<path d="M716 224 H740" stroke="var(--label-3)" stroke-width="1"/>
+<path class="dg-edge" d="M689 138 L728 188" style="opacity:0.45"/>
+<text class="dg-tiny" x="409" y="278" style="fill:var(--ok)">baja 3 niveles y lee 20 entradas seguidas</text>
+<text class="dg-small" x="409" y="298">costo: O(log n + limit). No depende de la página.</text>
+<text class="dg-small" x="409" y="318">Página 5 000 = 3 páginas de índice + 20 entradas.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.3.</b> El mismo índice, dos recorridos. OFFSET baja a la primera hoja y avanza hoja por hoja contando. El cursor es una condición sobre valores: el árbol lo lleva directo a la hoja donde está la marca.</figcaption>
+      </figure>
+
+      <p>Es habitual leer que el cursor es O(1). Casi: es <b>O(log n + k)</b>, donde n es el tamaño del índice y k el tamaño de la página. Bajar por el árbol cuesta un nivel por cada factor de crecimiento, y ese factor es enorme. La cuenta a mano, con páginas de 8&#8239;KB y entradas de unos 40 bytes (tres columnas de 8 bytes más la cabecera y el puntero de cada entrada), da unas 200 entradas por página:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Filas en el índice</th><th class="r">Niveles del árbol</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>1 millón</td><td class="r">3</td><td>200³ = 8&#8239;000&#8239;000 entradas caben en 3 niveles</td></tr>
+            <tr><td>100 millones</td><td class="r">4</td><td>200⁴ = 1&#8239;600&#8239;000&#8239;000</td></tr>
+            <tr><td>10&#8239;000 millones</td><td class="r">5</td><td>200⁵ = 320&#8239;000&#8239;000&#8239;000</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Multiplicar la tabla por 100 suma un nivel. Y la raíz y los niveles internos se consultan en cada búsqueda, así que casi siempre están en memoria: lo que de verdad se lee del disco es una hoja y las k filas. Por eso, en la práctica, el cursor se comporta como si fuera constante, mientras el OFFSET crece en línea recta con la página.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f2cct f2ccd">
+<title id="f2cct">Filas que lee la base según la página</title>
+<desc id="f2ccd">Gráfico de líneas. Con LIMIT 20, OFFSET lee 20 filas en la página 1, 20 000 en la página 1 000 y 100 000 en la página 5 000: crece en línea recta. El cursor lee 20 filas en cualquier página: la línea queda pegada al eje.</desc>
+<defs><marker id="f2cca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-grid" d="M90 240.0 H730"/>
+<text class="sim-axis" x="82" y="244.0" text-anchor="end">0</text>
+<path class="sim-grid" d="M90 187.5 H730"/>
+<text class="sim-axis" x="82" y="191.5" text-anchor="end">25 000</text>
+<path class="sim-grid" d="M90 135.0 H730"/>
+<text class="sim-axis" x="82" y="139.0" text-anchor="end">50 000</text>
+<path class="sim-grid" d="M90 82.5 H730"/>
+<text class="sim-axis" x="82" y="86.5" text-anchor="end">75 000</text>
+<path class="sim-grid" d="M90 30.0 H730"/>
+<text class="sim-axis" x="82" y="34.0" text-anchor="end">100 000</text>
+<text class="sim-axis" x="90.128" y="258" text-anchor="middle">1</text>
+<text class="sim-axis" x="218.0" y="258" text-anchor="middle">1 000</text>
+<text class="sim-axis" x="346.0" y="258" text-anchor="middle">2 000</text>
+<text class="sim-axis" x="474.0" y="258" text-anchor="middle">3 000</text>
+<text class="sim-axis" x="602.0" y="258" text-anchor="middle">4 000</text>
+<text class="sim-axis" x="730.0" y="258" text-anchor="middle">5 000</text>
+<text class="sim-axis" x="410.0" y="280" text-anchor="middle">número de página (LIMIT 20)</text>
+<text class="sim-axis" x="20" y="20">filas leídas</text>
+<path d="M90.1 240.0 L730.0 30.0" stroke="var(--fail)" stroke-width="2.5" fill="none"/>
+<path d="M90.1 239.0 L730.0 239.0" stroke="var(--ok)" stroke-width="2.5" fill="none"/>
+<circle cx="730.0" cy="30.0" r="4" fill="var(--fail)"/>
+<text class="sim-label" x="722.0" y="19.958" text-anchor="end">OFFSET: 100 020 filas en la página 5 000</text>
+<circle cx="218.0" cy="198.0" r="4" fill="var(--fail)"/>
+<text class="sim-label" x="232.0" y="214.0">página 1 000: 20 020</text>
+<text class="sim-label" x="410.0" y="230.0" text-anchor="middle" style="fill:var(--ok)">cursor: 20 filas más 3 páginas de índice, en cualquier página</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.4.</b> Filas que lee la base para devolver 20, según la página. Es una cuenta, no una medición: OFFSET lee (página − 1) × 20 + 20 filas; el cursor, 20 más la bajada por el árbol.</figcaption>
+      </figure>
+
+      <p>Slack describe lo mismo desde su experiencia: endpoints que se diseñaron para devolver cientos de registros terminaron devolviendo cientos de miles, y con <code>OFFSET</code> "la base igual tiene que leer del disco hasta offset + count filas". Por eso migraron a cursores. <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="paginacion-cambios">Qué pasa cuando llegan inserts mientras alguien pagina</h3>
+      <p>Un OFFSET es una <b>posición</b>: "sáltate las primeras 4". Un cursor es un <b>valor</b>: "dame lo que esté por debajo de (10:00:12, post_88)". Esa diferencia decide qué pasa cuando la tabla cambia entre una página y la siguiente:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f2cht f2chd">
+<title id="f2cht">Qué le pasa a la página 2 cuando la tabla cambia</title>
+<desc id="f2chd">Tres casos con páginas de 4. Si llega un post nuevo arriba, OFFSET 4 devuelve otra vez el post D, que ya estaba en la página 1. Si se borra un post ya leído, OFFSET 4 saltea el post E. Con cursor, los dos casos salen bien. El tercer caso afecta también al cursor: una transacción que tomó su created_at antes y confirmó tarde aparece entre posts que el lector ya pasó, y nadie la ve.</desc>
+<defs><marker id="f2cha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f2chf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-box" x="8" y="8" width="246" height="356" rx="10" style="fill:var(--bg)"/>
+<text class="dg-label" x="22" y="32">Llega un post nuevo arriba</text>
+<text class="dg-small" x="22" y="56">página 1 leída</text>
+<rect class="hb-b" x="22" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="57" y="79" text-anchor="middle">A</text>
+<rect class="hb-b" x="22" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="57" y="107" text-anchor="middle">B</text>
+<rect class="hb-b" x="22" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="57" y="135" text-anchor="middle">C</text>
+<rect class="hb-b" x="22" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="57" y="163" text-anchor="middle">D</text>
+<text class="dg-small" x="124" y="56">la tabla ahora</text>
+<rect class="hb-a" x="124" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="79" text-anchor="middle">N (nuevo)</text>
+<rect class="dg-box" x="124" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="107" text-anchor="middle">A</text>
+<rect class="dg-box" x="124" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="135" text-anchor="middle">B</text>
+<rect class="dg-box" x="124" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="163" text-anchor="middle">C</text>
+<rect class="dg-warnbox" x="124" y="176" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="191" text-anchor="middle">D</text>
+<text class="dg-tiny" x="200" y="191" style="fill:var(--warn)">repetido</text>
+<rect class="dg-box" x="124" y="204" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="219" text-anchor="middle">E</text>
+<rect class="dg-box" x="124" y="232" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="247" text-anchor="middle">F</text>
+<rect class="dg-box" x="124" y="260" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="159" y="275" text-anchor="middle">G</text>
+<path d="M118 176 h-6 V282 h6" fill="none" stroke="var(--label)" stroke-width="1.4"/>
+<text class="dg-tiny" x="106" y="225.0" text-anchor="end">pág. 2</text>
+<text class="dg-tiny" x="106" y="239.0" text-anchor="end" style="font-family:var(--f-mono)">OFFSET 4</text>
+<text class="dg-label" x="22" y="300" style="fill:var(--fail)">OFFSET 4 repite D</text>
+<text class="dg-tiny" x="22" y="322" style="fill:var(--ok)">con cursor (&lt; D): E F G H, bien</text>
+<rect class="dg-box" x="262" y="8" width="246" height="356" rx="10" style="fill:var(--bg)"/>
+<text class="dg-label" x="276" y="32">Se borra B, ya leído</text>
+<text class="dg-small" x="276" y="56">página 1 leída</text>
+<rect class="hb-b" x="276" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="311" y="79" text-anchor="middle">A</text>
+<rect class="hb-b" x="276" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="311" y="107" text-anchor="middle">B</text>
+<rect class="hb-b" x="276" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="311" y="135" text-anchor="middle">C</text>
+<rect class="hb-b" x="276" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="311" y="163" text-anchor="middle">D</text>
+<text class="dg-small" x="378" y="56">la tabla ahora</text>
+<rect class="dg-box" x="378" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="79" text-anchor="middle">A</text>
+<rect class="dg-box" x="378" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="107" text-anchor="middle">C</text>
+<rect class="dg-box" x="378" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="135" text-anchor="middle">D</text>
+<rect class="hb-lost" x="378" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="163" text-anchor="middle">E</text>
+<text class="dg-tiny dg-fail-text" x="454" y="163">saltado</text>
+<rect class="dg-box" x="378" y="176" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="191" text-anchor="middle">F</text>
+<rect class="dg-box" x="378" y="204" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="219" text-anchor="middle">G</text>
+<rect class="dg-box" x="378" y="232" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="247" text-anchor="middle">H</text>
+<rect class="dg-box" x="378" y="260" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="413" y="275" text-anchor="middle">I</text>
+<path d="M372 176 h-6 V282 h6" fill="none" stroke="var(--label)" stroke-width="1.4"/>
+<text class="dg-tiny" x="360" y="225.0" text-anchor="end">pág. 2</text>
+<text class="dg-tiny" x="360" y="239.0" text-anchor="end" style="font-family:var(--f-mono)">OFFSET 4</text>
+<text class="dg-label" x="276" y="300" style="fill:var(--fail)">OFFSET 4 saltea E</text>
+<text class="dg-tiny" x="276" y="322" style="fill:var(--ok)">con cursor (&lt; D): E F G H, bien</text>
+<rect class="dg-box" x="516" y="8" width="246" height="356" rx="10" style="fill:var(--bg)"/>
+<text class="dg-label" x="530" y="32">Commit tardío de X</text>
+<text class="dg-small" x="530" y="56">página 1 leída</text>
+<rect class="hb-b" x="530" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="565" y="79" text-anchor="middle">A</text>
+<rect class="hb-b" x="530" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="565" y="107" text-anchor="middle">B</text>
+<rect class="hb-b" x="530" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="565" y="135" text-anchor="middle">C</text>
+<rect class="hb-b" x="530" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="565" y="163" text-anchor="middle">D</text>
+<text class="dg-small" x="632" y="56">la tabla ahora</text>
+<rect class="dg-box" x="632" y="64" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="79" text-anchor="middle">A</text>
+<rect class="dg-box" x="632" y="92" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="107" text-anchor="middle">B</text>
+<rect class="hb-lost" x="632" y="120" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="135" text-anchor="middle">X (tarde)</text>
+<text class="dg-tiny dg-fail-text" x="708" y="135">saltado</text>
+<rect class="dg-box" x="632" y="148" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="163" text-anchor="middle">C</text>
+<rect class="dg-box" x="632" y="176" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="191" text-anchor="middle">D</text>
+<rect class="dg-box" x="632" y="204" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="219" text-anchor="middle">E</text>
+<rect class="dg-box" x="632" y="232" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="247" text-anchor="middle">F</text>
+<rect class="dg-box" x="632" y="260" width="70" height="22" rx="4"/>
+<text class="dg-tiny" x="667" y="275" text-anchor="middle">G</text>
+<path d="M626 204 h-6 V282 h6" fill="none" stroke="var(--label)" stroke-width="1.4"/>
+<text class="dg-tiny" x="614" y="239.0" text-anchor="end">pág. 2</text>
+<text class="dg-tiny" x="614" y="253.0" text-anchor="end" style="font-family:var(--f-mono)">&lt; D</text>
+<text class="dg-label" x="530" y="300" style="fill:var(--fail)">nadie ve X, ni con cursor</text>
+<text class="dg-tiny" x="530" y="322">X tiene hora anterior a D</text>
+<text class="dg-tiny" x="530" y="340">pero confirmó después de leer</text>
+<text class="dg-tiny" x="530" y="356">la página 1: cae detrás del cursor</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.5.</b> Páginas de 4, con la página 1 (A, B, C, D) ya leída. Con OFFSET, un insert arriba repite y un borrado saltea. El cursor resuelve los dos, pero no el tercero: una fila que aparece detrás de la marca.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">Un insert arriba</span>Llega un post nuevo. Con OFFSET, todo se corre un lugar y la página 2 vuelve a traer D. Con cursor, el post nuevo tiene un <code>created_at</code> mayor que la marca, así que queda fuera del rango <code>&lt; (marca)</code>: la página 2 sale bien, y el post nuevo aparece cuando el usuario pida lo nuevo, arriba.</li>
+        <li><span class="step-title">Un borrado de algo ya leído</span>Con OFFSET, todo sube un lugar y E no aparece nunca. Con cursor no pasa nada: la condición compara valores, así que funciona aunque la fila de la marca ya no exista.</li>
+        <li><span class="step-title">Una fila que aparece detrás de la marca</span>Este es el caso que el cursor no resuelve solo, y el que más sorprende. Pasa cuando una fila se vuelve visible con un valor de orden que el lector ya pasó.</li>
+        <li><span class="step-title">Una fila que cambia de lugar</span>Si ordenas por algo que cambia (<code>updated_at</code>, un puntaje), una fila editada salta a otra posición: puede salir dos veces o ninguna, con offset o con cursor. Ordena por algo inmutable o usa un snapshot.</li>
+      </ol>
+
+      <p>¿Cómo aparece una fila "en el pasado"? Más fácil de lo que parece:</p>
+      <ul>
+        <li><b>Commits tardíos.</b> En PostgreSQL, <code>now()</code> devuelve la hora de <em>inicio</em> de la transacción, no la del commit. <span class="badge badge--doc">Documentado</span> Una transacción que empieza a las 10:00:00, tarda 3 segundos y confirma a las 10:00:03 deja una fila con <code>created_at = 10:00:00</code> que nadie pudo ver hasta las 10:00:03. Si en ese intervalo un lector leyó posts de las 10:00:01 y 10:00:02, la fila nueva quedó detrás de su marca.</li>
+        <li><b>Secuencias.</b> Los ids de una secuencia se reparten al insertar, no al confirmar: la transacción que recibió el 1001 puede confirmar después que la del 1002. Un cursor sobre el id tiene el mismo problema.</li>
+        <li><b>Relojes de varias máquinas.</b> Si cada servidor de aplicación pone el <code>created_at</code> con su propio reloj, un desfase de 200 ms basta para que una fila nueva quede "antes" de otra que ya se leyó (M06).</li>
+        <li><b>Réplicas con retraso.</b> Si la página 1 sale del primario y la 2 de una réplica atrasada (M05), el lector puede ver huecos que después se llenan.</li>
+      </ul>
+
+      <p>En un feed que se lee scrolleando, perderse un post de vez en cuando es aceptable. En una sincronización, no: un cliente contable que cada 5 minutos pide "los movimientos posteriores al último que tengo" se pierde esa fila <b>para siempre</b>, porque nunca vuelve a pedir ese rango. Las soluciones, de la más simple a la más robusta:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Técnica</th><th>Cómo funciona</th><th>Costo</th></tr></thead>
+          <tbody>
+            <tr><td>Ventana de solape</td><td>Pedir <code>created_at &gt; marca − 10 s</code> y descartar por id lo que ya tienes</td><td>Relees un poco cada vez; la ventana tiene que ser mayor que la transacción más larga (un <code>statement_timeout</code> la acota)</td></tr>
+            <tr><td>Marca de agua</td><td>Devolver solo filas con <code>created_at &lt; now() − 5 s</code>: lo más reciente todavía puede estar en vuelo</td><td>Lo nuevo aparece con 5 s de demora</td></tr>
+            <tr><td>Solo lo confirmado</td><td>No devolver filas escritas por transacciones más nuevas que la más vieja todavía abierta (en PostgreSQL, con <code>pg_snapshot_xmin(pg_current_snapshot())</code>) <span class="badge badge--ref">Diseño de referencia</span></td><td>Exige guardar el id de transacción en cada fila; una transacción colgada frena a todos</td></tr>
+            <tr><td>Orden asignado al confirmar</td><td>Un log de cambios con una posición que crece en orden de commit: los offsets de Kafka (M07), una tabla outbox numerada por un solo escritor o el LSN de la replicación lógica</td><td>Una pieza más que operar; es lo que usan los change feeds en serio</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Pruébalo. Pide una página, cambia la tabla y pide la siguiente. Después prueba el commit tardío y trae lo nuevo con y sin solape:</p>
+
+      <div data-sim="paginate"></div>
+
+      <h3 id="paginacion-direcciones">Bajar y subir: before y after</h3>
+      <p>Un feed se recorre en dos direcciones: hacia abajo (más viejo) al scrollear, y hacia arriba (más nuevo) al tirar para refrescar. Cada dirección usa su propia marca:</p>
+<pre data-lang="sql"><code>-- Hacia abajo: lo anterior a la marca de abajo
+SELECT … WHERE feed_id = $1 AND (created_at, id) &lt; ($2, $3)
+ORDER BY created_at DESC, id DESC LIMIT 21;
+
+-- Hacia arriba: lo posterior a la marca de arriba, en orden ASCENDENTE
+SELECT … WHERE feed_id = $1 AND (created_at, id) &gt; ($4, $5)
+ORDER BY created_at ASC, id ASC LIMIT 21;     -- la app invierte la lista antes de mostrarla</code></pre>
+      <p>¿Por qué ascendente al subir? Si el usuario estuvo tres horas sin abrir la app y llegaron 500 posts, pedir "los 20 más nuevos" trae los últimos 20 y deja un hueco de 480 entre esos y lo que ya tenía. Con orden ascendente desde la marca, la página trae los 20 que siguen inmediatamente, sin hueco, y se repite hasta alcanzar el presente. La alternativa, que usan muchas apps, es traer los 20 más nuevos y mostrar un separador "cargar más" en el hueco, que se llena paginando hacia abajo desde ahí.</p>
+      <p>Las APIs públicas exponen las dos marcas: Twitter usó <code>since_id</code> y <code>max_id</code> en sus timelines, y Stripe usa <code>starting_after</code> y <code>ending_before</code> con <code>limit</code> y <code>has_more</code>. <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="paginacion-cursor">El cursor por dentro</h3>
+      <ul>
+        <li><b>Qué guarda.</b> Los valores de las columnas de orden de la última fila (<code>created_at</code> e <code>id</code>), la dirección, y una huella de los filtros: un cursor de "mis posts con la etiqueta X" no debería servir para otra consulta.</li>
+        <li><b>Por qué opaco.</b> Si el cliente no puede leerlo, puedes cambiar lo que guarda sin romper a nadie. Slack lo aprovechó: su cursor es un base64 (<code>dXNlcjpXMDdRQ1JQQTQ=</code> es <code>user:W07QCRPA4</code>), y en endpoints viejos podía esconder un offset por dentro mientras migraba. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Firmado.</b> Con un HMAC, nadie fabrica un cursor que lea fuera de lo permitido.</li>
+        <li><b>El índice tiene que coincidir.</b> Las columnas y las direcciones del <code>ORDER BY</code> tienen que ser las del índice. La comparación de filas <code>(a, b) &lt; (x, y)</code> funciona solo si las dos columnas van en la misma dirección; si mezclas (<code>created_at DESC, id ASC</code>), se escribe a mano: <code>created_at &lt; $t OR (created_at = $t AND id &gt; $id)</code>.</li>
+        <li><b>Sin nulos en la clave de orden.</b> Un <code>NULL</code> no es menor ni mayor que nada: esas filas desaparecen de la paginación. Usa columnas <code>NOT NULL</code>.</li>
+      </ul>
+<pre data-lang="python"><code>import base64, hashlib, hmac, json
+
+SECRETO = b"rotar-cada-90-dias"
+
+def encode_cursor(created_at: str, id: str, filtros: dict) -&gt; str:
+    datos = {"t": created_at, "id": id, "f": hashlib.sha256(json.dumps(filtros, sort_keys=True).encode()).hexdigest()[:16]}
+    crudo = json.dumps(datos, separators=(",", ":")).encode()
+    firma = hmac.new(SECRETO, crudo, hashlib.sha256).digest()[:16]
+    return base64.urlsafe_b64encode(crudo + firma).decode().rstrip("=")
+
+def decode_cursor(cursor: str, filtros: dict) -&gt; dict:
+    bruto = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+    crudo, firma = bruto[:-16], bruto[-16:]
+    if not hmac.compare_digest(firma, hmac.new(SECRETO, crudo, hashlib.sha256).digest()[:16]):
+        raise ValueError("cursor inválido")            # la API responde 400
+    datos = json.loads(crudo)
+    if datos["f"] != hashlib.sha256(json.dumps(filtros, sort_keys=True).encode()).hexdigest()[:16]:
+        raise ValueError("el cursor es de otra consulta")
+    return datos</code></pre>
+
+      <h3 id="paginacion-total">Contar el total, saltar páginas y exportar</h3>
+      <ul>
+        <li><b>El total cuesta.</b> En PostgreSQL, <code>COUNT(*)</code> recorre todas las filas visibles: no hay un contador guardado, por MVCC. Para "1 de 4 312 páginas", usa una estimación (<code>reltuples</code> de <code>pg_class</code>), un tope ("más de 10&#8239;000") o simplemente <code>has_more</code>.</li>
+        <li><b>Saltar a una página.</b> Si hace falta, se permite offset con un tope. Elasticsearch lo trae de fábrica: <code>from + size</code> no puede pasar de 10&#8239;000 por defecto (<code>index.max_result_window</code>), y para ir más lejos recomienda <code>search_after</code>, que es un cursor. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Exportar todo, consistente.</b> Para una foto exacta de millones de filas, el cursor no alcanza: hace falta un snapshot. En PostgreSQL, una transacción <code>REPEATABLE READ</code> con un <code>DECLARE CURSOR</code>; en Elasticsearch, un point in time con <code>search_after</code>. <span class="badge badge--doc">Documentado</span> El costo es mantener el snapshot abierto: en PostgreSQL, una transacción larga impide que VACUUM limpie filas viejas en toda la base.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>OFFSET</th><th>Cursor (keyset)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Costo de la página p</b></td><td>O(p × limit): crece con la página</td><td>O(log n + limit): casi constante</td></tr>
+            <tr><td><b>Saltar a la página 37</b></td><td>Sí</td><td>No</td></tr>
+            <tr><td><b>Insert arriba mientras paginas</b></td><td>Repite filas</td><td>No afecta</td></tr>
+            <tr><td><b>Borrado de algo ya leído</b></td><td>Saltea filas</td><td>No afecta</td></tr>
+            <tr><td><b>Fila que aparece detrás de la marca</b></td><td>Puede saltearla</td><td>La saltea: necesita solape, marca de agua o un orden de commit</td></tr>
+            <tr><td><b>Total de páginas</b></td><td>Con un <code>COUNT(*)</code> aparte</td><td>No lo da: <code>has_more</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div data-exercise="m02-feed"></div>
+
       <h2 id="versionado"><span class="sec-num">2.4</span>Versionado y evolución sin romper clientes</h2>
 
       <p>Una API pública tiene clientes que no controlas y que no se actualizan: apps móviles de hace dos años, integraciones que nadie mantiene. La regla es separar cambios <b>compatibles</b> de cambios que <b>rompen</b>:</p>
@@ -329,7 +946,7 @@ CREATE INDEX posts_feed_cursor ON posts (feed_id, created_at DESC, id DESC);</co
 <text class="dg-tiny" x="175.0" y="474" text-anchor="middle">201 Created (la misma respuesta)</text>
 </svg>
         </div>
-        <figcaption><b>Figura 2.1.</b> El reintento encuentra la clave ya completada y recibe la misma respuesta. El procesador de pagos nunca ve la segunda request.</figcaption>
+        <figcaption><b>Figura 2.6.</b> El reintento encuentra la clave ya completada y recibe la misma respuesta. El procesador de pagos nunca ve la segunda request.</figcaption>
       </figure>
 
       <figure class="schema">
@@ -378,25 +995,677 @@ If-Match: "v17"
                                     →  412 Precondition Failed  (otro guardó v18 antes: recarga y decide)</code></pre>
       <p>Del lado de la base es un <code>UPDATE … SET version = version + 1 WHERE id = $1 AND version = $2</code>: si actualizó 0 filas, alguien ganó la carrera.</p>
 
-      <h2 id="grpc"><span class="sec-num">2.6</span>gRPC entre servicios</h2>
-      <p>Dentro de tu sistema, los servicios se llaman millones de veces por segundo y los contratos cambian a menudo. gRPC aporta lo que ahí importa:</p>
+      <h2 id="rpc"><span class="sec-num">2.6</span>RPC: llamar a una función en otra máquina</h2>
+      <p>REST piensa en recursos: hay cosas con URL y se les aplican verbos. <dfn data-term="rpc">RPC</dfn> (Remote Procedure Call) piensa en acciones: hay funciones, y las llamas con argumentos. La idea, publicada por Birrell y Nelson en 1984, es que el programador escriba <code>cobrar(42, 2500)</code> y no se entere de que la función corre en otra máquina. <span class="badge badge--doc">Documentado</span> Para lograrlo, un generador de código lee el contrato, escrito en un <dfn data-term="idl">IDL</dfn> (lenguaje de definición de interfaces), y produce dos piezas: un <dfn data-term="stub">stub</dfn> en el cliente, con la misma firma que la función real, y otro en el servidor que la invoca.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f2rpt f2rpd">
+<title id="f2rpt">Qué hay debajo de una llamada remota</title>
+<desc id="f2rpd">El código del cliente llama a cobrar como si fuera local. El stub del cliente serializa los argumentos, el transporte los envía por la red, el stub del servidor los deserializa y llama a la función real. La respuesta vuelve por el mismo camino. En la red, la llamada puede perderse, tardar o ejecutarse sin que el cliente se entere.</desc>
+<defs><marker id="f2rpa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f2rpr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="40" y="30" width="210" height="56" rx="8"/>
+<text class="dg-label" x="145" y="54" text-anchor="middle">Tu código</text>
+<text class="dg-tiny" x="145" y="72" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">cobrar(42, 2500)</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="40" y="112" width="210" height="56" rx="8"/>
+<text class="dg-label" x="145" y="136" text-anchor="middle">Stub del cliente</text>
+<text class="dg-tiny" x="145" y="154" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">generado del IDL</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="40" y="194" width="210" height="56" rx="8"/>
+<text class="dg-label" x="145" y="218" text-anchor="middle">Transporte</text>
+<text class="dg-tiny" x="145" y="236" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">TCP, HTTP/2</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="520" y="30" width="210" height="56" rx="8"/>
+<text class="dg-label" x="625" y="54" text-anchor="middle">Función real</text>
+<text class="dg-tiny" x="625" y="72" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">cobrar(cuenta, monto)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="520" y="112" width="210" height="56" rx="8"/>
+<text class="dg-label" x="625" y="136" text-anchor="middle">Stub del servidor</text>
+<text class="dg-tiny" x="625" y="154" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">generado del IDL</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="520" y="194" width="210" height="56" rx="8"/>
+<text class="dg-label" x="625" y="218" text-anchor="middle">Transporte</text>
+<text class="dg-tiny" x="625" y="236" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">TCP, HTTP/2</text>
+<text class="dg-group" x="145" y="18" text-anchor="middle">Proceso cliente</text>
+<text class="dg-group" x="625" y="18" text-anchor="middle">Proceso servidor</text>
+<path class="dg-edge" d="M120 86 V110" marker-end="url(#f2rpa)"/>
+<text class="dg-num" x="112" y="102" text-anchor="end">1</text>
+<path class="dg-edge" d="M120 168 V192" marker-end="url(#f2rpa)"/>
+<text class="dg-num" x="112" y="184" text-anchor="end">2 serializa</text>
+<path class="dg-edge" d="M250 214 L518 214" marker-end="url(#f2rpa)"/>
+<text class="dg-num" x="385" y="206" text-anchor="middle">3 bytes por la red</text>
+<text class="dg-tiny" x="385" y="232" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">0A 02 34 32 10 C4 13</text>
+<path class="dg-edge" d="M600 192 V170" marker-end="url(#f2rpa)"/>
+<text class="dg-num" x="592" y="184" text-anchor="end">4 deserializa</text>
+<path class="dg-edge" d="M600 110 V88" marker-end="url(#f2rpa)"/>
+<text class="dg-num" x="592" y="102" text-anchor="end">5 llama</text>
+<path class="dg-edge dg-res" d="M670 88 V110" marker-end="url(#f2rpr)" style="stroke-dasharray:5 3"/>
+<path class="dg-edge dg-res" d="M670 168 V192" marker-end="url(#f2rpr)" style="stroke-dasharray:5 3"/>
+<path class="dg-edge dg-res" d="M518 238 L252 238" marker-end="url(#f2rpr)" style="stroke-dasharray:5 3"/>
+<path class="dg-edge dg-res" d="M190 192 V170" marker-end="url(#f2rpr)" style="stroke-dasharray:5 3"/>
+<path class="dg-edge dg-res" d="M190 110 V88" marker-end="url(#f2rpr)" style="stroke-dasharray:5 3"/>
+<text class="dg-num" x="198" y="184">6 vuelve</text>
+<rect class="dg-bad" x="60" y="268" width="650" height="50" rx="8"/>
+<text class="dg-tiny" x="385" y="288" text-anchor="middle">Lo que una llamada local nunca hace: perderse, tardar 30 s, o ejecutarse</text>
+<text class="dg-tiny" x="385" y="306" text-anchor="middle">del otro lado sin que la respuesta llegue. El stub esconde la red, pero la red sigue ahí.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.7.</b> Los seis pasos de una llamada remota. El paso 2 es el <dfn data-term="marshalling">marshalling</dfn>: convertir los argumentos en bytes con un formato que los dos lados entienden. Los bytes del ejemplo son los de Protobuf para una cuenta "42" y un monto de 2 500.</figcaption>
+      </figure>
+
+      <h3 id="rpc-no-es-local">Una llamada remota no es una llamada local</h3>
+      <p>El atractivo de RPC, que la red sea invisible, es también su trampa. En 1994, cuatro ingenieros de Sun Microsystems publicaron "A Note on Distributed Computing", que explica por qué esconder la red por completo es un error: una llamada remota difiere de una local en latencia, en que no comparte memoria (no hay punteros), en la concurrencia y, sobre todo, en las <b>fallas parciales</b>. <span class="badge badge--doc">Documentado</span> Una función local termina o lanza una excepción. Una remota puede quedar sin respuesta, y entonces no sabes si se ejecutó. Por eso todo RPC serio expone lo que la red agrega en lugar de esconderlo:</p>
+      <ul>
+        <li><b>Plazos.</b> Toda llamada tiene un <span data-term="deadline">deadline</span>. Sin él, un servidor colgado retiene hilos del cliente hasta agotarlos (M08).</li>
+        <li><b>Semántica de entrega.</b> Si el cliente reintenta, la función puede ejecutarse dos veces: "al menos una vez". Si no reintenta, "como mucho una vez". Para efectos que no se pueden duplicar, hace falta idempotencia (2.5), igual que en REST. ONC RPC, por ejemplo, pone un identificador de transacción (<code>xid</code>) en cada llamada para emparejar respuestas, y los servidores lo usan para detectar retransmisiones. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Versiones mezcladas.</b> Durante un deploy, clientes viejos llaman a servidores nuevos y al revés. El formato tiene que tolerar campos que uno de los dos no conoce.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Sistema</th><th>Año</th><th>Formato y transporte</th><th>Dónde sigue</th></tr></thead>
+          <tbody>
+            <tr><td>ONC RPC (Sun RPC)</td><td>1988</td><td>XDR, binario; TCP o UDP</td><td>NFS</td></tr>
+            <tr><td>CORBA</td><td>1991</td><td>IDL de OMG; IIOP</td><td>Sistemas heredados de telecomunicaciones y banca</td></tr>
+            <tr><td>Java RMI</td><td>1997</td><td>Serialización de Java</td><td>Solo entre JVMs; casi abandonado</td></tr>
+            <tr><td>XML-RPC y SOAP</td><td>1998 y 2000</td><td>XML sobre HTTP</td><td>Integraciones entre empresas (2.7)</td></tr>
+            <tr><td>Thrift</td><td>2007</td><td>Binario con IDL propio; varios transportes</td><td>Servicios internos de empresas que lo adoptaron temprano</td></tr>
+            <tr><td>JSON-RPC 2.0</td><td>2010</td><td>JSON, cualquier transporte</td><td>Editores (LSP), herramientas de IA (MCP), nodos de Ethereum</td></tr>
+            <tr><td>gRPC</td><td>2015</td><td>Protobuf sobre HTTP/2</td><td>El estándar de hecho entre microservicios</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="grpc">gRPC por dentro</h3>
+      <p>gRPC nació de Stubby, el RPC que Google usaba internamente, y se publicó como código abierto en 2015. <span class="badge badge--doc">Documentado</span> Dentro de tu sistema, los servicios se llaman millones de veces por segundo y los contratos cambian a menudo. gRPC aporta lo que ahí importa:</p>
       <ul>
         <li><b>Contratos tipados</b> en <dfn data-term="protobuf">Protocol Buffers</dfn>, con código generado para cada lenguaje: un cambio incompatible falla al compilar, no en producción.</li>
-        <li><b>Binario y compacto</b> sobre HTTP/2 con conexiones persistentes y multiplexadas.</li>
+        <li><b>Binario y compacto</b> sobre HTTP/2 con conexiones persistentes y <span data-term="multiplexar">multiplexadas</span>.</li>
         <li><b>Cuatro modos</b>: unario, streaming del servidor, del cliente y bidireccional.</li>
         <li><b><dfn data-term="deadline">Deadlines</dfn></b> que se propagan: si el usuario tiene 2 s de presupuesto y ya se gastaron 1.5 s, el servicio de más abajo recibe 0.5 s y no trabaja en vano.</li>
       </ul>
-      <p>Lo que cuesta: no es legible con curl, los navegadores necesitan gRPC-Web con un proxy, y el balanceo necesita un balanceador L7 que entienda HTTP/2 (con uno L4, todas las requests de una conexión larga caen en la misma instancia, M03).</p>
+      <p>Cada llamada es un stream de HTTP/2. El cliente abre el stream con un frame <code>HEADERS</code> y manda los mensajes en frames <code>DATA</code>; el servidor contesta igual y cierra con un segundo <code>HEADERS</code>, los <dfn data-term="trailers">trailers</dfn>, donde va el resultado:</p>
 
-      <h2 id="graphql"><span class="sec-num">2.7</span>GraphQL: flexibilidad con costo</h2>
-      <p>GraphQL resuelve un problema real de los frontends: una pantalla necesita datos de cinco recursos y con REST eso son cinco requests, o un endpoint a medida. Con GraphQL el cliente pide exactamente el árbol de datos que necesita. A cambio, el servidor acepta consultas arbitrarias, y eso trae tres problemas que hay que diseñar desde el principio:</p>
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 420" role="img" aria-labelledby="f2grt f2grd">
+<title id="f2grt">Una llamada gRPC dentro de HTTP/2</title>
+<desc id="f2grd">Arriba, los frames de una llamada con streaming del servidor. El cliente envía un frame HEADERS con el método POST, la ruta /chat.v1.ChatService/SendMessage, content-type application/grpc, te trailers y grpc-timeout, y un frame DATA con un byte de compresión, cuatro de largo y el mensaje Protobuf. El servidor responde HEADERS con status 200, varios DATA con un mensaje cada uno, y al final un HEADERS de trailers con grpc-status 0. Abajo, la misma conexión TCP lleva frames de varios streams intercalados.</desc>
+<defs><marker id="f2gra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="14" y="22">cliente → servidor (stream 1)</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="14" y="32" width="270" height="106" rx="7"/>
+<text class="dg-label" x="24" y="50" style="font-size:12.5px">HEADERS</text>
+<text class="dg-tiny" x="24" y="68" style="font-family:var(--f-mono);white-space:pre">:method POST</text>
+<text class="dg-tiny" x="24" y="83" style="font-family:var(--f-mono);white-space:pre">:path /chat.v1.ChatService/SendMessage</text>
+<text class="dg-tiny" x="24" y="98" style="font-family:var(--f-mono);white-space:pre">content-type: application/grpc</text>
+<text class="dg-tiny" x="24" y="113" style="font-family:var(--f-mono);white-space:pre">te: trailers</text>
+<text class="dg-tiny" x="24" y="128" style="font-family:var(--f-mono);white-space:pre">grpc-timeout: 1500m</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="296" y="32" width="214" height="106" rx="7"/>
+<text class="dg-label" x="306" y="50" style="font-size:12.5px">DATA  (END_STREAM)</text>
+<text class="dg-tiny" x="306" y="68" style="font-family:var(--f-mono);white-space:pre">00           sin comprimir</text>
+<text class="dg-tiny" x="306" y="83" style="font-family:var(--f-mono);white-space:pre">00 00 00 14  largo: 20 bytes</text>
+<text class="dg-tiny" x="306" y="98" style="font-family:var(--f-mono);white-space:pre">0A 07 63 6F 6E 76 5F …</text>
+<text class="dg-tiny" x="306" y="113" style="font-family:var(--f-mono);white-space:pre">el mensaje en Protobuf</text>
+<text class="dg-group" x="14" y="166">servidor → cliente (stream 1)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="14" y="176" width="190" height="76" rx="7"/>
+<text class="dg-label" x="24" y="194" style="font-size:12.5px">HEADERS</text>
+<text class="dg-tiny" x="24" y="212" style="font-family:var(--f-mono);white-space:pre">:status 200</text>
+<text class="dg-tiny" x="24" y="227" style="font-family:var(--f-mono);white-space:pre">content-type:</text>
+<text class="dg-tiny" x="24" y="242" style="font-family:var(--f-mono);white-space:pre">  application/grpc</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="214" y="176" width="150" height="76" rx="7"/>
+<text class="dg-label" x="224" y="194" style="font-size:12.5px">DATA</text>
+<text class="dg-tiny" x="224" y="212" style="font-family:var(--f-mono);white-space:pre">00 00 00 00 0A</text>
+<text class="dg-tiny" x="224" y="227" style="font-family:var(--f-mono);white-space:pre">MessageDelta 1</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="374" y="176" width="150" height="76" rx="7"/>
+<text class="dg-label" x="384" y="194" style="font-size:12.5px">DATA</text>
+<text class="dg-tiny" x="384" y="212" style="font-family:var(--f-mono);white-space:pre">00 00 00 00 0C</text>
+<text class="dg-tiny" x="384" y="227" style="font-family:var(--f-mono);white-space:pre">MessageDelta 2</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="534" y="176" width="222" height="76" rx="7"/>
+<text class="dg-label" x="544" y="194" style="font-size:12.5px">HEADERS  (trailers)</text>
+<text class="dg-tiny" x="544" y="212" style="font-family:var(--f-mono);white-space:pre">grpc-status: 0</text>
+<text class="dg-tiny" x="544" y="227" style="font-family:var(--f-mono);white-space:pre">grpc-message: (vacío)</text>
+<text class="dg-tiny" x="544" y="242" style="font-family:var(--f-mono);white-space:pre">END_STREAM</text>
+<path class="dg-edge" d="M14 270 H756" marker-end="url(#f2gra)"/>
+<text class="dg-small" x="756" y="286" text-anchor="end">tiempo</text>
+<text class="dg-tiny" x="534" y="300">El resultado viaja al final, en los trailers:</text>
+<text class="dg-tiny" x="534" y="315">el :status 200 ya salió antes de saberlo.</text>
+<text class="dg-group" x="14" y="340">Una conexión TCP, varios streams intercalados</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="14" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="40.0" y="371" text-anchor="middle">HEAD 1</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="74" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="100.0" y="371" text-anchor="middle">HEAD 3</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="134" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="160.0" y="371" text-anchor="middle">DATA 1</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="194" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="220.0" y="371" text-anchor="middle">HEAD 5</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="254" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="280.0" y="371" text-anchor="middle">DATA 3</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="314" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="340.0" y="371" text-anchor="middle">DATA 1</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="374" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="400.0" y="371" text-anchor="middle">DATA 5</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="434" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="460.0" y="371" text-anchor="middle">DATA 3</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="494" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="520.0" y="371" text-anchor="middle">TRAIL 1</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="554" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="580.0" y="371" text-anchor="middle">DATA 5</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="614" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="640.0" y="371" text-anchor="middle">TRAIL 3</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="674" y="352" width="52" height="30" rx="5"/>
+<text class="dg-tiny" x="700.0" y="371" text-anchor="middle">TRAIL 5</text>
+<text class="dg-small" x="14" y="404">Un mensaje lento del stream 3 no frena al stream 1 en HTTP/2, pero una pérdida de paquete en TCP sí frena a todos (M01).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.8.</b> Una llamada con streaming del servidor, frame por frame, y abajo la misma conexión con tres llamadas a la vez. El formato de los headers, del prefijo de 5 bytes y de los trailers es el de la especificación de gRPC sobre HTTP/2. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
+      <ul>
+        <li><b>La ruta es el método.</b> <code>:path</code> es <code>/paquete.Servicio/Método</code>, siempre con <code>POST</code>. Un balanceador L7 puede enrutar por servicio leyendo solo la ruta.</li>
+        <li><b><code>te: trailers</code></b> sirve para detectar proxies que no soportan trailers: sin ellos, el cliente nunca sabría si la llamada salió bien.</li>
+        <li><b><code>grpc-timeout</code></b> lleva el deadline como duración, con unidades <code>H</code>, <code>M</code>, <code>S</code>, <code>m</code>, <code>u</code> y <code>n</code>: <code>1500m</code> son 1.5 s. Cada servidor le resta lo que ya gastó antes de llamar al siguiente.</li>
+        <li><b>Cada mensaje lleva un prefijo de 5 bytes:</b> 1 de compresión y 4 con el largo, en big endian. Así el receptor sabe dónde termina un mensaje y empieza otro dentro del stream.</li>
+        <li><b>El estado va al final.</b> El <code>:status 200</code> de HTTP se envía antes de saber cómo termina la llamada; el resultado real es <code>grpc-status</code> en los trailers. Una llamada que falla de inmediato puede mandar solo trailers (<em>Trailers-Only</em>). Para un monitor que solo mira códigos HTTP, gRPC siempre "anda bien": mide <code>grpc-status</code>.</li>
+      </ul>
+
+      <p>gRPC tiene 17 códigos de estado propios. <span class="badge badge--doc">Documentado</span> Los que más decisiones mueven:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Código</th><th class="r">Número</th><th>Equivale a HTTP</th><th>¿Reintentar?</th></tr></thead>
+          <tbody>
+            <tr><td><code>OK</code></td><td class="r">0</td><td>200</td><td>—</td></tr>
+            <tr><td><code>INVALID_ARGUMENT</code></td><td class="r">3</td><td>400</td><td>No: el mismo argumento fallará igual</td></tr>
+            <tr><td><code>DEADLINE_EXCEEDED</code></td><td class="r">4</td><td>504</td><td>Con cuidado: la operación pudo ejecutarse; solo si es idempotente</td></tr>
+            <tr><td><code>NOT_FOUND</code></td><td class="r">5</td><td>404</td><td>No</td></tr>
+            <tr><td><code>PERMISSION_DENIED</code> / <code>UNAUTHENTICATED</code></td><td class="r">7 / 16</td><td>403 / 401</td><td>No / renovar la credencial</td></tr>
+            <tr><td><code>RESOURCE_EXHAUSTED</code></td><td class="r">8</td><td>429</td><td>Sí, con backoff</td></tr>
+            <tr><td><code>FAILED_PRECONDITION</code></td><td class="r">9</td><td>400</td><td>No, hasta que cambie el estado del sistema</td></tr>
+            <tr><td><code>ABORTED</code></td><td class="r">10</td><td>409</td><td>Sí, pero la secuencia completa (releer y volver a escribir)</td></tr>
+            <tr><td><code>INTERNAL</code></td><td class="r">13</td><td>500</td><td>No a ciegas</td></tr>
+            <tr><td><code>UNAVAILABLE</code></td><td class="r">14</td><td>503</td><td>Sí: la documentación lo define como la condición transitoria que se corrige reintentando con backoff</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="protobuf">Protocol Buffers, byte por byte</h3>
+      <p>Protobuf no manda nombres de campos: manda <b>números</b>. Cada campo empieza con un tag que junta el número de campo y el tipo de dato en el cable: <code>tag = (número &lt;&lt; 3) | tipo</code>. <span class="badge badge--doc">Documentado</span></p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th class="r">Tipo</th><th>Nombre</th><th>Para</th><th>Cómo se escribe</th></tr></thead>
+          <tbody>
+            <tr><td class="r">0</td><td><code>VARINT</code></td><td>int32, int64, uint, bool, enum</td><td>Grupos de 7 bits; el bit más alto de cada byte dice si sigue otro</td></tr>
+            <tr><td class="r">1</td><td><code>I64</code></td><td>fixed64, double</td><td>8 bytes</td></tr>
+            <tr><td class="r">2</td><td><code>LEN</code></td><td>string, bytes, mensajes anidados, listas empaquetadas</td><td>Un varint con el largo y después los bytes</td></tr>
+            <tr><td class="r">5</td><td><code>I32</code></td><td>fixed32, float</td><td>4 bytes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>El ejemplo de la documentación oficial: el campo 1 con el valor 150 se escribe <code>08 96 01</code>. El <code>08</code> es (1 &lt;&lt; 3) | 0. El 150 en binario es <code>10010110</code>: no entra en 7 bits, así que se parte en <code>0010110</code> (los 7 bajos, con un 1 adelante porque sigue otro byte: <code>96</code>) y <code>0000001</code> (<code>01</code>). <span class="badge badge--doc">Documentado</span> Tres consecuencias de diseño salen de aquí:</p>
+      <ul>
+        <li><b>Los campos 1 a 15 ocupan un byte de tag</b>; del 16 al 2047, dos. Los campos que más se envían van con números chicos.</li>
+        <li><b>Los negativos en <code>int32</code> son caros:</b> se extienden a 64 bits y ocupan 10 bytes. Para valores que suelen ser negativos, <code>sint32</code> usa ZigZag (−1 → 1, 1 → 2, −2 → 3…) y quedan cortos.</li>
+        <li><b>La compatibilidad está en los números.</b> Un receptor que encuentra un número desconocido lo saltea (el tipo le dice cuántos bytes saltar) y lo conserva. Por eso puedes agregar campos y renombrarlos, pero <b>nunca reutilizar un número</b>: márcalo con <code>reserved 4;</code> cuando borres el campo. En proto3, los valores por defecto (0, <code>""</code>, <code>false</code>) ni siquiera se envían.</li>
+      </ul>
+
+      <div data-sim="protobuf"></div>
+
+      <p>Con los valores iniciales del simulador, el mensaje ocupa 20 bytes en Protobuf y 77 en JSON sin espacios: un 26&#8239;%. Con gzip la distancia se achica en mensajes largos y repetitivos; lo que no se achica es el trabajo de parsear texto, ni la ventaja de tener un esquema que el compilador verifica.</p>
+
+      <h3 id="grpc-balanceo">Balancear y exponer gRPC</h3>
+      <p>Una conexión HTTP/2 vive mucho y lleva miles de llamadas. Con un balanceador L4 (M03), el balanceo se decide <b>por conexión</b>: si el cliente abre una sola, todas sus llamadas caen en la misma instancia, y las réplicas nuevas que agrega el autoescalado no reciben nada. Tres salidas:</p>
+      <ul>
+        <li><b>Proxy L7</b> (Envoy, un service mesh): termina HTTP/2 y reparte cada stream por separado.</li>
+        <li><b>Balanceo en el cliente:</b> el resolver de nombres devuelve todas las instancias y el cliente reparte con una política. La de por defecto, <code>pick_first</code>, usa una sola; <code>round_robin</code> abre una conexión a cada una. <span class="badge badge--doc">Documentado</span> Con xDS, un plano de control le envía al cliente la lista y los pesos: un service mesh sin proxy.</li>
+        <li><b>Edad máxima de conexión</b> en el servidor (<code>MAX_CONNECTION_AGE</code>): obliga a los clientes a reconectar cada tanto, y las conexiones nuevas se reparten entre las instancias nuevas. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+      <p>Hacia los navegadores, gRPC no funciona tal cual: JavaScript no puede leer trailers ni controlar frames de HTTP/2. gRPC-Web cambia el formato para que los trailers viajen dentro del cuerpo, y necesita un proxy que traduzca. Por eso, hacia afuera, gRPC suele quedarse detrás de un gateway que expone REST.</p>
+
+      <h2 id="soap"><span class="sec-num">2.7</span>SOAP: contratos formales y seguridad en el mensaje</h2>
+      <p>SOAP es un protocolo de mensajes en XML. Nació como RPC por HTTP (SOAP 1.1, una nota del W3C de mayo de 2000) y se estandarizó como SOAP 1.2, recomendación del W3C desde el 24 de junio de 2003. <span class="badge badge--doc">Documentado</span> Ya casi nadie lo elige para una API nueva, pero sigue en el corazón de muchas integraciones entre bancos, aseguradoras, gobiernos y sistemas empresariales, y es probable que te toque integrarte con uno. Salesforce, por ejemplo, sigue publicando su SOAP API junto a la REST. <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="soap-mensaje">El sobre: Envelope, Header, Body y Fault</h3>
+      <p>Todo mensaje SOAP es un <code>Envelope</code> con dos partes. El <code>Body</code> lleva la operación y sus datos. El <code>Header</code>, opcional, lleva bloques que no son de la operación sino del viaje: seguridad, ruteo, transacciones. Un bloque marcado con <code>mustUnderstand="true"</code> obliga al receptor a procesarlo o a rechazar el mensaje: así se agregan capacidades sin que un servidor viejo las ignore en silencio. Si algo falla, el Body trae un <code>Fault</code>:</p>
+<pre><code>HTTP/1.1 400 Bad Request
+Content-Type: application/soap+xml; charset=utf-8
+
+&lt;soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"&gt;
+  &lt;soap:Body&gt;
+    &lt;soap:Fault&gt;
+      &lt;soap:Code&gt;
+        &lt;soap:Value&gt;soap:Sender&lt;/soap:Value&gt;            &lt;!-- la culpa es de quien envió --&gt;
+        &lt;soap:Subcode&gt;&lt;soap:Value&gt;c:MontoInvalido&lt;/soap:Value&gt;&lt;/soap:Subcode&gt;
+      &lt;/soap:Code&gt;
+      &lt;soap:Reason&gt;&lt;soap:Text xml:lang="es"&gt;El monto debe ser positivo&lt;/soap:Text&gt;&lt;/soap:Reason&gt;
+    &lt;/soap:Fault&gt;
+  &lt;/soap:Body&gt;
+&lt;/soap:Envelope&gt;</code></pre>
+      <p><code>Sender</code> equivale a un 4xx y <code>Receiver</code> a un 5xx: dice si reintentar tiene sentido. En el binding HTTP de SOAP 1.2, un fault de tipo Sender viaja con 400 y los demás con 500. <span class="badge badge--doc">Documentado</span> Las dos versiones conviven, y se confunden a menudo:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>SOAP 1.1</th><th>SOAP 1.2</th></tr></thead>
+          <tbody>
+            <tr><td><b>Content-Type</b></td><td><code>text/xml</code></td><td><code>application/soap+xml</code></td></tr>
+            <tr><td><b>La operación</b></td><td>Header HTTP <code>SOAPAction</code></td><td>Parámetro <code>action</code> del Content-Type</td></tr>
+            <tr><td><b>Espacio de nombres</b></td><td><code>schemas.xmlsoap.org/soap/envelope/</code></td><td><code>www.w3.org/2003/05/soap-envelope</code></td></tr>
+            <tr><td><b>Fault</b></td><td><code>faultcode</code> (<code>Client</code>, <code>Server</code>) y <code>faultstring</code></td><td><code>Code</code> (<code>Sender</code>, <code>Receiver</code>), <code>Subcode</code> y <code>Reason</code> en varios idiomas</td></tr>
+            <tr><td><b>Estado HTTP de un fault</b></td><td>500</td><td>400 si es del emisor, 500 si es del receptor</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="wsdl">WSDL: el contrato primero</h3>
+      <p>Un <dfn data-term="wsdl">WSDL</dfn> (Web Services Description Language) es el IDL de SOAP: un XML que describe los tipos (con XML Schema), las operaciones con sus mensajes de entrada, salida y error, cómo se codifican, y la URL del servicio. Las herramientas leen el WSDL y generan los stubs, igual que <code>protoc</code> con un <code>.proto</code>: en Java, <code>wsimport</code>; en .NET, <code>svcutil</code>. Integrarse con un banco suele empezar así: te mandan un WSDL, generas el cliente y llamas métodos tipados.</p>
+<pre><code>&lt;wsdl:portType name="Pagos"&gt;
+  &lt;wsdl:operation name="Cobrar"&gt;
+    &lt;wsdl:input  message="tns:CobrarRequest"/&gt;
+    &lt;wsdl:output message="tns:CobrarResponse"/&gt;
+    &lt;wsdl:fault  message="tns:MontoInvalido" name="MontoInvalido"/&gt;
+  &lt;/wsdl:operation&gt;
+&lt;/wsdl:portType&gt;
+&lt;!-- más abajo: el binding (SOAP 1.2 sobre HTTP), la política de seguridad
+     exigida (WS-Policy) y la dirección del servicio --&gt;</code></pre>
+
+      <h3 id="soap-seguridad">¿Por qué se dice que SOAP es más seguro?</h3>
+      <p>La respuesta corta: SOAP en sí no trae seguridad. Lo que la trae es <dfn data-term="ws-security">WS-Security</dfn>, un estándar de OASIS de abril de 2004 que define cómo firmar y cifrar partes de un mensaje SOAP. <span class="badge badge--doc">Documentado</span> La diferencia de fondo está en <b>qué se protege</b>. TLS protege la conexión: cada salto entre dos máquinas. WS-Security protege el mensaje: la protección viaja con él, sin importar por cuántas manos pase.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 314" role="img" aria-labelledby="f2tmt f2tmd">
+<title id="f2tmt">TLS protege cada salto; WS-Security protege el mensaje</title>
+<desc id="f2tmd">Dos filas con los mismos cuatro actores: cliente, gateway, cola y servicio. En la de arriba, cada salto tiene su propio TLS y el mensaje queda en claro dentro del gateway y de la cola. En la de abajo, el mensaje va firmado y cifrado de punta a punta; los intermediarios lo pasan sin poder leerlo ni alterarlo, aunque los saltos también usen TLS.</desc>
+<defs><marker id="f2tma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="28">Solo TLS (seguridad de transporte)</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="44" width="150" height="44" rx="8"/>
+<text class="dg-label" x="95" y="71" text-anchor="middle">Cliente</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="220" y="44" width="150" height="44" rx="8"/>
+<text class="dg-label" x="295" y="71" text-anchor="middle">Gateway o ESB</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="420" y="44" width="150" height="44" rx="8"/>
+<text class="dg-label" x="495" y="71" text-anchor="middle">Cola</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="44" width="150" height="44" rx="8"/>
+<text class="dg-label" x="675" y="71" text-anchor="middle">Servicio</text>
+<path class="dg-edge" d="M172 66 L218 66" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="195.0" y="60" text-anchor="middle">TLS</text>
+<path class="dg-edge" d="M372 66 L418 66" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="395.0" y="60" text-anchor="middle">TLS</text>
+<path class="dg-edge" d="M572 66 L598 66" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="585.0" y="60" text-anchor="middle">TLS</text>
+<rect class="dg-bad" x="230" y="96" width="130" height="22" rx="4"/>
+<text class="dg-tiny" x="295" y="111" text-anchor="middle">mensaje en claro</text>
+<rect class="dg-bad" x="430" y="96" width="130" height="22" rx="4"/>
+<text class="dg-tiny" x="495" y="111" text-anchor="middle">mensaje en claro</text>
+<text class="dg-tiny" x="20" y="142">Cada intermediario descifra y vuelve a cifrar. Si uno está comprometido, o la cola</text>
+<text class="dg-tiny" x="20" y="157">guarda el mensaje en disco, la firma y la confidencialidad terminaron en ese salto.</text>
+<text class="dg-group" x="20" y="184">WS-Security (seguridad de mensaje) sobre TLS</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="200" width="150" height="44" rx="8"/>
+<text class="dg-label" x="95" y="227" text-anchor="middle">Cliente</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="220" y="200" width="150" height="44" rx="8"/>
+<text class="dg-label" x="295" y="227" text-anchor="middle">Gateway o ESB</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="420" y="200" width="150" height="44" rx="8"/>
+<text class="dg-label" x="495" y="227" text-anchor="middle">Cola</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="200" width="150" height="44" rx="8"/>
+<text class="dg-label" x="675" y="227" text-anchor="middle">Servicio</text>
+<path class="dg-edge" d="M172 222 L218 222" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="195.0" y="216" text-anchor="middle">TLS</text>
+<path class="dg-edge" d="M372 222 L418 222" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="395.0" y="216" text-anchor="middle">TLS</text>
+<path class="dg-edge" d="M572 222 L598 222" marker-end="url(#f2tma)"/>
+<text class="dg-tiny" x="585.0" y="216" text-anchor="middle">TLS</text>
+<rect class="dg-ok" x="20" y="254" width="730" height="22" rx="4"/>
+<text class="dg-tiny" x="385" y="269" text-anchor="middle">el mensaje viaja firmado y con el Body cifrado: solo el servicio lo lee</text>
+<text class="dg-tiny" x="20" y="298">El gateway puede leer los headers de ruteo, que no van cifrados, pero no el Body.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.9.</b> Con solo TLS, cada intermediario descifra el mensaje: el gateway lo ve en claro y la cola lo guarda en claro. Con WS-Security, el mensaje firmado y cifrado atraviesa los intermediarios intacto.</figcaption>
+      </figure>
+
+      <p>En una arquitectura con un ESB (un bus de servicios que enruta y transforma mensajes), colas y sistemas de terceros en el medio, eso importa. Un mensaje firmado con WS-Security se ve así:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 408" role="img" aria-labelledby="f2set f2sed">
+<title id="f2set">Un mensaje SOAP firmado con WS-Security</title>
+<desc id="f2sed">Cajas anidadas. El Envelope contiene un Header y un Body. En el Header, el bloque wsse:Security trae un Timestamp con id TS-1, un certificado X.509 como BinarySecurityToken y una firma XML. La firma tiene referencias por id al Body (Body-1) y al Timestamp (TS-1), con el digest de cada uno, y un SignatureValue calculado con la clave privada del certificado. El Body tiene la operación Cobrar con cuenta y monto.</desc>
+<defs><marker id="f2sea" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="10" y="10" width="470" height="388" rx="12"/>
+<text class="dg-label" x="24" y="32" style="font-family:var(--f-mono);white-space:pre;font-weight:600">soap:Envelope</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="26" y="44" width="438" height="236" rx="9"/>
+<text class="dg-tiny" x="40" y="64" style="font-family:var(--f-mono);white-space:pre;font-weight:600">soap:Header</text>
+<rect class="dg-box" x="40" y="74" width="410" height="196" rx="7"/>
+<text class="dg-tiny" x="52" y="92" style="font-family:var(--f-mono);white-space:pre;font-weight:600">wsse:Security  (mustUnderstand=&quot;1&quot;)</text>
+<rect class="hb-b" x="52" y="102" width="386" height="26" rx="5"/>
+<text class="dg-tiny" x="62" y="119" style="font-family:var(--f-mono);white-space:pre">wsu:Timestamp  Id=&quot;TS-1&quot;  Expires: +5 min</text>
+<rect class="hb-b" x="52" y="134" width="386" height="26" rx="5"/>
+<text class="dg-tiny" x="62" y="151" style="font-family:var(--f-mono);white-space:pre">wsse:BinarySecurityToken  (certificado X.509)</text>
+<rect class="hb-a" x="52" y="166" width="386" height="96" rx="5"/>
+<text class="dg-tiny" x="62" y="184" style="font-family:var(--f-mono);white-space:pre;font-weight:600">ds:Signature</text>
+<text class="dg-tiny" x="74" y="202" style="font-family:var(--f-mono);white-space:pre">Reference URI=&quot;#Body-1&quot;  DigestValue=…</text>
+<text class="dg-tiny" x="74" y="218" style="font-family:var(--f-mono);white-space:pre">Reference URI=&quot;#TS-1&quot;    DigestValue=…</text>
+<text class="dg-tiny" x="74" y="234" style="font-family:var(--f-mono);white-space:pre">SignatureValue = firma(SignedInfo,</text>
+<text class="dg-tiny" x="74" y="250" style="font-family:var(--f-mono);white-space:pre">                 clave privada)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="26" y="292" width="438" height="96" rx="9"/>
+<text class="dg-tiny" x="40" y="312" style="font-family:var(--f-mono);white-space:pre;font-weight:600">soap:Body  wsu:Id=&quot;Body-1&quot;</text>
+<text class="dg-tiny" x="56" y="334" style="font-family:var(--f-mono);white-space:pre">&lt;tns:Cobrar&gt;</text>
+<text class="dg-tiny" x="72" y="350" style="font-family:var(--f-mono);white-space:pre">&lt;cuenta&gt;42&lt;/cuenta&gt;&lt;monto&gt;2500&lt;/monto&gt;</text>
+<text class="dg-tiny" x="56" y="366" style="font-family:var(--f-mono);white-space:pre">&lt;/tns:Cobrar&gt;</text>
+<path class="dg-feedback" d="M438 198 C 470 220, 480 300, 466 330" marker-end="url(#f2sea)"/>
+<path class="dg-feedback" d="M438 214 C 462 190, 460 130, 440 118" marker-end="url(#f2sea)"/>
+<text class="dg-label" x="500" y="60" style="font-size:13px">Timestamp firmado</text>
+<text class="dg-tiny" x="500" y="77">Un mensaje capturado y reenviado más tarde se</text>
+<text class="dg-tiny" x="500" y="92">rechaza: es la defensa contra replay.</text>
+<text class="dg-label" x="500" y="140" style="font-size:13px">Token de seguridad</text>
+<text class="dg-tiny" x="500" y="157">Quién firma: un certificado X.509, un usuario y</text>
+<text class="dg-tiny" x="500" y="172">contraseña (UsernameToken) o un token SAML.</text>
+<text class="dg-label" x="500" y="220" style="font-size:13px">Firma XML</text>
+<text class="dg-tiny" x="500" y="237">Cada Reference apunta a una parte por su id y</text>
+<text class="dg-tiny" x="500" y="252">guarda su hash. Firma partes, no el mensaje entero.</text>
+<text class="dg-label" x="500" y="330" style="font-size:13px">Body</text>
+<text class="dg-tiny" x="500" y="347">Puede ir cifrado (xenc:EncryptedData) para que</text>
+<text class="dg-tiny" x="500" y="362">solo el destino final lo lea.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.10.</b> La firma no cubre el mensaje entero, sino las partes que referencia por id: el Body y el Timestamp. Cada <code>Reference</code> guarda el hash de su parte, y el <code>SignatureValue</code> firma ese conjunto de hashes con la clave privada del certificado.</figcaption>
+      </figure>
+
+      <p>Lo que WS-Security agrega, y que TLS solo no da:</p>
+      <ul>
+        <li><b>Integridad de punta a punta.</b> Si un intermediario cambia el monto, el hash del Body no coincide y la firma falla, aunque cada salto haya usado TLS.</li>
+        <li><b>Confidencialidad selectiva.</b> Con XML Encryption se cifra solo el Body, o solo el número de tarjeta: el ESB puede leer los headers de ruteo sin ver los datos.</li>
+        <li><b><dfn data-term="no-repudio">No repudio</dfn>.</b> La firma se hace con la clave privada de un certificado X.509 de la empresa que envía. Guardado el mensaje firmado, esa empresa no puede negar después que lo envió: la prueba es criptográfica y sobrevive al mensaje. Para bancos y gobiernos, eso vale más que todo lo demás. Con TLS, la prueba muere al cerrar la conexión.</li>
+        <li><b>Protección contra replay.</b> El Timestamp firmado, con vencimiento, impide reenviar un mensaje capturado horas después.</li>
+        <li><b>Política en el contrato.</b> Con WS-Policy, el WSDL declara qué hay que firmar y cifrar, y las herramientas lo aplican solas al generar el cliente. La familia WS-* suma entrega confiable (WS-ReliableMessaging) y transacciones distribuidas con commit en dos fases (WS-AtomicTransaction, el 2PC del M06).</li>
+      </ul>
+      <p>Nada de esto es exclusivo de SOAP. En el mundo JSON, la firma y el cifrado de mensajes existen como JWS y JWE (RFC 7515 y 7516), HTTP Message Signatures (RFC 9421) firma requests HTTP, y las firmas HMAC de los webhooks (2.10) son seguridad a nivel de mensaje. <span class="badge badge--doc">Documentado</span> La diferencia es que en SOAP vienen estandarizadas, integradas al contrato y soportadas por herramientas desde hace veinte años. "SOAP es más seguro" quiere decir eso: trae seguridad de mensaje de fábrica, no que una API REST bien hecha no pueda tenerla.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla: la seguridad de XML tiene sus propios ataques</p>
+        <p>La flexibilidad de la firma por partes abrió una familia entera de ataques. En el <dfn data-term="xml-signature-wrapping">XML Signature Wrapping</dfn>, el atacante mueve la parte firmada a otro lugar del documento y pone la suya donde la aplicación la va a leer. El verificador busca el id firmado, lo encuentra y aprueba; la aplicación procesa otra cosa. En 2011, un grupo de la Universidad del Ruhr en Bochum mostró que con un solo mensaje SOAP firmado y capturado se podían ejecutar operaciones arbitrarias en la interfaz SOAP de Amazon EC2 con la identidad de la víctima. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 360" role="img" aria-labelledby="f2swt f2swd">
+<title id="f2swt">Ataque de XML Signature Wrapping</title>
+<desc id="f2swd">A la izquierda, un mensaje legítimo: la firma apunta al Body con id body y el Body pide una operación inocente. A la derecha, el atacante copia ese Body firmado dentro de un elemento envoltorio en el Header y pone un Body nuevo con su propia operación. El verificador busca el id body, lo encuentra en el envoltorio y la firma es válida; la aplicación ejecuta el primer hijo de soap:Body, que es el del atacante.</desc>
+<defs><marker id="f2swa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f2swf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f2swo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--ok)"/></marker></defs>
+<text class="dg-label" x="10" y="22">Mensaje legítimo, capturado</text>
+<rect class="dg-box" x="10" y="32" width="360" height="318" rx="10"/>
+<text class="dg-tiny" x="22" y="52" style="font-family:var(--f-mono);white-space:pre;font-weight:600">soap:Envelope</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="22" y="62" width="336" height="90" rx="8"/>
+<text class="dg-tiny" x="34" y="80" style="font-family:var(--f-mono);white-space:pre">soap:Header &gt; wsse:Security</text>
+<rect class="hb-a" x="34" y="88" width="312" height="34" rx="5"/>
+<text class="dg-tiny" x="44" y="109" style="font-family:var(--f-mono);white-space:pre">ds:Signature  Reference URI=&quot;#body&quot;</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="22" y="164" width="336" height="64" rx="8"/>
+<text class="dg-tiny" x="34" y="186" style="font-family:var(--f-mono);white-space:pre">soap:Body  Id=&quot;body&quot;</text>
+<rect class="dg-ok" x="34" y="194" width="312" height="26" rx="4"/>
+<text class="dg-tiny" x="44" y="211" style="font-family:var(--f-mono);white-space:pre">DescribeInstances</text>
+<text class="dg-label" x="400" y="22">Mensaje manipulado</text>
+<rect class="dg-box" x="400" y="32" width="360" height="318" rx="10"/>
+<text class="dg-tiny" x="412" y="52" style="font-family:var(--f-mono);white-space:pre;font-weight:600">soap:Envelope</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="412" y="62" width="336" height="150" rx="8"/>
+<text class="dg-tiny" x="424" y="80" style="font-family:var(--f-mono);white-space:pre">soap:Header &gt; wsse:Security</text>
+<rect class="hb-a" x="424" y="88" width="312" height="34" rx="5"/>
+<text class="dg-tiny" x="434" y="109" style="font-family:var(--f-mono);white-space:pre">ds:Signature  Reference URI=&quot;#body&quot;</text>
+<rect class="dg-warnbox" x="424" y="130" width="312" height="72" rx="5"/>
+<text class="dg-tiny" x="434" y="148" style="font-family:var(--f-mono);white-space:pre">&lt;Envoltorio&gt;  (lo agregó el atacante)</text>
+<rect class="dg-ok" x="434" y="156" width="292" height="38" rx="4"/>
+<text class="dg-tiny" x="444" y="172" style="font-family:var(--f-mono);white-space:pre">soap:Body Id=&quot;body&quot;  (el original)</text>
+<text class="dg-tiny" x="444" y="187" style="font-family:var(--f-mono);white-space:pre">DescribeInstances</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="412" y="222" width="336" height="64" rx="8"/>
+<text class="dg-tiny" x="424" y="244" style="font-family:var(--f-mono);white-space:pre">soap:Body  (nuevo, sin el id firmado)</text>
+<rect class="dg-bad" x="424" y="252" width="312" height="26" rx="4"/>
+<text class="dg-tiny" x="434" y="269" style="font-family:var(--f-mono);white-space:pre">RunInstances  x 100  (lo que pide el atacante)</text>
+<path class="dg-edge" d="M736 112 C 760 130, 760 150, 728 168" marker-end="url(#f2swo)" style="stroke:var(--ok)"/>
+<path class="dg-edge" d="M742 112 C 768 180, 768 260, 738 274" marker-end="url(#f2swf)" style="stroke:var(--fail)"/>
+<text class="dg-tiny" x="410" y="312" style="fill:var(--ok)">El verificador busca Id=&quot;body&quot;: lo encuentra y la firma da OK.</text>
+<text class="dg-tiny dg-fail-text" x="410" y="330">La aplicación ejecuta el hijo de soap:Body: la operación</text>
+<text class="dg-tiny dg-fail-text" x="410" y="345">del atacante. Firma válida, mensaje falso.</text>
+<text class="dg-tiny" x="20" y="268">Con un solo mensaje firmado capturado, el atacante</text>
+<text class="dg-tiny" x="20" y="284">puede ejecutar otras operaciones con la identidad</text>
+<text class="dg-tiny" x="20" y="300">de la víctima mientras el Timestamp siga vigente.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.11.</b> Firma válida, mensaje falso. El problema no es criptográfico: el verificador y la aplicación miran elementos distintos. La defensa es que la aplicación procese exactamente el nodo que se verificó, no que lo vuelva a buscar.</figcaption>
+      </figure>
+
+      <p>Otros dos ataques vienen con cualquier parser de XML, SOAP o no:</p>
+      <ul>
+        <li><b><dfn data-term="xxe">XXE</dfn></b> (XML External Entity): una entidad que apunta a <code>file:///etc/passwd</code> o a una URL interna hace que el parser la lea y la meta en el documento. Se apaga desactivando las DTD y las entidades externas.</li>
+        <li><b>Billion laughs:</b> diez entidades anidadas, cada una con diez copias de la anterior, expanden a 10⁹ copias de un texto de 3 bytes: unos 3&#8239;GB de memoria a partir de un mensaje de menos de 1&#8239;KB. Se evita igual, y con límites de expansión.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Elige SOAP cuando la otra parte lo exige, que es lo más común, o cuando necesitas no repudio y mensajes que atraviesan intermediarios con herramientas que ya lo resuelven. Para una API nueva, REST con mTLS (M10) y firmas de mensaje donde hagan falta da las mismas garantías con mucho menos peso. Y si te integras con un servicio SOAP, usa una biblioteca de WS-Security mantenida y con los parsers endurecidos: escribir la verificación de firmas a mano es justo cómo nacen los ataques de wrapping.</p>
+      </aside>
+
+      <h2 id="graphql"><span class="sec-num">2.8</span>GraphQL: flexibilidad con costo</h2>
+      <p>GraphQL resuelve un problema real de los frontends: una pantalla necesita datos de cinco recursos y con REST eso son cinco requests, o un endpoint a medida. Con GraphQL el cliente pide exactamente el árbol de datos que necesita. Facebook lo creó en 2012 para el News Feed de su app móvil, lo publicó en 2015 y desde 2018 lo mantiene la GraphQL Foundation, dentro de la Linux Foundation. <span class="badge badge--doc">Documentado</span> A cambio de esa flexibilidad, el servidor acepta consultas arbitrarias, y eso trae tres problemas que hay que diseñar desde el principio:</p>
       <ul>
         <li><b>El <dfn data-term="n-mas-1">problema N+1</dfn>.</b> Cada campo se resuelve por separado; una lista de 50 posts con su autor dispara 51 consultas. Se agrupan con DataLoader.</li>
         <li><b>Consultas carísimas.</b> Nada impide pedir amigos de amigos de amigos. Se limita profundidad y costo calculado de cada consulta, y en APIs propias se aceptan solo <em>persisted queries</em> (consultas registradas de antemano, identificadas por hash).</li>
         <li><b>Caché HTTP inútil.</b> Todo es <code>POST /graphql</code>. Las persisted queries por GET recuperan la caché de CDN; si no, se cachea por entidad en el servidor.</li>
       </ul>
 
-      <h2 id="tiempo-real"><span class="sec-num">2.8</span>Tiempo real: polling, SSE y WebSockets</h2>
+      <h3 id="graphql-esquema">El esquema es el contrato</h3>
+      <p>Todo empieza en un esquema tipado, escrito en SDL (Schema Definition Language). Tiene tres puntos de entrada: <code>Query</code> para leer, <code>Mutation</code> para escribir y <code>Subscription</code> para recibir eventos. El <code>!</code> marca un campo que nunca es nulo:</p>
+<pre><code>type Query {
+  post(id: ID!): Post
+  posts(first: Int!, after: String): PostConnection!
+}
+type Mutation  { sendMessage(input: SendInput!): Message! }
+type Subscription { messageAdded(conversationId: ID!): Message! }
+
+type Post { id: ID!  title: String!  author: User!  comments(first: Int!): CommentConnection! }
+type User { id: ID!  name: String! }
+
+# Paginación por cursor, al estilo Relay: la misma idea de 2.3
+type PostConnection { edges: [PostEdge!]!  pageInfo: PageInfo! }
+type PostEdge { node: Post!  cursor: String! }
+type PageInfo { hasNextPage: Boolean!  endCursor: String }</code></pre>
+      <p>La convención de <em>connections</em> (de Relay, el cliente de Facebook) es la paginación por cursor de la sección 2.3 con otro nombre: <code>first</code> y <code>after</code> son el <code>limit</code> y el cursor, y <code>endCursor</code> es la marca. GitHub la usa en toda su API de GraphQL. <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="graphql-ejecucion">Cómo se ejecuta una consulta</h3>
+      <p>El servidor procesa cada consulta en tres pasos. <b>Parsea</b> el texto. La <b>valida</b> contra el esquema: un campo que no existe o un argumento del tipo equivocado se rechaza antes de tocar la base. Y la <b>ejecuta</b>: recorre el árbol de la consulta de arriba abajo y, para cada campo, llama a su <em>resolver</em>, una función que recibe el objeto padre y devuelve el valor del campo. Un resolver de lista devuelve N objetos, y los resolvers de sus campos se ejecutan N veces.</p>
+<pre data-lang="python"><code>def resolve_posts(parent, info, first):
+    return db.fetch("SELECT * FROM posts ORDER BY id DESC LIMIT %s", first)
+
+def resolve_author(post, info):
+    # Sin loader: un SELECT por post. Con loader: se junta con los demás autores del mismo nivel.
+    return info.context.loaders.user.load(post.author_id)</code></pre>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 360" role="img" aria-labelledby="f2gqt f2gqd">
+<title id="f2gqt">Cómo se ejecuta una consulta GraphQL</title>
+<desc id="f2gqd">A la izquierda, la consulta pide 50 posts con su título y el nombre de su autor. En el centro, el árbol de resolvers: Query.posts se ejecuta una vez y Post.author se ejecuta 50 veces, una por post. A la derecha, el log de la base: sin DataLoader son 51 consultas; con DataLoader, las 50 cargas del mismo nivel se juntan en una sola consulta con IN, y son 2.</desc>
+<defs><marker id="f2gqa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="14" y="22">La consulta</text>
+<rect class="dg-box" x="10" y="30" width="200" height="150" rx="8"/>
+<text class="dg-tiny" x="22" y="52" style="font-family:var(--f-mono);white-space:pre">query {</text>
+<text class="dg-tiny" x="22" y="68" style="font-family:var(--f-mono);white-space:pre">  posts(first: 50) {</text>
+<text class="dg-tiny" x="22" y="84" style="font-family:var(--f-mono);white-space:pre">    title</text>
+<text class="dg-tiny" x="22" y="100" style="font-family:var(--f-mono);white-space:pre">    author {</text>
+<text class="dg-tiny" x="22" y="116" style="font-family:var(--f-mono);white-space:pre">      name</text>
+<text class="dg-tiny" x="22" y="132" style="font-family:var(--f-mono);white-space:pre">    }</text>
+<text class="dg-tiny" x="22" y="148" style="font-family:var(--f-mono);white-space:pre">  }</text>
+<text class="dg-tiny" x="22" y="164" style="font-family:var(--f-mono);white-space:pre">}</text>
+<text class="dg-group" x="240" y="22">El árbol de resolvers</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="260" y="36" width="150" height="36" rx="8"/>
+<text class="dg-tiny" x="335" y="59" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">Query.posts</text>
+<text class="dg-num" x="420" y="59">x 1</text>
+<path class="dg-edge" d="M335 72 L252 108" style="opacity:0.6"/>
+<rect class="hb-b" x="236" y="110" width="32" height="26" rx="4"/>
+<text class="dg-tiny" x="252" y="127" text-anchor="middle">Post</text>
+<path class="dg-edge" d="M252 136 L252 164" marker-end="url(#f2gqa)" style="opacity:0.6"/>
+<rect class="hb-c" x="236" y="166" width="32" height="26" rx="4"/>
+<path class="dg-edge" d="M335 72 L292 108" style="opacity:0.6"/>
+<rect class="hb-b" x="276" y="110" width="32" height="26" rx="4"/>
+<text class="dg-tiny" x="292" y="127" text-anchor="middle">Post</text>
+<path class="dg-edge" d="M292 136 L292 164" marker-end="url(#f2gqa)" style="opacity:0.6"/>
+<rect class="hb-c" x="276" y="166" width="32" height="26" rx="4"/>
+<path class="dg-edge" d="M335 72 L332 108" style="opacity:0.6"/>
+<rect class="hb-b" x="316" y="110" width="32" height="26" rx="4"/>
+<text class="dg-tiny" x="332" y="127" text-anchor="middle">Post</text>
+<path class="dg-edge" d="M332 136 L332 164" marker-end="url(#f2gqa)" style="opacity:0.6"/>
+<rect class="hb-c" x="316" y="166" width="32" height="26" rx="4"/>
+<path class="dg-edge" d="M335 72 L372 108" style="opacity:0.6"/>
+<rect class="hb-b" x="356" y="110" width="32" height="26" rx="4"/>
+<text class="dg-tiny" x="372" y="127" text-anchor="middle">Post</text>
+<path class="dg-edge" d="M372 136 L372 164" marker-end="url(#f2gqa)" style="opacity:0.6"/>
+<rect class="hb-c" x="356" y="166" width="32" height="26" rx="4"/>
+<path class="dg-edge" d="M335 72 L412 108" style="opacity:0.6"/>
+<rect class="hb-b" x="396" y="110" width="32" height="26" rx="4"/>
+<text class="dg-tiny" x="412" y="127" text-anchor="middle">Post</text>
+<path class="dg-edge" d="M412 136 L412 164" marker-end="url(#f2gqa)" style="opacity:0.6"/>
+<rect class="hb-c" x="396" y="166" width="32" height="26" rx="4"/>
+<text class="dg-num" x="440" y="127">x 50</text>
+<text class="dg-num" x="440" y="184">Post.author x 50</text>
+<text class="dg-tiny" x="236" y="214">Cada campo tiene su resolver y se ejecuta</text>
+<text class="dg-tiny" x="236" y="230">por cada objeto del nivel de arriba.</text>
+<text class="dg-group" x="530" y="22">Lo que recibe la base</text>
+<rect class="dg-bad" x="530" y="30" width="236" height="150" rx="8"/>
+<text class="dg-label" x="542" y="50" style="font-size:12.5px">Sin DataLoader: 51 consultas</text>
+<text class="dg-tiny" x="542" y="68" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM posts LIMIT 50</text>
+<text class="dg-tiny" x="542" y="86" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=7</text>
+<text class="dg-tiny" x="542" y="100" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=3</text>
+<text class="dg-tiny" x="542" y="114" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=7</text>
+<text class="dg-tiny" x="542" y="128" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=12</text>
+<text class="dg-tiny" x="542" y="142" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=3</text>
+<text class="dg-tiny" x="542" y="156" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users WHERE id=9</text>
+<text class="dg-tiny" x="542" y="174">… 44 más, varias repetidas</text>
+<rect class="dg-ok" x="530" y="196" width="236" height="98" rx="8"/>
+<text class="dg-label" x="542" y="216" style="font-size:12.5px">Con DataLoader: 2 consultas</text>
+<text class="dg-tiny" x="542" y="236" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM posts LIMIT 50</text>
+<text class="dg-tiny" x="542" y="254" style="font-family:var(--f-mono);white-space:pre">SELECT … FROM users</text>
+<text class="dg-tiny" x="542" y="270" style="font-family:var(--f-mono);white-space:pre">  WHERE id IN (7,3,12,9,…)</text>
+<text class="dg-tiny" x="542" y="286">ids únicos, en un solo viaje</text>
+<text class="dg-small" x="14" y="318">DataLoader no cambia los resolvers: cada author llama a loader.load(id), y el loader espera al final del</text>
+<text class="dg-small" x="14" y="336">turno del event loop para mandar todos los ids juntos y deduplicados. Además guarda cada usuario durante la request.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.12.</b> El resolver de <code>author</code> corre una vez por post. Sin agrupar, la base recibe 51 consultas; con DataLoader, 2, sin importar cuántos posts haya.</figcaption>
+      </figure>
+
+      <h3 id="graphql-n1">N+1 y DataLoader</h3>
+      <p><dfn data-term="dataloader">DataLoader</dfn>, la biblioteca que publicó Facebook, hace dos cosas: <b>agrupa</b> todas las llamadas a <code>load(id)</code> que ocurren en el mismo turno del event loop y las convierte en una sola llamada con la lista de ids, y <b>cachea</b> cada resultado durante la request, así que el mismo autor pedido diez veces se busca una. <span class="badge badge--doc">Documentado</span> Con 50 posts de 12 autores distintos: sin loader, 1 + 50 = 51 consultas; con loader, 1 + 1 = 2, y la segunda pide 12 ids, no 50. Con anidamiento, el número de consultas pasa a ser uno por nivel del árbol: posts, autores y comentarios de los posts son 3, no 1 + 50 + 50.</p>
+      <p>El loader se crea <b>por request</b>, nunca global: su caché no sabe de permisos, y un loader compartido le mostraría a un usuario lo que cargó otro.</p>
+
+      <h3 id="graphql-errores">Errores: 200 con datos a medias</h3>
+      <p>Una consulta GraphQL puede salir bien en parte. La respuesta trae lo que se pudo resolver en <code>data</code> y los fallos en <code>errors</code>, cada uno con el <code>path</code> del campo que falló:</p>
+<pre data-lang="json"><code>{
+  "data": { "posts": [ { "title": "Viaje", "author": { "name": "Ana" } },
+                       { "title": "Receta", "author": null } ] },
+  "errors": [ { "message": "No tienes permiso para ver este usuario",
+                "path": ["posts", 1, "author"],
+                "extensions": { "code": "FORBIDDEN" } } ]
+}</code></pre>
+      <p>Dos consecuencias. La primera, para operar: casi todo vuelve con HTTP 200, así que un tablero que mide errores por código de estado ve el 100&#8239;% de éxito mientras la mitad de los campos falla. Hay que contar <code>errors</code>, por operación y por código. La segunda, para diseñar: la nulabilidad decide hasta dónde se propaga un error. Si <code>author</code> fuera <code>User!</code> (no nulo) y fallara, el null subiría hasta el primer padre que sí admita null y se llevaría el post entero. <span class="badge badge--doc">Documentado</span> Marca como no nulo solo lo que de verdad nunca puede fallar.</p>
+
+      <h3 id="graphql-costo">Limitar lo que cuesta una consulta</h3>
+      <p>Contar requests no sirve: una sola consulta puede pedir un millón de objetos. Las APIs públicas cobran por costo calculado. GitHub lo documenta así: cada usuario tiene 5&#8239;000 puntos por hora; el costo de una consulta es el número de requests que haría falta para resolver cada conexión, suponiendo que cada <code>first</code> se llena, dividido por 100 y redondeado; <code>first</code> y <code>last</code> van de 1 a 100; ninguna consulta puede pedir más de 500&#8239;000 nodos; y una consulta que tarda más de 10 s se corta. <span class="badge badge--doc">Documentado</span> Un ejemplo resuelto:</p>
+<pre><code>query {
+  viewer {
+    repositories(first: 100) {        # 1 request
+      nodes {
+        issues(first: 50) {           # 100 requests, una por repositorio
+          nodes {
+            labels(first: 10) {       # 100 × 50 = 5 000 requests, una por issue
+              nodes { name }
+}}}}}}}
+
+costo  = (1 + 100 + 5 000) / 100 = 51.01  →  51 puntos
+nodos  = 100 + 100 × 50 + 100 × 50 × 10 = 55 100   (dentro del límite de 500 000)</code></pre>
+      <p>Además de costo y profundidad, hay dos abusos propios de GraphQL. Los <b>alias</b> permiten pedir el mismo campo muchas veces en una consulta (<code>a1: login(…) a2: login(…)</code>…): mil intentos de contraseña en una sola request HTTP, que un límite por request no ve. Y la <b>introspección</b> le entrega el esquema completo a cualquiera; en una API privada se apaga en producción.</p>
+
+      <h3 id="graphql-cache">Caché, persisted queries, suscripciones y federación</h3>
+      <ul>
+        <li><b>Persisted queries.</b> El cliente manda el hash SHA-256 de la consulta en lugar del texto. Si el servidor no la conoce, responde con un error y el cliente reenvía el texto completo una sola vez. Como el hash es corto, la consulta puede ir por GET y una CDN puede cachearla. Es el protocolo de Automatic Persisted Queries de Apollo. <span class="badge badge--doc">Documentado</span> En una API propia, lo más seguro es una lista cerrada: el servidor solo ejecuta los hashes que registró tu build, y cualquier otra consulta se rechaza.</li>
+        <li><b>Caché normalizada en el cliente.</b> Apollo Client y Relay guardan cada objeto una sola vez, por <code>__typename</code> e <code>id</code>. Si una mutación devuelve el usuario 7 con otro nombre, todas las pantallas que lo muestran se actualizan.</li>
+        <li><b>Suscripciones.</b> Para eventos en vivo, el cliente abre una suscripción que viaja casi siempre sobre un WebSocket (2.9), con un subprotocolo como <code>graphql-transport-ws</code>.</li>
+        <li><b><dfn data-term="graphql-federation">Federación</dfn>.</b> En una empresa grande, cada equipo publica su parte del esquema (un subgrafo) y un router los compone en un solo grafo: planifica cada consulta, pregunta a cada subgrafo lo suyo y junta el resultado. Netflix contó en 2020 cómo migró su API de estudio a este modelo. <span class="badge badge--doc">Documentado</span> El precio es que el router se vuelve una pieza crítica y que una consulta puede pagar varios saltos de red.</li>
+      </ul>
+
+      <h2 id="tiempo-real"><span class="sec-num">2.9</span>Tiempo real: polling, SSE y WebSockets</h2>
+      <p>HTTP nació para que el cliente pregunte y el servidor conteste. Para que el servidor avise algo apenas pasa, hay cuatro formas, de la más simple a la más capaz.</p>
+
+      <h3 id="polling">Polling y long polling, con números</h3>
+      <p><b>Polling</b> es preguntar cada tanto. Su costo se calcula a mano: un millón de clientes que preguntan cada 5 segundos son 1&#8239;000&#8239;000 ÷ 5 = 200&#8239;000 requests por segundo, y si hay novedades para el 1&#8239;% de ellos, el 99&#8239;% de ese tráfico vuelve vacío. Bajar el intervalo mejora la latencia y multiplica el costo en la misma proporción.</p>
+      <p>Con <dfn data-term="long-polling">long polling</dfn>, el servidor retiene la request hasta que hay algo nuevo o vence un plazo (25 o 30 s, por debajo del timeout de los proxies del camino). Al recibir la respuesta, el cliente vuelve a preguntar enseguida. Entre una respuesta y la request siguiente queda un hueco: lo que pase ahí se perdería, así que cada request lleva un cursor ("lo posterior al evento 812") y el servidor contesta desde ahí. Es la paginación de 2.3 aplicada al tiempo.</p>
+
+      <h3 id="sse-cable">SSE por dentro</h3>
+      <p>SSE es una respuesta HTTP que no termina. El servidor responde con <code>Content-Type: text/event-stream</code> y va escribiendo eventos de texto separados por una línea en blanco, con cuatro campos posibles: <code>event</code> (el tipo), <code>data</code> (el contenido; varias líneas se juntan), <code>id</code> (lo que el navegador devuelve en <code>Last-Event-ID</code> al reconectar) y <code>retry</code> (cuántos milisegundos esperar antes de reconectar). Una línea que empieza con <code>:</code> es un comentario y sirve de latido para que ningún proxy cierre la conexión por inactividad. <span class="badge badge--doc">Documentado</span></p>
+<pre data-lang="sse"><code>retry: 3000
+
+: latido cada 15 s para que los proxies no corten
+
+event: precio
+id: 812
+data: {"simbolo": "ACME", "precio": 101.25}
+</code></pre>
+      <p>Dos límites prácticos. Con HTTP/1.1, el navegador abre como mucho 6 conexiones por dominio, y cada pestaña con SSE gasta una; con HTTP/2, los streams se <span data-term="multiplexar">multiplexan</span> sobre una conexión y el límite pasa a ser el que negocian las partes, típicamente 100. <span class="badge badge--doc">Documentado</span> Y los proxies que acumulan la respuesta antes de reenviarla (buffering) rompen el streaming: en nginx se desactiva por respuesta con el header <code>X-Accel-Buffering: no</code>. <span class="badge badge--doc">Documentado</span> El M17 lo usa para el streaming de los LLMs.</p>
+
+      <h3 id="websocket-cable">WebSocket por dentro</h3>
+      <p>Un <dfn data-term="websocket">WebSocket</dfn> empieza como un GET de HTTP/1.1 que pide cambiar de protocolo. Si el servidor acepta, responde <code>101 Switching Protocols</code> y desde ese momento la conexión TCP deja de hablar HTTP: lleva frames en los dos sentidos, en cualquier momento.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f2wst f2wsd">
+<title id="f2wst">El handshake de WebSocket y el formato de un frame</title>
+<desc id="f2wsd">Arriba, el GET con Upgrade websocket y Sec-WebSocket-Key dGhlIHNhbXBsZSBub25jZQ==, y la respuesta 101 Switching Protocols con Sec-WebSocket-Accept s3pPLMBiTxaQ9kYGzzhZRbK+xOo=, que es el base64 del SHA-1 de la clave más un GUID fijo. Abajo, los bits de un frame: FIN, tres bits reservados, opcode de cuatro bits, MASK, largo de siete bits, largo extendido opcional, clave de máscara de 32 bits y el payload. El ejemplo es el texto Hola enviado por el cliente: 10 bytes.</desc>
+<defs><marker id="f2wsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f2wsr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<rect class="dg-box" x="10" y="10" width="360" height="128" rx="8"/>
+<text class="dg-tiny" x="22" y="30" style="font-family:var(--f-mono);white-space:pre">GET /chat HTTP/1.1</text>
+<text class="dg-tiny" x="22" y="47" style="font-family:var(--f-mono);white-space:pre">Host: chat.ejemplo.com</text>
+<text class="dg-tiny" x="22" y="64" style="font-family:var(--f-mono);white-space:pre">Upgrade: websocket</text>
+<text class="dg-tiny" x="22" y="81" style="font-family:var(--f-mono);white-space:pre">Connection: Upgrade</text>
+<text class="dg-tiny" x="22" y="98" style="font-family:var(--f-mono);white-space:pre">Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==</text>
+<text class="dg-tiny" x="22" y="115" style="font-family:var(--f-mono);white-space:pre">Sec-WebSocket-Version: 13</text>
+<path class="dg-edge" d="M372 70 L396 70" marker-end="url(#f2wsa)"/>
+<rect class="dg-box" x="400" y="10" width="360" height="128" rx="8"/>
+<text class="dg-tiny" x="412" y="30" style="font-family:var(--f-mono);white-space:pre">HTTP/1.1 101 Switching Protocols</text>
+<text class="dg-tiny" x="412" y="47" style="font-family:var(--f-mono);white-space:pre">Upgrade: websocket</text>
+<text class="dg-tiny" x="412" y="64" style="font-family:var(--f-mono);white-space:pre">Connection: Upgrade</text>
+<text class="dg-tiny" x="412" y="81" style="font-family:var(--f-mono);white-space:pre">Sec-WebSocket-Accept:</text>
+<text class="dg-tiny" x="412" y="98" style="font-family:var(--f-mono);white-space:pre">  s3pPLMBiTxaQ9kYGzzhZRbK+xOo=</text>
+<text class="dg-tiny" x="412" y="128">base64(SHA-1(clave + &quot;258EAFA5-…-C5AB0DC85B11&quot;))</text>
+<text class="dg-group" x="10" y="162">Después del 101, la misma conexión TCP lleva frames. Cabecera de un frame:</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="174" width="38" height="34" rx="4"/>
+<text class="dg-tiny" x="30.0" y="196" text-anchor="middle">FIN</text>
+<rect class="hb-b" x="50" y="174" width="118" height="34" rx="4"/>
+<text class="dg-tiny" x="110.0" y="196" text-anchor="middle">RSV</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="170" y="174" width="158" height="34" rx="4"/>
+<text class="dg-tiny" x="250.0" y="196" text-anchor="middle">opcode</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="330" y="174" width="38" height="34" rx="4"/>
+<text class="dg-tiny" x="350.0" y="196" text-anchor="middle">MASK</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="370" y="174" width="278" height="34" rx="4"/>
+<text class="dg-tiny" x="510.0" y="196" text-anchor="middle">largo (7 bits)</text>
+<rect class="hb-b" x="650" y="174" width="108.0" height="34" rx="4"/>
+<text class="dg-tiny" x="705.0" y="196" text-anchor="middle">largo extendido</text>
+<text class="dg-num" x="10" y="222">bit 0</text>
+<text class="dg-num" x="648" y="222" text-anchor="end">bit 15</text>
+<rect class="hb-c" x="10" y="230" width="748" height="30" rx="4"/>
+<text class="dg-tiny" x="385" y="250" text-anchor="middle">clave de máscara: 32 bits, nueva en cada frame (solo de cliente a servidor)</text>
+<rect class="dg-box" x="10" y="266" width="748" height="30" rx="4"/>
+<text class="dg-tiny" x="385" y="286" text-anchor="middle">payload: los datos, con XOR contra la máscara si MASK = 1</text>
+<text class="dg-label" x="10" y="320" style="font-size:13px">&quot;Hola&quot; del cliente, 10 bytes:</text>
+<text class="dg-tiny" x="210" y="320" style="font-family:var(--f-mono);white-space:pre;font-weight:600">81</text>
+<text class="dg-tiny" x="210" y="338">FIN=1, opcode=1 (texto)</text>
+<text class="dg-tiny" x="380.12" y="320" style="font-family:var(--f-mono);white-space:pre;font-weight:600">84</text>
+<text class="dg-tiny" x="380.12" y="338">MASK=1, largo=4</text>
+<text class="dg-tiny" x="498.72" y="320" style="font-family:var(--f-mono);white-space:pre;font-weight:600">xx xx xx xx</text>
+<text class="dg-tiny" x="498.72" y="338">máscara</text>
+<text class="dg-tiny" x="595.5600000000001" y="320" style="font-family:var(--f-mono);white-space:pre;font-weight:600">yy yy yy yy</text>
+<text class="dg-tiny" x="595.5600000000001" y="338">&quot;Hola&quot; enmascarado</text>
+<text class="dg-small" x="10" y="362">Opcodes: 0x1 texto, 0x2 binario, 0x8 cierre, 0x9 ping, 0xA pong (RFC 6455).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 2.13.</b> El handshake y la cabecera de un frame, con los valores de ejemplo del RFC 6455. <span class="badge badge--doc">Documentado</span> El <code>Sec-WebSocket-Accept</code> prueba que el servidor entendió el pedido de WebSocket: un servidor HTTP cualquiera no sabría calcularlo.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>La clave no es seguridad.</b> <code>Sec-WebSocket-Key</code> es un valor al azar, y el servidor responde con el base64 del SHA-1 de la clave más un GUID fijo. No autentica a nadie: solo evita que una caché o un servidor que no habla WebSocket acepte la conexión por error. La autenticación va aparte, con una cookie o un token en el primer mensaje.</li>
+        <li><b>Los frames del cliente van enmascarados.</b> Cada frame del cliente al servidor lleva una clave de 32 bits nueva y el payload pasa por un XOR con ella. No es cifrado (la clave viaja al lado): impide que una página maliciosa elija los bytes exactos que aparecen en el cable y engañe a un proxy intermedio para envenenar su caché. Los frames del servidor no se enmascaran. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Mensajes de control.</b> Ping y pong mantienen viva la conexión y detectan una que murió sin avisar. El cierre lleva un código: 1000 es normal, 1001 es que el servidor se va (un deploy), y 1006 lo reporta el navegador cuando la conexión se cortó sin frame de cierre. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Lo que no trae.</b> No hay correlación entre pedido y respuesta, ni reintentos, ni control de flujo por mensaje: si el servidor envía más rápido de lo que el cliente procesa, los mensajes se acumulan en memoria. El protocolo de mensajes de tu aplicación tiene que agregar ids, acks y un límite de mensajes en vuelo, como hace WhatsApp en el M29.</li>
+      </ul>
+
+      <h3 id="tiempo-real-comparacion">Comparación</h3>
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th></th><th>Polling</th><th>Long polling</th><th>SSE</th><th>WebSocket</th></tr></thead>
@@ -411,7 +1680,7 @@ If-Match: "v17"
       </div>
       <p>Las conexiones persistentes cambian la escala del problema: ya no importan tanto las requests por segundo como las <b>conexiones abiertas</b> y la memoria que ocupa cada una. Y aparecen problemas nuevos: un deploy que reinicia servidores desconecta a cientos de miles de clientes a la vez, que reconectan todos juntos (se mitiga con reconexión con jitter y drenaje gradual), y enviar un mensaje a un usuario exige saber en qué servidor está su conexión (un registro de presencia o pub/sub, que verás en <a href="m29-whatsapp.html#registro">WhatsApp, M29</a>).</p>
 
-      <h2 id="webhooks"><span class="sec-num">2.9</span>Webhooks: tu sistema llamando al de otros</h2>
+      <h2 id="webhooks"><span class="sec-num">2.10</span>Webhooks: tu sistema llamando al de otros</h2>
       <p>Un webhook invierte la dirección: cuando pasa algo (un pago se confirma), tu sistema envía un POST a la URL que registró el cliente. Eso significa depender de un servidor ajeno, que puede estar caído, lento o mal programado. Las reglas, de los dos lados:</p>
 
       <figure class="figure">
@@ -461,7 +1730,7 @@ If-Match: "v17"
 <text class="dg-tiny" x="746.0" y="381">procesar: actualizar pedido</text>
 </svg>
         </div>
-        <figcaption><b>Figura 2.2.</b> El primer intento falla, el segundo llega. El receptor verifica, deduplica, encola y responde enseguida.</figcaption>
+        <figcaption><b>Figura 2.14.</b> El primer intento falla, el segundo llega. El receptor verifica, deduplica, encola y responde enseguida.</figcaption>
       </figure>
 
       <div class="to-grid">
@@ -532,9 +1801,12 @@ function verificar(cuerpoCrudo, header, secreto, ahora) {
 <script src="../assets/js/data/course.data.js"></script>
 <script src="../assets/js/data/glossary.data.js"></script>
 <script src="../assets/js/data/quizzes/m02.data.js"></script>
+<script src="../assets/js/data/exercises/m02.data.js"></script>
 <script src="../assets/js/core/progress.js"></script>
 <script src="../assets/js/core/nav.js"></script>
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-api.js"></script>
 </body>
 </html>

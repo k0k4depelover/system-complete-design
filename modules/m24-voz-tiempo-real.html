@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M24. Voz y tiempo real</title>
+<meta name="description" content="prueba">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m24">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Voz y tiempo real</h1>
+        <p class="lead">prueba</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M24</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M17, M19, M29</dd></div>
+          <div><dt>Estado</dt><dd data-status="m24">Sin empezar</dd></div>
+        </dl>
+      </header>
+<h2 id="f-arquitecturas">arquitecturas</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f24ct f24cd">
+<title id="f24ct">Cascada contra speech-to-speech</title>
+<desc id="f24cd">Arriba, la cascada: el audio del usuario pasa por el VAD, el STT lo convierte en texto, el LLM contesta en texto y el TTS lo convierte en voz. Entre etapa y etapa hay texto que se puede leer, moderar y registrar. Abajo, speech-to-speech: un solo modelo recibe el audio y devuelve audio, con la detección de turno del lado del servidor. La cascada suma 780 ms en el presupuesto de referencia y speech-to-speech 700 ms; una llamada de 10 minutos cuesta unos 0.12 dólares en la cascada por APIs y unos 0.52 con la Realtime API.</desc>
+<defs><marker id="f24ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="22">Cascada</text>
+<rect class="dg-box" x="10" y="34" width="84" height="56" rx="6"/>
+<text class="dg-label" x="52" y="59.5" text-anchor="middle" style="font-size:13.5px">Audio</text>
+<text class="dg-tiny" x="52" y="75.5" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="124" y="34" width="96" height="56" rx="6"/>
+<text class="dg-label" x="172" y="59.5" text-anchor="middle" style="font-size:13.5px">VAD</text>
+<text class="dg-tiny" x="172" y="75.5" text-anchor="middle">¿hay voz?</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="250" y="34" width="112" height="56" rx="6"/>
+<text class="dg-label" x="306" y="59.5" text-anchor="middle" style="font-size:13.5px">STT</text>
+<text class="dg-tiny" x="306" y="75.5" text-anchor="middle">voz a texto</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="392" y="34" width="112" height="56" rx="6"/>
+<text class="dg-label" x="448" y="59.5" text-anchor="middle" style="font-size:13.5px">LLM</text>
+<text class="dg-tiny" x="448" y="75.5" text-anchor="middle">texto a texto</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="534" y="34" width="112" height="56" rx="6"/>
+<text class="dg-label" x="590" y="59.5" text-anchor="middle" style="font-size:13.5px">TTS</text>
+<text class="dg-tiny" x="590" y="75.5" text-anchor="middle">texto a voz</text>
+<rect class="dg-box" x="676" y="34" width="84" height="56" rx="6"/>
+<text class="dg-label" x="718" y="59.5" text-anchor="middle" style="font-size:13.5px">Audio</text>
+<text class="dg-tiny" x="718" y="75.5" text-anchor="middle">del agente</text>
+<path class="dg-edge" d="M94 62 H122" marker-end="url(#f24ca)"/>
+<path class="dg-edge" d="M220 62 H248" marker-end="url(#f24ca)"/>
+<path class="dg-edge" d="M362 62 H390" marker-end="url(#f24ca)"/>
+<path class="dg-edge" d="M504 62 H532" marker-end="url(#f24ca)"/>
+<path class="dg-edge" d="M646 62 H674" marker-end="url(#f24ca)"/>
+<path class="dg-feedback" d="M376 66 V96"/>
+<text class="dg-tiny" x="376" y="108" text-anchor="middle">texto</text>
+<path class="dg-feedback" d="M518 66 V96"/>
+<text class="dg-tiny" x="518" y="108" text-anchor="middle">texto</text>
+<text class="dg-small" x="376" y="126" text-anchor="middle">Texto en cada frontera: se lee, se modera, se registra y se cambia de modelo o de voz por separado.</text>
+<text class="dg-group" x="10" y="158">Speech-to-speech</text>
+<rect class="dg-box" x="10" y="170" width="84" height="56" rx="6"/>
+<text class="dg-label" x="52" y="195.5" text-anchor="middle" style="font-size:13.5px">Audio</text>
+<text class="dg-tiny" x="52" y="211.5" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="124" y="170" width="522" height="56" rx="6"/>
+<text class="dg-label" x="385" y="195.5" text-anchor="middle" style="font-size:13.5px">Un modelo de audio a audio</text>
+<text class="dg-tiny" x="385" y="211.5" text-anchor="middle">detecta el turno, escucha el tono y contesta con voz</text>
+<rect class="dg-box" x="676" y="170" width="84" height="56" rx="6"/>
+<text class="dg-label" x="718" y="195.5" text-anchor="middle" style="font-size:13.5px">Audio</text>
+<text class="dg-tiny" x="718" y="211.5" text-anchor="middle">del agente</text>
+<path class="dg-edge" d="M94 198 H122" marker-end="url(#f24ca)"/>
+<path class="dg-edge" d="M646 198 H674" marker-end="url(#f24ca)"/>
+<text class="dg-small" x="376" y="250" text-anchor="middle">780 ms contra 700 ms en el presupuesto de 24.8; 0.12 contra 0.52 dólares por una llamada de 10 minutos (24.11).</text>
+</svg>
+</div><figcaption>arquitecturas</figcaption></figure>
+<h2 id="f-hld">hld</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 360" role="img" aria-labelledby="f24ht f24hd">
+<title id="f24ht">Un agente de voz por planos</title>
+<desc id="f24hd">Cinco planos. Clientes: la app con WebRTC y el teléfono. Borde: el app server que entrega el token, STUN y TURN, el SFU y el gateway SIP. Agente: el VAD, el detector de fin de turno, el worker de voz y las herramientas. Modelos: STT, LLM, TTS y speech-to-speech; el worker habla con todos. Plataforma: eventos de uso, moderación, estado de sesión y transcripciones en S3. El audio baja de la app al SFU y del SFU al worker; el del teléfono entra por el gateway SIP.</desc>
+<defs><marker id="f24ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="10" y="26" width="750" height="44" rx="8" style="fill: var(--fill-2)"/>
+<text class="dg-group" x="22" y="53">Clientes</text>
+<rect x="10" y="94" width="750" height="44" rx="8" style="fill: var(--fill-2)"/>
+<text class="dg-group" x="22" y="121">Borde</text>
+<rect x="10" y="162" width="750" height="44" rx="8" style="fill: var(--fill-2)"/>
+<text class="dg-group" x="22" y="189">Agente</text>
+<rect x="10" y="244" width="750" height="44" rx="8" style="fill: var(--fill-2)"/>
+<text class="dg-group" x="22" y="271">Modelos</text>
+<rect x="10" y="312" width="750" height="44" rx="8" style="fill: var(--fill-2)"/>
+<text class="dg-group" x="22" y="339">Plataforma</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="450" y="30" width="140" height="36" rx="6"/>
+<text class="dg-label" x="520" y="45.5" text-anchor="middle" style="font-size:12.5px">App con voz</text>
+<text class="dg-tiny" x="520" y="61.5" text-anchor="middle">WebRTC</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="610" y="30" width="140" height="36" rx="6"/>
+<text class="dg-label" x="680" y="45.5" text-anchor="middle" style="font-size:12.5px">Teléfono</text>
+<text class="dg-tiny" x="680" y="61.5" text-anchor="middle">red telefónica</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="130" y="98" width="140" height="36" rx="6"/>
+<text class="dg-label" x="200" y="113.5" text-anchor="middle" style="font-size:12.5px">App server</text>
+<text class="dg-tiny" x="200" y="129.5" text-anchor="middle">token efímero</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="290" y="98" width="140" height="36" rx="6"/>
+<text class="dg-label" x="360" y="113.5" text-anchor="middle" style="font-size:12.5px">STUN y TURN</text>
+<text class="dg-tiny" x="360" y="129.5" text-anchor="middle">atravesar el NAT</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="450" y="98" width="140" height="36" rx="6"/>
+<text class="dg-label" x="520" y="113.5" text-anchor="middle" style="font-size:12.5px">SFU</text>
+<text class="dg-tiny" x="520" y="129.5" text-anchor="middle">una sala por sesión</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="610" y="98" width="140" height="36" rx="6"/>
+<text class="dg-label" x="680" y="113.5" text-anchor="middle" style="font-size:12.5px">Gateway SIP</text>
+<text class="dg-tiny" x="680" y="129.5" text-anchor="middle">G.711 a la sala</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="130" y="166" width="140" height="36" rx="6"/>
+<text class="dg-label" x="200" y="181.5" text-anchor="middle" style="font-size:12.5px">VAD</text>
+<text class="dg-tiny" x="200" y="197.5" text-anchor="middle">cuadro por cuadro</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="166" width="140" height="36" rx="6"/>
+<text class="dg-label" x="360" y="181.5" text-anchor="middle" style="font-size:12.5px">Fin de turno</text>
+<text class="dg-tiny" x="360" y="197.5" text-anchor="middle">silencio y texto</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="450" y="166" width="140" height="36" rx="6"/>
+<text class="dg-label" x="520" y="181.5" text-anchor="middle" style="font-size:12.5px">Worker de voz</text>
+<text class="dg-tiny" x="520" y="197.5" text-anchor="middle">orquesta el turno</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="610" y="166" width="140" height="36" rx="6"/>
+<text class="dg-label" x="680" y="181.5" text-anchor="middle" style="font-size:12.5px">Herramientas</text>
+<text class="dg-tiny" x="680" y="197.5" text-anchor="middle">APIs del negocio</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="130" y="248" width="140" height="36" rx="6"/>
+<text class="dg-label" x="200" y="263.5" text-anchor="middle" style="font-size:12.5px">STT</text>
+<text class="dg-tiny" x="200" y="279.5" text-anchor="middle">parciales y finales</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="290" y="248" width="140" height="36" rx="6"/>
+<text class="dg-label" x="360" y="263.5" text-anchor="middle" style="font-size:12.5px">LLM</text>
+<text class="dg-tiny" x="360" y="279.5" text-anchor="middle">la flota del M19</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="450" y="248" width="140" height="36" rx="6"/>
+<text class="dg-label" x="520" y="263.5" text-anchor="middle" style="font-size:12.5px">TTS</text>
+<text class="dg-tiny" x="520" y="279.5" text-anchor="middle">frase por frase</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="610" y="248" width="140" height="36" rx="6"/>
+<text class="dg-label" x="680" y="263.5" text-anchor="middle" style="font-size:12.5px">Speech-to-speech</text>
+<text class="dg-tiny" x="680" y="279.5" text-anchor="middle">la alternativa</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="130" y="316" width="140" height="36" rx="6"/>
+<text class="dg-label" x="200" y="331.5" text-anchor="middle" style="font-size:12.5px">Eventos de uso</text>
+<text class="dg-tiny" x="200" y="347.5" text-anchor="middle">el M21</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="316" width="140" height="36" rx="6"/>
+<text class="dg-label" x="360" y="331.5" text-anchor="middle" style="font-size:12.5px">Moderación</text>
+<text class="dg-tiny" x="360" y="347.5" text-anchor="middle">el M22</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="450" y="316" width="140" height="36" rx="6"/>
+<text class="dg-label" x="520" y="331.5" text-anchor="middle" style="font-size:12.5px">Estado de sesión</text>
+<text class="dg-tiny" x="520" y="347.5" text-anchor="middle">Redis</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="610" y="316" width="140" height="36" rx="6"/>
+<text class="dg-label" x="680" y="331.5" text-anchor="middle" style="font-size:12.5px">Transcripciones</text>
+<text class="dg-tiny" x="680" y="347.5" text-anchor="middle">S3</text>
+<path class="dg-edge" d="M520 66 V96" marker-end="url(#f24ha)" style="stroke-width:1.6"/>
+<path class="dg-edge" d="M520 134 V164" marker-end="url(#f24ha)" style="stroke-width:1.6"/>
+<path class="dg-edge" d="M680 66 V96" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M610 116 H592" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M270 184 H288" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M430 184 H448" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M520 202 V222 H200 V246" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M360 222 V246" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M520 222 V246" marker-end="url(#f24ha)"/>
+<path class="dg-edge" d="M520 222 H680 V246" marker-end="url(#f24ha)"/>
+<text class="dg-tiny" x="530" y="92">audio</text>
+</svg>
+</div><figcaption>hld</figcaption></figure>
+<h2 id="f-secuencia">secuencia</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 616" role="img" aria-labelledby="f24qt f24qd">
+<title id="f24qt">Un turno de voz en cascada, salto por salto</title>
+<desc id="f24qd">El usuario termina de decir &quot;Quiero cambiar mi vuelo del viernes&quot;. El último cuadro tarda 30 ms en capturarse y 25 ms en llegar al SFU, que lo reenvía al worker. El jitter buffer agrega 30 ms. El STT ya transcribió casi todo y entrega un parcial; el detector de fin de turno cierra el turno a los 250 ms de silencio. El final del STT llega 50 ms después. El LLM entrega el primer token a los 150 ms y la primera frase completa 100 ms más tarde. El TTS devuelve el primer audio en 80 ms. El audio vuelve al SFU y al usuario en 25 ms y se reproduce después de 40 ms de buffer: 780 ms en total.</desc>
+<defs><marker id="f24q-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f24q-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f24q-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f24q-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="11.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App</text>
+<path class="dg-frame" d="M70.0 40 V606"/>
+<rect class="dg-box" x="137.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="196.0" y="29" text-anchor="middle" style="font-size:13.5px">SFU</text>
+<path class="dg-frame" d="M196.0 40 V606"/>
+<rect class="dg-box" x="263.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="322.0" y="29" text-anchor="middle" style="font-size:13.5px">Worker</text>
+<path class="dg-frame" d="M322.0 40 V606"/>
+<rect class="dg-box" x="389.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="448.0" y="29" text-anchor="middle" style="font-size:13.5px">STT</text>
+<path class="dg-frame" d="M448.0 40 V606"/>
+<rect class="dg-box" x="515.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="574.0" y="29" text-anchor="middle" style="font-size:13.5px">LLM</text>
+<path class="dg-frame" d="M574.0 40 V606"/>
+<rect class="dg-box" x="641.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">TTS</text>
+<path class="dg-frame" d="M700.0 40 V606"/>
+<rect x="80.0" y="58" width="244" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="74">el usuario calla; captura: 30 ms</text>
+<path class="dg-edge" d="M73.0 104 L191.0 104" marker-end="url(#f24q-a)"/>
+<rect x="61.0" y="87" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="98" text-anchor="middle">último cuadro, 25 ms</text>
+<path class="dg-edge" d="M199.0 136 L317.0 136" marker-end="url(#f24q-a)"/>
+<rect x="243.1" y="119" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="130" text-anchor="middle">RTP</text>
+<rect x="332.0" y="154" width="160" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="342.0" y="170">jitter buffer: 30 ms</text>
+<path class="dg-edge" d="M325.0 200 L443.0 200" marker-end="url(#f24q-a)"/>
+<rect x="319.6" y="183" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="194" text-anchor="middle">audio en streaming</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M445.0 232 L327.0 232" marker-end="url(#f24q-r)"/>
+<rect x="306.4" y="215" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="226" text-anchor="middle">parcial «…del viernes»</text>
+<rect x="332.0" y="250" width="244" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="342.0" y="266">fin de turno: 250 ms de silencio</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M445.0 296 L327.0 296" marker-end="url(#f24q-r)"/>
+<rect x="339.4" y="279" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="290" text-anchor="middle">final: 50 ms</text>
+<path class="dg-edge" d="M325.0 328 L569.0 328" marker-end="url(#f24q-a)"/>
+<rect x="385.9" y="311" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="322" text-anchor="middle">historial + turno</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M571.0 360 L327.0 360" marker-end="url(#f24q-r)"/>
+<rect x="376.0" y="343" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="354" text-anchor="middle">primer token: 150 ms</text>
+<rect x="332.0" y="378" width="167" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="342.0" y="394">primera frase: 100 ms</text>
+<path class="dg-edge" d="M325.0 424 L695.0 424" marker-end="url(#f24q-a)"/>
+<rect x="419.2" y="407" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="511.0" y="418" text-anchor="middle">«Claro, te ayudo con eso.»</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 456 L327.0 456" marker-end="url(#f24q-r)"/>
+<rect x="442.3" y="439" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="511.0" y="450" text-anchor="middle">primer audio: 80 ms</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M319.0 488 L201.0 488" marker-end="url(#f24q-r)"/>
+<rect x="243.1" y="471" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="482" text-anchor="middle">RTP</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M193.0 520 L75.0 520" marker-end="url(#f24q-r)"/>
+<rect x="87.4" y="503" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="514" text-anchor="middle">audio, 25 ms</text>
+<rect x="80.0" y="538" width="279" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="554">reproduce tras 40 ms: 780 ms en total</text>
+</svg>
+</div><figcaption>secuencia</figcaption></figure>
+<h2 id="f-pilas">pilas</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f24pt f24pd">
+<title id="f24pt">Qué hay debajo del audio en WebRTC y en un WebSocket</title>
+<desc id="f24pd">A la izquierda, WebRTC: el audio en Opus va en paquetes SRTP, con RTCP para medir pérdida y jitter; las claves se negocian con DTLS; ICE, con STUN y TURN, encuentra un camino a través del NAT; todo sobre UDP e IP. Un paquete perdido se disimula y el audio sigue. A la derecha, un WebSocket: el audio va en mensajes sobre TLS y TCP. Una pérdida frena todo lo que viene detrás hasta que TCP la retransmite: head-of-line blocking.</desc>
+<defs><marker id="f24pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="170" y="22" text-anchor="middle">WebRTC</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="36" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="56" style="font-size:12.5px">Opus</text>
+<text class="dg-tiny" x="306" y="56" text-anchor="end">cuadros de 20 ms</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="72" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="92" style="font-size:12.5px">SRTP y RTCP</text>
+<text class="dg-tiny" x="306" y="92" text-anchor="end">audio cifrado; pérdida y jitter</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="108" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="128" style="font-size:12.5px">DTLS</text>
+<text class="dg-tiny" x="306" y="128" text-anchor="end">negocia las claves de SRTP</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="144" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="164" style="font-size:12.5px">ICE: STUN y TURN</text>
+<text class="dg-tiny" x="306" y="164" text-anchor="end">un camino a través del NAT</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="180" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="200" style="font-size:12.5px">UDP</text>
+<text class="dg-tiny" x="306" y="200" text-anchor="end">sin orden ni reenvío</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="216" width="300" height="30" rx="5"/>
+<text class="dg-label" x="34" y="236" style="font-size:12.5px">IP</text>
+<text class="dg-tiny" x="306" y="236" text-anchor="end"></text>
+<text class="dg-small" x="170" y="270" text-anchor="middle">Un paquete perdido se disimula (PLC o FEC)</text>
+<text class="dg-small" x="170" y="287" text-anchor="middle">y el audio sigue: llega tarde 20 ms, no 200.</text>
+<text class="dg-group" x="600" y="22" text-anchor="middle">WebSocket</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="450" y="36" width="300" height="30" rx="5"/>
+<text class="dg-label" x="464" y="56" style="font-size:12.5px">PCM u Opus</text>
+<text class="dg-tiny" x="736" y="56" text-anchor="end">en mensajes</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="450" y="72" width="300" height="30" rx="5"/>
+<text class="dg-label" x="464" y="92" style="font-size:12.5px">WebSocket</text>
+<text class="dg-tiny" x="736" y="92" text-anchor="end">mensajes en los dos sentidos</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="450" y="108" width="300" height="30" rx="5"/>
+<text class="dg-label" x="464" y="128" style="font-size:12.5px">TLS</text>
+<text class="dg-tiny" x="736" y="128" text-anchor="end">cifrado</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="450" y="144" width="300" height="30" rx="5"/>
+<text class="dg-label" x="464" y="164" style="font-size:12.5px">TCP</text>
+<text class="dg-tiny" x="736" y="164" text-anchor="end">orden y reenvío</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="450" y="180" width="300" height="30" rx="5"/>
+<text class="dg-label" x="464" y="200" style="font-size:12.5px">IP</text>
+<text class="dg-tiny" x="736" y="200" text-anchor="end"></text>
+<text class="dg-small" x="600" y="234" text-anchor="middle" style="fill: var(--fail)">Una pérdida frena todo lo que sigue</text>
+<text class="dg-small" x="600" y="251" text-anchor="middle">hasta que TCP la retransmite (head-of-line).</text>
+<path class="dg-frame" d="M385 36 V250"/>
+</svg>
+</div><figcaption>pilas</figcaption></figure>
+<h2 id="f-media">media</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f24mt f24md">
+<title id="f24mt">P2P, SFU y MCU con cuatro participantes</title>
+<desc id="f24md">Tres formas de conectar a cuatro participantes. En P2P, cada uno manda su audio a los otros tres y recibe tres: sin servidor, pero la subida crece con la sala. Con un SFU, cada uno sube un stream y el servidor lo reenvía sin decodificarlo; cada uno recibe tres. Con un MCU, el servidor decodifica, mezcla y vuelve a codificar: cada uno sube uno y recibe uno, a cambio de CPU y de latencia en el servidor. Un agente de voz es una sala de dos con un SFU: el agente es un participante más.</desc>
+<defs><marker id="f24ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="128" y="22" text-anchor="middle">P2P</text>
+<path class="dg-edge" d="M177.5 161.5 L78.5 161.5"/>
+<path class="dg-edge" d="M177.5 161.5 L78.5 62.5"/>
+<path class="dg-edge" d="M177.5 161.5 L177.5 62.5"/>
+<path class="dg-edge" d="M78.5 161.5 L78.5 62.5"/>
+<path class="dg-edge" d="M78.5 161.5 L177.5 62.5"/>
+<path class="dg-edge" d="M78.5 62.5 L177.5 62.5"/>
+<rect class="dg-box" x="160.497" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="177.497" y="166.497" text-anchor="middle" style="font-size:12.5px">A</text>
+<rect class="dg-box" x="61.5025" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="78.5025" y="166.497" text-anchor="middle" style="font-size:12.5px">B</text>
+<rect class="dg-box" x="61.5025" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="78.5025" y="67.5025" text-anchor="middle" style="font-size:12.5px">C</text>
+<rect class="dg-box" x="160.497" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="177.497" y="67.5025" text-anchor="middle" style="font-size:12.5px">D</text>
+<text class="dg-small" x="128" y="218" text-anchor="middle">sube 3, baja 3</text>
+<text class="dg-tiny" x="128" y="236" text-anchor="middle">sin servidor; no escala</text>
+<text class="dg-group" x="385" y="22" text-anchor="middle">SFU</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="351" y="94" width="68" height="36" rx="6"/>
+<text class="dg-label" x="385" y="117" text-anchor="middle" style="font-size:12.5px">SFU</text>
+<path class="dg-edge" d="M420.4 151.6 L414.7 127.6" style="stroke-width:2.4"/>
+<path class="dg-edge" d="M349.6 151.6 L355.3 127.6" style="stroke-width:2.4"/>
+<path class="dg-edge" d="M349.6 72.4 L355.3 96.4" style="stroke-width:2.4"/>
+<path class="dg-edge" d="M420.4 72.4 L414.7 96.4" style="stroke-width:2.4"/>
+<rect class="dg-box" x="417.497" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="434.497" y="166.497" text-anchor="middle" style="font-size:12.5px">A</text>
+<rect class="dg-box" x="318.503" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="335.503" y="166.497" text-anchor="middle" style="font-size:12.5px">B</text>
+<rect class="dg-box" x="318.503" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="335.503" y="67.5025" text-anchor="middle" style="font-size:12.5px">C</text>
+<rect class="dg-box" x="417.497" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="434.497" y="67.5025" text-anchor="middle" style="font-size:12.5px">D</text>
+<text class="dg-small" x="385" y="218" text-anchor="middle">sube 1, baja 3</text>
+<text class="dg-tiny" x="385" y="236" text-anchor="middle">reenvía sin decodificar</text>
+<text class="dg-group" x="642" y="22" text-anchor="middle">MCU</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="608" y="94" width="68" height="36" rx="6"/>
+<text class="dg-label" x="642" y="117" text-anchor="middle" style="font-size:12.5px">MCU</text>
+<path class="dg-edge" d="M677.4 151.6 L671.7 127.6"/>
+<path class="dg-edge" d="M606.6 151.6 L612.3 127.6"/>
+<path class="dg-edge" d="M606.6 72.4 L612.3 96.4"/>
+<path class="dg-edge" d="M677.4 72.4 L671.7 96.4"/>
+<rect class="dg-box" x="674.497" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="691.497" y="166.497" text-anchor="middle" style="font-size:12.5px">A</text>
+<rect class="dg-box" x="575.503" y="149.497" width="34" height="24" rx="5"/>
+<text class="dg-label" x="592.503" y="166.497" text-anchor="middle" style="font-size:12.5px">B</text>
+<rect class="dg-box" x="575.503" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="592.503" y="67.5025" text-anchor="middle" style="font-size:12.5px">C</text>
+<rect class="dg-box" x="674.497" y="50.5025" width="34" height="24" rx="5"/>
+<text class="dg-label" x="691.497" y="67.5025" text-anchor="middle" style="font-size:12.5px">D</text>
+<text class="dg-small" x="642" y="218" text-anchor="middle">sube 1, baja 1</text>
+<text class="dg-tiny" x="642" y="236" text-anchor="middle">decodifica y mezcla: CPU y latencia</text>
+<path class="dg-frame" d="M256 30 V240"/>
+<path class="dg-frame" d="M513 30 V240"/>
+<text class="dg-tiny" x="385" y="256" text-anchor="middle">Las flechas gruesas del SFU llevan el stream de cada uno hacia los otros tres.</text>
+</svg>
+</div><figcaption>media</figcaption></figure>
+<h2 id="f-finturno">finturno</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f24et f24ed">
+<title id="f24et">Dónde corta un umbral de silencio y dónde corta un detector</title>
+<desc id="f24ed">Una onda de 3.4 segundos. El usuario dice &quot;Quiero cambiar mi vuelo al&quot;, calla 700 ms pensando y sigue con &quot;del viernes&quot;. Un umbral fijo de 500 ms de silencio cierra el turno en el medio de la pausa, a los 1.9 s, y el agente lo interrumpe. Un detector que lee el parcial ve que la frase termina en &quot;al&quot; y espera. Cuando la frase está completa, cierra el turno a los 250 ms de silencio, en 2.95 s; el umbral fijo habría cerrado recién en 3.2 s.</desc>
+<defs><marker id="f24ea" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f24ef" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f24eo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--ok)"/></marker></defs>
+<path d="M70.0 86.0 V94.0 M74.0 81.7 V98.3 M78.0 79.3 V100.7 M82.0 76.9 V103.1 M86.0 75.9 V104.1 M90.0 77.5 V102.5 M94.0 73.8 V106.2 M98.0 69.9 V110.1 M102.0 68.8 V111.2 M106.0 70.9 V109.1 M110.0 74.7 V105.3 M114.0 72.9 V107.1 M118.0 72.4 V107.6 M122.0 74.1 V105.9 M126.0 72.6 V107.4 M130.0 73.1 V106.9 M134.0 70.6 V109.4 M138.0 65.7 V114.3 M142.0 63.2 V116.8 M146.0 65.1 V114.9 M150.0 70.6 V109.4 M154.0 68.7 V111.3 M158.0 65.4 V114.6 M162.0 66.3 V113.7 M166.0 69.5 V110.5 M170.0 71.9 V108.1 M174.0 71.1 V108.9 M178.0 67.6 V112.4 M182.0 64.1 V115.9 M186.0 64.1 V115.9 M190.0 68.6 V111.4 M194.0 67.9 V112.1 M198.0 62.4 V117.6 M202.0 61.2 V118.8 M206.0 64.5 V115.5 M210.0 69.6 V110.4 M214.0 70.7 V109.3 M218.0 71.1 V108.9 M222.0 69.8 V110.2 M226.0 67.9 V112.1 M230.0 69.4 V110.6 M234.0 69.9 V110.1 M238.0 64.3 V115.7 M242.0 61.4 V118.6 M246.0 63.3 V116.7 M250.0 68.8 V111.2 M254.0 71.3 V108.7 M258.0 68.7 V111.3 M262.0 69.8 V110.2 M266.0 72.7 V107.3 M270.0 73.2 V106.8 M274.0 73.5 V106.5 M278.0 70.2 V109.8 M282.0 67.4 V112.6 M286.0 67.6 V112.4 M290.0 71.4 V108.6 M294.0 74.9 V105.1 M298.0 71.4 V108.6 M302.0 71.0 V109.0 M306.0 73.5 V106.5 M310.0 76.7 V103.3 M314.0 78.6 V101.4 M318.0 78.9 V101.1 M322.0 78.7 V101.3 M326.0 79.7 V100.3 M330.0 86.0 V94.0 M470.0 86.0 V94.0 M474.0 79.3 V100.7 M478.0 76.4 V103.6 M482.0 71.1 V108.9 M486.0 67.9 V112.1 M490.0 68.5 V111.5 M494.0 72.1 V107.9 M498.0 71.7 V108.3 M502.0 69.5 V110.5 M506.0 70.7 V109.3 M510.0 72.0 V108.0 M514.0 71.1 V108.9 M518.0 70.2 V109.8 M522.0 65.1 V114.9 M526.0 61.4 V118.6 M530.0 62.1 V117.9 M534.0 67.4 V112.6 M538.0 69.2 V110.8 M542.0 64.6 V115.4 M546.0 64.6 V115.4 M550.0 68.0 V112.0 M554.0 71.9 V108.1 M558.0 73.2 V106.8 M562.0 71.7 V108.3 M566.0 69.5 V110.5 M570.0 69.5 V110.5 M574.0 72.8 V107.2 M578.0 75.9 V104.1 M582.0 74.0 V106.0 M586.0 75.7 V104.3 M590.0 86.0 V94.0 " style="stroke: var(--l-client)" stroke-width="2" stroke-linecap="round"/>
+<path class="dg-frame" d="M50.0 90 H730.0"/>
+<text class="dg-small" x="200" y="48" text-anchor="middle">«Quiero cambiar mi vuelo al…»</text>
+<text class="dg-small" x="530" y="48" text-anchor="middle">«…del viernes.»</text>
+<text class="dg-tiny" x="50" y="138" text-anchor="middle">0 s</text>
+<text class="dg-tiny" x="150" y="138" text-anchor="middle">0.5 s</text>
+<text class="dg-tiny" x="250" y="138" text-anchor="middle">1 s</text>
+<text class="dg-tiny" x="350" y="138" text-anchor="middle">1.5 s</text>
+<text class="dg-tiny" x="450" y="138" text-anchor="middle">2 s</text>
+<text class="dg-tiny" x="550" y="138" text-anchor="middle">2.5 s</text>
+<text class="dg-tiny" x="650" y="138" text-anchor="middle">3 s</text>
+<path class="dg-feedback" d="M330.0 152 H470.0"/>
+<path class="dg-edge" d="M330.0 146 V158"/>
+<path class="dg-edge" d="M470.0 146 V158"/>
+<text class="dg-tiny" x="378" y="172" text-anchor="middle">700 ms de silencio</text>
+<path d="M430.0 30 V186" stroke="var(--fail)" stroke-width="1.6" stroke-dasharray="5 4"/>
+<text class="dg-small" x="424" y="200" text-anchor="end" style="fill: var(--fail)">Umbral de 500 ms: corta a los 1.9 s,</text>
+<text class="dg-small" x="424" y="216" text-anchor="end" style="fill: var(--fail)">en medio de la pausa</text>
+<path d="M640.0 30 V186" stroke="var(--ok)" stroke-width="1.8"/>
+<path class="dg-feedback" d="M640.0 186 V220"/>
+<text class="dg-small" x="634" y="234" text-anchor="end">Detector: espera en «al» y cierra a los 250 ms</text>
+<text class="dg-small" x="634" y="250" text-anchor="end">de silencio con la frase completa: 2.95 s</text>
+<path d="M690.0 30 V186" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="2 3"/>
+<text class="dg-tiny" x="694" y="24">3.2 s</text>
+<text class="dg-tiny" x="636" y="24" text-anchor="end">2.95 s</text>
+<text class="dg-tiny" x="430" y="24" text-anchor="middle">1.9 s</text>
+</svg>
+</div><figcaption>finturno</figcaption></figure>
+<h2 id="f-presupuesto">presupuesto</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f24bt f24bd">
+<title id="f24bt">El presupuesto de 800 ms, salto por salto</title>
+<desc id="f24bd">Dos barras apiladas en la misma escala de 0 a 900 ms. La cascada: captura 30, red de ida 25, jitter buffer 30, fin de turno 250, STT final 50, primer token 150, hasta la primera frase 100, primer audio del TTS 80, red de vuelta 25 y reproducción 40: 780 ms. Speech-to-speech: las mismas etapas de cliente, red y fin de turno, y 300 ms del modelo hasta el primer audio: 700 ms. Una línea marca los 200 ms del silencio típico entre dos personas y otra el objetivo de 800 ms. El fin de turno es la etapa más grande.</desc>
+<defs><marker id="f24ba" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="10" y="72" style="font-size:12.5px">Cascada</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="100" y="54" width="21.33" height="28" rx="2"/>
+<path class="dg-feedback" d="M110.7 54 V50"/>
+<text class="dg-tiny" x="106.665" y="46" text-anchor="end">captura 30</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="121.33" y="54" width="17.775" height="28" rx="2"/>
+<path class="dg-feedback" d="M130.2 82 V86"/>
+<text class="dg-tiny" x="130.218" y="96" text-anchor="middle">red 25</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="139.105" y="54" width="21.33" height="28" rx="2"/>
+<path class="dg-feedback" d="M149.8 54 V50"/>
+<text class="dg-tiny" x="153.77" y="46">buffer 30</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="160.435" y="54" width="177.75" height="28" rx="2"/>
+<text class="dg-tiny" x="290.192" y="72" text-anchor="middle">fin de turno 250</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="338.185" y="54" width="35.55" height="28" rx="2"/>
+<path class="dg-feedback" d="M356.0 82 V86"/>
+<text class="dg-tiny" x="355.96" y="96" text-anchor="middle">STT 50</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="373.735" y="54" width="106.65" height="28" rx="2"/>
+<text class="dg-tiny" x="427.06" y="72" text-anchor="middle">TTFT 150</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="480.385" y="54" width="71.1" height="28" rx="2"/>
+<text class="dg-tiny" x="515.935" y="72" text-anchor="middle">frase 100</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="551.485" y="54" width="56.88" height="28" rx="2"/>
+<text class="dg-tiny" x="579.925" y="72" text-anchor="middle">TTS 80</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="608.365" y="54" width="17.775" height="28" rx="2"/>
+<path class="dg-feedback" d="M617.3 82 V86"/>
+<text class="dg-tiny" x="617.253" y="96" text-anchor="middle">red 25</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="626.14" y="54" width="28.44" height="28" rx="2"/>
+<path class="dg-feedback" d="M640.4 54 V50"/>
+<text class="dg-tiny" x="644.36" y="46">reproducción 40</text>
+<text class="dg-num" x="760" y="72" text-anchor="end">780 ms</text>
+<text class="dg-label" x="10" y="162" style="font-size:12.5px">Speech-to-</text>
+<text class="dg-label" x="10" y="178" style="font-size:12.5px">speech</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="100" y="150" width="21.33" height="28" rx="2"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="121.33" y="150" width="17.775" height="28" rx="2"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="139.105" y="150" width="21.33" height="28" rx="2"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="160.435" y="150" width="177.75" height="28" rx="2"/>
+<text class="dg-tiny" x="290.192" y="168" text-anchor="middle">fin de turno 250</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="338.185" y="150" width="213.3" height="28" rx="2"/>
+<text class="dg-tiny" x="444.835" y="168" text-anchor="middle">modelo hasta el primer audio 300</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="551.485" y="150" width="17.775" height="28" rx="2"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="569.26" y="150" width="28.44" height="28" rx="2"/>
+<text class="dg-num" x="760" y="168" text-anchor="end">700 ms</text>
+<path class="sim-axis" d="M100 214 H739.9"/>
+<path class="sim-axis" d="M100.0 214 V219"/>
+<text class="dg-tiny" x="100" y="232" text-anchor="middle">0</text>
+<path class="sim-axis" d="M171.1 214 V219"/>
+<text class="dg-tiny" x="171.1" y="232" text-anchor="middle">100</text>
+<path class="sim-axis" d="M242.2 214 V219"/>
+<text class="dg-tiny" x="242.2" y="232" text-anchor="middle">200</text>
+<path class="sim-axis" d="M313.3 214 V219"/>
+<text class="dg-tiny" x="313.3" y="232" text-anchor="middle">300</text>
+<path class="sim-axis" d="M384.4 214 V219"/>
+<text class="dg-tiny" x="384.4" y="232" text-anchor="middle">400</text>
+<path class="sim-axis" d="M455.5 214 V219"/>
+<text class="dg-tiny" x="455.5" y="232" text-anchor="middle">500</text>
+<path class="sim-axis" d="M526.6 214 V219"/>
+<text class="dg-tiny" x="526.6" y="232" text-anchor="middle">600</text>
+<path class="sim-axis" d="M597.7 214 V219"/>
+<text class="dg-tiny" x="597.7" y="232" text-anchor="middle">700</text>
+<path class="sim-axis" d="M668.8 214 V219"/>
+<text class="dg-tiny" x="668.8" y="232" text-anchor="middle">800</text>
+<path class="sim-axis" d="M739.9 214 V219"/>
+<text class="dg-tiny" x="739.9" y="232" text-anchor="middle">900</text>
+<text class="dg-tiny" x="739.9" y="248" text-anchor="end">ms</text>
+<path d="M242.2 30 V212" stroke="var(--label-2)" stroke-width="1.2" stroke-dasharray="4 4"/>
+<text class="dg-tiny" x="246.2" y="24">silencio típico entre personas: 200 ms</text>
+<path d="M668.8 30 V212" stroke="var(--label-2)" stroke-width="1.2" stroke-dasharray="4 4"/>
+<text class="dg-tiny" x="672.8" y="24" text-anchor="middle">objetivo: 800 ms</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="100" y="268" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="120" y="280">cliente</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="213" y="268" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="233" y="280">red y buffers</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="268" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="400" y="280">fin de turno</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="538" y="268" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="558" y="280">modelos</text>
+</svg>
+</div><figcaption>presupuesto</figcaption></figure>
+<h2 id="f-bargein">bargein</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 342" role="img" aria-labelledby="f24it f24id">
+<title id="f24it">Una interrupción: lo que sonó, lo que no y los 310 ms del medio</title>
+<desc id="f24id">Arriba, la respuesta del agente dura 10.4 s. A los 5.23 s el usuario dice &quot;No, no, déjalo así&quot;. El audio del agente se corta a los 5.54 s; lo que venía después, &quot;al de las 10:15, que tiene asientos libres, pero cuesta 40 dólares más&quot;, ya estaba generado pero nunca sonó y hay que truncarlo del contexto. Abajo, el zoom de 5.1 a 5.7 s: la voz del usuario llega al servidor 85 ms después de empezar, el VAD la confirma tras 200 ms de habla y la orden de callar vuelve al cliente en 25 ms: 310 ms de agente hablando encima.</desc>
+<defs><marker id="f24ia" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f24if" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<text class="dg-label" x="10" y="46" style="font-size:12.5px">Agente</text>
+<text class="dg-label" x="10" y="86" style="font-size:12.5px">Usuario</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="90" y="30" width="322.327" height="24" rx="4"/>
+<rect x="412.3" y="30" width="281.6" height="24" rx="4" style="fill: none; stroke: var(--fail)" stroke-dasharray="5 4"/>
+<text class="dg-tiny" x="251.164" y="46" text-anchor="middle">sonó: «…Si prefieres, puedo cambiarlo»</text>
+<text class="dg-tiny" x="553.127" y="46" text-anchor="middle" style="fill: var(--fail)">generado, nunca sonó</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="394.291" y="70" width="73.8909" height="24" rx="4"/>
+<text class="dg-tiny" x="474.182" y="86">«No, no, déjalo así.»</text>
+<path d="M412.3 22 V102" stroke="var(--fail)" stroke-width="1.6"/>
+<text class="dg-tiny" x="90" y="116" text-anchor="middle">0 s</text>
+<text class="dg-tiny" x="148.182" y="116" text-anchor="middle">1 s</text>
+<text class="dg-tiny" x="206.364" y="116" text-anchor="middle">2 s</text>
+<text class="dg-tiny" x="264.545" y="116" text-anchor="middle">3 s</text>
+<text class="dg-tiny" x="322.727" y="116" text-anchor="middle">4 s</text>
+<text class="dg-tiny" x="380.909" y="116" text-anchor="middle">5 s</text>
+<text class="dg-tiny" x="439.091" y="116" text-anchor="middle">6 s</text>
+<text class="dg-tiny" x="497.273" y="116" text-anchor="middle">7 s</text>
+<text class="dg-tiny" x="555.455" y="116" text-anchor="middle">8 s</text>
+<text class="dg-tiny" x="613.636" y="116" text-anchor="middle">9 s</text>
+<text class="dg-tiny" x="671.818" y="116" text-anchor="middle">10 s</text>
+<text class="dg-tiny" x="730" y="116" text-anchor="middle">11 s</text>
+<path class="dg-feedback" d="M386.7 122 L80.0 150"/>
+<path class="dg-feedback" d="M421.6 122 L740.0 150"/>
+<rect class="dg-box" x="80" y="150" width="660" height="140" rx="8" style="fill: var(--fill-2)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="90" y="162" width="469.333" height="18" rx="3"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="228.667" y="188" width="501.333" height="18" rx="3"/>
+<text class="dg-tiny" x="96" y="175">agente</text>
+<text class="dg-tiny" x="724" y="201" text-anchor="end">usuario</text>
+<path d="M228.7 158 V216" stroke="var(--label-2)" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="232.667" y="226">5 230 ms: empieza a hablar</text>
+<path d="M319.3 158 V232" stroke="var(--label-2)" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="323.333" y="242">5 315 ms: llega al servidor (+85)</text>
+<path d="M532.7 158 V248" stroke="var(--label-2)" stroke-width="1" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="528.667" y="258" text-anchor="end">5 515 ms: el VAD confirma (+200)</text>
+<text class="dg-tiny" x="563.333" y="274">5 540 ms: el cliente calla (+25)</text>
+<path d="M559.3 156 V284" stroke="var(--fail)" stroke-width="1.6"/>
+<text class="dg-small" x="385" y="312" text-anchor="middle">Agente encima del usuario: 30 + 25 + 30 + 200 + 25 = 310 ms. Después: truncar en audio_end_ms = 5 540.</text>
+<text class="dg-small" x="385" y="330" text-anchor="middle" style="fill: var(--fail)">Sin truncar, el contexto dice que el agente ya dio el precio del cambio.</text>
+</svg>
+</div><figcaption>bargein</figcaption></figure>
+<h2 id="f-aws">aws</h2>
+<figure class="figure"><div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f24wt f24wd">
+<title id="f24wt">Un agente de voz en AWS</title>
+<desc id="f24wd">El cliente pide el token al app server en EKS y manda el audio al SFU, LiveKit en instancias c7gn, directo por UDP o a través de coturn, también en c7gn. Las llamadas telefónicas entran por Chime SDK Voice Connector a un gateway SIP que las convierte en participantes de la sala. El SFU despacha los workers de voz, en EKS sobre m7g, que llaman al STT y al TTS en nodos g6 y al LLM, la flota del M19 en p5 o Bedrock. Los workers guardan el estado en ElastiCache, emiten el uso a MSK y las transcripciones a S3.</desc>
+<defs><marker id="f24wa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="10" y="30" width="100" height="56" rx="6"/>
+<text class="dg-label" x="60" y="55.5" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<text class="dg-tiny" x="60" y="71.5" text-anchor="middle">app o navegador</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="140" y="30" width="130" height="56" rx="6"/>
+<text class="dg-label" x="205" y="55.5" text-anchor="middle" style="font-size:13.5px">coturn</text>
+<text class="dg-tiny" x="205" y="71.5" text-anchor="middle">c7gn, TURN</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="300" y="30" width="150" height="56" rx="6"/>
+<text class="dg-label" x="375" y="55.5" text-anchor="middle" style="font-size:13.5px">SFU</text>
+<text class="dg-tiny" x="375" y="71.5" text-anchor="middle">LiveKit en c7gn</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="480" y="30" width="130" height="56" rx="6"/>
+<text class="dg-label" x="545" y="55.5" text-anchor="middle" style="font-size:13.5px">Gateway SIP</text>
+<text class="dg-tiny" x="545" y="71.5" text-anchor="middle">a la sala</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="640" y="30" width="120" height="56" rx="6"/>
+<text class="dg-label" x="700" y="55.5" text-anchor="middle" style="font-size:13.5px">Chime SDK</text>
+<text class="dg-tiny" x="700" y="71.5" text-anchor="middle">Voice Connector</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="130" width="110" height="56" rx="6"/>
+<text class="dg-label" x="65" y="155.5" text-anchor="middle" style="font-size:13.5px">App server</text>
+<text class="dg-tiny" x="65" y="171.5" text-anchor="middle">EKS, token</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="300" y="130" width="150" height="56" rx="6"/>
+<text class="dg-label" x="375" y="155.5" text-anchor="middle" style="font-size:13.5px">Workers de voz</text>
+<text class="dg-tiny" x="375" y="171.5" text-anchor="middle">EKS, m7g</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="480" y="130" width="130" height="56" rx="6"/>
+<text class="dg-label" x="545" y="155.5" text-anchor="middle" style="font-size:13.5px">STT y TTS</text>
+<text class="dg-tiny" x="545" y="171.5" text-anchor="middle">EKS, g6</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="640" y="130" width="120" height="56" rx="6"/>
+<text class="dg-label" x="700" y="155.5" text-anchor="middle" style="font-size:13.5px">LLM</text>
+<text class="dg-tiny" x="700" y="171.5" text-anchor="middle">p5 (M19) o Bedrock</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="140" y="230" width="130" height="56" rx="6"/>
+<text class="dg-label" x="205" y="255.5" text-anchor="middle" style="font-size:13.5px">ElastiCache</text>
+<text class="dg-tiny" x="205" y="271.5" text-anchor="middle">estado de sesión</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="300" y="230" width="150" height="56" rx="6"/>
+<text class="dg-label" x="375" y="255.5" text-anchor="middle" style="font-size:13.5px">MSK</text>
+<text class="dg-tiny" x="375" y="271.5" text-anchor="middle">eventos de uso (M21)</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="480" y="230" width="130" height="56" rx="6"/>
+<text class="dg-label" x="545" y="255.5" text-anchor="middle" style="font-size:13.5px">S3</text>
+<text class="dg-tiny" x="545" y="271.5" text-anchor="middle">transcripciones</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="640" y="230" width="120" height="56" rx="6"/>
+<text class="dg-label" x="700" y="255.5" text-anchor="middle" style="font-size:13.5px">Observabilidad</text>
+<text class="dg-tiny" x="700" y="271.5" text-anchor="middle">una trace por turno</text>
+<path class="dg-edge" d="M110 58 H138" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M270 58 H298" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M60 30 V16 H375 V28" marker-end="url(#f24wa)"/>
+<text class="dg-tiny" x="218" y="12" text-anchor="middle">UDP directo, si la red lo deja</text>
+<path class="dg-edge" d="M640 58 H612" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M480 58 H452" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M60 86 V128" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M375 86 V128" marker-end="url(#f24wa)"/>
+<text class="dg-tiny" x="383" y="110">audio de la sala</text>
+<path class="dg-edge" d="M450 158 H478" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M450 178 H460 V200 H700 V188" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M330 186 V208 H205 V228" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M375 186 V228" marker-end="url(#f24wa)"/>
+<path class="dg-edge" d="M420 186 V218 H545 V228" marker-end="url(#f24wa)"/>
+</svg>
+</div><figcaption>aws</figcaption></figure>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m24.data.js"></script>
+<script src="../assets/js/data/maps/m24-voz.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-voice.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
+</body>
+</html>

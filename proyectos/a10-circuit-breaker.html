@@ -1,0 +1,3430 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A10. Cuando Redis se cae</title>
+<meta name="description" content="Un catálogo en Spring Boot con cache-aside en Redis y una caché local de Caffeine, sobre un k3s de tres nodos. A mitad de una prueba de k6 a 30 requests por segundo se apaga el nodo de Redis, y se agregan una a una las defensas: timeouts cortos, circuit breaker con Resilience4j, una compuerta que rechaza lo que la base no alcanza y la copia local vieja. Después, un master y una réplica con tres Sentinels, y el failover medido con la misma carga.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a10" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Cuando Redis se cae</h1>
+        <p class="lead">Redis es una caché: si se cae, la app debería seguir, solo que más lenta. Casi nunca pasa así. Vas a apagar el nodo de Redis en medio de una prueba de carga y ver cómo un servicio sin defensas se cuelga entero, y cómo cada defensa le quita un pedazo al daño: timeouts cortos, circuit breaker, load shedding y una caché local que sirve lo viejo. Después lo repites con un master y una réplica, donde lo que importa son los segundos que tardan los Sentinels en promover a la réplica, y lo que la app hace mientras tanto.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A10</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 3</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>6 a 8 h</dd></div>
+          <div><dt>Módulos</dt><dd>M04, M05, M08</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a10">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Poner una caché en dos niveles con cache-aside, Caffeine en cada pod y Redis compartido, y saber de dónde salió cada respuesta.</li>
+          <li>Apagar el nodo de Redis bajo 30 requests por segundo y explicar con la ley de Little por qué un timeout de 60&#8239;s cuelga al servicio entero.</li>
+          <li>Agregar una defensa a la vez (timeouts cortos, circuit breaker, una compuerta delante de la base y la copia local vieja) y medir con k6 qué cambia cada una.</li>
+          <li>Montar un master y una réplica de Redis con tres Sentinels en Kubernetes, y medir la ventana de un failover planeado, de un nodo apagado y de un nodo congelado.</li>
+          <li>Encontrar las copias viejas que dejan una invalidación perdida y la replicación asíncrona, y reponerlas.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Un catálogo de 200 productos, como el de cualquier tienda: de cada 100 requests, 95 leen un producto y 5 le cambian el precio. Delante de PostgreSQL hay dos cachés. Redis, compartido por los dos pods de la app, guarda cada producto 60&#8239;s. Caffeine, dentro de cada pod, guarda lo que ese pod leyó hace menos de 5&#8239;s. Es el cache-aside de M04: la app busca en la caché, y si no está, lo lee de la base y lo deja en la caché para el siguiente.</p>
+
+      <p>La base es lenta a propósito. Cada lectura por id tarda 200&#8239;ms, con un <code>pg_sleep</code>, y cada pod tiene dos conexiones. La cuenta de capacidad es corta: 2 pods × 2 conexiones / 0.2&#8239;s = 20 lecturas por segundo. La prueba de k6 manda 30 requests por segundo, 28.5 de ellas lecturas. Con Redis lleno, la base casi no trabaja; sin Redis, no alcanza. La caché dejó de ser una optimización y se volvió una dependencia de la disponibilidad, como cuenta <a href="../modules/m04-cache.html#caida">M04. Cuando la caché entera cae</a>.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Por segundo</th><th>De dónde sale</th></tr></thead>
+          <tbody>
+            <tr><td>Requests de k6</td><td class="r">30</td><td>El escenario <code>constant-arrival-rate</code> de <code>carga.js</code>.</td></tr>
+            <tr><td>Lecturas de un producto</td><td class="r">28.5</td><td>95&#8239;% de 30.</td></tr>
+            <tr><td>Cambios de precio</td><td class="r">1.5</td><td>5&#8239;% de 30.</td></tr>
+            <tr><td>Lecturas que la base aguanta</td><td class="r">20</td><td>2 pods × 2 conexiones / 0.2&#8239;s.</td></tr>
+            <tr><td>Lecturas que llegan a la base con Redis sano</td><td class="r">3 a 4.5</td><td>Cada clave vence a los 60&#8239;s, y la siguiente lectura de ese producto llega, en promedio, 200 / 28.5 = 7&#8239;s después: 200 productos / 67&#8239;s = 3 por segundo. Cada cambio de precio borra una clave: hasta 1.5 más.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En la primera parte hay un solo Redis, en su propio nodo. A mitad de la prueba se apaga ese nodo, con <code>docker compose kill</code>, como un corte de luz. Lo vas a hacer cinco veces, con una defensa más en cada una, y k6 va a decir qué pasó antes, durante y después de la falla. En la segunda parte, Redis tiene un master y una réplica, cada uno en un nodo, y tres Sentinels que deciden quién es el master. La falla es la misma, pero ahora hay una réplica lista para tomar el lugar del master, y lo que se mide es la ventana: cuánto tarda en pasar, y qué hace la app mientras tanto.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="fa10t fa10d">
+<title id="fa10t">El catálogo, sus cachés y los nodos que se apagan</title>
+<desc id="fa10d">Tres nodos de k3s. En k3s-server, el nodo que nunca se apaga, corren el Job de k6, que manda 30 requests por segundo, los dos pods de catalogo, cada uno con su caché local de Caffeine, su circuit breaker y su compuerta, y debajo PgBouncer y PostgreSQL 18, donde cada lectura tarda 200 ms. La compuerta deja pasar dos lecturas a la vez por pod. Los pods hablan con Redis, en k3s-agent1, con un timeout de 100 ms. A los 30 s de la prueba se apaga k3s-agent1 y a los 90 s vuelve. En la parte 2, Redis en k3s-agent1 es el master y en k3s-agent2 hay una réplica, alimentada por replicación asíncrona, que los Sentinels pueden promover. Hay un Sentinel en cada nodo.</desc>
+<defs><marker id="fa10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-frame" x="10" y="10" width="470" height="310" rx="10"/>
+<text class="dg-group" x="24" y="30">k3s-server: lo que nunca se apaga</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="24" y="52" width="110" height="60" rx="6"/>
+<text class="dg-label" x="79" y="76" text-anchor="middle">k6</text>
+<text class="dg-tiny" x="79" y="96" text-anchor="middle">30 por segundo</text>
+<path class="dg-edge" d="M136 82 H180" marker-end="url(#fa10a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="184" y="44" width="190" height="76" rx="6"/>
+<text class="dg-label" x="279" y="66" text-anchor="middle">catalogo, dos pods</text>
+<text class="dg-tiny" x="279" y="86" text-anchor="middle">Caffeine en cada uno</text>
+<text class="dg-tiny" x="279" y="104" text-anchor="middle">breaker y compuerta</text>
+<path class="dg-edge" d="M279 122 V176" marker-end="url(#fa10a)"/>
+<text class="dg-tiny" x="268" y="146" text-anchor="end">la compuerta:</text>
+<text class="dg-tiny" x="268" y="162" text-anchor="end">2 a la vez por pod</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="184" y="180" width="190" height="48" rx="6"/>
+<text class="dg-label" x="279" y="200" text-anchor="middle">PgBouncer</text>
+<text class="dg-tiny" x="279" y="218" text-anchor="middle">modo transaction</text>
+<path class="dg-edge" d="M279 230 V252" marker-end="url(#fa10a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="184" y="256" width="190" height="52" rx="6"/>
+<text class="dg-label" x="279" y="277" text-anchor="middle">PostgreSQL 18</text>
+<text class="dg-tiny" x="279" y="296" text-anchor="middle">200 ms por lectura</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="392" y="256" width="76" height="52" rx="6"/>
+<text class="dg-small" x="430" y="278" text-anchor="middle">sentinel</text>
+<text class="dg-tiny" x="430" y="296" text-anchor="middle">parte 2</text>
+<path class="dg-edge" d="M376 74 H510" marker-end="url(#fa10a)"/>
+<text class="dg-tiny" x="428" y="64" text-anchor="middle">100 ms</text>
+<rect class="dg-frame" x="500" y="10" width="260" height="160" rx="10"/>
+<text class="dg-group" x="746" y="30" text-anchor="end">k3s-agent1</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="514" y="44" width="150" height="60" rx="6"/>
+<text class="dg-label" x="589" y="68" text-anchor="middle">Redis</text>
+<text class="dg-tiny" x="589" y="88" text-anchor="middle">parte 2: el master</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="676" y="44" width="72" height="60" rx="6"/>
+<text class="dg-small" x="712" y="70" text-anchor="middle">sentinel</text>
+<text class="dg-tiny" x="712" y="90" text-anchor="middle">parte 2</text>
+<text class="dg-fail-text" x="556" y="132">a los 30 s, kill del nodo</text>
+<text class="dg-fail-text" x="556" y="152">a los 90 s, vuelve</text>
+<path class="dg-feedback" d="M540 106 V226" marker-end="url(#fa10a)"/>
+<rect class="dg-frame" x="500" y="186" width="260" height="134" rx="10"/>
+<text class="dg-tiny" x="552" y="210">replicación asíncrona</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="514" y="230" width="150" height="60" rx="6"/>
+<text class="dg-label" x="589" y="254" text-anchor="middle">réplica</text>
+<text class="dg-tiny" x="589" y="274" text-anchor="middle">parte 2</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="676" y="230" width="72" height="60" rx="6"/>
+<text class="dg-small" x="712" y="256" text-anchor="middle">sentinel</text>
+<text class="dg-tiny" x="712" y="276" text-anchor="middle">parte 2</text>
+<text class="dg-group" x="746" y="310" text-anchor="end">k3s-agent2</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.1.</b> Todo lo que no se rompe vive en <code>k3s-server</code>: k6, la app y la base. Redis vive en los agentes, que se apagan a los 30&#8239;s de cada prueba y vuelven a los 90&#8239;s. Cada lectura prueba Caffeine, después Redis y al final la base, a través de la compuerta. En la parte 2, la línea punteada es la replicación del master a la réplica, y los tres Sentinels, uno por nodo, deciden cuándo la réplica pasa a ser el master.</figcaption>
+      </figure>
+
+      <p>Las defensas se prenden y se apagan con variables de entorno, sin tocar el código. <code>scripts/modo.sh</code> deja la app en uno de cinco modos, y cada experimento de la primera parte usa uno:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modo</th><th>Timeouts de Redis</th><th>Espera por una conexión a la base</th><th>Breaker</th><th>Compuerta</th><th>Caché local</th></tr></thead>
+          <tbody>
+            <tr><td><code>e1</code></td><td>60&#8239;s por comando, 10&#8239;s por conexión: los de Lettuce</td><td>30&#8239;s: la de HikariCP</td><td>No</td><td>No</td><td>No</td></tr>
+            <tr><td><code>e2</code></td><td>100&#8239;ms y 500&#8239;ms</td><td>1&#8239;s</td><td>No</td><td>No</td><td>No</td></tr>
+            <tr><td><code>e3</code></td><td>100&#8239;ms y 500&#8239;ms</td><td>1&#8239;s</td><td>Sí</td><td>No</td><td>No</td></tr>
+            <tr><td><code>e4</code></td><td>100&#8239;ms y 500&#8239;ms</td><td>1&#8239;s</td><td>Sí</td><td>Sí</td><td>No</td></tr>
+            <tr><td><code>e5</code></td><td>100&#8239;ms y 500&#8239;ms</td><td>1&#8239;s</td><td>Sí</td><td>Sí</td><td>Sí, y sirve la copia vieja</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <p>Dos CRUD sobre dos tablas relacionadas: categorías y productos, cada producto en una categoría. La caché solo cubre la lectura de un producto por id, que es lo que manda la prueba de carga.</p>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/categories</code></td><td>Todas las categorías.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/categories/{id}</code></td><td>Una categoría.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/categories</code></td><td>Crea una categoría.</td><td>201, 400, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/api/categories/{id}</code></td><td>Le cambia el nombre.</td><td>200, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="DELETE">DELETE</span><code>/api/categories/{id}</code></td><td>La borra, si no tiene productos.</td><td>204, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/products</code></td><td>Hasta <code>limit</code> productos (50 por defecto, 200 como mucho), de una categoría si va <code>categoryId</code>. Directo a la base, sin caché.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/products/{id}</code></td><td>Un producto, por las dos cachés.</td><td>200, 404, 500, 503</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/products</code></td><td>Crea un producto.</td><td>201, 400, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/api/products/{id}</code></td><td>Reemplaza un producto y borra sus copias.</td><td>200, 400, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/api/products/{id}/price</code></td><td>Le cambia el precio y borra sus copias. Es el cambio que manda k6.</td><td>200, 400, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="DELETE">DELETE</span><code>/api/products/{id}</code></td><td>Lo borra, y sus copias.</td><td>204, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/consistency</code></td><td>Compara las copias de Redis y de la caché local de este pod con la base.</td><td>200</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/products/{id}</code>
+        </div>
+        <p class="ep-desc">Busca el producto en la caché local, si la copia tiene menos de 5&#8239;s; después en Redis, y al final en la base, a través de la compuerta. Lo que viene de la base se guarda en Redis y en la caché local. Si la base no lo atiende y la caché local tiene una copia, de cualquier edad, contesta con esa. Dos encabezados cuentan cómo fue: <code>X-Source</code> dice de dónde salió (<code>l1</code>, <code>l1-stale</code>, <code>redis</code> o <code>db</code>), y <code>X-Breaker</code>, cómo estaba el breaker de Redis.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>GET /api/products/7 HTTP/1.1
+Host: localhost:8080</code></pre>
+          <p class="ep-sec">Respuesta 200, en una base recién creada</p>
+<pre data-lang="http"><code>HTTP/1.1 200 OK
+X-Source: db
+X-Breaker: CLOSED
+Content-Type: application/json
+
+{"id": 7, "categoryId": 7, "categoryName": "Categoría 7", "name": "Producto 7",
+ "priceCents": 1259, "stock": 100, "version": 1, "updatedAt": "…"}</code></pre>
+          <p class="ep-sec">Respuesta 503, si la compuerta está llena y no hay copia local</p>
+<pre data-lang="http"><code>HTTP/1.1 503 Service Unavailable
+Retry-After: 1
+Content-Type: application/problem+json
+
+{"type": "about:blank", "title": "Service Unavailable", "status": 503,
+ "detail": "La base está al límite. Vuelve a intentar en un segundo.", "instance": "/api/products/7"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>El producto, de alguna de las tres capas.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe. Se sabe en la base: los productos que no existen no se cachean.</span></li>
+            <li><span class="st st--5xx">500</span><span>La base falló, por ejemplo porque nadie soltó una conexión en 1&#8239;s, y no había copia local.</span></li>
+            <li><span class="st st--5xx">503</span><span>La compuerta rechazó la lectura y no había copia local. <code>Retry-After: 1</code> le dice al cliente cuándo volver.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="PUT">PUT</span>
+          <code class="ep-path">/api/products/{id}/price</code>
+        </div>
+        <p class="ep-desc">Cambia el precio en la base, sube <code>version</code> y después borra las dos copias: la de la caché local de este pod y la de Redis. Si el <code>DEL</code> a Redis no sale, la respuesta es la misma: la base ya cambió, y la invalidación queda anotada para reponerla cuando Redis vuelva. La caché local del otro pod no se entera: sigue sirviendo su copia hasta que cumple 5&#8239;s.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>PUT /api/products/7/price HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{"priceCents": 1990}</code></pre>
+          <p class="ep-sec">Respuesta 200, el primer cambio en una base recién creada</p>
+<pre data-lang="json"><code>{"id": 7, "categoryId": 7, "categoryName": "Categoría 7", "name": "Producto 7",
+ "priceCents": 1990, "stock": 100, "version": 2, "updatedAt": "…"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>El producto como quedó en la base.</span></li>
+            <li><span class="st st--4xx">400</span><span>Un precio que no es positivo.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/consistency</code>
+        </div>
+        <p class="ep-desc">Lee la versión de los 200 productos en la base y la compara con la que tienen Redis y la caché local del pod que contesta. Una copia con una versión menor es una copia vieja: alguien cambió el producto y la invalidación no llegó, o llegó antes que una escritura vieja. Es para mirar, no para la carga: <code>scripts/consistencia.sh</code> se lo pide a cada pod.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200, con el pod recién arrancado y Redis vacío</p>
+<pre data-lang="json"><code>{"pod": "catalogo-…", "products": 200,
+ "redis": {"cached": 0, "stale": 0, "staleIds": []},
+ "l1": {"cached": 0, "stale": 0, "staleIds": []},
+ "pendingInvalidations": 0}</code></pre>
+          <p class="ep-sec">Los campos</p>
+          <ul>
+            <li><code>cached</code>: cuántos productos tienen copia en esa caché.</li>
+            <li><code>stale</code>: cuántas de esas copias tienen una versión menor que la base, con hasta 20 ids en <code>staleIds</code>. En la caché local, una copia de más de 5&#8239;s no se sirve salvo que la base no atienda.</li>
+            <li><code>redis</code> es <code>null</code> si Redis no contestó o el breaker no dejó preguntar.</li>
+            <li><code>pendingInvalidations</code>: las invalidaciones de este pod que esperan a que Redis vuelva.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/categories</code>
+        </div>
+        <p class="ep-desc">Crea una categoría. Los nombres son únicos, y una categoría con productos no se puede borrar: los dos casos son una restricción de la base, y la API los devuelve como 409.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="json"><code>{"name": "Ofertas"}</code></pre>
+          <p class="ep-sec">Respuesta 201, en una base recién creada: las semillas usan los ids del 1 al 10</p>
+<pre data-lang="http"><code>HTTP/1.1 201 Created
+Location: /api/categories/11
+
+{"id": 11, "name": "Ofertas"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Creada.</span></li>
+            <li><span class="st st--4xx">400</span><span>Nombre vacío o de más de 80 caracteres.</span></li>
+            <li><span class="st st--4xx">409</span><span>Ya hay una con ese nombre. Un ProblemDetail con <code>detail</code> "El cambio choca con otra fila: …".</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>Los dos CRUD, con <code>@NotBlank</code> y <code>@Positive</code> en los cuerpos y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-actuator</code></td><td>Las probes de Kubernetes, que no miran a Redis.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td><code>JdbcClient</code> con HikariCP, y la migración con las semillas al arrancar.</td></tr>
+            <tr><td><code>spring-boot-starter-data-redis</code></td><td><code>StringRedisTemplate</code> sobre Lettuce. En la parte 2, la misma conexión, pero preguntándoles a los Sentinels quién es el master.</td></tr>
+            <tr><td><code>com.github.ben-manes.caffeine:caffeine</code></td><td>La caché local de cada pod. La versión la fija Spring Boot.</td></tr>
+            <tr><td><code>io.github.resilience4j:resilience4j-circuitbreaker</code> y <code>resilience4j-bulkhead</code> 2.4.0</td><td>El circuit breaker delante de Redis y la compuerta delante de la base. Solo los módulos de la librería, sin Spring Cloud ni anotaciones.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Dieciséis pruebas: once contra un PostgreSQL 18 y un Redis 8.10 de verdad, que se congela a propósito, y cinco unitarias.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Resilience4j también viene con anotaciones, como <code>@CircuitBreaker(name = "redis", fallbackMethod = "…")</code>, y Spring Cloud tiene su propia capa encima. Las dos esconden el breaker detrás de un proxy: el método parece una llamada normal, y la decisión de no llamar a Redis queda en la configuración. Aquí se quiere lo contrario, ver cada decisión en el código. Dos clases chicas, <code>RedisGuard</code> y <code>DbGate</code>, usan el <code>CircuitBreaker</code> y el <code>Bulkhead</code> directamente, y las pruebas unitarias los manejan sin levantar Spring.</p>
+      </aside>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;catalogo&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;!-- Spring Boot no gestiona Resilience4j: la versión va fija aquí. --&gt;
+    &lt;resilience4j.version&gt;2.4.0&lt;/resilience4j.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;!-- La caché compartida: Redis con Lettuce. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-data-redis&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;!-- La caché local de cada pod. Spring Boot gestiona su versión. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;com.github.ben-manes.caffeine&lt;/groupId&gt;
+      &lt;artifactId&gt;caffeine&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;!-- Solo los dos módulos que se usan: el breaker delante de Redis y el bulkhead delante de la base. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.github.resilience4j&lt;/groupId&gt;
+      &lt;artifactId&gt;resilience4j-circuitbreaker&lt;/artifactId&gt;
+      &lt;version&gt;${resilience4j.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.github.resilience4j&lt;/groupId&gt;
+      &lt;artifactId&gt;resilience4j-bulkhead&lt;/artifactId&gt;
+      &lt;version&gt;${resilience4j.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+      <p>Además de Java, Maven y Docker, necesitas <code>kubectl</code>, como en A07 y A08. Funciona con el servidor si las versiones no se separan en más de una versión menor <span class="badge badge--doc">Documentado</span>: con k3s 1.36, usa un <code>kubectl</code> 1.35, 1.36 o 1.37. k6 no hace falta en tu máquina: corre dentro del clúster, como un Job.</p>
+
+<pre data-lang="bash"><code>winget install -e --id Kubernetes.kubectl     # Windows
+brew install kubectl                         # macOS
+kubectl version --client</code></pre>
+
+      <p>Crea la carpeta del proyecto y pon cada archivo de esta guía en su ruta. El wrapper de Maven, <code>mvnw</code>, lo puedes copiar de un proyecto anterior, junto con la carpeta <code>.mvn/</code>, o generarlo una vez con <code>mvn -N wrapper:wrapper</code>. Los scripts son de bash: en Windows, córrelos en Git Bash, y dales permiso de ejecución con <code>chmod +x scripts/*.sh</code>. Así queda el proyecto:</p>
+
+<pre data-lang="bash"><code>a10-circuit-breaker/
+├── pom.xml, Dockerfile, .gitignore, mvnw, .mvn/, src/…
+├── cluster/        compose.yaml, registries.yaml
+├── k8s/            namespace.yaml, db.yaml, app.yaml, redis-solo.yaml,
+│                   redis-replicas.yaml, sentinel.yaml, carga.yaml
+├── k6/             carga.js
+└── scripts/        modo.sh, experimento.sh, mira.sh, consistencia.sh,
+                    master.sh, sentinels.sh, psql.sh</code></pre>
+
+<pre data-lang="yaml" data-file="cluster/compose.yaml"><code># Un clúster de k3s de tres nodos en contenedores: el servidor y dos agentes.
+# En el servidor corre todo lo que no se rompe; en los agentes, solo Redis y los Sentinels.
+# "Tirar un nodo" es docker compose kill agent1: se corta la máquina entera, con todo lo que tenía, como un corte de luz.
+x-node: &amp;node
+  image: rancher/k3s:v1.36.5-k3s1
+  privileged: true
+  tmpfs:
+    - /run
+    - /var/run
+  ulimits:
+    nproc: 65535
+    nofile:
+      soft: 65535
+      hard: 65535
+  restart: unless-stopped
+  environment: &amp;node-env
+    K3S_TOKEN: un-secreto-solo-para-el-lab
+  volumes:
+    - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+
+services:
+  server:
+    &lt;&lt;: *node
+    hostname: k3s-server
+    # Sin Traefik ni metrics-server: la carga la genera k6 dentro del clúster, y así hay menos pods que ubicar.
+    command: ["server", "--tls-san=127.0.0.1", "--disable=traefik", "--disable=metrics-server"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+      - ./kube:/output
+    ports:
+      - "6443:6443"   # API de Kubernetes
+
+  agent1:
+    &lt;&lt;: *node
+    hostname: k3s-agent1
+    command: ["agent"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_URL: https://server:6443
+
+  agent2:
+    &lt;&lt;: *node
+    hostname: k3s-agent2
+    command: ["agent"]
+    environment:
+      &lt;&lt;: *node-env
+      K3S_URL: https://server:6443
+
+  # Registro de imágenes local: docker push localhost:5000/catalogo:1 desde tu máquina,
+  # y los nodos la bajan de registry:5000 (ver registries.yaml).
+  registry:
+    image: registry:3
+    ports:
+      - "5000:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Tres nodos</dt><dd>El servidor y dos agentes. Para apagar a Redis sin apagar a la app, tienen que vivir en máquinas distintas, y en la parte 2 el master y la réplica también. Cada contenedor corre el mismo binario de k3s que instalarías en una máquina.</dd></div>
+        <div><dt>Apagar un nodo</dt><dd><code>docker compose kill agent1</code> mata al contenedor del agente con SIGKILL, y con él a todos sus pods: Redis no alcanza a cerrar nada en orden. Es lo más parecido a desenchufar una máquina. <code>docker compose start agent1</code> la vuelve a prender, con el mismo disco.</dd></div>
+        <div><dt>Sin Traefik ni metrics-server</dt><dd>No hace falta entrar desde afuera: k6 corre adentro y le pega al Service. Son menos pods que ubicar en el servidor, donde va todo lo demás.</dd></div>
+        <div><dt>El kubeconfig y los puertos</dt><dd><code>K3S_KUBECONFIG_OUTPUT</code> lo escribe en <code>cluster/kube/kubeconfig.yaml</code>, apuntando a <code>https://127.0.0.1:6443</code>, la dirección que <code>--tls-san</code> mete en el certificado. El 5000 es el registro de imágenes.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="cluster/registries.yaml"><code>mirrors:
+  "localhost:5000":
+    endpoint:
+      - "http://registry:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Un nombre, dos lugares</dt><dd>Desde tu máquina empujas a <code>localhost:5000/catalogo:1</code>. Dentro de un nodo, <code>localhost</code> es el propio nodo, así que el mirror le dice a containerd que esa imagen se baja de <code>http://registry:5000</code>, el nombre del registro en la red del compose. Es el mismo archivo de A07.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: catalogo
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      # Dos conexiones por pod: con 200 ms por lectura, la base atiende 2 / 0.2 = 10 lecturas por segundo por pod.
+      maximum-pool-size: ${DB_POOL:2}
+      # Cuánto espera una lectura por una conexión libre antes de fallar. HikariCP trae 30 s.
+      connection-timeout: ${DB_POOL_TIMEOUT:1000}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      # Cuánto espera un comando. Lettuce trae 60 s.
+      timeout: ${REDIS_TIMEOUT:100ms}
+      # Cuánto espera una conexión nueva. Lettuce trae 10 s.
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:500ms}
+  mvc:
+    problemdetails:
+      enabled: true
+  task:
+    scheduling:
+      pool:
+        # Dos hilos: si reponer las invalidaciones se traba contra Redis, el tablero sigue imprimiendo.
+        size: 2
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      # Liveness y readiness no miran a Redis ni a la base: si Redis cae, los pods siguen recibiendo tráfico.
+      probes:
+        enabled: true
+
+app:
+  db:
+    delay: ${DB_DELAY:200ms}
+    gate:
+      enabled: ${GATE:true}
+      # Tantas lecturas a la vez como conexiones tiene el pool.
+      max-concurrent: ${DB_POOL:2}
+      # Cuánto espera una lectura por un lugar libre. Con 0, lo que no entra se rechaza en el acto.
+      max-wait: ${GATE_WAIT:0ms}
+  redis:
+    ttl: 60s
+    breaker:
+      enabled: ${BREAKER:true}
+      window: 20
+      minimum-calls: 10
+      failure-rate: 50
+      slow-call: 50ms
+      open-for: 5s
+      half-open-calls: 3
+  l1:
+    # off, fresh o stale.
+    mode: ${L1:stale}
+    fresh-for: 5s
+    keep-for: 10m
+    max-size: 10000</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Las defensas, en variables</dt><dd>Cada defensa lee una variable de entorno, y su valor por defecto es el corto. Lo que corre en tu máquina y en las pruebas tiene todas las defensas puestas; <code>scripts/modo.sh</code> las cambia en el Deployment para cada experimento.</dd></div>
+        <div><dt>Los timeouts de Redis</dt><dd><code>timeout</code> es cuánto espera un comando, y <code>connect-timeout</code>, cuánto espera una conexión nueva. Si no los pones, Lettuce espera 60&#8239;s por comando y 10&#8239;s por conexión. <span class="badge badge--doc">Documentado</span> HikariCP espera 30&#8239;s por una conexión libre. <span class="badge badge--doc">Documentado</span> El paso 4 explica por qué 100&#8239;ms, 500&#8239;ms y 1&#8239;s.</dd></div>
+        <div><dt>Dos conexiones, dos lugares</dt><dd>El pool de cada pod tiene dos conexiones, y la compuerta deja entrar dos lecturas a la vez: la misma variable, <code>DB_POOL</code>, fija las dos. <code>max-wait</code> en 0 quiere decir que lo que no entra se rechaza en el acto; <code>GATE_WAIT</code> lo cambia.</dd></div>
+        <div><dt>El breaker</dt><dd>Mira las últimas 20 llamadas a Redis y no decide nada con menos de 10. Se abre si falla la mitad, o si la mitad tarda más de 50&#8239;ms, y queda abierto 5&#8239;s. Después deja pasar tres llamadas de prueba: si salen bien, se cierra; si no, se abre otra vez.</dd></div>
+        <div><dt>La caché local</dt><dd><code>off</code> la apaga, <code>fresh</code> sirve solo copias de menos de 5&#8239;s, y <code>stale</code> además sirve una copia vieja, de hasta 10 minutos, cuando la base no atiende.</dd></div>
+        <div><dt>Las probes no miran a Redis</dt><dd>Con <code>probes.enabled</code>, el grupo de readiness solo mira el estado de la aplicación, no a Redis ni a la base. <span class="badge badge--doc">Documentado</span> Si mirara a Redis, una caída de Redis sacaría a los dos pods del Service, y la caché que se cae se llevaría al servicio entero.</dd></div>
+      </dl>
+
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/catalogo-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM recibe el SIGTERM de Kubernetes directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+<pre data-lang="ini" data-file=".gitignore"><code>target/
+cluster/kube/
+resultados/</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el código de la aplicación: la migración, CatalogoApplication, AppProps, las categorías, los productos y los errores</summary>
+        <div class="solution-body">
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__catalogo.sql"><code>CREATE TABLE categories (
+    id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name text   NOT NULL UNIQUE
+);
+
+CREATE TABLE products (
+    id          bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    category_id bigint      NOT NULL REFERENCES categories (id),
+    name        text        NOT NULL,
+    price_cents bigint      NOT NULL CHECK (price_cents &gt; 0),
+    stock       int         NOT NULL DEFAULT 0 CHECK (stock &gt;= 0),
+    -- Sube en cada cambio: con ella se comparan las copias de las cachés con la base.
+    version     bigint      NOT NULL DEFAULT 1,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX products_category ON products (category_id);
+
+-- Los datos de partida: 10 categorías y 200 productos, 20 en cada una, con ids del 1 al 200.
+INSERT INTO categories (name)
+SELECT 'Categoría ' || n FROM generate_series(1, 10) AS n;
+
+INSERT INTO products (category_id, name, price_cents, stock)
+SELECT 1 + (n - 1) % 10, 'Producto ' || n, 1000 + (n * 37) % 9000, 100
+FROM generate_series(1, 200) AS n;</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/CatalogoApplication.java"><code>package lab.catalogo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class CatalogoApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(CatalogoApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/AppProps.java"><code>package lab.catalogo;
+
+import java.time.Duration;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties("app")
+public record AppProps(Db db, Redis redis, L1 l1) {
+
+    /** La base: cuánto tarda la consulta de un producto y la compuerta que limita las lecturas a la vez. */
+    public record Db(Duration delay, Gate gate) {
+
+        public record Gate(boolean enabled, int maxConcurrent, Duration maxWait) {
+        }
+    }
+
+    /** Redis: cuánto vive cada entrada y el breaker que lo protege. */
+    public record Redis(Duration ttl, Breaker breaker) {
+
+        public record Breaker(boolean enabled, int window, int minimumCalls, float failureRate,
+                              Duration slowCall, Duration openFor, int halfOpenCalls) {
+        }
+    }
+
+    /** La caché local de cada pod, con Caffeine. */
+    public record L1(L1Mode mode, Duration freshFor, Duration keepFor, long maxSize) {
+    }
+
+    /**
+     * OFF: sin caché local. FRESH: contesta solo con entradas de menos de freshFor.
+     * STALE: además, si Redis y la base no contestan, contesta con lo que tenga, aunque esté vencido.
+     */
+    public enum L1Mode { OFF, FRESH, STALE }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/categories/Category.java"><code>package lab.catalogo.categories;
+
+public record Category(long id, String name) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/categories/CategoryRepository.java"><code>package lab.catalogo.categories;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class CategoryRepository {
+
+    private final JdbcClient jdbc;
+
+    public CategoryRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public List&lt;Category&gt; findAll() {
+        return jdbc.sql("SELECT id, name FROM categories ORDER BY id").query(Category.class).list();
+    }
+
+    public Optional&lt;Category&gt; find(long id) {
+        return jdbc.sql("SELECT id, name FROM categories WHERE id = :id")
+                .param("id", id).query(Category.class).optional();
+    }
+
+    public Category create(String name) {
+        return jdbc.sql("INSERT INTO categories (name) VALUES (:name) RETURNING id, name")
+                .param("name", name).query(Category.class).single();
+    }
+
+    public Optional&lt;Category&gt; rename(long id, String name) {
+        return jdbc.sql("UPDATE categories SET name = :name WHERE id = :id RETURNING id, name")
+                .param("id", id).param("name", name).query(Category.class).optional();
+    }
+
+    /** Si la categoría tiene productos, la clave foránea lo impide y sale un DataIntegrityViolationException. */
+    public boolean delete(long id) {
+        return jdbc.sql("DELETE FROM categories WHERE id = :id").param("id", id).update() == 1;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/categories/CategoryController.java"><code>package lab.catalogo.categories;
+
+import java.net.URI;
+import java.util.List;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lab.catalogo.web.NotFound;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/** El CRUD de categorías: va directo a la base, sin caché. */
+@RestController
+@RequestMapping("/api/categories")
+public class CategoryController {
+
+    public record CategoryBody(@NotBlank @Size(max = 80) String name) {
+    }
+
+    private final CategoryRepository categories;
+
+    public CategoryController(CategoryRepository categories) {
+        this.categories = categories;
+    }
+
+    @GetMapping
+    public List&lt;Category&gt; list() {
+        return categories.findAll();
+    }
+
+    @GetMapping("/{id}")
+    public Category get(@PathVariable long id) {
+        return categories.find(id).orElseThrow(() -&gt; new NotFound("No existe la categoría " + id));
+    }
+
+    @PostMapping
+    public ResponseEntity&lt;Category&gt; create(@Valid @RequestBody CategoryBody body) {
+        Category created = categories.create(body.name());
+        return ResponseEntity.created(URI.create("/api/categories/" + created.id())).body(created);
+    }
+
+    @PutMapping("/{id}")
+    public Category rename(@PathVariable long id, @Valid @RequestBody CategoryBody body) {
+        return categories.rename(id, body.name()).orElseThrow(() -&gt; new NotFound("No existe la categoría " + id));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity&lt;Void&gt; delete(@PathVariable long id) {
+        if (!categories.delete(id)) {
+            throw new NotFound("No existe la categoría " + id);
+        }
+        return ResponseEntity.noContent().build();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/Product.java"><code>package lab.catalogo.products;
+
+import java.time.OffsetDateTime;
+
+/** Un producto con el nombre de su categoría: la fila que se guarda en las dos cachés. */
+public record Product(long id, long categoryId, String categoryName, String name,
+                      long priceCents, int stock, long version, OffsetDateTime updatedAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/ProductBody.java"><code>package lab.catalogo.products;
+
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
+
+public record ProductBody(
+        @Positive long categoryId,
+        @NotBlank @Size(max = 120) String name,
+        @Positive long priceCents,
+        @Min(0) int stock) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/ProductRepository.java"><code>package lab.catalogo.products;
+
+import java.util.List;
+import java.util.Optional;
+
+import lab.catalogo.AppProps;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class ProductRepository {
+
+    /** La versión de cada producto, para compararla con las cachés. */
+    public record VersionRow(long id, long version) {
+    }
+
+    // Todas las consultas devuelven el producto con el nombre de su categoría.
+    private static final String SELECT_JOINED = """
+            SELECT p.id, p.category_id, c.name AS category_name, p.name, p.price_cents, p.stock,
+                   p.version, p.updated_at
+            FROM %s p
+            JOIN categories c ON c.id = p.category_id
+            """;
+
+    private final JdbcClient jdbc;
+    private final double delaySeconds;
+
+    public ProductRepository(JdbcClient jdbc, AppProps props) {
+        this.jdbc = jdbc;
+        this.delaySeconds = props.db().delay().toMillis() / 1000.0;
+    }
+
+    /**
+     * La lectura cara que la caché protege. El pg_sleep hace las veces de una consulta pesada:
+     * con 200 ms, cada conexión atiende 5 lecturas por segundo.
+     */
+    public Optional&lt;Product&gt; find(long id) {
+        return jdbc.sql(SELECT_JOINED.formatted("products") + """
+                        CROSS JOIN (SELECT pg_sleep(:delay)) AS consulta_lenta
+                        WHERE p.id = :id
+                        """)
+                .param("delay", delaySeconds)
+                .param("id", id)
+                .query(Product.class).optional();
+    }
+
+    public List&lt;Product&gt; list(int limit) {
+        return jdbc.sql(SELECT_JOINED.formatted("products") + "ORDER BY p.id LIMIT :limit")
+                .param("limit", limit)
+                .query(Product.class).list();
+    }
+
+    public List&lt;Product&gt; listByCategory(long categoryId, int limit) {
+        return jdbc.sql(SELECT_JOINED.formatted("products") + "WHERE p.category_id = :categoryId ORDER BY p.id LIMIT :limit")
+                .param("categoryId", categoryId)
+                .param("limit", limit)
+                .query(Product.class).list();
+    }
+
+    public Product create(long categoryId, String name, long priceCents, int stock) {
+        return jdbc.sql("""
+                        WITH inserted AS (
+                          INSERT INTO products (category_id, name, price_cents, stock)
+                          VALUES (:categoryId, :name, :priceCents, :stock)
+                          RETURNING *
+                        )
+                        """ + SELECT_JOINED.formatted("inserted"))
+                .param("categoryId", categoryId)
+                .param("name", name)
+                .param("priceCents", priceCents)
+                .param("stock", stock)
+                .query(Product.class).single();
+    }
+
+    /** Cada cambio sube la versión: así se sabe si una copia en caché quedó vieja. */
+    public Optional&lt;Product&gt; update(long id, long categoryId, String name, long priceCents, int stock) {
+        return jdbc.sql("""
+                        WITH updated AS (
+                          UPDATE products
+                          SET category_id = :categoryId, name = :name, price_cents = :priceCents, stock = :stock,
+                              version = version + 1, updated_at = now()
+                          WHERE id = :id
+                          RETURNING *
+                        )
+                        """ + SELECT_JOINED.formatted("updated"))
+                .param("id", id)
+                .param("categoryId", categoryId)
+                .param("name", name)
+                .param("priceCents", priceCents)
+                .param("stock", stock)
+                .query(Product.class).optional();
+    }
+
+    public Optional&lt;Product&gt; changePrice(long id, long priceCents) {
+        return jdbc.sql("""
+                        WITH updated AS (
+                          UPDATE products
+                          SET price_cents = :priceCents, version = version + 1, updated_at = now()
+                          WHERE id = :id
+                          RETURNING *
+                        )
+                        """ + SELECT_JOINED.formatted("updated"))
+                .param("id", id)
+                .param("priceCents", priceCents)
+                .query(Product.class).optional();
+    }
+
+    public boolean delete(long id) {
+        return jdbc.sql("DELETE FROM products WHERE id = :id").param("id", id).update() == 1;
+    }
+
+    public List&lt;VersionRow&gt; versions() {
+        return jdbc.sql("SELECT id, version FROM products ORDER BY id").query(VersionRow.class).list();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/ProductController.java"><code>package lab.catalogo.products;
+
+import java.net.URI;
+import java.util.List;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
+import lab.catalogo.products.ProductService.Read;
+import lab.catalogo.resilience.RedisGuard;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/products")
+public class ProductController {
+
+    public record PriceBody(@Positive long priceCents) {
+    }
+
+    private final ProductService service;
+    private final ProductRepository products;
+    private final RedisGuard guard;
+
+    public ProductController(ProductService service, ProductRepository products, RedisGuard guard) {
+        this.service = service;
+        this.products = products;
+        this.guard = guard;
+    }
+
+    /** El listado va directo a la base: la caché es solo para la lectura por id. */
+    @GetMapping
+    public List&lt;Product&gt; list(@RequestParam(required = false) Long categoryId,
+                              @RequestParam(defaultValue = "50") int limit) {
+        int capped = Math.clamp(limit, 1, 200);
+        return categoryId == null ? products.list(capped) : products.listByCategory(categoryId, capped);
+    }
+
+    /** X-Source dice de dónde salió (l1, l1-stale, redis o db), y X-Breaker, cómo estaba el breaker. */
+    @GetMapping("/{id}")
+    public ResponseEntity&lt;Product&gt; get(@PathVariable long id) {
+        Read read = service.get(id);
+        return ResponseEntity.ok()
+                .header("X-Source", read.source().header)
+                .header("X-Breaker", guard.state())
+                .body(read.product());
+    }
+
+    @PostMapping
+    public ResponseEntity&lt;Product&gt; create(@Valid @RequestBody ProductBody body) {
+        Product created = service.create(body);
+        return ResponseEntity.created(URI.create("/api/products/" + created.id())).body(created);
+    }
+
+    @PutMapping("/{id}")
+    public Product update(@PathVariable long id, @Valid @RequestBody ProductBody body) {
+        return service.update(id, body);
+    }
+
+    /** El cambio que manda la prueba de carga: solo el precio. */
+    @PutMapping("/{id}/price")
+    public Product changePrice(@PathVariable long id, @Valid @RequestBody PriceBody body) {
+        return service.changePrice(id, body.priceCents());
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity&lt;Void&gt; delete(@PathVariable long id) {
+        service.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/web/NotFound.java"><code>package lab.catalogo.web;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.ErrorResponseException;
+
+/** Un 404 con ProblemDetail. */
+public class NotFound extends ErrorResponseException {
+
+    public NotFound(String detail) {
+        super(HttpStatus.NOT_FOUND);
+        setDetail(detail);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/web/Shed.java"><code>package lab.catalogo.web;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.ErrorResponseException;
+
+/**
+ * La lectura no entró a la base: la compuerta estaba llena. Es un 503 con Retry-After,
+ * que le dice al cliente cuándo vale la pena volver.
+ */
+public class Shed extends ErrorResponseException {
+
+    public Shed() {
+        super(HttpStatus.SERVICE_UNAVAILABLE);
+        setDetail("La base está al límite. Vuelve a intentar en un segundo.");
+        getHeaders().set(HttpHeaders.RETRY_AFTER, "1");
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/web/Conflicts.java"><code>package lab.catalogo.web;
+
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+/** Un nombre de categoría repetido, una categoría que no existe o una con productos: 409, no 500. */
+@RestControllerAdvice
+public class Conflicts {
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ProblemDetail conflict(DataIntegrityViolationException e) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "El cambio choca con otra fila: un nombre repetido, una categoría que no existe o una que todavía tiene productos.");
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <p>Las clases que hacen el trabajo de este proyecto, las cachés y las defensas, van en el paso a paso, cada una en su paso.</p>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-cluster">Paso 1. El clúster, con los agentes apartados</h3>
+
+<pre data-lang="bash"><code>cd cluster
+mkdir -p kube
+docker compose up -d
+# En Git Bash, kubectl.exe necesita la ruta de Windows: pwd -W la da, y en Linux o macOS se usa pwd.
+export KUBECONFIG="$(pwd -W 2&gt;/dev/null || pwd)/kube/kubeconfig.yaml"
+until [ -f kube/kubeconfig.yaml ] &amp;&amp; [ "$(kubectl get nodes --no-headers 2&gt;/dev/null | grep -c ' Ready')" = 3 ]; do sleep 2; done
+kubectl get nodes
+cd ..</code></pre>
+
+      <p>Tienen que aparecer tres nodos en <code>Ready</code>, con la versión <code>v1.36.5+k3s1</code>: <code>k3s-server</code>, <code>k3s-agent1</code> y <code>k3s-agent2</code>. Ahora, aparta a los agentes:</p>
+
+<pre data-lang="bash"><code>kubectl taint nodes k3s-agent1 k3s-agent2 lab=fallas:NoSchedule
+kubectl -n kube-system rollout restart deploy/coredns deploy/local-path-provisioner
+kubectl -n kube-system rollout status deploy/coredns --timeout=120s
+kubectl -n kube-system rollout status deploy/local-path-provisioner --timeout=120s
+kubectl -n kube-system get pods -o wide</code></pre>
+
+      <p>En la columna <code>NODE</code>, todos los pods de <code>kube-system</code> tienen que estar en <code>k3s-server</code>.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un taint en los agentes: <code>NoSchedule</code> hace que ningún pod nuevo vaya a un agente si no tolera <code>lab=fallas</code>. <span class="badge badge--doc">Documentado</span> Solo Redis y los Sentinels lo toleran. Así, apagar un agente rompe a Redis y nada más. El <code>rollout restart</code> mueve a CoreDNS y al aprovisionador de discos, que pudieron caer en un agente antes del taint: con CoreDNS en un nodo apagado, ningún pod resuelve nombres, y el experimento mide otra cosa.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un <code>nodeSelector</code> en cada pod de la app y la base, sin taint. Funciona para lo tuyo, pero no para lo que instala otro: el operador de CloudNativePG, CoreDNS o lo que agregues después pueden caer en un agente. El taint se pone una vez y cubre todo lo que venga.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el 6443 o el 5000 ya estén ocupados, por ejemplo por el clúster de A07 o de A08: <code>docker compose up</code> falla con "port is already allocated". Apaga el otro con <code>docker compose down</code> en su carpeta. Y que exportes <code>KUBECONFIG</code> en una terminal y corras <code>kubectl</code> en otra: cada terminal nueva lo necesita, también las de <code>mira.sh</code> y <code>sentinels.sh</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-base">Paso 2. La base</h3>
+
+<pre data-lang="yaml" data-file="k8s/namespace.yaml"><code>apiVersion: v1
+kind: Namespace
+metadata:
+  name: catalogo</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/db.yaml"><code># PostgreSQL con CloudNativePG: una sola instancia. Este proyecto rompe Redis, no la base.
+# Los agentes tienen un taint, así que la base y PgBouncer caen en k3s-server sin pedirlo.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: catalogo-db
+  namespace: catalogo
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+  storage:
+    size: 1Gi
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+---
+# PgBouncer delante del primario: los pods se conectan aquí, no a PostgreSQL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: catalogo-db-pooler-rw
+  namespace: catalogo
+spec:
+  cluster:
+    name: catalogo-db
+  instances: 1
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "20"</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply --server-side -f \
+  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
+kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=180s
+kubectl apply -f k8s/namespace.yaml &amp;&amp; kubectl apply -f k8s/db.yaml
+kubectl -n catalogo wait cluster/catalogo-db --for=condition=Ready --timeout=300s
+until kubectl -n catalogo get deploy catalogo-db-pooler-rw &gt; /dev/null 2&gt;&amp;1; do sleep 2; done
+kubectl -n catalogo rollout status deploy/catalogo-db-pooler-rw --timeout=180s
+kubectl -n catalogo get pods -o wide</code></pre>
+
+      <p>Al final tienen que quedar dos pods en <code>Running</code>, los dos en <code>k3s-server</code>: <code>catalogo-db-1</code>, el PostgreSQL, y uno de <code>catalogo-db-pooler-rw</code>, el PgBouncer.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>CloudNativePG 1.30.1 con una sola instancia, detrás de un Pooler en modo transaction, como en A07 y A08. El operador crea el usuario <code>app</code> con su Secret <code>catalogo-db-app</code>, que lee el Deployment, y el Service <code>catalogo-db-rw</code>, por el que entra Flyway. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Réplicas de PostgreSQL. Este proyecto rompe Redis, y la base es la que tiene que aguantar: una sola instancia con una capacidad conocida hace que las cuentas sean simples. Las réplicas y su failover son el tema de A04.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Instalar el operador antes del taint: su pod puede quedar en un agente, y apagar ese agente deja a la base sin quién la cuide. Si pasó, <code>kubectl -n cnpg-system rollout restart deploy/cnpg-controller-manager</code> lo mueve.</dd></div>
+      </dl>
+
+      <h3 id="paso-cache">Paso 3. Cache-aside en dos niveles</h3>
+
+      <p>Una lectura prueba tres lugares, en orden. Primero la caché local del pod: si la copia tiene menos de 5&#8239;s, contesta con ella. Si no, Redis: si está, la guarda en la caché local y contesta. Si no, la base: guarda lo que trajo en Redis y en la caché local. Un cambio va primero a la base, y después borra la copia local y la de Redis. La próxima lectura trae la fila nueva.</p>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/ProductService.java"><code>package lab.catalogo.products;
+
+import java.util.Optional;
+
+import lab.catalogo.cache.LocalCache;
+import lab.catalogo.cache.RedisCache;
+import lab.catalogo.resilience.DbGate;
+import lab.catalogo.resilience.Tablero;
+import lab.catalogo.web.NotFound;
+import lab.catalogo.web.Shed;
+
+import org.springframework.dao.DataAccessException;
+import org.springframework.stereotype.Service;
+
+/**
+ * Cache-aside en dos niveles. Una lectura prueba, en orden: la caché local fresca, Redis y la base.
+ * Si la base no la atiende (la compuerta está llena o la base falla), contesta con la copia local
+ * vieja, si la hay. Las escrituras van a la base y después borran las dos copias.
+ */
+@Service
+public class ProductService {
+
+    /** De dónde salió cada lectura: va en el encabezado X-Source. */
+    public enum Source {
+        L1("l1"), L1_STALE("l1-stale"), REDIS("redis"), DB("db");
+
+        public final String header;
+
+        Source(String header) {
+            this.header = header;
+        }
+    }
+
+    public record Read(Product product, Source source) {
+    }
+
+    private final ProductRepository products;
+    private final LocalCache l1;
+    private final RedisCache redis;
+    private final DbGate gate;
+    private final Tablero tablero;
+
+    public ProductService(ProductRepository products, LocalCache l1, RedisCache redis, DbGate gate, Tablero tablero) {
+        this.products = products;
+        this.l1 = l1;
+        this.redis = redis;
+        this.gate = gate;
+        this.tablero = tablero;
+    }
+
+    public Read get(long id) {
+        long start = System.nanoTime();
+        try {
+            Read read = lookup(id);
+            tablero.served(read.source(), start);
+            return read;
+        } catch (NotFound e) {
+            throw e;
+        } catch (Shed e) {
+            tablero.shed(start);
+            throw e;
+        } catch (RuntimeException e) {
+            tablero.failed(start);
+            throw e;
+        }
+    }
+
+    private Read lookup(long id) {
+        LocalCache.Entry local = l1.get(id);
+        if (local != null &amp;&amp; l1.isFresh(local)) {
+            return new Read(local.product(), Source.L1);
+        }
+
+        Product cached = redis.get(id);
+        if (cached != null) {
+            l1.put(cached);
+            return new Read(cached, Source.REDIS);
+        }
+
+        Optional&lt;Product&gt; loaded;
+        try {
+            loaded = gate.call(() -&gt; products.find(id));
+        } catch (Shed | DataAccessException e) {
+            if (local != null &amp;&amp; l1.servesStale()) {
+                return new Read(local.product(), Source.L1_STALE);
+            }
+            throw e;
+        }
+        Product product = loaded.orElseThrow(() -&gt; new NotFound("No existe el producto " + id));
+        redis.put(product);
+        l1.put(product);
+        return new Read(product, Source.DB);
+    }
+
+    public Product create(ProductBody body) {
+        // Nada que invalidar: el producto entra a las cachés la primera vez que alguien lo lee.
+        return products.create(body.categoryId(), body.name(), body.priceCents(), body.stock());
+    }
+
+    public Product update(long id, ProductBody body) {
+        Product updated = products.update(id, body.categoryId(), body.name(), body.priceCents(), body.stock())
+                .orElseThrow(() -&gt; new NotFound("No existe el producto " + id));
+        invalidate(id);
+        return updated;
+    }
+
+    public Product changePrice(long id, long priceCents) {
+        Product updated = products.changePrice(id, priceCents)
+                .orElseThrow(() -&gt; new NotFound("No existe el producto " + id));
+        invalidate(id);
+        return updated;
+    }
+
+    public void delete(long id) {
+        if (!products.delete(id)) {
+            throw new NotFound("No existe el producto " + id);
+        }
+        invalidate(id);
+    }
+
+    // Primero la base, después las cachés. Borrar en lugar de escribir: la próxima lectura trae la fila nueva.
+    // La caché local de los otros pods no se entera: sigue sirviendo su copia hasta 5 s.
+    private void invalidate(long id) {
+        l1.evict(id);
+        redis.evict(id);
+    }
+}</code></pre>
+
+      <p>La caché local es una sola entrada por producto que sirve para dos cosas. Mientras tiene menos de 5&#8239;s, es fresca y se sirve sin preguntar. Después sigue guardada hasta 10 minutos, pero solo se sirve si la base no atiende, en el modo <code>stale</code>.</p>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/cache/LocalCache.java"><code>package lab.catalogo.cache;
+
+import java.util.Map;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import lab.catalogo.AppProps;
+import lab.catalogo.AppProps.L1Mode;
+import lab.catalogo.products.Product;
+
+import org.springframework.stereotype.Component;
+
+/**
+ * La caché de cada pod, con Caffeine. Una entrada sirve como fresca durante freshFor (5 s) y se guarda
+ * hasta keepFor (10 min). Lo que pasó de los 5 s solo se usa si Redis y la base no contestan.
+ */
+@Component
+public class LocalCache {
+
+    public record Entry(Product product, long loadedAtNanos) {
+    }
+
+    private final L1Mode mode;
+    private final long freshForNanos;
+    private final Cache&lt;Long, Entry&gt; cache;
+
+    public LocalCache(AppProps props) {
+        this.mode = props.l1().mode();
+        this.freshForNanos = props.l1().freshFor().toNanos();
+        this.cache = Caffeine.newBuilder()
+                .expireAfterWrite(props.l1().keepFor())
+                .maximumSize(props.l1().maxSize())
+                .build();
+    }
+
+    /** La entrada, fresca o no; null si no está o si la caché local está apagada. */
+    public Entry get(long id) {
+        return mode == L1Mode.OFF ? null : cache.getIfPresent(id);
+    }
+
+    public boolean isFresh(Entry entry) {
+        return System.nanoTime() - entry.loadedAtNanos() &lt; freshForNanos;
+    }
+
+    /** Stale-if-error: con el modo STALE, una entrada vencida vale más que un error. */
+    public boolean servesStale() {
+        return mode == L1Mode.STALE;
+    }
+
+    public void put(Product product) {
+        if (mode != L1Mode.OFF) {
+            cache.put(product.id(), new Entry(product, System.nanoTime()));
+        }
+    }
+
+    public void evict(long id) {
+        cache.invalidate(id);
+    }
+
+    public void clear() {
+        cache.invalidateAll();
+    }
+
+    public Map&lt;Long, Entry&gt; snapshot() {
+        return Map.copyOf(cache.asMap());
+    }
+
+    public String mode() {
+        return mode.name();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/cache/RedisCache.java"><code>package lab.catalogo.cache;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import lab.catalogo.AppProps;
+import lab.catalogo.products.Product;
+import lab.catalogo.resilience.RedisGuard;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import tools.jackson.databind.json.JsonMapper;
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * La caché compartida: un string con el JSON de cada producto, en product:{id}, con 60 s de TTL.
+ * Cada operación pasa por el RedisGuard, así que ninguna puede tardar más que el timeout de Redis.
+ */
+@Component
+public class RedisCache {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisCache.class);
+
+    private final StringRedisTemplate redis;
+    private final JsonMapper json;
+    private final RedisGuard guard;
+    private final Duration ttl;
+
+    // Las invalidaciones que no se pudieron hacer: se reponen cuando Redis vuelve.
+    private final Set&lt;Long&gt; pending = ConcurrentHashMap.newKeySet();
+
+    public RedisCache(StringRedisTemplate redis, JsonMapper json, RedisGuard guard, AppProps props) {
+        this.redis = redis;
+        this.json = json;
+        this.guard = guard;
+        this.ttl = props.redis().ttl();
+    }
+
+    public Product get(long id) {
+        String value = guard.read(() -&gt; redis.opsForValue().get(key(id)));
+        return value == null ? null : json.readValue(value, Product.class);
+    }
+
+    public void put(Product product) {
+        String value = json.writeValueAsString(product);
+        guard.write(() -&gt; redis.opsForValue().set(key(product.id()), value, ttl));
+    }
+
+    /** Si el DEL no sale, la copia vieja queda en Redis: se anota para reponerlo. */
+    public void evict(long id) {
+        if (!guard.write(() -&gt; redis.delete(key(id)))) {
+            pending.add(id);
+        }
+    }
+
+    @Scheduled(fixedDelay = 1000)
+    void replayPending() {
+        if (pending.isEmpty() || !guard.healthy()) {
+            return;
+        }
+        int done = 0;
+        for (Long id : List.copyOf(pending)) {
+            if (!guard.write(() -&gt; redis.delete(key(id)))) {
+                break;
+            }
+            pending.remove(id);
+            done++;
+        }
+        if (done &gt; 0) {
+            log.info("invalidaciones repuestas: {}, pendientes: {}", done, pending.size());
+        }
+    }
+
+    public int pending() {
+        return pending.size();
+    }
+
+    /** La versión que tiene Redis de cada producto; null si Redis no contestó. */
+    public Map&lt;Long, Long&gt; versions(List&lt;Long&gt; ids) {
+        List&lt;String&gt; keys = ids.stream().map(RedisCache::key).toList();
+        List&lt;String&gt; values = guard.read(() -&gt; redis.opsForValue().multiGet(keys));
+        if (values == null) {
+            return null;
+        }
+        Map&lt;Long, Long&gt; versions = new HashMap&lt;&gt;();
+        for (int i = 0; i &lt; ids.size(); i++) {
+            if (values.get(i) != null) {
+                versions.put(ids.get(i), json.readValue(values.get(i), Product.class).version());
+            }
+        }
+        return versions;
+    }
+
+    /** Para las pruebas. */
+    public void clearPending() {
+        pending.clear();
+    }
+
+    static String key(long id) {
+        return "product:" + id;
+    }
+}</code></pre>
+
+      <p>Cuánto le quita la caché local a Redis se calcula a mano. Cada pod recibe la mitad de las 28.5 lecturas, 14.25 por segundo, repartidas en 200 productos: cada producto se lee 0.071 veces por segundo en cada pod. Después de que una lectura llena la copia, en los 5&#8239;s siguientes llegan, en promedio, 0.071 × 5 = 0.36 lecturas más del mismo producto en el mismo pod. Por cada lectura que va a Redis hay 0.36 que no: la caché local atiende 0.36 / 1.36, cerca del 26&#8239;%.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cache-aside, con dos niveles y borrar al escribir. Borrar es más simple que escribir la copia nueva: dos cambios seguidos del mismo producto no pueden dejar el más viejo en Redis, porque ninguno escribe en Redis. Una entrada de Caffeine por producto, con la hora de carga adentro, en lugar de dos cachés con dos TTL: la misma copia es fresca 5&#8239;s y de reserva 10 minutos.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>@Cacheable</code> de Spring, que cubre un nivel con un TTL; servir la copia vieja cuando la base no atiende no cabe en la anotación. También <code>refreshAfterWrite</code> de Caffeine: después de los 5&#8239;s devuelve la copia vieja en el acto y recarga en otro hilo, así que sirve lo viejo aunque la base esté sana. Aquí lo viejo es solo para cuando la base no puede.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Una carrera que este proyecto deja a la vista. Una lectura no encuentra el producto en Redis y lo lee de la base, en la versión 4. Mientras tanto, un cambio guarda la versión 5 y borra la clave. La lectura termina y escribe su versión 4: Redis queda con el precio viejo hasta que la clave vence, 60&#8239;s. A03 lo resuelve escribiendo la versión nueva en lugar de borrar, y descartando con un script de Lua la escritura que trae una versión más vieja (A03, paso 2). Aquí la vas a contar con <code>/api/consistency</code>. La caché local del otro pod, además, no se entera de los cambios: sirve su copia hasta que cumple 5&#8239;s.</dd></div>
+      </dl>
+
+      <h3 id="paso-timeouts">Paso 4. Timeouts cortos</h3>
+
+      <p>No hay código nuevo: los timeouts están en <code>application.yaml</code>, cada uno con su variable. Lo que hay es una cuenta. Lettuce espera 60&#8239;s a que Redis conteste un comando. Si Redis no contesta, cada lectura queda colgada 60&#8239;s, y la prueba sigue mandando 30 por segundo. Por la ley de Little, lo que hay adentro del sistema es lo que llega por lo que tarda cada uno: 30 por segundo × 60&#8239;s = 1&#8239;800 requests en espera. Ningún servicio con 200 hilos por pod, el máximo de Tomcat por defecto <span class="badge badge--doc">Documentado</span>, aguanta eso.</p>
+
+      <p>k6 no llega a mandar tanto. Cada VU espera su respuesta hasta 10&#8239;s, el timeout de la request en <code>carga.js</code>, y hay 30 VUs: 30 / 10&#8239;s = 3 requests por segundo salen de verdad, y las otras 27 por segundo quedan en <code>dropped_iterations</code>. Del lado de la app, cada una de esas 3 por segundo retiene un hilo al menos 60&#8239;s, aunque k6 ya se haya ido: 3 × 60 = 180 hilos ocupados entre los dos pods. El servicio está vivo, contesta las probes, y no atiende a nadie.</p>
+
+      <p>El timeout corto sale del presupuesto de la request. k6 pide que el p95 quede por debajo de 300&#8239;ms; una lectura de la base tarda 200&#8239;ms; a Redis le quedan 100&#8239;ms. Un Redis sano, en la misma red, contesta un <code>GET</code> de una clave chica en menos de un milisegundo: 100&#8239;ms es cien veces eso, y no se dispara por una pausa normal. La conexión nueva tiene 500&#8239;ms y se paga solo al reconectar. Y una lectura que espera más de 1&#8239;s por una conexión de la base ya se pasó del presupuesto: HikariCP la corta ahí.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Cada timeout se deriva del presupuesto de la request, de afuera hacia adentro, como en <a href="../modules/m08-resiliencia.html#timeouts">M08. Timeouts y deadlines</a>. Un timeout no arregla nada: decide cuánto cuesta cada falla. Con 100&#8239;ms, una lectura con Redis caído cuesta 100&#8239;ms más la base, no 60&#8239;s.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Reintentar contra Redis. Para una caché, el plan B de un miss ya existe: la base. Un reintento contra un Redis caído dobla la espera y no trae nada, y contra un Redis lento le suma carga justo cuando menos puede (<a href="../modules/m08-resiliencia.html#reintentos">M08. Reintentos</a>).</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Lo que el timeout no arregla, y que E2 va a mostrar: cada lectura sigue pagando 100&#8239;ms en cada comando a Redis, el <code>GET</code> y después el <code>SET</code>, y todas las lecturas van a la base, 28.5 por segundo contra 20 que puede atender. La base se satura igual, solo que más rápido. Y un timeout más bajo que la latencia normal de Redis convierte la lentitud de siempre en fallas.</dd></div>
+      </dl>
+
+      <h3 id="paso-breaker">Paso 5. El circuit breaker delante de Redis</h3>
+
+      <p>Todo lo que va a Redis pasa por <code>RedisGuard</code>. Con el breaker cerrado, la llamada sale, y si falla o tarda más de 50&#8239;ms, cuenta. Cuando la mitad de las últimas 20 llamadas falló, el breaker se abre, y durante 5&#8239;s ninguna llamada sale: una lectura se trata como un miss, en microsegundos, y una escritura como no hecha. Después deja pasar tres llamadas de prueba. Si salen bien, se cierra; si no, se abre otros 5&#8239;s.</p>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/resilience/RedisGuard.java"><code>package lab.catalogo.resilience;
+
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Supplier;
+
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker.State;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Todo lo que va a Redis pasa por aquí. Con el breaker cerrado, la llamada sale; si falla, cuenta.
+ * Con el breaker abierto, ni se intenta: la lectura se trata como un miss y la escritura como no hecha.
+ * Sin breaker (el experimento sin defensas), cada llamada paga su timeout entero.
+ */
+public class RedisGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(RedisGuard.class);
+
+    private final CircuitBreaker breaker;
+    private final boolean enabled;
+    private final LongAdder failures = new LongAdder();
+    private final LongAdder skipped = new LongAdder();
+
+    /** onOpen corre cada vez que el breaker se abre: en la aplicación, tira la conexión a Redis. */
+    public RedisGuard(CircuitBreaker breaker, boolean enabled, Runnable onOpen) {
+        this.breaker = breaker;
+        this.enabled = enabled;
+        breaker.getEventPublisher().onStateTransition(event -&gt; {
+            State to = event.getStateTransition().getToState();
+            log.warn("breaker {} -&gt; {}", event.getStateTransition().getFromState(), to);
+            if (to == State.OPEN) {
+                try {
+                    onOpen.run();
+                } catch (RuntimeException e) {
+                    log.warn("no se pudo tirar la conexión a Redis: {}", e.toString());
+                }
+            }
+        });
+    }
+
+    /** Una lectura: devuelve null si la clave no está, si Redis falla o si el breaker no la deja salir. */
+    public &lt;T&gt; T read(Supplier&lt;T&gt; call) {
+        try {
+            return enabled ? breaker.executeSupplier(call) : call.get();
+        } catch (CallNotPermittedException e) {
+            skipped.increment();
+            return null;
+        } catch (RuntimeException e) {
+            failures.increment();
+            return null;
+        }
+    }
+
+    /** Una escritura: devuelve false si no se pudo hacer. */
+    public boolean write(Runnable call) {
+        return read(() -&gt; {
+            call.run();
+            return Boolean.TRUE;
+        }) != null;
+    }
+
+    /** Si vale la pena intentar algo que puede esperar, como reponer las invalidaciones pendientes. */
+    public boolean healthy() {
+        return !enabled || breaker.getState() == State.CLOSED;
+    }
+
+    public String state() {
+        return enabled ? breaker.getState().name() : "DISABLED";
+    }
+
+    public long takeFailures() {
+        return failures.sumThenReset();
+    }
+
+    public long takeSkipped() {
+        return skipped.sumThenReset();
+    }
+
+    /** Para las pruebas: vuelve a cerrar el breaker y borra sus cuentas. */
+    public void reset() {
+        breaker.reset();
+        failures.reset();
+        skipped.reset();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/resilience/ResilienceConfig.java"><code>package lab.catalogo.resilience;
+
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
+import lab.catalogo.AppProps;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+
+@Configuration(proxyBeanMethods = false)
+public class ResilienceConfig {
+
+    @Bean
+    CircuitBreaker redisBreaker(AppProps props) {
+        AppProps.Redis.Breaker b = props.redis().breaker();
+        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+                // Mira las últimas 20 llamadas, y no decide nada hasta tener 10.
+                .slidingWindowType(SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(b.window())
+                .minimumNumberOfCalls(b.minimumCalls())
+                // Se abre si falla la mitad, o si la mitad tarda más de 50 ms: un Redis lento también es un Redis caído.
+                .failureRateThreshold(b.failureRate())
+                .slowCallDurationThreshold(b.slowCall())
+                .slowCallRateThreshold(b.failureRate())
+                // Abierto 5 s; después deja pasar 3 llamadas de prueba.
+                .waitDurationInOpenState(b.openFor())
+                .permittedNumberOfCallsInHalfOpenState(b.halfOpenCalls())
+                .build();
+        return CircuitBreaker.of("redis", config);
+    }
+
+    @Bean
+    RedisGuard redisGuard(CircuitBreaker redisBreaker, AppProps props, LettuceConnectionFactory redis) {
+        // Al abrirse, tira la conexión compartida. Puede estar viva para el cliente y muerta del otro lado;
+        // la llamada de prueba abre una nueva, y en modo Sentinel le pregunta antes quién es el master.
+        return new RedisGuard(redisBreaker, props.redis().breaker().enabled(), redis::resetConnection);
+    }
+
+    @Bean
+    DbGate dbGate(AppProps props) {
+        AppProps.Db.Gate g = props.db().gate();
+        BulkheadConfig config = BulkheadConfig.custom()
+                .maxConcurrentCalls(g.maxConcurrent())
+                .maxWaitDuration(g.maxWait())
+                .build();
+        return new DbGate(Bulkhead.of("db", config), g.enabled());
+    }
+}</code></pre>
+
+      <p>Hay dos detalles que no son del breaker de libro. El primero: al abrirse, tira la conexión compartida con <code>resetConnection()</code>. Cuando el nodo de Redis se apaga de golpe, la app puede enterarse o no. Si al morir Redis alcanzó a salir el aviso de cierre de TCP, Lettuce sabe que está desconectado y reintenta conectarse, cada vez más espaciado, hasta 30&#8239;s entre intentos <span class="badge badge--doc">Documentado</span>. Si no salió, Lettuce cree que la conexión sigue viva, y cada comando espera su timeout por una respuesta que no va a llegar: TCP tarda unos 15 minutos en rendirse <span class="badge badge--doc">Documentado</span>, y Redis puede volver mucho antes sin que la app se entere. Tirar la conexión al abrirse resuelve los dos casos igual: la llamada de prueba, 5&#8239;s después, abre una conexión nueva.</p>
+
+      <p>El segundo: un <code>DEL</code> que no sale deja la copia vieja en Redis. <code>RedisCache</code> lo anota en <code>pending</code>, y una tarea programada lo repone cada segundo mientras el breaker esté cerrado. Si Redis volvió vacío, el <code>DEL</code> no borra nada, y no hace daño.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un breaker por dependencia, contado por llamadas: con 28.5 lecturas por segundo, 20 llamadas son menos de un segundo de historia, y 10 como mínimo evitan que dos fallas sueltas lo abran. Las llamadas lentas cuentan como fallas, porque un Redis que contesta en 80&#8239;ms le cuesta a cada request casi lo mismo que uno caído. El plan B de cada operación es el que ya existía: la lectura va a la base, el <code>DEL</code> se repone después, y el <code>SET</code> se pierde sin daño. <a href="../modules/m08-resiliencia.html#breaker">M08. Circuit breakers y bulkheads</a>.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>REJECT_COMMANDS</code> en las opciones de Lettuce, que rechaza los comandos en el acto mientras está desconectado en lugar de guardarlos hasta su timeout. Sirve cuando Lettuce sabe que está desconectado, y no cuando cree que la conexión sigue viva. Lo mismo pasa con el keepalive de TCP y <code>TCP_USER_TIMEOUT</code>, que detectan la conexión muerta en el kernel: necesitan el transporte nativo de Netty y tardan segundos. El breaker la ve en diez llamadas, con cualquier transporte.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Sin tráfico, el breaker no pasa solo a medio abrir: Resilience4j espera a la siguiente llamada después de los 5&#8239;s, salvo que actives la transición automática. <span class="badge badge--doc">Documentado</span> El tablero puede decir <code>breaker=OPEN</code> mucho después de que Redis volvió, si nadie lee. Y <code>pending</code> vive en la memoria del pod: si el pod muere con invalidaciones anotadas, se pierden, y las copias viejas duran hasta que vence su clave, 60&#8239;s como mucho.</dd></div>
+      </dl>
+
+      <h3 id="paso-compuerta">Paso 6. La compuerta delante de la base</h3>
+
+      <p>Sin Redis, todas las lecturas van a la base, y la base atiende 20 por segundo. Sin compuerta, las que no caben esperan en HikariCP hasta 1&#8239;s por una conexión, con un hilo de Tomcat ocupado, y después fallan igual: la latencia sube para todos. La compuerta deja entrar tantas lecturas a la vez como conexiones hay, dos por pod, y la tercera no espera: recibe un 503 con <code>Retry-After: 1</code> en microsegundos. Antes del 503, <code>ProductService</code> prueba la copia local vieja, si el modo es <code>stale</code>.</p>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/resilience/DbGate.java"><code>package lab.catalogo.resilience;
+
+import java.util.function.Supplier;
+
+import io.github.resilience4j.bulkhead.Bulkhead;
+import lab.catalogo.web.Shed;
+
+/**
+ * La compuerta delante de la base: deja pasar tantas lecturas a la vez como conexiones tiene el pool,
+ * y a la que sobra la rechaza en el acto con un 503. Es load shedding: mejor un no rápido que un sí
+ * que llega tarde y, mientras espera, ocupa un hilo.
+ */
+public class DbGate {
+
+    private final Bulkhead bulkhead;
+    private final boolean enabled;
+
+    public DbGate(Bulkhead bulkhead, boolean enabled) {
+        this.bulkhead = bulkhead;
+        this.enabled = enabled;
+    }
+
+    public &lt;T&gt; T call(Supplier&lt;T&gt; query) {
+        if (!enabled) {
+            return query.get();
+        }
+        // Con maxWaitDuration en cero, no espera: hay lugar o no lo hay.
+        if (!bulkhead.tryAcquirePermission()) {
+            throw new Shed();
+        }
+        try {
+            return query.get();
+        } finally {
+            bulkhead.onComplete();
+        }
+    }
+
+    /** Cuántas lecturas más entran ahora mismo. */
+    public int available() {
+        return enabled ? bulkhead.getMetrics().getAvailableConcurrentCalls() : -1;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Limitar por concurrencia, no por tasa: un semáforo con <code>tryAcquirePermission()</code>, el <code>Bulkhead</code> de Resilience4j. Si la base se pone más lenta, la misma concurrencia deja pasar menos lecturas por segundo, sin cambiar nada: es la ley de Little al revés. Es el load shedding de <a href="../modules/m08-resiliencia.html#shedding">M08. Load shedding</a>: mejor atender bien a una parte que mal a todos.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Dejar que HikariCP sea el límite: rechaza igual, pero después de 1&#8239;s de espera. Un rate limiter de 20 por segundo: deja entrar 20 aunque la base esté atendiendo 5. Y <code>@ConcurrencyLimit</code> de Spring Framework 7, que limita la concurrencia, pero por defecto hace esperar al que no entra.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Los cambios de precio usan el mismo pool y no pasan por la compuerta. Un <code>PUT</code> puede tomar una de las dos conexiones, y una lectura que pasó la compuerta espera en HikariCP a que se libere. Son 1.5 por segundo de pocos milisegundos cada uno, así que pasa poco, pero pasa. Y la compuerta es por pod: con más pods, la suma de los pools tiene que caber en el <code>default_pool_size</code> de PgBouncer.</dd></div>
+      </dl>
+
+      <h3 id="paso-mirar">Paso 7. Mirar: el tablero y las copias viejas</h3>
+
+      <p>Mientras corre una prueba, cada pod escribe una línea por segundo en su log. <code>scripts/mira.sh</code> junta las de los dos pods, con los cambios del breaker y las invalidaciones repuestas.</p>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/resilience/Tablero.java"><code>package lab.catalogo.resilience;
+
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.concurrent.atomic.LongAccumulator;
+import java.util.concurrent.atomic.LongAdder;
+
+import lab.catalogo.cache.RedisCache;
+import lab.catalogo.products.ProductService.Source;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * Una línea por segundo en el log de cada pod: cuántas lecturas atendió y de dónde salieron,
+ * cuántas rechazó, cómo está el breaker y la lectura más lenta del segundo. Es lo que miras
+ * mientras corre la prueba.
+ */
+@Component
+public class Tablero {
+
+    private static final Logger log = LoggerFactory.getLogger("tablero");
+
+    private final Map&lt;Source, LongAdder&gt; served = new EnumMap&lt;&gt;(Source.class);
+    private final LongAdder shed = new LongAdder();
+    private final LongAdder failed = new LongAdder();
+    private final LongAccumulator maxMillis = new LongAccumulator(Math::max, 0);
+
+    private final RedisGuard guard;
+    private final RedisCache redis;
+    private final DbGate gate;
+
+    public Tablero(RedisGuard guard, RedisCache redis, DbGate gate) {
+        this.guard = guard;
+        this.redis = redis;
+        this.gate = gate;
+        for (Source source : Source.values()) {
+            served.put(source, new LongAdder());
+        }
+    }
+
+    public void served(Source source, long startNanos) {
+        served.get(source).increment();
+        took(startNanos);
+    }
+
+    public void shed(long startNanos) {
+        shed.increment();
+        took(startNanos);
+    }
+
+    public void failed(long startNanos) {
+        failed.increment();
+        took(startNanos);
+    }
+
+    private void took(long startNanos) {
+        maxMillis.accumulate((System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    @Scheduled(fixedRate = 1000)
+    void print() {
+        long l1 = served.get(Source.L1).sumThenReset();
+        long stale = served.get(Source.L1_STALE).sumThenReset();
+        long fromRedis = served.get(Source.REDIS).sumThenReset();
+        long db = served.get(Source.DB).sumThenReset();
+        long rejected = shed.sumThenReset();
+        long errors = failed.sumThenReset();
+        long redisFailures = guard.takeFailures();
+        long redisSkipped = guard.takeSkipped();
+        long max = maxMillis.getThenReset();
+        long total = l1 + stale + fromRedis + db + rejected + errors;
+        String state = guard.state();
+        // En silencio no imprime nada, salvo que el breaker no esté cerrado.
+        if (total == 0 &amp;&amp; redisFailures == 0 &amp;&amp; (state.equals("CLOSED") || state.equals("DISABLED"))) {
+            return;
+        }
+        log.info("lecturas={} l1={} viejas={} redis={} db={} rechazos={} errores={} | redis: fallas={} saltadas={} breaker={} pendientes={} | compuerta libre={} | max={}ms",
+                total, l1, stale, fromRedis, db, rejected, errors,
+                redisFailures, redisSkipped, state, redis.pending(), gate.available(), max);
+    }
+}</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Campo</th><th>Qué cuenta, en el último segundo</th></tr></thead>
+          <tbody>
+            <tr><td><code>lecturas</code></td><td>Todas las lecturas de un producto que terminaron, bien o mal.</td></tr>
+            <tr><td><code>l1</code>, <code>viejas</code>, <code>redis</code>, <code>db</code></td><td>De dónde salió cada una que salió bien: la copia local fresca, la copia local vieja, Redis o la base.</td></tr>
+            <tr><td><code>rechazos</code>, <code>errores</code></td><td>Los 503 de la compuerta y los 500, por ejemplo de HikariCP.</td></tr>
+            <tr><td><code>fallas</code>, <code>saltadas</code></td><td>Las llamadas a Redis que fallaron, y las que el breaker no dejó salir.</td></tr>
+            <tr><td><code>breaker</code></td><td><code>CLOSED</code>, <code>OPEN</code>, <code>HALF_OPEN</code>, o <code>DISABLED</code> si el modo no lo usa.</td></tr>
+            <tr><td><code>pendientes</code></td><td>Las invalidaciones que esperan a Redis.</td></tr>
+            <tr><td><code>compuerta libre</code></td><td>Cuántos lugares quedaban libres en ese momento; <code>-1</code> si el modo no la usa.</td></tr>
+            <tr><td><code>max</code></td><td>La lectura más lenta del segundo.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre data-lang="java" data-file="src/main/java/lab/catalogo/products/ConsistencyController.java"><code>package lab.catalogo.products;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import lab.catalogo.cache.LocalCache;
+import lab.catalogo.cache.RedisCache;
+import lab.catalogo.products.ProductRepository.VersionRow;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Compara la versión de cada producto en la base con la que tienen Redis y la caché local de este pod.
+ * Una copia con versión menor es una copia vieja: alguien cambió el producto y la invalidación no llegó.
+ */
+@RestController
+public class ConsistencyController {
+
+    public record Side(int cached, int stale, List&lt;Long&gt; staleIds) {
+    }
+
+    /** redis es null si Redis no contestó. */
+    public record Report(String pod, int products, Side redis, Side l1, int pendingInvalidations) {
+    }
+
+    private final ProductRepository products;
+    private final RedisCache redis;
+    private final LocalCache l1;
+    private final String pod;
+
+    public ConsistencyController(ProductRepository products, RedisCache redis, LocalCache l1,
+                                 @Value("${POD_NAME:local}") String pod) {
+        this.products = products;
+        this.redis = redis;
+        this.l1 = l1;
+        this.pod = pod;
+    }
+
+    @GetMapping("/api/consistency")
+    public Report check() {
+        List&lt;VersionRow&gt; rows = products.versions();
+        Map&lt;Long, Long&gt; inRedis = redis.versions(rows.stream().map(VersionRow::id).toList());
+        Map&lt;Long, LocalCache.Entry&gt; inL1 = l1.snapshot();
+
+        Side redisSide = inRedis == null ? null : compare(rows, inRedis);
+        Map&lt;Long, Long&gt; l1Versions = new HashMap&lt;&gt;();
+        inL1.forEach((id, entry) -&gt; l1Versions.put(id, entry.product().version()));
+        return new Report(pod, rows.size(), redisSide, compare(rows, l1Versions), redis.pending());
+    }
+
+    private static Side compare(List&lt;VersionRow&gt; rows, Map&lt;Long, Long&gt; cached) {
+        List&lt;Long&gt; stale = rows.stream()
+                .filter(row -&gt; cached.containsKey(row.id()) &amp;&amp; cached.get(row.id()) &lt; row.version())
+                .map(VersionRow::id)
+                .toList();
+        int present = (int) rows.stream().filter(row -&gt; cached.containsKey(row.id())).count();
+        return new Side(present, stale.size(), stale.size() &gt; 20 ? stale.subList(0, 20) : stale);
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un log por segundo en lugar de métricas con Prometheus y Grafana: para seguir una falla de 60&#8239;s alcanza, y se mira con <code>kubectl logs</code>. Las copias viejas se miden comparando la columna <code>version</code>, que sube en cada cambio, con la versión de cada copia.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Las métricas de Resilience4j en Micrometer: son las mismas cuentas, pero piden un Prometheus que las lea. A14 es el proyecto de la observabilidad.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que <code>mira.sh</code> no muestre nada después de <code>modo.sh</code>: sigue a los pods que existían cuando arrancó, y <code>modo.sh</code> los recrea. Arráncalo después. Y que el tablero calle: no imprime si nadie lee y el breaker está cerrado.</dd></div>
+      </dl>
+
+      <h3 id="paso-desplegar">Paso 8. La imagen y el despliegue</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package
+docker build -t localhost:5000/catalogo:1 .
+docker push localhost:5000/catalogo:1</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/redis-solo.yaml"><code># Parte 1: un solo Redis, sin réplica. Vive en k3s-agent1: apagar ese nodo es apagar la caché compartida.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: catalogo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k3s-agent1
+      # Los agentes tienen el taint lab=fallas: solo entra lo que lo tolera.
+      tolerations:
+        - { key: lab, operator: Equal, value: fallas, effect: NoSchedule }
+      containers:
+        - name: redis
+          image: redis:8.10
+          # Caché pura: sin RDB ni AOF. Si el proceso se reinicia, vuelve vacío.
+          args: ["--save", "", "--appendonly", "no", "--protected-mode", "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: catalogo
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/app.yaml"><code>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalogo
+  namespace: catalogo
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: catalogo
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: catalogo
+    spec:
+      # Los dos pods en el servidor, el nodo que nunca se apaga: lo que se rompe es Redis, no la app.
+      nodeSelector:
+        kubernetes.io/hostname: k3s-server
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: app
+          image: localhost:5000/catalogo:1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Las defensas, todas puestas. scripts/modo.sh las cambia para cada experimento.
+            - name: REDIS_TIMEOUT
+              value: 100ms
+            - name: REDIS_CONNECT_TIMEOUT
+              value: 500ms
+            - name: DB_POOL_TIMEOUT
+              value: "1000"
+            - name: BREAKER
+              value: "true"
+            - name: GATE
+              value: "true"
+            - name: L1
+              value: stale
+            # Parte 1: un solo Redis detrás de un Service. En la parte 2 manda Sentinel (ver el paso 8).
+            - name: REDIS_HOST
+              value: redis
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DB_URL
+              value: jdbc:postgresql://catalogo-db-pooler-rw:5432/app
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: catalogo-db-app, key: username }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: catalogo-db-app, key: password }
+            # Flyway va directo al primario, sin PgBouncer, como en A00.
+            - name: SPRING_FLYWAY_URL
+              value: jdbc:postgresql://catalogo-db-rw:5432/app
+            - name: SPRING_FLYWAY_USER
+              valueFrom:
+                secretKeyRef: { name: catalogo-db-app, key: username }
+            - name: SPRING_FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: catalogo-db-app, key: password }
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 512Mi
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # La readiness no mira a Redis: si Redis cae, el pod sigue recibiendo tráfico y lo atiende como puede.
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo
+  namespace: catalogo
+spec:
+  selector:
+    app: catalogo
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/redis-solo.yaml
+kubectl -n catalogo rollout status deploy/redis --timeout=120s
+kubectl apply -f k8s/app.yaml
+kubectl -n catalogo rollout status deploy/catalogo --timeout=300s
+kubectl -n catalogo get pods -o wide</code></pre>
+
+      <p>Redis tiene que estar en <code>k3s-agent1</code>, y los dos pods de <code>catalogo</code> en <code>k3s-server</code>. Para probarlo a mano, abre un túnel en otra terminal; <code>port-forward</code> a un Service elige uno de sus pods y le manda todo. <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="bash"><code>kubectl -n catalogo port-forward svc/catalogo 8080:8080     # en otra terminal; Ctrl+C lo cierra</code></pre>
+
+<pre data-lang="bash"><code>curl -si localhost:8080/api/products/7 | grep -E '^(HTTP|X-)'
+curl -si localhost:8080/api/products/7 | grep -E '^(HTTP|X-)'
+sleep 6
+curl -si localhost:8080/api/products/7 | grep -E '^(HTTP|X-)'
+curl -s -X PUT localhost:8080/api/products/7/price -H 'Content-Type: application/json' -d '{"priceCents": 1990}'
+curl -si localhost:8080/api/products/7 | grep -E '^(HTTP|X-)'
+curl -s localhost:8080/api/consistency</code></pre>
+
+      <p>Las tres primeras lecturas tienen que decir <code>X-Source: db</code>, <code>l1</code> y <code>redis</code>: la primera llenó las dos cachés, la segunda encontró la copia local fresca, y la tercera, 6&#8239;s después, la encontró vencida y fue a Redis. El cambio de precio devuelve <code>"version": 2</code>, y la lectura siguiente vuelve a decir <code>db</code>, porque el cambio borró las dos copias. En <code>/api/consistency</code>, Redis tiene una copia, la del producto 7, y ninguna vieja.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Redis como un Deployment atado a <code>k3s-agent1</code>, sin RDB ni AOF: una caché pura, que vuelve vacía si el proceso se reinicia. La app, con dos réplicas en <code>k3s-server</code> y una readiness que no mira a Redis.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un StatefulSet con un disco para Redis. Volver con los datos tapa un problema que quieres ver: la caché que vuelve fría, y la base que recibe todo hasta que se llena. Con el nodo apagado, además, el disco no ayuda: está en el nodo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Cambiar el código y volver a empujar la misma etiqueta <code>:1</code>. Con una etiqueta que no es <code>latest</code>, Kubernetes usa <code>imagePullPolicy: IfNotPresent</code> <span class="badge badge--doc">Documentado</span>: el nodo ya tiene una <code>:1</code> y no baja la nueva. Usa <code>:2</code> y cámbiala en <code>app.yaml</code>. Y si Redis queda en <code>Pending</code>, le falta la toleration del taint.</dd></div>
+      </dl>
+
+      <h3 id="paso-carga">Paso 9. La prueba de carga, adentro del clúster</h3>
+
+<pre data-lang="javascript" data-file="k6/carga.js"><code>// 30 requests por segundo durante 150 s contra el catálogo: 95 % lecturas de un producto al azar
+// y 5 % cambios de precio. Las métricas se separan en tres fases: antes (0 a 30 s), durante (30 a 90 s,
+// cuando algo está roto) y después (90 a 150 s). Corre dentro del clúster como un Job (k8s/carga.yaml).
+import http from 'k6/http';
+import exec from 'k6/execution';
+import { Counter } from 'k6/metrics';
+
+const BASE = __ENV.BASE || 'http://catalogo:8080';
+const PRODUCTOS = 200;
+const FASES = ['antes', 'durante', 'despues'];
+
+// Los 503 de la compuerta y las respuestas con la copia local vieja, contados por fase.
+const rechazos = new Counter('rechazos');
+const viejas = new Counter('viejas');
+
+// El objetivo por fase: p95 por debajo de 300 ms y menos de 1 % de errores. Los contadores llevan
+// un umbral que siempre se cumple, para que el resumen los muestre separados por fase.
+const thresholds = {};
+for (const fase of FASES) {
+  thresholds[`http_req_duration{fase:${fase}}`] = ['p(95)&lt;300'];
+  thresholds[`http_req_failed{fase:${fase}}`] = ['rate&lt;0.01'];
+  thresholds[`rechazos{fase:${fase}}`] = ['count&gt;=0'];
+  thresholds[`viejas{fase:${fase}}`] = ['count&gt;=0'];
+}
+
+export const options = {
+  scenarios: {
+    carga: {
+      // Llegadas a ritmo fijo, como usuarios de verdad: si el servicio se pone lento, no bajan el ritmo.
+      executor: 'constant-arrival-rate',
+      rate: 30,
+      timeUnit: '1s',
+      duration: '150s',
+      // Con 30 VUs y 30 llegadas por segundo, alcanzan mientras cada request tarde menos de 1 s en promedio.
+      // Si tardan más, k6 no tiene con quién mandar la siguiente y la cuenta en dropped_iterations.
+      preAllocatedVUs: 30,
+      maxVUs: 30,
+    },
+  },
+  thresholds,
+  setupTimeout: '180s',
+  summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
+};
+
+// Antes de medir, lee los 200 productos para que Redis empiece lleno. De a 4 a la vez,
+// y lo que la compuerta rechaza se vuelve a pedir.
+export function setup() {
+  let faltan = Array.from({ length: PRODUCTOS }, (_, i) =&gt; i + 1);
+  for (let vuelta = 1; vuelta &lt;= 10 &amp;&amp; faltan.length &gt; 0; vuelta++) {
+    const fallaron = [];
+    for (let i = 0; i &lt; faltan.length; i += 4) {
+      const ids = faltan.slice(i, i + 4);
+      const respuestas = http.batch(ids.map((id) =&gt; ['GET', `${BASE}/api/products/${id}`, null,
+        { timeout: '60s', tags: { fase: 'calentar', name: 'calentar' } }]));
+      respuestas.forEach((r, j) =&gt; { if (r.status !== 200) fallaron.push(ids[j]); });
+    }
+    faltan = fallaron;
+  }
+  if (faltan.length &gt; 0) {
+    exec.test.abort(`No se pudieron leer ${faltan.length} productos al calentar: ¿la app está lista?`);
+  }
+  console.log('calentamiento listo');
+}
+
+export default function () {
+  const segundos = (Date.now() - exec.scenario.startTime) / 1000;
+  const fase = segundos &lt; 30 ? 'antes' : segundos &lt; 90 ? 'durante' : 'despues';
+  const id = 1 + Math.floor(Math.random() * PRODUCTOS);
+
+  if (Math.random() &lt; 0.05) {
+    const precio = 1000 + Math.floor(Math.random() * 9000);
+    http.put(`${BASE}/api/products/${id}/price`, JSON.stringify({ priceCents: precio }), {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: '10s',
+      tags: { fase, name: 'PUT /api/products/{id}/price' },
+    });
+    return;
+  }
+
+  const res = http.get(`${BASE}/api/products/${id}`, {
+    timeout: '10s',
+    tags: { fase, name: 'GET /api/products/{id}' },
+  });
+  if (res.status === 503) rechazos.add(1, { fase });
+  if (res.headers['X-Source'] === 'l1-stale') viejas.add(1, { fase });
+}</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/carga.yaml"><code># La prueba de carga como un Job: k6 corre dentro del clúster, al lado de la app, y le pega al Service.
+# El script está en el ConfigMap carga, que crea scripts/experimento.sh a partir de k6/carga.js.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: carga
+  namespace: catalogo
+spec:
+  # Sin reintentos: si k6 sale con error (un umbral no se cumplió, código 99), el Job queda Failed y se lee.
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: k3s-server
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0
+          args: ["run", "/scripts/carga.js"]
+          env:
+            - name: BASE
+              value: http://catalogo:8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: carga</code></pre>
+
+      <p>Llegadas a ritmo fijo: k6 empieza 30 iteraciones por segundo aunque las anteriores no hayan terminado, como usuarios que no se enteran de que el servicio anda mal. Con 30 VUs, alcanza mientras cada request tarde menos de 1&#8239;s en promedio: 30 VUs / 30 por segundo = 1&#8239;s, otra vez la ley de Little. Si tardan más, k6 no tiene con quién mandar la siguiente, y la cuenta en <code>dropped_iterations</code>. Un 503 cuenta como request fallida: k6 da por buenas las respuestas de 200 a 399. <span class="badge badge--doc">Documentado</span> Si algún umbral no se cumple, k6 sale con el código 99 <span class="badge badge--doc">Documentado</span>, y el Job queda en <code>Failed</code>.</p>
+
+<pre data-lang="bash" data-file="scripts/modo.sh"><code>#!/usr/bin/env bash
+# Cambia las defensas de la app para un experimento y espera a que los pods nuevos estén listos.
+# Uso: scripts/modo.sh &lt;e1|e2|e3|e4|e5&gt;
+#   GATE_WAIT=100ms scripts/modo.sh e4   la compuerta deja esperar hasta 100 ms por un lugar (por defecto, 0)
+#   e1  sin defensas: los timeouts que traen Lettuce (60 s y 10 s) y HikariCP (30 s)
+#   e2  timeouts cortos: 100 ms por comando, 500 ms por conexión, 1 s por una conexión a la base
+#   e3  e2 más el circuit breaker delante de Redis
+#   e4  e3 más la compuerta delante de la base (load shedding)
+#   e5  e4 más la caché local de Caffeine, que sirve lo viejo si la base no alcanza
+set -euo pipefail
+CORTOS="REDIS_TIMEOUT=100ms REDIS_CONNECT_TIMEOUT=500ms DB_POOL_TIMEOUT=1000"
+case "${1:?Uso: scripts/modo.sh &lt;e1|e2|e3|e4|e5&gt;}" in
+  e1) VARS="REDIS_TIMEOUT=60s REDIS_CONNECT_TIMEOUT=10s DB_POOL_TIMEOUT=30000 BREAKER=false GATE=false L1=off" ;;
+  e2) VARS="$CORTOS BREAKER=false GATE=false L1=off" ;;
+  e3) VARS="$CORTOS BREAKER=true GATE=false L1=off" ;;
+  e4) VARS="$CORTOS BREAKER=true GATE=true L1=off" ;;
+  e5) VARS="$CORTOS BREAKER=true GATE=true L1=stale" ;;
+  *) echo "Modo desconocido: $1"; exit 1 ;;
+esac
+# MODO_DESDE cambia siempre: obliga a recrear los pods aunque el modo sea el mismo,
+# así cada experimento empieza con la caché local vacía y el breaker cerrado.
+# shellcheck disable=SC2086
+kubectl -n catalogo set env deploy/catalogo $VARS GATE_WAIT="${GATE_WAIT:-0ms}" MODO="$1" MODO_DESDE="$(date +%s)"
+kubectl -n catalogo rollout status deploy/catalogo --timeout=180s</code></pre>
+
+<pre data-lang="bash" data-file="scripts/experimento.sh"><code>#!/usr/bin/env bash
+# Corre la prueba de carga de 150 s y, a los 30 s, rompe algo; a los 90 s lo arregla. Al final, el resumen de k6,
+# que también queda en resultados/&lt;nombre&gt;.txt.
+# Uso: scripts/experimento.sh &lt;nombre&gt; &lt;falla&gt;
+#   ninguna      sin falla: la línea de base
+#   nodo-redis   apaga k3s-agent1, el nodo del Redis solo (parte 1)
+#   nodo-master  apaga el nodo donde está el master que dicen los Sentinels (parte 2)
+#   congelar-master  congela ese nodo en lugar de apagarlo: los procesos se detienen, las conexiones no se cierran
+#   switchover   borra el pod del master: un cambio planeado, con preStop (parte 2)
+# Las horas van en UTC, como las de los logs de la app y de Sentinel.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export MSYS_NO_PATHCONV=1
+NOMBRE=${1:?Uso: scripts/experimento.sh &lt;nombre&gt; &lt;ninguna|nodo-redis|nodo-master|congelar-master|switchover&gt;}
+FALLA=${2:?Falta la falla: ninguna, nodo-redis, nodo-master, congelar-master o switchover}
+NS=catalogo
+COMPOSE="docker compose -f cluster/compose.yaml"
+mkdir -p resultados
+hora() { date -u +%T; }
+# Espera hasta que pasen N segundos desde que empezó la carga: cada comando también tarda.
+hasta() { while [ "$SECONDS" -lt "$1" ]; do sleep 0.2; done; }
+
+# 1. La prueba desde cero: el script de k6 en un ConfigMap y el Job que lo corre.
+kubectl -n $NS delete job carga --ignore-not-found --wait=true &gt; /dev/null
+kubectl -n $NS create configmap carga --from-file=k6/carga.js --dry-run=client -o yaml | kubectl apply -f - &gt; /dev/null
+kubectl apply -f k8s/carga.yaml &gt; /dev/null
+echo "$(hora) k6 calienta las cachés"
+
+# 2. El reloj de las fases empieza cuando k6 termina de calentar.
+until kubectl -n $NS logs job/carga 2&gt;/dev/null | grep -q 'calentamiento listo'; do sleep 1; done
+SECONDS=0
+echo "$(hora) Empieza la carga: 30 s antes, 60 s durante, 60 s después"
+
+# 3. A los 30 s, la falla. A los 90 s, la vuelta.
+hasta 30
+case "$FALLA" in
+  ninguna)
+    echo "$(hora) Sin falla" ;;
+  nodo-redis)
+    $COMPOSE kill agent1 &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Apagué k3s-agent1, con el Redis adentro"
+    hasta 90
+    $COMPOSE start agent1 &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Prendí k3s-agent1" ;;
+  nodo-master)
+    read -r POD NODO &lt;&lt;&lt; "$(scripts/master.sh)"
+    $COMPOSE kill "${NODO#k3s-}" &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Apagué $NODO, con el master $POD adentro"
+    hasta 90
+    $COMPOSE start "${NODO#k3s-}" &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Prendí $NODO" ;;
+  congelar-master)
+    read -r POD NODO &lt;&lt;&lt; "$(scripts/master.sh)"
+    $COMPOSE pause "${NODO#k3s-}" &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Congelé $NODO, con el master $POD adentro"
+    hasta 90
+    $COMPOSE unpause "${NODO#k3s-}" &gt; /dev/null 2&gt;&amp;1
+    echo "$(hora) Descongelé $NODO" ;;
+  switchover)
+    read -r POD NODO &lt;&lt;&lt; "$(scripts/master.sh)"
+    kubectl -n $NS delete pod "$POD" --wait=false &gt; /dev/null
+    echo "$(hora) Borré el pod $POD, el master, en $NODO" ;;
+  *)
+    echo "Falla desconocida: $FALLA"; exit 1 ;;
+esac
+
+# 4. Esperar a que k6 termine y guardar el resumen.
+until [ -n "$(kubectl -n $NS get job carga -o jsonpath='{.status.completionTime}{.status.failed}')" ]; do sleep 2; done
+kubectl -n $NS logs job/carga &gt; "resultados/$NOMBRE.txt"
+CODIGO=$(kubectl -n $NS get pods -l job-name=carga \
+  -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.exitCode}')
+tail -n 60 "resultados/$NOMBRE.txt"
+echo
+case "$CODIGO" in
+  0) echo "$(hora) $NOMBRE: se cumplieron todos los umbrales" ;;
+  99) echo "$(hora) $NOMBRE: algún umbral no se cumplió (k6 salió con 99). Busca las líneas con ✗" ;;
+  *) echo "$(hora) $NOMBRE: k6 salió con $CODIGO. Mira resultados/$NOMBRE.txt" ;;
+esac</code></pre>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="fa10ct fa10cd">
+<title id="fa10ct">El reloj de un experimento</title>
+<desc id="fa10cd">Una línea de tiempo de 0 a 150 s, que empieza cuando k6 termina de calentar las cachés. De 0 a 30 s es la fase antes; de 30 a 90 s, la fase durante, con algo roto; de 90 a 150 s, la fase después. A los 30 s se apaga el nodo; a los 80 s, 50 s después, Kubernetes marca el nodo como NotReady; a los 90 s el nodo se prende, y Redis vuelve, vacío, cuando el nodo termina de arrancar.</desc>
+<text class="dg-tiny" x="60" y="26">0 s: termina el calentamiento</text>
+<text class="dg-tiny" x="740" y="26" text-anchor="end">150 s: k6 termina</text>
+<rect class="dg-box" x="60" y="38" width="136" height="38" rx="4"/>
+<text class="dg-label" x="128" y="62" text-anchor="middle">antes</text>
+<rect class="dg-bad" x="196" y="38" width="272" height="38" rx="4"/>
+<text class="dg-label" x="332" y="62" text-anchor="middle">durante: algo está roto</text>
+<rect class="dg-box" x="468" y="38" width="272" height="38" rx="4"/>
+<text class="dg-label" x="604" y="62" text-anchor="middle">después</text>
+<path class="sim-axis" d="M60 90 H740"/>
+<path class="sim-axis" d="M60 86 V94 M196 86 V94 M332 86 V94 M468 86 V94 M604 86 V94 M740 86 V94"/>
+<text class="sim-label" x="60" y="108" text-anchor="middle">0 s</text>
+<text class="sim-label" x="196" y="108" text-anchor="middle">30 s</text>
+<text class="sim-label" x="332" y="108" text-anchor="middle">60 s</text>
+<text class="sim-label" x="468" y="108" text-anchor="middle">90 s</text>
+<text class="sim-label" x="604" y="108" text-anchor="middle">120 s</text>
+<text class="sim-label" x="740" y="108" text-anchor="middle">150 s</text>
+<path class="dg-feedback" d="M196 114 V130"/>
+<text class="dg-fail-text" x="196" y="146" text-anchor="middle">kill del nodo</text>
+<path class="dg-feedback" d="M423 94 V166"/>
+<text class="dg-tiny" x="416" y="180" text-anchor="end">a los 80 s, Kubernetes marca el nodo NotReady</text>
+<path class="dg-feedback" d="M468 114 V130"/>
+<text class="dg-tiny" x="476" y="146">start del nodo</text>
+<text class="dg-tiny" x="476" y="180">Redis vuelve vacío cuando el nodo arranca</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.2.</b> El reloj de cada experimento. <code>experimento.sh</code> lo pone en cero cuando k6 avisa que terminó de calentar, y las fases de k6 cuentan desde el mismo momento. Kubernetes no arregla nada dentro de la ventana: tarda 50&#8239;s en marcar un nodo que dejó de reportarse como <code>NotReady</code> <span class="badge badge--doc">Documentado</span>, y recién ahí saca a Redis del Service. "Después" empieza a los 90&#8239;s para k6, pero para la app empieza cuando Redis contesta.</figcaption>
+      </figure>
+
+<pre data-lang="bash" data-file="scripts/mira.sh"><code>#!/usr/bin/env bash
+# El tablero de los dos pods de la app: una línea por segundo cada uno, más los cambios del breaker
+# y las invalidaciones repuestas. Arráncalo después de scripts/modo.sh: no ve a los pods que nacen después. Ctrl+C para salir.
+kubectl -n catalogo logs -l app=catalogo -f --prefix --since=1s --max-log-requests=4 \
+  | grep --line-buffered -E 'tablero|breaker|invalidaciones'</code></pre>
+
+<pre data-lang="bash" data-file="scripts/consistencia.sh"><code>#!/usr/bin/env bash
+# Compara las copias de Redis y de la caché local de cada pod con la base: /api/consistency de cada pod,
+# pedido a través del API server de Kubernetes, sin port-forward.
+export MSYS_NO_PATHCONV=1
+for P in $(kubectl -n catalogo get pods -l app=catalogo -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl get --raw "/api/v1/namespaces/catalogo/pods/$P:8080/proxy/api/consistency"
+  echo
+done</code></pre>
+
+<pre data-lang="bash" data-file="scripts/psql.sh"><code>#!/usr/bin/env bash
+# psql dentro del primario de CloudNativePG, en la base app: lo mismo que hace kubectl cnpg psql.
+# Uso: scripts/psql.sh -c "SELECT count(*) FROM products"
+PRIMARIO=$(kubectl -n catalogo get cluster catalogo-db -o jsonpath='{.status.currentPrimary}')
+exec kubectl -n catalogo exec -i "$PRIMARIO" -c postgres -- psql -d app -X -v ON_ERROR_STOP=1 "$@"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>k6 como un Job en <code>k3s-server</code>, al lado de la app, que le pega al Service. El generador de carga no comparte la suerte de los nodos que se apagan, y no pasa por un <code>port-forward</code>, que va a un solo pod y por el API server. Las tres fases son etiquetas de k6, con umbrales por fase, para que el resumen las muestre por separado. Antes de medir, <code>setup()</code> lee los 200 productos: cada prueba empieza con Redis lleno.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Gatling, como en A00 a A07: necesita un proyecto de Java aparte, y aquí la carga tiene que correr adentro del clúster. El k6-operator, con su recurso <code>TestRun</code>: es un operador más para lanzar un solo Job.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que <code>experimento.sh</code> se quede en "k6 calienta las cachés": el calentamiento no terminó, o k6 abortó porque la app no estaba lista. Mira <code>kubectl -n catalogo logs job/carga</code>. Y que <code>dropped_iterations</code> aparezca en la fase antes: la app ya estaba lenta sin falla, y el experimento no mide lo que crees.</dd></div>
+      </dl>
+
+      <h3 id="paso-sentinel">Paso 10. Un master, una réplica y tres Sentinels</h3>
+
+      <p>Esto es para la segunda parte: hazlo cuando termines los experimentos de la primera. Redis pasa a tener un master y una réplica, uno en cada agente, y tres Sentinels, uno por nodo, que vigilan al master y promueven a la réplica si deja de contestar.</p>
+
+<pre data-lang="yaml" data-file="k8s/redis-replicas.yaml"><code># Parte 2: un master y una réplica, uno en cada agente. Quién es el master lo deciden los Sentinels.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-scripts
+  namespace: catalogo
+data:
+  redis.sh: |
+    #!/bin/sh
+    # Arranca como réplica del master que digan los Sentinels. Si ninguno contesta (el primer arranque),
+    # redis-0 es el master y redis-1 su réplica.
+    YO="$(hostname).redis.catalogo.svc.cluster.local"
+    MASTER=""
+    for i in 0 1 2; do
+      MASTER=$(timeout 2 redis-cli -h "sentinel-$i.sentinel" -p 26379 --raw \
+        SENTINEL get-master-addr-by-name mymaster 2&gt;/dev/null | head -n 1)
+      [ -n "$MASTER" ] &amp;&amp; break
+    done
+    [ -n "$MASTER" ] || MASTER="redis-0.redis.catalogo.svc.cluster.local"
+    echo "Soy $YO; el master es $MASTER"
+
+    # Caché pura: sin RDB ni AOF. Cada instancia se anuncia con su nombre DNS, que no cambia, y no con su IP,
+    # que cambia cada vez que el pod se recrea.
+    set -- --save "" --appendonly no --protected-mode no --replica-announce-ip "$YO"
+    if [ "$MASTER" != "$YO" ]; then
+      set -- "$@" --replicaof "$MASTER" 6379
+    fi
+    exec redis-server "$@"
+
+  prestop.sh: |
+    #!/bin/sh
+    # Al borrar el pod del master: pide el failover, espera a que otro sea el master y corta a los clientes,
+    # que vuelven a preguntarle a Sentinel. En una réplica no hace nada.
+    YO="$(hostname).redis.catalogo.svc.cluster.local"
+    log() { echo "preStop: $*" &gt; /proc/1/fd/1; }
+    [ "$(redis-cli --raw ROLE | head -n 1)" = "master" ] || exit 0
+    master() {
+      for i in 0 1 2; do
+        M=$(timeout 2 redis-cli -h "sentinel-$i.sentinel" -p 26379 --raw \
+          SENTINEL get-master-addr-by-name mymaster 2&gt;/dev/null | head -n 1)
+        [ -n "$M" ] &amp;&amp; { echo "$M"; return; }
+      done
+    }
+    for i in 0 1 2; do
+      [ "$(timeout 2 redis-cli -h "sentinel-$i.sentinel" -p 26379 --raw SENTINEL FAILOVER mymaster 2&gt;/dev/null)" = "OK" ] \
+        &amp;&amp; { log "pedí el failover a sentinel-$i"; break; }
+    done
+    for _ in $(seq 1 25); do
+      M=$(master)
+      [ -n "$M" ] &amp;&amp; [ "$M" != "$YO" ] &amp;&amp; { log "el master ahora es $M"; break; }
+      sleep 1
+    done
+    redis-cli CLIENT KILL TYPE normal &gt; /dev/null
+    log "corté a los clientes"
+---
+# Headless: cada pod tiene su nombre DNS, redis-0.redis y redis-1.redis. Con publishNotReadyAddresses,
+# el nombre existe desde que el pod tiene IP, antes de estar listo.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: catalogo
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: catalogo
+spec:
+  serviceName: redis
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      # Uno en cada agente, nunca los dos en el mismo.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - { key: kubernetes.io/hostname, operator: In, values: [k3s-agent1, k3s-agent2] }
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: redis
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - { key: lab, operator: Equal, value: fallas, effect: NoSchedule }
+      # El preStop puede tardar hasta unos 25 s esperando el failover.
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: redis
+          image: redis:8.10
+          command: ["sh", "/scripts/redis.sh"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "/scripts/prestop.sh"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+      volumes:
+        - name: scripts
+          configMap:
+            name: redis-scripts</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/sentinel.yaml"><code># Tres Sentinels, uno por nodo. Si se apaga el nodo del master, quedan dos: alcanzan para el quórum de 2
+# y para la mayoría que elige quién hace el failover.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentinel-scripts
+  namespace: catalogo
+data:
+  sentinel.sh: |
+    #!/bin/sh
+    # Arma la configuración en cada arranque. Si otro Sentinel ya conoce al master, monitorea a ese;
+    # si nadie contesta (el primer arranque), a redis-0.
+    YO="$(hostname).sentinel.catalogo.svc.cluster.local"
+    MASTER=""
+    for i in 0 1 2; do
+      [ "sentinel-$i" = "$(hostname)" ] &amp;&amp; continue
+      MASTER=$(timeout 2 redis-cli -h "sentinel-$i.sentinel" -p 26379 --raw \
+        SENTINEL get-master-addr-by-name mymaster 2&gt;/dev/null | head -n 1)
+      [ -n "$MASTER" ] &amp;&amp; break
+    done
+    [ -n "$MASTER" ] || MASTER="redis-0.redis.catalogo.svc.cluster.local"
+    echo "Soy $YO; monitoreo a $MASTER"
+
+    # Sentinel reescribe su archivo: tiene que estar en un lugar con permiso de escritura.
+    cat &gt; /etc/sentinel/sentinel.conf &lt;&lt;EOF
+    port 26379
+    protected-mode no
+    sentinel resolve-hostnames yes
+    sentinel announce-hostnames yes
+    sentinel announce-ip $YO
+    sentinel monitor mymaster $MASTER 6379 2
+    sentinel down-after-milliseconds mymaster 5000
+    sentinel failover-timeout mymaster 20000
+    sentinel parallel-syncs mymaster 1
+    EOF
+    exec redis-sentinel /etc/sentinel/sentinel.conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentinel
+  namespace: catalogo
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: sentinel
+  ports:
+    - name: sentinel
+      port: 26379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sentinel
+  namespace: catalogo
+spec:
+  serviceName: sentinel
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sentinel
+  template:
+    metadata:
+      labels:
+        app: sentinel
+    spec:
+      # Uno por nodo: k3s-server, k3s-agent1 y k3s-agent2, en el orden que toque.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: sentinel
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+        - { key: lab, operator: Equal, value: fallas, effect: NoSchedule }
+      containers:
+        - name: sentinel
+          image: redis:8.10
+          command: ["sh", "/scripts/sentinel.sh"]
+          ports:
+            - name: sentinel
+              containerPort: 26379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "-p", "26379", "ping"]
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: config
+              mountPath: /etc/sentinel
+      volumes:
+        - name: scripts
+          configMap:
+            name: sentinel-scripts
+        - name: config
+          emptyDir: {}</code></pre>
+
+<pre data-lang="bash"><code>kubectl delete -f k8s/redis-solo.yaml
+kubectl apply -f k8s/redis-replicas.yaml
+kubectl -n catalogo rollout status statefulset/redis --timeout=180s
+kubectl apply -f k8s/sentinel.yaml
+kubectl -n catalogo rollout status statefulset/sentinel --timeout=180s
+kubectl -n catalogo get pods -l 'app in (redis, sentinel)' -o wide
+kubectl -n catalogo exec redis-1 -- redis-cli ROLE
+kubectl -n catalogo exec sentinel-0 -- redis-cli -p 26379 SENTINEL master mymaster \
+  | grep -A1 -E '^(flags|num-slaves|num-other-sentinels)$'</code></pre>
+
+      <p>Tiene que haber un pod de Redis en cada agente y un Sentinel en cada nodo. <code>ROLE</code> en <code>redis-1</code> empieza con <code>slave</code>: el comando conserva el nombre viejo de las réplicas. <span class="badge badge--doc">Documentado</span> El Sentinel tiene que decir <code>flags</code> <code>master</code>, <code>num-slaves</code> 1 y <code>num-other-sentinels</code> 2: ve al master, a la réplica y a los otros dos. Ahora, que la app le pregunte a los Sentinels:</p>
+
+<pre data-lang="bash"><code>S=sentinel.catalogo.svc.cluster.local:26379
+kubectl -n catalogo set env deploy/catalogo \
+  SPRING_DATA_REDIS_SENTINEL_MASTER=mymaster \
+  SPRING_DATA_REDIS_SENTINEL_NODES="sentinel-0.$S,sentinel-1.$S,sentinel-2.$S"
+kubectl -n catalogo rollout status deploy/catalogo --timeout=180s</code></pre>
+
+<pre data-lang="bash" data-file="scripts/master.sh"><code>#!/usr/bin/env bash
+# Quién es el master según los Sentinels y en qué nodo corre. Imprime: &lt;pod&gt; &lt;nodo&gt;
+# Le pregunta al Sentinel de k3s-server, el nodo que nunca se apaga.
+set -euo pipefail
+NS=catalogo
+S=$(kubectl -n $NS get pods -l app=sentinel --field-selector spec.nodeName=k3s-server \
+  -o jsonpath='{.items[0].metadata.name}')
+M=$(kubectl -n $NS exec "$S" -- redis-cli -p 26379 --raw SENTINEL get-master-addr-by-name mymaster \
+  | head -n 1 | tr -d '\r')
+[ -n "$M" ] || { echo "$S no conoce al master" &gt;&amp;2; exit 1; }
+POD=${M%%.*}
+echo "$POD $(kubectl -n $NS get pod "$POD" -o jsonpath='{.spec.nodeName}')"</code></pre>
+
+<pre data-lang="bash" data-file="scripts/sentinels.sh"><code>#!/usr/bin/env bash
+# Los eventos de los tres Sentinels: cuándo ven caído al master (+sdown), cuándo se ponen de acuerdo (+odown),
+# quién lleva el failover y cuándo cambia el master (+switch-master). Ctrl+C para salir.
+kubectl -n catalogo logs -l app=sentinel -f --prefix --since=1s --max-log-requests=4 \
+  | grep --line-buffered -E 'sdown|odown|try-failover|elected|selected|promoted|switch-master|convert-to-slave|failover-end|dup-sentinel'</code></pre>
+
+      <p><code>scripts/master.sh</code> tiene que imprimir el master y su nodo, por ejemplo <code>redis-0 k3s-agent1</code>; el nodo depende de dónde lo puso el scheduler. Con las dos configuraciones, la de Sentinel y <code>REDIS_HOST</code>, Spring Boot usa la de Sentinel. <span class="badge badge--doc">Documentado</span></p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Sentinel con quórum 2 de 3, un Sentinel por nodo: si se apaga el nodo del master, quedan dos, que alcanzan para el quórum y para la mayoría que autoriza el failover. <span class="badge badge--doc">Documentado</span> Cada instancia se anuncia con su nombre DNS, que es fijo, y no con su IP, que cambia cada vez que el pod se recrea; Sentinel acepta nombres desde la versión 6.2. <span class="badge badge--doc">Documentado</span> Los scripts de arranque les preguntan a los Sentinels quién es el master antes de arrancar.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Redis Cluster: reparte los datos en shards y necesita al menos tres masters, y aquí hay un solo conjunto de datos. Un chart de Helm o un operador de Redis: arman lo mismo, pero esconden justo lo que quieres ver, quién decide y cuándo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un master sin persistencia que se reinicia solo vuelve vacío, y si nadie lo promovió antes, la réplica se sincroniza con él y también se vacía. <span class="badge badge--doc">Documentado</span> Por eso <code>redis.sh</code> pregunta primero: un master que vuelve después de un failover arranca como réplica. Con el nodo apagado 60&#8239;s y 5&#8239;s para declarar caído al master, Sentinel llega antes. También, la JVM guarda cada nombre resuelto 30&#8239;s <span class="badge badge--doc">Documentado</span>: un pod recreado con otra IP puede tardar eso en ser alcanzable desde la app. Y aplicar <code>sentinel.yaml</code> antes de que <code>redis-0</code> esté listo deja a los Sentinels monitoreando un nombre que todavía no resuelve.</dd></div>
+      </dl>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 614" role="img" aria-labelledby="fa10st fa10sd">
+<title id="fa10st">El failover visto desde la app</title>
+<desc id="fa10sd">Antes de la falla, catalogo lee product:7 de redis-0, el master. A los 30 s se apaga el nodo de redis-0: los GET quedan sin respuesta, cada uno falla a los 100 ms, el breaker se abre y la app tira su conexión. Los Sentinels tampoco reciben respuesta al PING: a los 5 s cada uno marca al master como caído (+sdown), dos se ponen de acuerdo (+odown), eligen a uno y ese le manda REPLICAOF NO ONE a redis-1, que pasa a ser el master (+switch-master). Cuando el breaker deja pasar la primera llamada de prueba, la conexión nueva le pregunta a los Sentinels quién es el master, recibe redis-1 y lee la misma copia, que estaba replicada. Con tres pruebas bien, el breaker se cierra.</desc>
+<defs><marker id="fa10s-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="fa10s-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="fa10s-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="fa10s-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">catalogo</text>
+<path class="dg-frame" d="M70.0 40 V604"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Sentinels</text>
+<path class="dg-frame" d="M280.0 40 V604"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">redis-0, master</text>
+<path class="dg-frame" d="M490.0 40 V604"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">redis-1, réplica</text>
+<path class="dg-frame" d="M700.0 40 V604"/>
+<path class="dg-edge" d="M73.0 72 L485.0 72" marker-end="url(#fa10s-a)"/>
+<rect x="231.1" y="55" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="66" text-anchor="middle">GET product:7</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 106 L75.0 106" marker-end="url(#fa10s-r)"/>
+<rect x="247.6" y="89" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="100" text-anchor="middle">la copia</text>
+<path d="M20 138 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="127" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="142" text-anchor="middle" style="fill:var(--fail)">a los 30 s se apaga el nodo de redis-0</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 174 L485.0 174" marker-end="url(#fa10s-f)"/>
+<rect x="181.60000000000002" y="157" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="168" text-anchor="middle">GET product:7, sin respuesta</text>
+<rect x="80.0" y="194" width="360" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="210">100 ms por intento; con la mitad fallando, el breaker se abre</text>
+<path class="dg-edge" d="M70.0 234 h40 v14 h-38" marker-end="url(#fa10s-a)"/>
+<text class="dg-tiny" x="116.0" y="245">resetConnection()</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M283.0 276 L485.0 276" marker-end="url(#fa10s-f)"/>
+<rect x="316.3" y="259" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="270" text-anchor="middle">PING, sin respuesta</text>
+<rect x="290.0" y="296" width="360" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="300.0" y="312">5 s sin respuesta: +sdown; dos de acuerdo: +odown</text>
+<path class="dg-edge" d="M283.0 344 L695.0 344" marker-end="url(#fa10s-a)"/>
+<rect x="431.2" y="327" width="117.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="338" text-anchor="middle">REPLICAOF NO ONE</text>
+<rect x="418.0" y="364" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="428.0" y="380">+switch-master: redis-1 es el master</text>
+<path class="dg-edge" d="M73.0 412 L275.0 412" marker-end="url(#fa10s-a)"/>
+<rect x="93.10000000000001" y="395" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="406" text-anchor="middle">get-master-addr-by-name</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 446 L75.0 446" marker-end="url(#fa10s-r)"/>
+<rect x="145.9" y="429" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="440" text-anchor="middle">redis-1</text>
+<path class="dg-edge" d="M73.0 480 L695.0 480" marker-end="url(#fa10s-a)"/>
+<rect x="273.4" y="463" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="474" text-anchor="middle">GET product:7, llamada de prueba</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 514 L75.0 514" marker-end="url(#fa10s-r)"/>
+<rect x="319.6" y="497" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="508" text-anchor="middle">la copia sigue ahí</text>
+<rect x="80.0" y="534" width="293" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="550">tres pruebas bien: el breaker se cierra</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.3.</b> El failover cuando se apaga el nodo del master, con el modo <code>e5</code>. La app y los Sentinels descubren la falla por separado: la app en 100&#8239;ms por comando, los Sentinels a los 5&#8239;s. El breaker abierto le da tiempo a Sentinel: si la llamada de prueba llega antes del <code>+switch-master</code>, Sentinel todavía contesta <code>redis-0</code>, la prueba falla y el breaker se abre otros 5&#8239;s. La copia de <code>product:7</code> sigue en la réplica: a diferencia de la parte 1, la caché no vuelve vacía.</figcaption>
+      </figure>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a10-circuit-breaker"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta un PostgreSQL 18 y un Redis 8.10 con Testcontainers y corre dieciséis pruebas. Las de integración cambian algunos números para no esperar: la base tarda 300&#8239;ms, la compuerta deja entrar una lectura, la copia local es fresca 1&#8239;s, y el breaker mira 8 llamadas, decide con 4 y queda abierto 1&#8239;s. Para romper a Redis, congelan su contenedor con <code>docker pause</code>, a través de la API de Docker que ya usa Testcontainers: las conexiones quedan abiertas y nadie contesta, como un nodo colgado. Al final, Surefire tiene que decir <code>Tests run: 16, Failures: 0, Errors: 0, Skipped: 0</code>.</p>
+
+      <ul>
+        <li><code>CategoryApiTest</code>, tres pruebas: crear, renombrar y borrar una categoría; una categoría con productos no se borra, 409; y un nombre vacío da 400, y uno repetido, 409.</li>
+        <li><code>ProductApiTest</code>, cuatro pruebas: la lectura baja por las tres capas, <code>db</code>, después <code>l1</code>, y <code>redis</code> cuando se vacía la caché local; cambiar el precio borra las dos copias; crear, leer y borrar un producto; y los datos se validan, con 400, 409 para una categoría que no existe y 404.</li>
+        <li><code>ResilienceTest</code>, cuatro pruebas: con Redis congelado, las lecturas siguen desde la base y el breaker se abre; la invalidación que no salió se repone cuando Redis vuelve; con la compuerta llena, una lectura con copia local recibe la copia vieja y otra sin copia recibe el rechazo; y el rechazo es un 503 con <code>Retry-After</code>.</li>
+        <li><code>RedisGuardTest</code>, tres pruebas sin Spring: cuatro fallas abren el breaker, lo avisan una vez y la llamada siguiente no sale; sin breaker, cada llamada paga su falla; y una escritura fallida devuelve <code>false</code>.</li>
+        <li><code>DbGateTest</code>, dos pruebas sin Spring: con dos lecturas adentro, la tercera se rechaza en menos de 50&#8239;ms y los lugares vuelven al terminar; y una compuerta apagada no limita.</li>
+      </ul>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver las pruebas: TestcontainersConfig, IntegrationTest, CategoryApiTest, ProductApiTest, ResilienceTest, RedisGuardTest y DbGateTest</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/TestcontainersConfig.java"><code>package lab.catalogo;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer&lt;?&gt; redis() {
+        return new GenericContainer&lt;&gt;("redis:8.10").withExposedPorts(6379);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/IntegrationTest.java"><code>package lab.catalogo;
+
+import java.time.Duration;
+
+import lab.catalogo.cache.LocalCache;
+import lab.catalogo.cache.RedisCache;
+import lab.catalogo.resilience.RedisGuard;
+import org.junit.jupiter.api.BeforeEach;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+import org.testcontainers.containers.GenericContainer;
+
+/**
+ * Los mismos números que en el clúster, más chicos para que las pruebas corran rápido: lecturas de 300 ms,
+ * una sola lectura a la vez en la base, 1 s de frescura local y un breaker que decide con 4 llamadas.
+ */
+@SpringBootTest(properties = {
+        "app.db.delay=300ms",
+        "app.db.gate.max-concurrent=1",
+        "app.l1.fresh-for=1s",
+        "app.redis.breaker.window=8",
+        "app.redis.breaker.minimum-calls=4",
+        "app.redis.breaker.open-for=1s",
+        "app.redis.breaker.half-open-calls=2"
+})
+@AutoConfigureMockMvc
+@Import(TestcontainersConfig.class)
+public abstract class IntegrationTest {
+
+    @Autowired
+    protected MockMvcTester mvc;
+
+    @Autowired
+    protected StringRedisTemplate redis;
+
+    @Autowired
+    @Qualifier("redis")
+    protected GenericContainer&lt;?&gt; redisContainer;
+
+    @Autowired
+    protected LocalCache l1;
+
+    @Autowired
+    protected RedisCache redisCache;
+
+    @Autowired
+    protected RedisGuard guard;
+
+    @BeforeEach
+    void startClean() {
+        guard.reset();
+        redisCache.clearPending();
+        l1.clear();
+        redis.execute(connection -&gt; {
+            connection.serverCommands().flushAll();
+            return null;
+        }, true);
+    }
+
+    /** Congela el contenedor de Redis: el puerto sigue abierto, pero nadie contesta. */
+    protected void pauseRedis() {
+        redisContainer.getDockerClient().pauseContainerCmd(redisContainer.getContainerId()).exec();
+    }
+
+    protected void unpauseRedis() {
+        redisContainer.getDockerClient().unpauseContainerCmd(redisContainer.getContainerId()).exec();
+    }
+
+    protected MvcTestResult put(String uri, String json) {
+        return mvc.put().uri(uri).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+    }
+
+    protected MvcTestResult post(String uri, String json) {
+        return mvc.post().uri(uri).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+    }
+
+    /** Repite la comprobación hasta que pase o se acabe el plazo. */
+    protected static void eventually(Duration within, Runnable check) throws InterruptedException {
+        long deadline = System.nanoTime() + within.toNanos();
+        while (true) {
+            try {
+                check.run();
+                return;
+            } catch (AssertionError e) {
+                if (System.nanoTime() &gt; deadline) {
+                    throw e;
+                }
+                Thread.sleep(200);
+            }
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/CategoryApiTest.java"><code>package lab.catalogo;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+class CategoryApiTest extends IntegrationTest {
+
+    @Test
+    void crearRenombrarYBorrarUnaCategoria() {
+        MvcTestResult created = post("/api/categories", "{\"name\": \"Jardín\"}");
+        assertThat(created).hasStatus(HttpStatus.CREATED);
+        String location = created.getResponse().getHeader("Location");
+
+        assertThat(put(location, "{\"name\": \"Jardín y patio\"}"))
+                .hasStatusOk().bodyJson().extractingPath("$.name").isEqualTo("Jardín y patio");
+        assertThat(mvc.delete().uri(location)).hasStatus(HttpStatus.NO_CONTENT);
+        assertThat(mvc.get().uri(location)).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void unaCategoriaConProductosNoSeBorra() {
+        // La categoría 1 tiene 20 productos de los datos de partida: la clave foránea lo impide.
+        assertThat(mvc.delete().uri("/api/categories/1")).hasStatus(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void elNombreSeValida() {
+        assertThat(post("/api/categories", "{\"name\": \"\"}")).hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(post("/api/categories", "{\"name\": \"Categoría 1\"}")).hasStatus(HttpStatus.CONFLICT);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/products/ProductApiTest.java"><code>package lab.catalogo.products;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import lab.catalogo.IntegrationTest;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+class ProductApiTest extends IntegrationTest {
+
+    @Test
+    void laLecturaBajaPorLasTresCapas() {
+        // Primera vez: ni la caché local ni Redis lo tienen.
+        assertThat(mvc.get().uri("/api/products/7")).hasStatusOk()
+                .hasHeader("X-Source", "db").hasHeader("X-Breaker", "CLOSED");
+        // Enseguida: la copia local está fresca.
+        assertThat(mvc.get().uri("/api/products/7")).hasStatusOk().hasHeader("X-Source", "l1");
+        // Sin la copia local, la trae de Redis.
+        l1.clear();
+        assertThat(mvc.get().uri("/api/products/7")).hasStatusOk().hasHeader("X-Source", "redis");
+        assertThat(redis.hasKey("product:7")).isTrue();
+    }
+
+    @Test
+    void cambiarElPrecioBorraLasDosCopias() {
+        assertThat(mvc.get().uri("/api/products/8")).hasStatusOk();
+
+        assertThat(put("/api/products/8/price", "{\"priceCents\": 4321}"))
+                .hasStatusOk().bodyJson().extractingPath("$.priceCents").isEqualTo(4321);
+        assertThat(redis.hasKey("product:8")).isFalse();
+
+        // La lectura siguiente va a la base y trae el precio nuevo.
+        assertThat(mvc.get().uri("/api/products/8")).hasStatusOk().hasHeader("X-Source", "db")
+                .bodyJson().extractingPath("$.priceCents").isEqualTo(4321);
+    }
+
+    @Test
+    void crearLeerYBorrarUnProducto() {
+        MvcTestResult created = post("/api/products",
+                "{\"categoryId\": 2, \"name\": \"Lámpara\", \"priceCents\": 2599, \"stock\": 4}");
+        assertThat(created).hasStatus(HttpStatus.CREATED);
+        String location = created.getResponse().getHeader("Location");
+
+        assertThat(mvc.get().uri(location)).hasStatusOk()
+                .bodyJson().extractingPath("$.categoryName").isEqualTo("Categoría 2");
+        assertThat(mvc.delete().uri(location)).hasStatus(HttpStatus.NO_CONTENT);
+        assertThat(mvc.get().uri(location)).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void losDatosSeValidan() {
+        assertThat(post("/api/products", "{\"categoryId\": 2, \"name\": \"Gratis\", \"priceCents\": 0, \"stock\": 1}"))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(post("/api/products", "{\"categoryId\": 999, \"name\": \"Huérfano\", \"priceCents\": 100, \"stock\": 1}"))
+                .hasStatus(HttpStatus.CONFLICT);
+        assertThat(mvc.get().uri("/api/products/999999")).hasStatus(HttpStatus.NOT_FOUND);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/products/ResilienceTest.java"><code>package lab.catalogo.products;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+
+import lab.catalogo.IntegrationTest;
+import lab.catalogo.products.ProductService.Read;
+import lab.catalogo.products.ProductService.Source;
+import lab.catalogo.resilience.DbGate;
+import lab.catalogo.web.Shed;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+
+class ResilienceTest extends IntegrationTest {
+
+    @Autowired
+    ProductService service;
+
+    @Autowired
+    DbGate gate;
+
+    @Test
+    void conRedisCongeladoLasLecturasSiguenYElBreakerSeAbre() {
+        pauseRedis();
+        try {
+            // Cada lectura intenta un GET y un SET en Redis: dos fallas de 100 ms. Con 4, el breaker se abre.
+            for (long id = 11; id &lt;= 13; id++) {
+                assertThat(mvc.get().uri("/api/products/" + id)).hasStatusOk().hasHeader("X-Source", "db");
+            }
+            assertThat(guard.state()).isEqualTo("OPEN");
+            // Abierto, ni intenta: la lectura va directo a la base.
+            assertThat(mvc.get().uri("/api/products/14")).hasStatusOk()
+                    .hasHeader("X-Source", "db").hasHeader("X-Breaker", "OPEN");
+        } finally {
+            unpauseRedis();
+        }
+    }
+
+    @Test
+    void laInvalidacionQueNoSalioSeReponeCuandoRedisVuelve() throws InterruptedException {
+        assertThat(mvc.get().uri("/api/products/20")).hasStatusOk().hasHeader("X-Source", "db");
+        assertThat(redis.hasKey("product:20")).isTrue();
+
+        pauseRedis();
+        try {
+            mvc.get().uri("/api/products/21").exchange();
+            mvc.get().uri("/api/products/22").exchange();
+            assertThat(guard.state()).isEqualTo("OPEN");
+
+            // El precio cambia en la base, pero el DEL no puede salir: Redis sigue con la copia vieja.
+            assertThat(put("/api/products/20/price", "{\"priceCents\": 777}")).hasStatusOk();
+            assertThat(redisCache.pending()).isEqualTo(1);
+        } finally {
+            unpauseRedis();
+        }
+
+        // Cuando el breaker se cierra, la tarea de cada segundo repone el DEL, y la lectura trae el precio nuevo.
+        eventually(Duration.ofSeconds(15), () -&gt; {
+            assertThat(mvc.get().uri("/api/products/20")).hasStatusOk()
+                    .bodyJson().extractingPath("$.priceCents").isEqualTo(777);
+            assertThat(redisCache.pending()).isZero();
+            assertThat(guard.state()).isEqualTo("CLOSED");
+        });
+    }
+
+    @Test
+    void conLaCompuertaLlenaRechazaOSirveLaCopiaVieja() throws Exception {
+        assertThat(service.get(30).source()).isEqualTo(Source.DB);
+        // Fuera de Redis, y con la copia local ya vencida: la próxima lectura tendría que ir a la base.
+        redis.delete("product:30");
+        Thread.sleep(1100);
+
+        // Una lectura lenta ocupa el único lugar de la compuerta.
+        CompletableFuture&lt;Read&gt; slow = CompletableFuture.supplyAsync(() -&gt; service.get(31));
+        waitUntilGateIsFull();
+
+        // La 30 tiene copia local: contesta con ella. La 32 no tiene nada: 503.
+        assertThat(service.get(30).source()).isEqualTo(Source.L1_STALE);
+        assertThatThrownBy(() -&gt; service.get(32)).isInstanceOf(Shed.class);
+
+        assertThat(slow.get().source()).isEqualTo(Source.DB);
+    }
+
+    @Test
+    void elRechazoEsUn503ConRetryAfter() throws Exception {
+        CompletableFuture&lt;Read&gt; slow = CompletableFuture.supplyAsync(() -&gt; service.get(40));
+        waitUntilGateIsFull();
+
+        assertThat(mvc.get().uri("/api/products/41")).hasStatus(503).hasHeader("Retry-After", "1");
+        slow.get();
+    }
+
+    /** La lectura lenta dura 300 ms: hay que mirar seguido para no perder la ventana. */
+    void waitUntilGateIsFull() throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (gate.available() &gt; 0) {
+            assertThat(System.nanoTime()).as("la compuerta nunca se llenó").isLessThan(deadline);
+            Thread.sleep(5);
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/resilience/RedisGuardTest.java"><code>package lab.catalogo.resilience;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import org.junit.jupiter.api.Test;
+
+/** El breaker sin Spring ni Redis: llamadas que fallan a propósito. */
+class RedisGuardTest {
+
+    final AtomicInteger opened = new AtomicInteger();
+    final AtomicInteger calls = new AtomicInteger();
+
+    RedisGuard guard(boolean enabled) {
+        CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+                .slidingWindowSize(8)
+                .minimumNumberOfCalls(4)
+                .failureRateThreshold(50)
+                .waitDurationInOpenState(Duration.ofSeconds(60))
+                .build();
+        return new RedisGuard(CircuitBreaker.of("prueba", config), enabled, opened::incrementAndGet);
+    }
+
+    String failing() {
+        calls.incrementAndGet();
+        throw new IllegalStateException("Redis no contesta");
+    }
+
+    @Test
+    void conCuatroFallasSeAbreYDejaDeLlamar() {
+        RedisGuard guard = guard(true);
+        for (int i = 0; i &lt; 4; i++) {
+            assertThat(guard.read(this::failing)).isNull();
+        }
+        assertThat(guard.state()).isEqualTo("OPEN");
+        assertThat(opened).hasValue(1);
+
+        // Abierto: la llamada ni sale.
+        assertThat(guard.read(this::failing)).isNull();
+        assertThat(calls).hasValue(4);
+        assertThat(guard.takeFailures()).isEqualTo(4);
+        assertThat(guard.takeSkipped()).isEqualTo(1);
+        assertThat(guard.healthy()).isFalse();
+    }
+
+    @Test
+    void sinBreakerCadaLlamadaPagaSuFalla() {
+        RedisGuard guard = guard(false);
+        for (int i = 0; i &lt; 10; i++) {
+            assertThat(guard.read(this::failing)).isNull();
+        }
+        assertThat(calls).hasValue(10);
+        assertThat(guard.state()).isEqualTo("DISABLED");
+        assertThat(opened).hasValue(0);
+    }
+
+    @Test
+    void unaEscrituraFallidaDevuelveFalse() {
+        RedisGuard guard = guard(true);
+        assertThat(guard.write(() -&gt; failing())).isFalse();
+        assertThat(guard.write(() -&gt; { })).isTrue();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/catalogo/resilience/DbGateTest.java"><code>package lab.catalogo.resilience;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import lab.catalogo.web.Shed;
+import org.junit.jupiter.api.Test;
+
+/** La compuerta sin Spring ni base: dos lecturas ocupan los dos lugares y la tercera rebota. */
+class DbGateTest {
+
+    DbGate gate(boolean enabled) {
+        BulkheadConfig config = BulkheadConfig.custom()
+                .maxConcurrentCalls(2)
+                .maxWaitDuration(Duration.ZERO)
+                .build();
+        return new DbGate(Bulkhead.of("prueba", config), enabled);
+    }
+
+    /** Lanza lecturas que se quedan dentro de la compuerta hasta que release se abre. */
+    static void hold(ExecutorService threads, DbGate gate, int count, CountDownLatch inside, CountDownLatch release) {
+        for (int i = 0; i &lt; count; i++) {
+            threads.submit(() -&gt; gate.call(() -&gt; {
+                inside.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return "ok";
+            }));
+        }
+    }
+
+    @Test
+    void laTerceraLecturaSeRechazaEnElActo() throws Exception {
+        DbGate gate = gate(true);
+        CountDownLatch inside = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        try (ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            hold(threads, gate, 2, inside, release);
+            assertThat(inside.await(2, TimeUnit.SECONDS)).isTrue();
+
+            long start = System.nanoTime();
+            assertThatThrownBy(() -&gt; gate.call(() -&gt; "tercera")).isInstanceOf(Shed.class);
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(50));
+            assertThat(gate.available()).isZero();
+
+            release.countDown();
+        }
+        // Las dos terminaron y soltaron su lugar.
+        assertThat(gate.available()).isEqualTo(2);
+        assertThat(gate.call(() -&gt; "otra vez")).isEqualTo("otra vez");
+    }
+
+    @Test
+    void apagadaNoLimita() throws Exception {
+        DbGate gate = gate(false);
+        CountDownLatch inside = new CountDownLatch(3);
+        CountDownLatch release = new CountDownLatch(1);
+        try (ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor()) {
+            hold(threads, gate, 3, inside, release);
+            assertThat(inside.await(2, TimeUnit.SECONDS)).isTrue();
+            release.countDown();
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-como">Cómo se corre cada experimento</h3>
+
+      <p>Necesitas tres terminales, todas con <code>KUBECONFIG</code> y en la carpeta del proyecto. En la primera corren los experimentos. En la segunda, <code>scripts/mira.sh</code>, el tablero de los dos pods. En la tercera, Redis: <code>kubectl -n catalogo get pods -l app=redis -o wide -w</code> en la parte 1, y <code>scripts/sentinels.sh</code> en la parte 2. Cada experimento son dos comandos:</p>
+
+<pre data-lang="bash"><code>scripts/modo.sh e3                              # recrea los pods de la app con las defensas de e3
+scripts/experimento.sh e3-breaker nodo-redis     # 150 s de carga; a los 30 s, la falla</code></pre>
+
+      <p><code>modo.sh</code> recrea los pods aunque el modo sea el mismo: cada experimento empieza con la caché local vacía y el breaker cerrado. Como recrea los pods, vuelve a arrancar <code>mira.sh</code> después. <code>experimento.sh</code> imprime la hora de cada paso en UTC, como los logs de la app y de Sentinel, y al final el resumen de k6, que también queda en <code>resultados/&lt;nombre&gt;.txt</code>. En el resumen, cada umbral aparece por fase, con su valor y una ✓ o una ✗: <code>http_req_duration{fase:durante}</code> trae el p95, <code>http_req_failed{fase:durante}</code> la fracción de requests fallidas, y <code>rechazos</code> y <code>viejas</code> cuentan los 503 y las copias viejas. Si k6 no pudo mandar todo, aparece <code>dropped_iterations</code>.</p>
+
+      <p>Entre un experimento y el siguiente, espera a que Redis vuelva: <code>kubectl -n catalogo rollout status deploy/redis --timeout=180s</code>. No hace falta llenarlo: k6 lo calienta al empezar. Nada de lo que sigue tiene una cifra para copiar: cada experimento dice qué mirar y qué cuenta hacer, y los números son los tuyos. Anótalos; al final de la parte 1 los vas a comparar.</p>
+
+      <h3 id="comprueba-base">La línea de base, sin falla</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e1
+scripts/experimento.sh e0-base ninguna
+scripts/consistencia.sh</code></pre>
+
+      <p>Sin defensas y sin falla, todos los umbrales tienen que cumplirse: el sistema sin defensas se ve igual que uno con defensas mientras nada se rompe. El p95 queda cerca de los 200&#8239;ms de la base, aunque la mayoría de las lecturas salgan de Redis: entre el 10 y el 16&#8239;% van a la base, y con más del 5&#8239;% de requests de 200&#8239;ms, el percentil 95 cae en ellas. En el tablero, la columna <code>db=</code> sube un poco antes del minuto: las 200 claves entraron a Redis en el calentamiento, con el mismo TTL de 60&#8239;s, y vencen juntas. Es una estampida chica, la de <a href="../modules/m04-cache.html#stampede">M04. Cache stampede</a>.</p>
+
+      <p>En <code>consistencia.sh</code>, Redis puede tener alguna copia vieja, de la carrera del paso 3. La cuenta dice que muy pocas: 3 cargas de la base por segundo repartidas en 200 productos son 0.015 por producto por segundo, y cada una dura 0.2&#8239;s, así que un producto pasa el 0.3&#8239;% del tiempo con una carga en curso. Con 1.5 cambios por segundo durante 150&#8239;s, son 225 cambios × 0.003 = 0.7 carreras por prueba, y cada copia vieja dura hasta 60&#8239;s. La caché local sí va a tener copias viejas: son las de más de 5&#8239;s, que no se sirven mientras la base atiende.</p>
+
+      <h3 id="comprueba-e1">E1. Sin defensas</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e1
+scripts/experimento.sh e1-sin-defensas nodo-redis
+kubectl -n catalogo logs -l app=catalogo --since=10m | grep -c econnect</code></pre>
+
+      <p>A los 30&#8239;s el tablero se calla, o casi: casi ninguna lectura termina, porque cada una espera hasta 60&#8239;s a Redis. En el resumen, la fase durante no cumple ningún umbral, y aparece <code>dropped_iterations</code>. La cuenta del paso 4: con 30 VUs que esperan 10&#8239;s cada uno, salen 3 requests por segundo, y las otras 27 por segundo se pierden: unas 27 × 60 = 1&#8239;620 en la fase durante. Compáralo con tu número.</p>
+
+      <p>Mira también la fase después. Que Redis vuelva no alcanza: la app tiene que reconectarse. El <code>grep</code> cuenta los mensajes de reconexión de Lettuce (<code>Reconnecting</code>, <code>Reconnected</code>, <code>Cannot reconnect</code>). Si hay, Lettuce supo que la conexión se cortó, y reintentó cada vez más espaciado: puede tardar hasta 30&#8239;s en volver a intentar después de que Redis está listo. Si no hay ninguno y la fase después sigue fallando, la conexión quedó colgada: Lettuce cree que está viva, y cada comando espera sus 60&#8239;s. Cualquiera de los dos es posible, según si el aviso de cierre de TCP alcanzó a salir del nodo; anota cuál te tocó.</p>
+
+      <h3 id="comprueba-e2">E2. Timeouts cortos</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e2
+scripts/experimento.sh e2-timeouts nodo-redis</code></pre>
+
+      <p>Ahora nada espera 60&#8239;s, y el tablero sigue imprimiendo, pero mira la columna <code>errores=</code>: son los 500 de HikariCP. Cada lectura paga 100&#8239;ms en el <code>GET</code> y va a la base: 28.5 por segundo contra 20 que la base atiende. Las que no caben esperan una conexión hasta 1&#8239;s y fallan. La cuenta pareja dice que al menos 8.5 por segundo fallan, el 30&#8239;%, y las que sí entran también esperan en la fila. Con esperas cerca de 1&#8239;s, los 30 VUs vuelven a no alcanzar, y puede aparecer <code>dropped_iterations</code> otra vez.</p>
+
+      <p>El timeout corto cambió cuánto cuesta cada falla, no cuántas hay. En la fase después, repite el <code>grep</code> de E1: sin breaker, la reconexión depende de Lettuce, igual que antes.</p>
+
+      <h3 id="comprueba-e3">E3. El circuit breaker</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e3
+scripts/experimento.sh e3-breaker nodo-redis</code></pre>
+
+      <p>En <code>mira.sh</code> tiene que aparecer <code>breaker CLOSED -&gt; OPEN</code> en los dos pods en el primer segundo de la falla, y después, cada 5&#8239;s, <code>OPEN -&gt; HALF_OPEN</code> y <code>HALF_OPEN -&gt; OPEN</code>: tres llamadas de prueba que fallan. <code>saltadas=</code> crece y <code>fallas=</code> casi desaparece. Las lecturas ya no pagan los 100&#8239;ms de Redis, pero <code>errores=</code> sigue igual que en E2: el breaker protege a la request de Redis, no a la base de la carga.</p>
+
+      <p>La diferencia grande está en la vuelta. Cuando Redis está listo, la siguiente llamada de prueba abre una conexión nueva, y el breaker pasa a <code>CLOSED</code> en 5&#8239;s como mucho, con la conexión vieja muerta o colgada. Pero Redis volvió vacío: todas las lecturas siguen yendo a la base hasta que se llena. Con 20 lecturas por segundo, llenar 200 productos toma 200 / 20 = 10&#8239;s como mínimo, y más, porque los productos se piden al azar. Mira cuándo <code>db=</code> deja el lugar a <code>redis=</code> en el tablero.</p>
+
+      <h3 id="comprueba-e4">E4. La compuerta</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e4
+scripts/experimento.sh e4-compuerta nodo-redis</code></pre>
+
+      <p>Los <code>errores=</code> se vuelven <code>rechazos=</code>: 503 que salen en microsegundos, en lugar de 500 después de 1&#8239;s de espera. Las lecturas que entran tardan los 200&#8239;ms de la base, sin fila delante, y <code>compuerta libre</code> se queda en 0 casi todo el tiempo. El p95 de la fase durante tiene que bajar mucho respecto de E2 y E3. <code>http_req_failed</code> no cumple el umbral: un 503 es una request fallida, aunque sea rápida. Mira <code>rechazos</code> en el resumen y divídelo por las requests de la fase durante.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Por qué la compuerta rechaza más de lo que da la cuenta</p>
+        <p>La cuenta de 8.5 rechazos por segundo, el 30&#8239;%, supone que las lecturas llegan parejas. k6 las manda parejas, pero cada VU tiene su conexión con un pod elegido al azar, y en un pod se juntan a veces tres lecturas y a veces ninguna. Con una compuerta sin espera, la que llega cuando hay dos adentro se rechaza, aunque un instante después hubiera lugar.</p>
+        <p>Si las llegadas a cada pod fueran del todo al azar, la fórmula de Erlang B da la fracción rechazada. Con c = 2 lugares y una carga de A = 14.25 lecturas por segundo × 0.2&#8239;s = 2.85 por pod: B = (A² / 2) / (1 + A + A² / 2) = 4.06 / 7.91 = 0.51. Tus rechazos deberían caer entre las dos cuentas, entre el 30 y el 51&#8239;%. Si los 30 VUs no quedaron repartidos parejo entre los dos pods, el pod con más rechaza más.</p>
+      </aside>
+
+      <p>Para ver el otro lado del trade-off, deja que la compuerta espere hasta 100&#8239;ms por un lugar:</p>
+
+<pre data-lang="bash"><code>GATE_WAIT=100ms scripts/modo.sh e4
+scripts/experimento.sh e4-espera-100ms nodo-redis</code></pre>
+
+      <p>Una espera corta absorbe los amontonamientos: una lectura que llega cuando hay dos adentro puede entrar cuando sale una. Los rechazos tienen que bajar, hacia el 30&#8239;% de la cuenta pareja, y el p95 tiene que subir, porque ahora hay una fila corta. Lo que sobra de verdad, 8.5 por segundo, se rechaza igual, solo que 100&#8239;ms más tarde. El próximo <code>modo.sh</code> sin <code>GATE_WAIT</code> la devuelve a 0.</p>
+
+      <h3 id="comprueba-e5">E5. La copia vieja</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e5
+scripts/experimento.sh e5-copia-vieja nodo-redis</code></pre>
+
+      <p>Ahora, antes del 503, la lectura prueba la copia local, de cualquier edad. En el tablero, la mayoría de los <code>rechazos=</code> de E4 aparecen como <code>viejas=</code>, y <code>l1=</code> le quita a la base una parte de las lecturas, cerca del 26&#8239;% según la cuenta del paso 3. Los 503 que quedan son las lecturas rechazadas para las que el pod no tenía copia. Cada producto se lee 0.071 veces por segundo en cada pod: después de los 30&#8239;s de la fase antes, la probabilidad de que un pod no lo haya leído nunca es e<sup>−0.071 × 30</sup> = e<sup>−2.1</sup> ≈ 0.12, y el calentamiento ya había dejado cada producto en uno de los dos pods. Los 503 son, como mucho, el 12&#8239;% de los rechazos, y bajan durante la falla, porque cada lectura que entra a la base deja una copia más.</p>
+
+      <p>Lo que se sirvió viejo no vio los cambios de precio: son copias de hasta 10 minutos. Para un catálogo es un precio viejo mostrado unos segundos; en un carrito, el precio se vuelve a leer de la base al pagar. Es la degradación elegante de <a href="../modules/m08-resiliencia.html#degradacion">M08. Degradación elegante</a>: decidir antes qué funciones pueden servir datos viejos, y cuáles no.</p>
+
+      <p>Con los cinco, arma tu tabla: el p95 y la fracción de fallas de la fase durante, los rechazos, las viejas, <code>dropped_iterations</code>, y cuánto tardó el breaker en volver a <code>CLOSED</code> después de que Redis estuvo listo. Lo que tiene que dominar en cada modo:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modo</th><th>Durante la falla domina</th><th>Después de la falla</th></tr></thead>
+          <tbody>
+            <tr><td><code>e1</code></td><td>Lecturas colgadas 60&#8239;s: k6 se queda sin VUs.</td><td>Depende de cómo se cortó la conexión: el backoff de Lettuce o una conexión colgada.</td></tr>
+            <tr><td><code>e2</code></td><td>La base saturada: 500 después de 1&#8239;s de espera.</td><td>Igual que <code>e1</code>, pero cada intento cuesta 100&#8239;ms.</td></tr>
+            <tr><td><code>e3</code></td><td>La base saturada; Redis ya no cuesta nada.</td><td>El breaker se cierra en 5&#8239;s; Redis vacío se llena con la base saturada.</td></tr>
+            <tr><td><code>e4</code></td><td>503 rápidos, entre el 30 y el 51&#8239;% de las lecturas que van a la base.</td><td>La compuerta protege a la base mientras Redis se llena.</td></tr>
+            <tr><td><code>e5</code></td><td>Copias viejas; 503 solo donde el pod no tenía copia.</td><td>Igual que durante, hasta que Redis se llena.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="comprueba-switchover">Parte 2. Un failover planeado</h3>
+
+      <p>Haz el paso 10 antes de seguir. Desde aquí, entre un experimento y el siguiente espera al menos un minuto, y revisa con <code>scripts/master.sh</code> que haya un master y con <code>kubectl -n catalogo get pods -l app=redis</code> que los dos pods estén listos. Un Sentinel no vuelve a intentar el failover del mismo master antes de dos veces el <code>failover-timeout</code>, 40&#8239;s. <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="bash"><code>scripts/modo.sh e5
+scripts/experimento.sh p2-switchover switchover
+scripts/consistencia.sh                  # en otra terminal, apenas aparece "Borré el pod"</code></pre>
+
+      <p>Borrar el pod del master dispara su preStop: le pide el failover a un Sentinel, espera a que otro sea el master y corta a sus clientes. En <code>sentinels.sh</code> tienen que aparecer <code>+try-failover</code>, <code>+selected-slave</code>, <code>+promoted-slave</code> y <code>+switch-master</code>; las horas de esas líneas son la ventana del cambio. En <code>mira.sh</code> puede aparecer alguna falla suelta cuando el preStop corta las conexiones, y Lettuce se reconecta preguntándoles a los Sentinels. El breaker probablemente no se abre: necesita diez llamadas, y la mitad fallando.</p>
+
+      <p>Las fases durante y después tienen que cumplir los umbrales, y Redis no vuelve vacío: la réplica tenía todo. Lo que puede quedar es una copia vieja. Entre que la réplica pasa a ser el master y que el preStop corta a los clientes, la app sigue hablando con el viejo, que todavía acepta comandos. Un <code>DEL</code> que llega ahí se ejecuta, la app lo da por hecho, y no se replica a nadie: el nuevo master se queda con la copia vieja hasta que vence. Por eso <code>consistencia.sh</code> va enseguida: 60&#8239;s después, la copia ya venció. Con 1.5 cambios por segundo y una ventana de pocos segundos, puede que no veas ninguna; si ves una, ya sabes de dónde viene. Es la replicación asíncrona de <a href="../modules/m05-bases-de-datos.html#replicacion">M05. Replicación</a>.</p>
+
+      <h3 id="comprueba-nodo-master">Parte 2. Se apaga el nodo del master</h3>
+
+<pre data-lang="bash"><code>kubectl -n catalogo get pods -l app=sentinel -o wide
+scripts/modo.sh e1
+scripts/experimento.sh p2-nodo-e1 nodo-master
+# espera un minuto, y revisa que redis-0 y redis-1 estén listos
+scripts/modo.sh e5
+scripts/experimento.sh p2-nodo-e5 nodo-master</code></pre>
+
+      <p>Con el nodo, se apagan el master y un Sentinel. En <code>sentinels.sh</code>, los dos que quedan tienen que marcar <code>+sdown</code> unos 5&#8239;s después de la línea "Apagué" de <code>experimento.sh</code>, después <code>+odown</code> cuando se ponen de acuerdo, y al final <code>+switch-master</code>. Anota los segundos entre "Apagué" y <code>+switch-master</code>: es lo que tarda la réplica en estar lista para recibir.</p>
+
+      <p>Con <code>e1</code>, mira si a la app le sirvió de algo. Si la conexión quedó colgada, Lettuce sigue esperando 60&#8239;s por comando al master muerto, y nunca les pregunta a los Sentinels: la réplica promovida está ahí, con toda la caché, y nadie la usa. Si el corte se notó, Lettuce se reconecta, les pregunta a los Sentinels y encuentra al nuevo, después de su backoff. Corre el mismo <code>grep</code> de E1 para saber cuál fue.</p>
+
+      <p>Con <code>e5</code>, el breaker se abre en el primer segundo y tira la conexión. Cada 5&#8239;s, la llamada de prueba abre una conexión nueva, y esa conexión les pregunta a los Sentinels quién es el master. Antes del <code>+switch-master</code> contestan el muerto, y la prueba falla; después, contestan la réplica promovida, y el breaker se cierra. La ventana para la app es la de Sentinel más hasta 5&#8239;s del breaker, y la cuenta de la figura A10.3: 5&#8239;s para detectar, más la elección y la promoción, más hasta 5&#8239;s. En el tablero, después de <code>HALF_OPEN -&gt; CLOSED</code>, tiene que aparecer <code>invalidaciones repuestas</code>: son los <code>DEL</code> que no salieron mientras el breaker estuvo abierto, unos 1.5 por segundo de breaker abierto. Esta vez importan, porque la réplica promovida tenía las copias viejas.</p>
+
+      <p>Lettuce les pregunta a los Sentinels en el orden de la lista. Si el primero, <code>sentinel-0</code>, estaba en el nodo apagado, el primer comando de <code>kubectl</code> te lo dice, y cada conexión nueva espera su <code>connect-timeout</code> antes de pasar al siguiente: 500&#8239;ms con <code>e5</code>, 10&#8239;s con <code>e1</code>. Su nombre sigue resolviendo a la IP del pod muerto, porque el Service lo publica aunque no esté listo.</p>
+
+      <h3 id="comprueba-congelado">Parte 2. El nodo congelado</h3>
+
+<pre data-lang="bash"><code>scripts/modo.sh e2
+scripts/experimento.sh p2-congelado-e2 congelar-master
+# espera un minuto, y revisa que redis-0 y redis-1 estén listos
+scripts/modo.sh e5
+scripts/experimento.sh p2-congelado-e5 congelar-master</code></pre>
+
+      <p><code>docker compose pause</code> congela todos los procesos del nodo con el freezer de cgroups <span class="badge badge--doc">Documentado</span>, pero la red sigue. El kernel del nodo sigue recibiendo los paquetes y confirmándolos: las conexiones no se cortan, solo que nadie contesta. Para Sentinel es lo mismo que un nodo apagado: el master no responde al <code>PING</code>, y los otros dos promueven a la réplica igual que antes. Para la app no.</p>
+
+      <p>Con <code>e2</code>, cada comando espera 100&#8239;ms y falla, pero la conexión sigue abierta, y Lettuce no la cambia por fallas de timeout. La app le habla al master congelado los 60&#8239;s, con la réplica promovida y llena a un costado, y todas las lecturas van a la base: es la E2 de la parte 1, con Redis sano. Al descongelar, Sentinel convierte al viejo master en réplica y le corta los clientes <span class="badge badge--doc">Documentado</span>; recién ahí Lettuce se reconecta y encuentra al nuevo. En el tablero, <code>fallas=</code> tiene que seguir hasta la línea "Descongelé".</p>
+
+      <p>Con <code>e5</code>, el breaker se abre, tira la conexión, y la llamada de prueba pregunta otra vez. Si llega antes del <code>+switch-master</code>, la conexión nueva al master congelado se establece, porque el kernel completa el saludo de TCP, pero el saludo de Redis no tiene respuesta y falla. Después del <code>+switch-master</code>, la prueba va a la réplica promovida. El breaker tiene que cerrarse a los pocos segundos del <code>+switch-master</code>, sin esperar a que el nodo se descongele.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Al descongelar, durante un momento hay dos masters: el viejo despierta creyendo que lo sigue siendo, hasta que Sentinel lo convierte. Lo que reciba en ese momento se pierde cuando se sincroniza con el nuevo. Para una caché es una copia vieja más, que repone <code>pending</code> o vence a los 60&#8239;s; para datos que importan, es el split-brain de A05 y M06, y Redis tiene <code>min-replicas-to-write</code> para que un master que no ve a sus réplicas deje de aceptar escrituras.</p>
+      </aside>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a10">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a10-circuit-breaker</code>, y pega aquí el enlace. Sube también tus resúmenes de <code>resultados/</code> en un archivo aparte, con tu tabla: <code>.gitignore</code> deja afuera la carpeta.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las dieciséis pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="base">Corriste la línea de base y comparaste las copias viejas de Redis con la cuenta de la carrera.</li>
+          <li data-check="e1">Sin defensas, viste a k6 quedarse sin VUs y explicaste <code>dropped_iterations</code> con la ley de Little.</li>
+          <li data-check="e2e3">Con timeouts cortos y con el breaker, viste la base saturada, y el breaker cerrarse en 5&#8239;s cuando Redis volvió.</li>
+          <li data-check="e4">Con la compuerta, los errores pasaron a ser 503 rápidos, y comparaste tus rechazos con la cuenta pareja y con Erlang B.</li>
+          <li data-check="e5">Con la copia vieja, la mayoría de los rechazos se sirvieron viejos, y explicaste dónde no aceptarías un precio viejo.</li>
+          <li data-check="switchover">Hiciste un failover planeado y mediste su ventana en los logs de Sentinel.</li>
+          <li data-check="nodo">Apagaste el nodo del master con <code>e1</code> y con <code>e5</code>, y explicaste por qué la réplica promovida no sirve si la app no se entera.</li>
+          <li data-check="congelado">Congelaste el nodo del master y explicaste por qué una conexión a un nodo congelado no se corta sola.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Es la misma división de A00: la app entra por PgBouncer en modo transaction y Flyway va directo al primario. Aquí PgBouncer tiene una tarea más: su <code>default_pool_size</code> es el techo de lo que pueden sumar los pools de todos los pods, y la compuerta de cada pod tiene que caber debajo.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p><code>max_fails</code> y <code>fail_timeout</code> de Nginx son un circuit breaker pasivo por upstream: después de unas fallas, deja de mandarle tráfico a esa réplica un rato. <code>limit_req</code> limita por tasa, y la compuerta de aquí, por concurrencia: con una base que se pone lenta, solo la segunda se ajusta sola.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>El 503 de la compuerta es un ProblemDetail con <code>Retry-After</code>, como los errores de A02. Un cliente que lo respeta espera un segundo; uno que reintenta en el acto convierte cada rechazo en dos requests. Un <code>PUT</code> de precio que se reintenta es idempotente por naturaleza; un <code>POST</code>, no, y necesita la <code>Idempotency-Key</code> de A02.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>A03 resuelve dos cosas que este proyecto deja a la vista: la carrera del cache-aside, con la escritura versionada en Lua, y la estampida, con una sola carga por clave y jitter en el TTL. Con su single-flight, el Redis que vuelve vacío en E3 y E4 se llenaría con una carga por producto, no con todas las que lleguen a la vez.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>Es la misma historia con PostgreSQL: una réplica asíncrona promovida pierde lo último que el primario no alcanzó a mandar. Allá se pierde una escritura; aquí, un <code>DEL</code>, y el daño dura lo que el TTL. Y el primario viejo que vuelve tiene que volver como réplica, con <code>pg_rewind</code> allá y con <code>redis.sh</code> aquí.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A05, dos primarios</p>
+          <p>El master congelado que despierta es un segundo primario por unos instantes. A05 los tiene a propósito y resuelve los conflictos; Sentinel los evita con quórum y épocas, y <code>min-replicas-to-write</code> le quita al aislado la posibilidad de aceptar escrituras.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A06, repartir los datos</p>
+          <p>Con Redis Cluster, cada shard tiene su master y sus réplicas, y la caída de un nodo afecta solo a sus claves. El breaker tendría que ser por nodo: uno solo para todo Redis se abriría por un shard y dejaría de usar a los sanos.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A07, Kubernetes</p>
+          <p>Drenar un nodo, como en A07, es un switchover: avisado, con preStop. Apagarlo es esta guía. Kubernetes tarda 50&#8239;s en notar un nodo que dejó de reportarse y 5 minutos en desalojar sus pods, así que la defensa dentro de esa ventana es de la app. Y la readiness de A07 no mira dependencias por la misma razón que aquí no mira a Redis.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A08, un solo líder</p>
+          <p>Sentinel es una elección de líder con quórum, y la época de configuración que sube en cada failover cumple el papel del fencing token de A08. El master congelado es el líder zombi de A08: vuelve creyendo que manda, y lo que lo frena es que los demás ya tienen una época más nueva.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A09, colas y pub/sub</p>
+          <p><code>pending</code> es una outbox en memoria: anota lo que no se pudo hacer y lo repone después, pero se pierde si el pod muere. Aquí alcanza, porque el TTL acota el daño. Si una invalidación tuviera que llegar sí o sí, iría a la outbox de A09, en la misma transacción que el cambio.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Resiliencia</p>
+          <p>De dónde sale cada timeout: <a href="../modules/m08-resiliencia.html#timeouts">M08. Timeouts y deadlines</a>. El breaker y el bulkhead: <a href="../modules/m08-resiliencia.html#breaker">M08. Circuit breakers y bulkheads</a>. Rechazar lo que no cabe: <a href="../modules/m08-resiliencia.html#shedding">M08. Load shedding</a>. Servir menos, pero servir: <a href="../modules/m08-resiliencia.html#degradacion">M08. Degradación elegante</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Cachés</p>
+          <p>Cache-aside y sus carreras: <a href="../modules/m04-cache.html#patrones">M04. Patrones</a> y <a href="../modules/m04-cache.html#invalidacion-carrera">M04. La carrera de la invalidación</a>. Dos niveles: <a href="../modules/m04-cache.html#invalidacion-l1">M04. Invalidar las cachés en memoria</a>. Y el orden de las defensas que este proyecto arma: <a href="../modules/m04-cache.html#caida">M04. Cuando la caché entera cae</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Réplicas y fallas</p>
+          <p>La replicación asíncrona y lo que pierde: <a href="../modules/m05-bases-de-datos.html#replicacion">M05. Replicación</a>. Cómo decide un detector que un nodo cayó, y por qué un nodo lento y uno muerto se parecen: <a href="../modules/m061-teoria-distribuida-a-fondo.html#detectores">M06.1. Detectores de fallas</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Estimaciones</p>
+          <p>La ley de Little y las cuentas de capacidad: <a href="../modules/m00-metodo.html#estimaciones">M00. Estimaciones</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-timeout">Timeout</a>, <a href="../glosario.html#t-circuit-breaker">circuit breaker</a>, <a href="../glosario.html#t-bulkhead">bulkhead</a>, <a href="../glosario.html#t-load-shedding">load shedding</a>, <a href="../glosario.html#t-admission-control">admission control</a>, <a href="../glosario.html#t-graceful-degradation">degradación elegante</a>, <a href="../glosario.html#t-backoff">backoff</a>, <a href="../glosario.html#t-cache-aside">cache-aside</a>, <a href="../glosario.html#t-hit-ratio">hit ratio</a>, <a href="../glosario.html#t-cache-stampede">cache stampede</a>, <a href="../glosario.html#t-ley-little">ley de Little</a>, <a href="../glosario.html#t-replication-lag">replication lag</a>, <a href="../glosario.html#t-failure-detector">detector de fallas</a>, <a href="../glosario.html#t-quorum">quórum</a> y <a href="../glosario.html#t-split-brain">split-brain</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a10.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

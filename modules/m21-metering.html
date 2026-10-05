@@ -1,0 +1,1182 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M21. Metering y facturación por uso</title>
+<meta name="description" content="Cómo se convierte cada token en dinero sin perder ni duplicar: eventos de uso, Kafka, deduplicación, ventanas, rating, créditos prepagados, topes, facturas y conciliación.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="m21">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Metering y facturación por uso</h1>
+        <p class="lead">Cada respuesta de un modelo consume GPU, y alguien la tiene que pagar. Este módulo diseña el camino que recorre ese consumo: el evento de uso que nace al cerrar un stream, el log durable que lo transporta, el procesador que descarta duplicados y suma por hora, el precio que corresponde a la hora del evento, el saldo prepagado que se descuenta mientras el stream sigue abierto, el tope de gasto, la factura de fin de mes y la conciliación que encuentra lo que se perdió. Es el puente entre el limitador aproximado del M18 y el ledger exacto del M27.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M21</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M07, M17, M18, M27</dd></div>
+          <div><dt>Estado</dt><dd data-status="m21">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Diseñar el evento de uso: qué campos lleva, por qué no lleva precio y cómo se construye un <code>event_id</code> que permita descartar copias.</li>
+          <li>Llevar cada evento del gateway a la factura sin perderlo ni contarlo dos veces, combinando el productor idempotente de Kafka, la deduplicación por id y escrituras que se pueden repetir.</li>
+          <li>Agregar uso por hora con ventanas y marcas de agua, y decidir qué hacer con un evento que llega tarde cuando hay dinero en juego.</li>
+          <li>Tarifar con un catálogo de precios versionado, en dinero entero y redondeando una sola vez por línea.</li>
+          <li>Diseñar créditos prepagados sobre un ledger, con reservas de saldo mientras un stream sigue abierto, topes de gasto con su exceso máximo calculado y una conciliación que encuentra lo que se perdió.</li>
+        </ul>
+      </section>
+
+      <h2 id="numeros"><span class="sec-num">21.1</span>Qué se mide y por qué es difícil</h2>
+
+      <p>En el <a href="m19-router-flota.html#flota">M19</a> dimensionamos una flota de 125 réplicas que en el pico sostiene 6&#8239;000 conversaciones generando a la vez y cuesta 1.46 millones de dólares por mes. Ese costo lo pagan los clientes, request por request, y alguien tiene que contar cuánto consumió cada uno. Ese alguien es el <dfn data-term="metering">metering</dfn>: el sistema que mide el uso de cada cliente con la exactitud necesaria para cobrarlo.</p>
+
+      <p>La primera sorpresa es que en una API de LLM no se cobra una sola cosa. Una request de la API de Anthropic, por ejemplo, se cobra por tipo de token y por herramienta: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Unidad</th><th>Qué cuenta</th><th>De dónde sale el número</th></tr></thead>
+          <tbody>
+            <tr><td>Tokens de entrada</td><td>El prompt que no estaba en caché</td><td>El tokenizer del modelo, en el prefill</td></tr>
+            <tr><td>Escritura en caché</td><td>Los tokens que se guardan para reusar, con vida de 5 minutos o de 1 hora</td><td>El motor, al guardar el prefijo (<a href="m16-context-windows.html#prompt-caching">M16</a>)</td></tr>
+            <tr><td>Lectura de caché</td><td>Los tokens del prompt que ya estaban calculados</td><td>El motor, al encontrar el prefijo (<a href="m15-motores-inferencia.html#prefix">M15</a>)</td></tr>
+            <tr><td>Tokens de salida</td><td>Lo generado, incluido el razonamiento que el cliente no ve</td><td>El motor, en el decode</td></tr>
+            <tr><td>Búsquedas web</td><td>10 USD cada 1&#8239;000 búsquedas</td><td>La herramienta del servidor, <code>server_tool_use.web_search_requests</code></td></tr>
+            <tr><td>Ejecución de código</td><td>Horas de contenedor, con un mínimo de 5 minutos</td><td>El sandbox</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Y vienen más: imágenes de entrada y de salida (<a href="m23-multimodal.html#costo">M23</a>), segundos de audio (M24), almacenamiento de archivos y de vectores. Cada unidad tiene su precio, cada modelo el suyo, y los modos de procesamiento (batch, prioridad, residencia de datos) los multiplican. Un evento de uso tiene que poder llevar todas.</p>
+
+      <h3 id="numeros-volumen">El volumen, con cuentas</h3>
+
+      <p>Con la flota del M19: <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Duración de una generación</td><td>500 tokens de salida × 30 ms de TPOT</td><td class="r">15 s</td></tr>
+            <tr><td>Requests por segundo en el pico</td><td>6&#8239;000 streams ÷ 15 s (ley de Little, <a href="m17-api-streaming.html#sse-infra">M17</a>)</td><td class="r">400</td></tr>
+            <tr><td>Requests por día</td><td>la mitad del pico como promedio × 86&#8239;400 s</td><td class="r">17.3 millones</td></tr>
+            <tr><td>Eventos de uso por día</td><td>1.3 eventos por request (finales, parciales y de herramientas)</td><td class="r">22.5 millones</td></tr>
+            <tr><td>Eventos por segundo</td><td>promedio y pico</td><td class="r">260 y 520</td></tr>
+            <tr><td>Bytes por día</td><td>600 bytes por evento</td><td class="r">13.5 GB</td></tr>
+            <tr><td>Log crudo de un año</td><td>13.5 GB × 365</td><td class="r">4.9 TB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Para Kafka, 520 mensajes por segundo es poco: un solo broker mueve decenas de megabytes por segundo (<a href="m07-mensajeria.html#kafka">M07</a>). Un proveedor cien veces más grande tendría 26&#8239;000 eventos por segundo en promedio, todavía un clúster chico. La dificultad del metering no es el volumen. Es que cada evento es dinero: contar uno de menos es regalar GPU, contar uno de más es cobrar algo que el cliente no usó, y el cliente lo va a notar cuando compare su factura con sus propios logs.</p>
+
+      <h3 id="numeros-niveles">Dos niveles de consistencia para los mismos números</h3>
+
+      <p>En el <a href="m18-cuotas-tokens.html#una-vez">M18</a> quedó dicho que el limitador es aproximado a propósito y que lo exacto es el metering. Son dos sistemas que cuentan lo mismo con contratos opuestos:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Limitador (M18)</th><th>Metering (este módulo)</th></tr></thead>
+          <tbody>
+            <tr><td>Pregunta</td><td>¿Dejo pasar esta request ahora?</td><td>¿Cuánto consumió este cliente?</td></tr>
+            <tr><td>Latencia</td><td>Un milisegundo, en el camino de la request</td><td>Segundos para el saldo, horas para el detalle, días para la factura</td></tr>
+            <tr><td>Exactitud</td><td>Aproximada: excesos acotados</td><td>Exacta: cada centavo se explica con un <code>request_id</code></td></tr>
+            <tr><td>Si se equivoca</td><td>A favor de la flota</td><td>No se puede equivocar: se corrige con un asiento nuevo</td></tr>
+            <tr><td>Fuente de verdad</td><td>No: se corrige desde el metering</td><td>Sí</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>De esa tabla salen los requisitos del metering:</p>
+      <ul>
+        <li><b>No perder.</b> Todo uso que pasó por una GPU termina en un evento, aunque el gateway muera a mitad del stream.</li>
+        <li><b>No duplicar.</b> Un evento que llega dos veces se cuenta una.</li>
+        <li><b>Reproducible.</b> Recalcular el mes con los mismos eventos da el mismo resultado, al centavo.</li>
+        <li><b>Auditable y explicable.</b> El tablero del cliente, la API de uso y la factura dicen lo mismo, y cada línea baja hasta las requests que la forman.</li>
+        <li><b>Oportuno donde importa.</b> El saldo prepagado y el tope de gasto necesitan el uso en segundos; la factura puede esperar al fin del ciclo.</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Los errores del metering se descubren tarde y de la peor manera: un cliente grande compara la factura con sus propios logs y encuentra una diferencia. Desde ese momento discute cada línea, y una disputa de un cobro con tarjeta tiene un costo fijo aunque la ganes (<a href="m27-pagos-stripe.html#disputas">M27</a>). Por eso el tablero de uso se calcula con los mismos agregados que la factura, nunca con un contador aparte.</p>
+      </aside>
+
+      <h2 id="arquitectura"><span class="sec-num">21.2</span>La arquitectura por planos</h2>
+
+      <p>El metering se entiende mejor como una cadena de planos, cada uno con su propia latencia y su propio contrato. Lo que cruza de uno al siguiente es siempre un registro inmutable: un evento, un agregado, un asiento, una factura.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 344" role="img" aria-labelledby="f21pt f21pd">
+<title id="f21pt">Los planos de un sistema de metering</title>
+<desc id="f21pd">El gateway produce un evento de uso al cerrar cada stream y lo publica en un tópico de Kafka con la organización como clave. Del tópico leen dos consumidores: un procesador de streaming que descarta duplicados y suma el uso en ventanas por hora, y un archivador que copia todo al log crudo en S3. Los agregados pasan al rating, que aplica el precio vigente a la hora del evento; el resultado descuenta el saldo del ledger de créditos y alimenta la factura del ciclo, que cobra Stripe Billing. El saldo dispara los topes y alertas, que bloquean al cliente en el limitador. Una conciliación horaria compara el log crudo, los agregados y el registro propio del motor, y corrige los contadores del limitador.</desc>
+<defs><marker id="f21pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="70" y="22" text-anchor="middle">Medir</text>
+<text class="dg-tiny" x="70" y="38" text-anchor="middle">milisegundos</text>
+<text class="dg-group" x="225" y="22" text-anchor="middle">Transportar</text>
+<text class="dg-tiny" x="225" y="38" text-anchor="middle">durable</text>
+<text class="dg-group" x="390" y="22" text-anchor="middle">Deduplicar y agregar</text>
+<text class="dg-tiny" x="390" y="38" text-anchor="middle">segundos</text>
+<text class="dg-group" x="560" y="22" text-anchor="middle">Tarifar y saldo</text>
+<text class="dg-tiny" x="560" y="38" text-anchor="middle">segundos</text>
+<text class="dg-group" x="710" y="22" text-anchor="middle">Facturar</text>
+<text class="dg-tiny" x="710" y="38" text-anchor="middle">fin del ciclo</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="56" width="120" height="60" rx="6"/>
+<text class="dg-label" x="70.0" y="83.5" text-anchor="middle" style="font-size:13.5px">Gateway</text>
+<text class="dg-tiny" x="70.0" y="99.5" text-anchor="middle">cierra el stream</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="140" width="120" height="60" rx="6"/>
+<text class="dg-label" x="70.0" y="167.5" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<text class="dg-tiny" x="70.0" y="183.5" text-anchor="middle">cuenta su uso</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="170" y="56" width="110" height="144" rx="6"/>
+<text class="dg-label" x="225.0" y="110.5" text-anchor="middle" style="font-size:13.5px">Kafka</text>
+<text class="dg-tiny" x="225.0" y="126.5" text-anchor="middle">tópico usage</text>
+<text class="dg-tiny" x="225.0" y="140.5" text-anchor="middle">clave: org</text>
+<text class="dg-tiny" x="225.0" y="154.5" text-anchor="middle">retención 7 días</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="320" y="56" width="140" height="60" rx="6"/>
+<text class="dg-label" x="390.0" y="83.5" text-anchor="middle" style="font-size:13.5px">Streaming</text>
+<text class="dg-tiny" x="390.0" y="99.5" text-anchor="middle">dedupe y ventanas</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="320" y="140" width="140" height="60" rx="6"/>
+<text class="dg-label" x="390.0" y="167.5" text-anchor="middle" style="font-size:13.5px">Log crudo</text>
+<text class="dg-tiny" x="390.0" y="183.5" text-anchor="middle">S3, inmutable</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="500" y="56" width="120" height="60" rx="6"/>
+<text class="dg-label" x="560.0" y="76.0" text-anchor="middle" style="font-size:13.5px">Rating</text>
+<text class="dg-tiny" x="560.0" y="92.0" text-anchor="middle">precio por hora</text>
+<text class="dg-tiny" x="560.0" y="106.0" text-anchor="middle">del evento</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="500" y="140" width="120" height="60" rx="6"/>
+<text class="dg-label" x="560.0" y="167.5" text-anchor="middle" style="font-size:13.5px">Saldo</text>
+<text class="dg-tiny" x="560.0" y="183.5" text-anchor="middle">ledger de créditos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="660" y="56" width="100" height="60" rx="6"/>
+<text class="dg-label" x="710.0" y="83.5" text-anchor="middle" style="font-size:13.5px">Facturas</text>
+<text class="dg-tiny" x="710.0" y="99.5" text-anchor="middle">cierre del ciclo</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="660" y="140" width="100" height="60" rx="6"/>
+<text class="dg-label" x="710.0" y="167.5" text-anchor="middle" style="font-size:13.5px">Cobro</text>
+<text class="dg-tiny" x="710.0" y="183.5" text-anchor="middle">Stripe Billing</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="10" y="250" width="120" height="60" rx="6"/>
+<text class="dg-label" x="70.0" y="277.5" text-anchor="middle" style="font-size:13.5px">Limitador</text>
+<text class="dg-tiny" x="70.0" y="293.5" text-anchor="middle">Redis (M18)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="320" y="250" width="300" height="60" rx="6"/>
+<text class="dg-label" x="470.0" y="277.5" text-anchor="middle" style="font-size:13.5px">Conciliación</text>
+<text class="dg-tiny" x="470.0" y="293.5" text-anchor="middle">gateway, agregados y motor, cada hora</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="660" y="250" width="100" height="60" rx="6"/>
+<text class="dg-label" x="710.0" y="277.5" text-anchor="middle" style="font-size:13.5px">Topes</text>
+<text class="dg-tiny" x="710.0" y="293.5" text-anchor="middle">50, 80 y 100 %</text>
+<path class="dg-edge" d="M130 86 H168" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M280 86 H318" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M280 170 H318" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M460 86 H498" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M560 116 V138" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M620 86 H658" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M710 116 V138" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M390 200 V248" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M460 104 H478 V248" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M620 176 H640 V280 H658" marker-end="url(#f21pa)"/>
+<path class="dg-edge" d="M130 180 H150 V266 H318" marker-end="url(#f21pa)" style="stroke-dasharray:5 4"/>
+<text class="dg-tiny" x="234" y="259" text-anchor="middle">registro propio</text>
+<path class="dg-edge" d="M318 298 H132" marker-end="url(#f21pa)"/>
+<text class="dg-tiny" x="234" y="291" text-anchor="middle">corrige contadores</text>
+<path class="dg-edge" d="M710 310 V328 H70 V312" marker-end="url(#f21pa)"/>
+<text class="dg-tiny" x="390" y="340" text-anchor="middle">bloquea al pasar el tope</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.1.</b> El uso viaja de izquierda a derecha y se vuelve más lento y más exacto en cada plano. La conciliación, abajo, compara tres fuentes independientes y es la única que puede corregir al limitador.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Plano</th><th>Pieza</th><th>Qué garantiza</th><th>Sección</th></tr></thead>
+          <tbody>
+            <tr><td>Medir</td><td>Gateway al cerrar el stream; registro propio del motor</td><td>Todo uso produce un evento</td><td>21.3, 21.4</td></tr>
+            <tr><td>Transportar</td><td>Kafka, tópico <code>usage</code> con la organización como clave</td><td>Durable, ordenado por organización, releíble</td><td>21.4</td></tr>
+            <tr><td>Deduplicar y agregar</td><td>Procesador de streaming con estado</td><td>Cada evento cuenta una vez, en la hora en que ocurrió</td><td>21.5, 21.6</td></tr>
+            <tr><td>Tarifar</td><td>Rating con el catálogo de precios versionado</td><td>El precio de la hora del evento, en dinero entero</td><td>21.7</td></tr>
+            <tr><td>Saldo y topes</td><td>Ledger de créditos, reservas, alertas</td><td>Nadie gasta lo que no tiene, salvo un sobregiro acotado</td><td>21.8, 21.9</td></tr>
+            <tr><td>Facturar y cobrar</td><td>Job de cierre y Stripe Billing</td><td>Una factura por ciclo, que se puede explicar línea por línea</td><td>21.10</td></tr>
+            <tr><td>Conciliar</td><td>Comparación horaria de tres fuentes</td><td>Lo que se perdió aparece; los contadores aproximados se corrigen</td><td>21.11</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span> Las piezas son las de un proveedor de API típico. Los proveedores no publican su diseño interno de metering; lo que sí está documentado (las APIs de Stripe, las garantías de Kafka, Flink y ClickHouse) se marca donde aparece.</p>
+
+      <h3 id="mapa">El mapa del metering</h3>
+
+      <p>Explora cada pieza: sus responsabilidades, su API, sus datos, cómo falla y sus números. Los escenarios recorren los casos de este módulo, del evento normal a la conciliación que corrige al limitador.</p>
+
+      <div data-map="m21-metering"></div>
+
+      <h3 id="viaje">De un token a la factura</h3>
+
+      <p>Sigamos una request de la organización <code>org_7</code>: 1&#8239;200 tokens de entrada, 8&#8239;000 leídos del caché y 400 de salida, terminada a las 14:05:09.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 546" role="img" aria-labelledby="f21st f21sd">
+<title id="f21st">De un token a la factura</title>
+<desc id="f21sd">Al terminar el stream, el gateway publica el evento de uso en Kafka. El procesador de streaming lo consume, lo deduplica por event_id y lo suma a la ventana de su hora; el servicio de saldo descuenta su costo un segundo después. Al final del ciclo, el job de facturas lee los agregados del mes, arma las líneas por modelo y tipo de token y las manda a Stripe, que finaliza la factura, cobra y avisa con webhooks.</desc>
+<defs><marker id="f21s-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f21s-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f21s-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f21s-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="11.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Gateway</text>
+<path class="dg-frame" d="M70.0 40 V536"/>
+<rect class="dg-box" x="137.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="196.0" y="29" text-anchor="middle" style="font-size:13.5px">Kafka</text>
+<path class="dg-frame" d="M196.0 40 V536"/>
+<rect class="dg-box" x="263.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="322.0" y="29" text-anchor="middle" style="font-size:13.5px">Streaming</text>
+<path class="dg-frame" d="M322.0 40 V536"/>
+<rect class="dg-box" x="389.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="448.0" y="29" text-anchor="middle" style="font-size:13.5px">Saldo</text>
+<path class="dg-frame" d="M448.0 40 V536"/>
+<rect class="dg-box" x="515.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="574.0" y="29" text-anchor="middle" style="font-size:13.5px">Facturas</text>
+<path class="dg-frame" d="M574.0 40 V536"/>
+<rect class="dg-box" x="641.0" y="8" width="118.0" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Stripe</text>
+<path class="dg-frame" d="M700.0 40 V536"/>
+<path class="dg-edge" d="M73.0 72 L191.0 72" marker-end="url(#f21s-a)"/>
+<rect x="47.80000000000001" y="55" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="66" text-anchor="middle">evento de uso · 14:05:09</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M193.0 106 L75.0 106" marker-end="url(#f21s-r)"/>
+<rect x="80.80000000000001" y="89" width="104.39999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="133.0" y="100" text-anchor="middle">ack (acks=all)</text>
+<path class="dg-edge" d="M199.0 140 L317.0 140" marker-end="url(#f21s-a)"/>
+<rect x="226.6" y="123" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="259.0" y="134" text-anchor="middle">consumir</text>
+<rect x="332.0" y="160" width="174" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="342.0" y="176">¿event_id ya visto? no</text>
+<path class="dg-edge" d="M322.0 200 h40 v14 h-38" marker-end="url(#f21s-a)"/>
+<text class="dg-tiny" x="368.0" y="211">suma a la ventana 14:00</text>
+<path class="dg-edge" d="M325.0 242 L443.0 242" marker-end="url(#f21s-a)"/>
+<rect x="316.3" y="225" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">descontar 0.008 USD</text>
+<rect x="458.0" y="262" width="230" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="468.0" y="278">a 1 o 2 s del final del stream</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">fin del ciclo: día 1 del mes siguiente</text>
+<path class="dg-edge" d="M571.0 344 L327.0 344" marker-end="url(#f21s-a)"/>
+<rect x="359.5" y="327" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="338" text-anchor="middle">agregados del mes por org</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M325.0 378 L569.0 378" marker-end="url(#f21s-r)"/>
+<rect x="362.8" y="361" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="448.0" y="372" text-anchor="middle">líneas por modelo y tipo</text>
+<path class="dg-edge" d="M577.0 412 L695.0 412" marker-end="url(#f21s-a)"/>
+<rect x="525.4" y="395" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="637.0" y="406" text-anchor="middle">uso del ciclo · factura borrador</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M697.0 446 L579.0 446" marker-end="url(#f21s-q)"/>
+<rect x="574.9" y="429" width="124.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="637.0" y="440" text-anchor="middle">invoice.finalized</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M697.0 480 L579.0 480" marker-end="url(#f21s-q)"/>
+<rect x="591.4" y="463" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="637.0" y="474" text-anchor="middle">invoice.paid</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.2.</b> El mismo evento alimenta dos relojes: el saldo, que se descuenta en un segundo o dos, y la factura, que espera al cierre del ciclo.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Etapa</th><th>Cuándo, desde el final del stream</th><th>Quién la mira</th></tr></thead>
+          <tbody>
+            <tr><td>Evento confirmado en Kafka</td><td class="r">~5 ms</td><td>Nadie todavía</td></tr>
+            <tr><td>Saldo descontado</td><td class="r">1 a 2 s</td><td>El limitador de saldo prepagado y el tope de gasto</td></tr>
+            <tr><td>Agregado horario visible en el tablero</td><td class="r">1 a 5 min</td><td>El cliente, en la consola de uso</td></tr>
+            <tr><td>Hora cerrada y conciliada</td><td class="r">~2 h</td><td>Finanzas, el equipo de guardia</td></tr>
+            <tr><td>Factura</td><td class="r">fin del ciclo</td><td>El cliente y su área de compras</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="evento"><span class="sec-num">21.3</span>El evento de uso</h2>
+
+      <p>Todo empieza con un registro bien diseñado. El <dfn data-term="evento-uso">evento de uso</dfn> describe qué se consumió, quién, cuándo y con qué modelo. No dice cuánto cuesta.</p>
+
+<pre data-lang="json"><code>{
+  "event_id": "req_9f2c41:final",
+  "request_id": "req_9f2c41",
+  "kind": "final",
+  "status": "completed",
+  "org_id": "org_7",
+  "project_id": "proj_31",
+  "api_key_id": "key_88a",
+  "model": "modelo-m",
+  "model_version": "modelo-m-2026-09-15",
+  "service_tier": "standard",
+  "batch": false,
+  "region": "us-east-1",
+  "event_time": "2026-10-04T14:05:09.412Z",
+  "units": {
+    "input_tokens": 1200,
+    "cache_write_5m_tokens": 0,
+    "cache_write_1h_tokens": 0,
+    "cache_read_tokens": 8000,
+    "output_tokens": 400,
+    "web_search_requests": 0
+  },
+  "producer": "gw-use1-14",
+  "schema_version": 3
+}</code></pre>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">usage_event</code>
+          <span class="schema-chip">Kafka, tópico usage</span>
+          <span class="schema-chip">Clave: <b>org_id</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>event_id</code><span class="key">PK</span></td><td>texto</td><td>determinista</td><td>Descartar copias: el mismo uso siempre tiene el mismo id</td></tr>
+              <tr><td><code>request_id</code></td><td>texto</td><td>no nulo</td><td>Unir con los logs, los traces y el registro del motor</td></tr>
+              <tr><td><code>kind</code></td><td>enum</td><td><code>final</code>, <code>partial</code>, <code>tool</code></td><td>Distinguir el cierre de un stream de un tramo de un stream largo</td></tr>
+              <tr><td><code>org_id</code>, <code>project_id</code>, <code>api_key_id</code></td><td>texto</td><td>no nulos</td><td>A quién se cobra y por dónde se desglosa</td></tr>
+              <tr><td><code>model_version</code></td><td>texto</td><td>no nulo</td><td>El precio depende del modelo; la versión, de la auditoría</td></tr>
+              <tr><td><code>service_tier</code>, <code>batch</code>, <code>region</code></td><td>enum, booleano, texto</td><td></td><td>Los multiplicadores del precio</td></tr>
+              <tr><td><code>event_time</code></td><td>timestamp UTC</td><td>no en el futuro</td><td>En qué hora se cuenta y qué precio se aplica</td></tr>
+              <tr><td><code>units</code></td><td>mapa de enteros</td><td>≥ 0</td><td>Cantidades por unidad; nunca dinero</td></tr>
+              <tr><td><code>schema_version</code></td><td>entero</td><td></td><td>Evolucionar el esquema sin romper consumidores (<a href="m07-mensajeria.html#esquemas">M07</a>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>Cuatro decisiones de este esquema importan más que el resto:</p>
+      <ul>
+        <li><b>Sin precio.</b> Los precios cambian, los contratos tienen descuentos propios y a veces hay que recalcular un mes. Si el evento trajera el precio, un error de precio quedaría grabado en millones de eventos inmutables. Separado, se corrige el catálogo y se vuelve a tarifar (21.7).</li>
+        <li><b>Inmutable.</b> Un evento nunca se edita. Si algo estuvo mal, se emite otro que lo corrige (21.12). Así el log crudo es una historia confiable que se puede volver a procesar.</li>
+        <li><b>Un <code>event_id</code> determinista.</b> Se arma con el <code>request_id</code> y el tipo de evento: <code>req_9f2c41:final</code>, <code>req_9f2c41:partial:0003</code>. Si el gateway reintenta, o si la conciliación reconstruye el evento, sale el mismo id, y el procesador descarta la copia. Un UUID aleatorio generado al emitir no sirve: cada reintento tendría un id nuevo.</li>
+        <li><b>La hora del evento, no la de llegada.</b> El uso se cuenta en la hora en que ocurrió, aunque el evento llegue dos horas tarde (21.6).</li>
+      </ul>
+
+<pre data-lang="python"><code>from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+@dataclass(frozen=True)          # inmutable: no se edita, se emite otro
+class UsageEvent:
+    request_id: str
+    kind: str                    # "final", "partial" o "tool"
+    seq: int                     # número de tramo, 0 para el final
+    org_id: str
+    project_id: str
+    api_key_id: str
+    model_version: str
+    event_time: datetime
+    units: dict = field(default_factory=dict)
+
+    @property
+    def event_id(self) -&gt; str:
+        # determinista: cualquier copia del mismo uso tiene el mismo id
+        return f"{self.request_id}:{self.kind}" + (f":{self.seq:04d}" if self.kind == "partial" else "")
+
+    def __post_init__(self):
+        assert self.event_time.tzinfo is timezone.utc
+        assert all(isinstance(v, int) and v &gt;= 0 for v in self.units.values())</code></pre>
+
+      <h2 id="emitir"><span class="sec-num">21.4</span>Emitir sin perder</h2>
+
+      <p>¿Quién emite el evento? Hay dos candidatos y cada uno ve una parte distinta:</p>
+      <ul>
+        <li><b>El motor</b> sabe exactamente cuántos tokens procesó y generó, pero no sabe de organizaciones, claves ni planes; tampoco sabe si el cliente recibió la respuesta.</li>
+        <li><b>El gateway</b> sabe a quién cobrar y qué le llegó al cliente, y recibe el conteo del motor en el último evento del stream: el objeto <code>usage</code> que viste en el <a href="m17-api-streaming.html#sse-formatos">M17</a>.</li>
+      </ul>
+
+      <p>La respuesta habitual es que el evento nace en el gateway, al cerrar el stream, con los números del motor. El motor deja además su propio registro, en lotes y por otro camino, que no se usa para cobrar sino para comprobar (21.11).</p>
+
+      <h3 id="emitir-durable">Que el evento sobreviva</h3>
+
+      <p>El gateway produce a Kafka con <code>acks=all</code> y el productor idempotente, que desde Kafka 3.0 vienen activados por defecto. <span class="badge badge--doc">Documentado</span> Si Kafka no responde, el gateway no puede descartar el evento ni bloquear al cliente esperando. Las dos salidas conocidas son las del <a href="m07-mensajeria.html#outbox">M07</a>:</p>
+      <ul>
+        <li><b>Outbox local.</b> El evento se escribe primero en un archivo de cola en el disco del gateway (un <i>spool</i>) y un hilo aparte lo publica y lo marca como enviado. Si el gateway se reinicia, publica lo que quedó pendiente. Es el patrón outbox sin base de datos.</li>
+        <li><b>Buffer en memoria con límite.</b> Más simple, pero se pierde todo lo pendiente si el proceso muere. Sirve solo si la conciliación puede reconstruir lo perdido.</li>
+      </ul>
+
+      <p>Las dos tienen la misma consecuencia: el outbox publica <em>al menos una vez</em>. Si el gateway publicó y murió antes de marcar el evento como enviado, al volver lo publica de nuevo. Ese duplicado no lo detecta Kafka, porque viene de una sesión de productor distinta; lo detecta el <code>event_id</code> (21.5).</p>
+
+      <h3 id="emitir-cortes">Streams cancelados, largos y huérfanos</h3>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Caso</th><th>Qué se emite</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>El cliente cancela o se desconecta</td><td>Un evento <code>final</code> con <code>status: "cancelled"</code> y el uso hasta que el motor se enteró</td><td>Esos tokens gastaron GPU. El <a href="m17-api-streaming.html#cancelacion">M17</a> dejó pendiente registrarlos: este es el registro.</td></tr>
+            <tr><td>Un stream de 20 minutos (un agente, un modo en segundo plano)</td><td>Eventos <code>partial</code> cada 30 s o cada 4&#8239;000 tokens, y un <code>final</code> con el resto</td><td>El saldo y el tope ven el gasto mientras ocurre, y si el gateway muere se pierde un tramo, no todo</td></tr>
+            <tr><td>Una herramienta del servidor (búsqueda, ejecución de código)</td><td>Un evento <code>tool</code> por llamada</td><td>Se cobra aparte y puede fallar aparte</td></tr>
+            <tr><td>El gateway muere a mitad del stream</td><td>Nada, en ese momento</td><td>La conciliación encuentra el hueco en el registro del motor y publica un evento reconstruido con el mismo <code>event_id</code> (21.11)</td></tr>
+            <tr><td>La request falla antes de generar</td><td>Un evento con los tokens de entrada si hubo prefill; si no, nada</td><td>Depende de la política del proveedor: muchos no cobran los errores del servidor</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre data-lang="python"><code>async def stream_and_meter(req, engine, spool):
+    usage, status = {}, "completed"
+    try:
+        async for chunk in engine.generate(req):
+            if chunk.usage:                 # el motor manda el conteo al final o en cada tramo
+                usage = chunk.usage
+            yield chunk
+    except ClientDisconnected:
+        status = "cancelled"
+        usage = await engine.abort(req.id)   # el motor devuelve lo que alcanzó a usar
+        raise
+    finally:
+        # se emite siempre: completado, cancelado o con error
+        spool.append(UsageEvent(req.id, "final", 0, req.org, req.project, req.key,
+                                req.model_version, utc_now(), usage), status=status)</code></pre>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Emitir desde el motor parece más exacto, porque es quien cuenta. Pero obliga a pasarle al motor la identidad del cliente, lo acopla al modelo de cobro y deja sin registrar lo que el gateway cobra por su cuenta, como las herramientas. Emitir desde el gateway mantiene el motor simple, a cambio de depender de que el gateway sobreviva hasta el final del stream. La conciliación con el registro del motor cubre ese hueco.</p>
+      </aside>
+
+      <h2 id="dedupe"><span class="sec-num">21.5</span>Exactamente una vez, en la práctica</h2>
+
+      <p>El <a href="m07-mensajeria.html#semanticas">M07</a> dejó la regla: la red solo ofrece entregas de a lo sumo una vez o de al menos una vez. Lo que se construye encima es un <dfn data-term="exactly-once-efectivo">exactamente una vez efectivo</dfn>: un mensaje puede llegar varias veces, pero su efecto se aplica una sola. En el metering se logra con cuatro capas, y cada una cubre un hueco distinto.</p>
+
+      <h3 id="dedupe-productor">1. El productor idempotente</h3>
+
+      <p>Kafka le asigna a cada productor un id y numera cada lote que manda a cada partición. El broker acepta un lote solo si su número es el siguiente al último que guardó; si recibe uno repetido, lo descarta. <span class="badge badge--doc">Documentado</span> (KIP-98) Cubre el caso más común, el reintento después de un timeout, sin hacer nada. No cubre un productor que se reinicia, porque obtiene un id nuevo.</p>
+
+      <h3 id="dedupe-transacciones">2. Las transacciones de Kafka</h3>
+
+      <p>Un procesador que lee de un tópico y escribe en otro puede confirmar en una sola transacción lo que escribió y hasta dónde leyó. Si se cae a mitad, nada de eso queda visible y otro proceso retoma desde el último offset confirmado. <span class="badge badge--doc">Documentado</span> Es exactamente una vez <em>dentro de Kafka</em>. En cuanto el procesador escribe fuera (una base, una API), la transacción ya no lo cubre.</p>
+
+      <h3 id="dedupe-id">3. Deduplicar por event_id</h3>
+
+      <p>Lo que queda, los reenvíos del outbox y los eventos reconstruidos, se resuelve en el procesador de streaming: guarda en su estado los <code>event_id</code> vistos durante una ventana y descarta los repetidos. ¿Cuánto cuesta ese estado?</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Ids en 48 horas</td><td>22.5 millones de eventos por día × 2</td><td class="r">45 millones</td></tr>
+            <tr><td>Estado de dedupe</td><td>45 millones × ~64 bytes (id, hora y sobrecarga del almacén)</td><td class="r">~2.9 GB</td></tr>
+            <tr><td>Un proveedor cien veces más grande</td><td>2.9 GB × 100, repartido en 64 particiones</td><td class="r">~4.5 GB por partición</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Como la clave del tópico es la organización, todas las copias de un evento caen en la misma partición y el estado de cada partición es independiente: crece con el clúster sin coordinación. La ventana tiene que ser más larga que el peor retraso con que puede llegar una copia. Para lo que llegue después, la red de seguridad es la conciliación.</p>
+
+      <h3 id="dedupe-escritura">4. Escrituras que se pueden repetir</h3>
+
+      <p>La última capa está en el almacén. Si el procesador escribe <code>sumar 9&#8239;600 tokens</code>, un reintento suma dos veces. Si escribe <code>la hora 14:00 de org_7 vale 9&#8239;109&#8239;600 tokens, versión 41</code>, repetirlo no cambia nada. Escribir el valor, no el incremento, vuelve idempotente al almacén. ClickHouse lo ofrece con <code>ReplacingMergeTree</code>, que se queda con la fila de versión más alta para cada clave, con una condición: descarta las filas viejas solo cuando fusiona partes en segundo plano, en un momento que no se puede predecir. Hasta entonces, las consultas que necesitan el resultado exacto usan <code>FINAL</code>. <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="python"><code>class Deduper:
+    """Estado por partición: event_id -&gt; hora en que se vio. Ventana de 48 h."""
+    def __init__(self, store, window_s=48 * 3600):
+        self.store, self.window_s = store, window_s
+
+    def first_time(self, ev, now) -&gt; bool:
+        if self.store.get(ev.event_id) is not None:
+            metrics.inc("usage_duplicates_total")
+            return False
+        self.store.put(ev.event_id, now, ttl=self.window_s)
+        return True
+
+def process(ev, dedupe, hourly, now):
+    if not dedupe.first_time(ev, now):
+        return
+    hour = ev.event_time.replace(minute=0, second=0, microsecond=0)
+    row = hourly.setdefault((ev.org_id, ev.model_version, hour), {})
+    for unit, qty in ev.units.items():
+        row[unit] = row.get(unit, 0) + qty
+    # al cerrar la ventana se escribe el valor completo de la fila, con su versión: repetirlo no suma dos veces</code></pre>
+
+      <p>La animación recorre los cuatro casos: un evento normal, el mismo evento dos veces, un evento que llega tarde y un evento que se pierde porque el gateway murió.</p>
+
+      <div data-sim="usagepipe"></div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Si el estado de dedupe se pierde (un disco que se borra, un cambio de topología mal hecho), el procesador vuelve a ver como nuevos los eventos de las últimas horas y los cuenta dos veces. No se arregla con el estado viejo, que ya no existe: se arregla volviendo a calcular esas horas desde el log crudo, que tiene todas las copias y se deduplica de nuevo (21.12). Por eso el log crudo guarda lo que llegó, sin filtrar.</p>
+      </aside>
+
+      <h2 id="agregar"><span class="sec-num">21.6</span>Agregar por hora: ventanas y eventos tardíos</h2>
+
+      <p>Nadie factura 22.5 millones de eventos sueltos. Se factura la suma por organización, modelo y unidad, y para el tablero y la conciliación conviene tenerla por hora. Sumar parece trivial hasta que aparece la pregunta: ¿en qué hora se cuenta un evento?</p>
+
+      <p>Hay dos relojes. El <dfn data-term="event-time">tiempo del evento</dfn> es cuándo ocurrió el uso, el <code>event_time</code> que puso el gateway. El tiempo de procesamiento es cuándo lo vio el procesador. Casi siempre difieren en milisegundos, pero una región aislada, un gateway que vacía su spool al reiniciar o un consumidor atrasado los separan por horas. Si se agrupa por tiempo de procesamiento, el resultado depende del lag de Kafka: reprocesar el mismo log otro día da otra distribución por hora. Para facturar se agrupa siempre por tiempo del evento.</p>
+
+      <h3 id="agregar-ventanas">Ventanas y marcas de agua</h3>
+
+      <p>El procesador suma en una <dfn data-term="ventana-tumbling">ventana tumbling</dfn> por hora: ventanas de tamaño fijo que no se superponen, de 14:00 a 15:00, de 15:00 a 16:00. <span class="badge badge--doc">Documentado</span> ¿Cuándo da por terminada la de 14:00? Nunca puede estar seguro de que no llegue otro evento de esa hora. Lo que tiene es una <dfn data-term="watermark">marca de agua</dfn>: una afirmación de que ya no espera eventos anteriores a cierta hora. La forma más común se calcula como la hora de evento más alta vista menos un desorden tolerado.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f21wt f21wd">
+<title id="f21wt">Ventanas por hora, marca de agua y un evento tardío</title>
+<desc id="f21wd">Arriba, el eje de la hora del evento con cuatro ventanas de una hora, de 13:00 a 17:00; abajo, el eje de la hora de llegada. La mayoría de los eventos llegan segundos después de ocurrir: sus líneas son casi verticales. El procesador ya vio eventos hasta las 16:10, así que su marca de agua, con 5 minutos de desorden tolerado, está en 16:05. Con una tolerancia de 1 hora, las ventanas de 13:00 y 14:00 están cerradas y las de 15:00 y 16:00 siguen abiertas. Un evento de las 14:05 llega a las 16:10, después del cierre de su ventana: va a la salida de eventos tardíos y se aplica como corrección.</desc>
+<defs><marker id="f21wa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f21wf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<text class="dg-group" x="10" y="20">Hora del evento</text>
+<rect class="dg-box" x="72.0" y="40" width="156" height="46" rx="6" style="fill:var(--fill)"/>
+<text class="dg-label" x="150.0" y="60" text-anchor="middle" style="font-size:13px">ventana 13:00</text>
+<text class="dg-tiny" x="150.0" y="76" text-anchor="middle">cerrada</text>
+<rect class="dg-box" x="232.0" y="40" width="156" height="46" rx="6" style="fill:var(--fill)"/>
+<text class="dg-label" x="310.0" y="60" text-anchor="middle" style="font-size:13px">ventana 14:00</text>
+<text class="dg-tiny" x="310.0" y="76" text-anchor="middle">cerrada</text>
+<rect class="dg-box" x="392.0" y="40" width="156" height="46" rx="6"/>
+<text class="dg-label" x="470.0" y="60" text-anchor="middle" style="font-size:13px">ventana 15:00</text>
+<text class="dg-tiny" x="470.0" y="76" text-anchor="middle">abierta</text>
+<rect class="dg-box" x="552.0" y="40" width="156" height="46" rx="6"/>
+<text class="dg-label" x="630.0" y="60" text-anchor="middle" style="font-size:13px">ventana 16:00</text>
+<text class="dg-tiny" x="630.0" y="76" text-anchor="middle">abierta</text>
+<path class="dg-edge" d="M70.0 104 H710.0"/>
+<path class="dg-edge" d="M70.0 100 V108"/>
+<text class="dg-num" x="70.0" y="122" text-anchor="middle">13:00</text>
+<path class="dg-edge" d="M230.0 100 V108"/>
+<text class="dg-num" x="230.0" y="122" text-anchor="middle">14:00</text>
+<path class="dg-edge" d="M390.0 100 V108"/>
+<text class="dg-num" x="390.0" y="122" text-anchor="middle">15:00</text>
+<path class="dg-edge" d="M550.0 100 V108"/>
+<text class="dg-num" x="550.0" y="122" text-anchor="middle">16:00</text>
+<path class="dg-edge" d="M710.0 100 V108"/>
+<text class="dg-num" x="710.0" y="122" text-anchor="middle">17:00</text>
+<text class="dg-group" x="10" y="226">Hora de llegada</text>
+<path class="dg-edge" d="M70.0 252 H710.0"/>
+<path class="dg-edge" d="M70.0 248 V256"/>
+<text class="dg-num" x="70.0" y="270" text-anchor="middle">13:00</text>
+<path class="dg-edge" d="M230.0 248 V256"/>
+<text class="dg-num" x="230.0" y="270" text-anchor="middle">14:00</text>
+<path class="dg-edge" d="M390.0 248 V256"/>
+<text class="dg-num" x="390.0" y="270" text-anchor="middle">15:00</text>
+<path class="dg-edge" d="M550.0 248 V256"/>
+<text class="dg-num" x="550.0" y="270" text-anchor="middle">16:00</text>
+<path class="dg-edge" d="M710.0 248 V256"/>
+<text class="dg-num" x="710.0" y="270" text-anchor="middle">17:00</text>
+<circle cx="123.3" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M123.3 130 L125.3 246"/>
+<circle cx="203.3" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M203.3 130 L205.3 246"/>
+<circle cx="310.0" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M310.0 130 L312.0 246"/>
+<circle cx="376.7" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M376.7 130 L378.7 246"/>
+<circle cx="430.0" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M430.0 130 L432.0 246"/>
+<circle cx="496.7" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M496.7 130 L498.7 246"/>
+<circle cx="555.3" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M555.3 130 L557.3 246"/>
+<circle cx="574.0" cy="104" r="4" fill="var(--l-service)"/>
+<path class="dg-feedback" d="M574.0 130 L576.0 246"/>
+<circle cx="243.3" cy="104" r="5" fill="var(--fail)"/>
+<path class="dg-edge" d="M243.3 130 L576.7 246" marker-end="url(#f21wf)" style="stroke:var(--fail)"/>
+<text class="dg-tiny dg-fail-text" x="235.3" y="160" text-anchor="end" style="paint-order:stroke;stroke:var(--bg-2);stroke-width:5px">ocurre 14:05</text>
+<text class="dg-tiny dg-fail-text" x="584.6666666666666" y="238">llega 16:10: su ventana ya cerró</text>
+<path d="M563.3 32 V104" stroke="var(--label)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="569.3333333333333" y="30">marca de agua: 16:05</text>
+<text class="dg-small" x="10" y="296">marca de agua = hora más alta vista (16:10) − desorden tolerado (5 min)</text>
+<text class="dg-small" x="10" y="316">una ventana cierra cuando la marca de agua pasa su fin + la tolerancia (1 h): la de 14:00 cerró en 16:00</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.3.</b> Los eventos normales caen casi verticales: llegan segundos después de ocurrir. El evento rojo ocurrió a las 14:05 y llegó a las 16:10, cuando su ventana ya había cerrado.</figcaption>
+      </figure>
+
+      <p>En Apache Flink, una ventana se dispara cuando la marca de agua pasa su fin, y los elementos que llegan después se descartan, porque la tolerancia (<i>allowed lateness</i>) vale 0 por defecto. Con una tolerancia mayor, cada evento tardío vuelve a disparar la ventana con el resultado actualizado; lo que llega después de la tolerancia se puede mandar a una salida aparte con <code>sideOutputLateData</code>. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Descartar es la opción por defecto y es inaceptable para facturar: un evento tardío es dinero. El diseño tiene tres plazos:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Cuándo llega</th><th>Qué pasa</th><th>Costo</th></tr></thead>
+          <tbody>
+            <tr><td>Dentro del desorden tolerado (5 min)</td><td>Entra en su ventana antes de que se dispare</td><td>Ninguno</td></tr>
+            <tr><td>Dentro de la tolerancia (1 h)</td><td>La ventana se vuelve a emitir con el total nuevo; la fila del agregado se reemplaza con una versión mayor</td><td>Estado abierto durante una hora más</td></tr>
+            <tr><td>Después de la tolerancia</td><td>Va a la salida de tardíos; un job suma una fila de corrección a esa hora</td><td>La hora cambia después de haberse mostrado</td></tr>
+            <tr><td>Después de facturado el ciclo</td><td>La corrección se cobra como línea de ajuste en la factura siguiente</td><td>Explicarle al cliente una línea de un mes anterior</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="agregar-tablas">Las tablas de agregados</h3>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">usage_hourly</code>
+          <span class="schema-chip">ClickHouse, ReplacingMergeTree(version)</span>
+          <span class="schema-chip">Orden: <b>org_id, hour, model, unit</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>org_id</code>, <code>project_id</code><span class="key">PK</span></td><td>String</td><td></td><td>Quién, y el desglose por proyecto</td></tr>
+              <tr><td><code>hour</code><span class="key">PK</span></td><td>DateTime</td><td>hora del evento, truncada</td><td>La ventana</td></tr>
+              <tr><td><code>model</code>, <code>unit</code>, <code>tier</code><span class="key">PK</span></td><td>LowCardinality(String)</td><td></td><td>Cada combinación es una línea de precio</td></tr>
+              <tr><td><code>quantity</code></td><td>UInt64</td><td></td><td>Suma de las unidades</td></tr>
+              <tr><td><code>events</code></td><td>UInt32</td><td></td><td>Para conciliar contra el log crudo</td></tr>
+              <tr><td><code>version</code></td><td>UInt64</td><td>crece en cada emisión</td><td>La fila nueva reemplaza a la vieja</td></tr>
+              <tr><td><code>is_correction</code></td><td>UInt8</td><td></td><td>Distinguir las filas de tardíos</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>Con 3&#8239;000 organizaciones, unas 8 combinaciones de modelo y unidad por organización y 24 horas, son 576&#8239;000 filas por día: nada para una base columnar. Una tabla diaria y otra mensual se derivan de la horaria. El tablero de uso del cliente lee estas mismas tablas, y muestra junto al gráfico hasta qué hora están completas, para que nadie confunda una hora abierta con una caída de tráfico.</p>
+
+      <h2 id="precios"><span class="sec-num">21.7</span>Tarifar: precios versionados y dinero entero</h2>
+
+      <p>El <dfn data-term="rating">rating</dfn> convierte cantidades en dinero: toma el uso agregado y le aplica el precio que corresponde. Ese precio sale de un <dfn data-term="catalogo-precios">catálogo de precios</dfn> versionado, en el que cada precio tiene una vigencia, y lo que decide qué versión se usa es la hora del evento.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f21ct f21cd">
+<title id="f21ct">El precio que corresponde es el de la hora del evento</title>
+<desc id="f21cd">Una línea de tiempo con dos versiones del catálogo de precios de un modelo: la versión 1 vale hasta el 30 de septiembre a las 23:59:59 UTC y la versión 2, más barata, desde el 1 de octubre a las 00:00. Una request termina a las 23:59:58 del 30 de septiembre y su evento llega al procesador a las 00:00:03. Tarifado por la hora del evento, usa la versión 1; tarifado por la hora de procesamiento usaría la versión 2, y reprocesar el mismo evento otro día daría otro precio.</desc>
+<defs><marker id="f21ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f21cf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f21co" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--ok)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="20" y="40" width="360" height="54" rx="6"/>
+<text class="dg-label" x="200" y="63" text-anchor="middle" style="font-size:12.5px">precios v1 · entrada 3.00, salida 15.00 USD por millón</text>
+<text class="dg-tiny" x="200" y="82" text-anchor="middle" style="font-family:var(--f-mono)">valid_from 2026-04-01 · valid_to 2026-10-01</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="390" y="40" width="360" height="54" rx="6"/>
+<text class="dg-label" x="570" y="63" text-anchor="middle" style="font-size:12.5px">precios v2 · entrada 2.00, salida 10.00 USD por millón</text>
+<text class="dg-tiny" x="570" y="82" text-anchor="middle" style="font-family:var(--f-mono)">valid_from 2026-10-01 · valid_to null</text>
+<path class="dg-edge" d="M20 120 H750"/>
+<path d="M385 30 V130" stroke="var(--label)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="385" y="146" text-anchor="middle" style="font-family:var(--f-mono);paint-order:stroke;stroke:var(--bg-2);stroke-width:5px">2026-10-01T00:00:00Z</text>
+<circle cx="372" cy="120" r="5" fill="var(--l-service)"/>
+<text class="dg-tiny" x="366" y="172" text-anchor="end">event_time 23:59:58</text>
+<path class="dg-feedback" d="M372 160 V127"/>
+<circle cx="400" cy="120" r="5" fill="var(--label-3)"/>
+<text class="dg-tiny" x="406" y="172">procesado 00:00:03</text>
+<path class="dg-feedback" d="M400 160 V127"/>
+<rect class="dg-ok" x="20" y="192" width="360" height="48" rx="6"/>
+<text class="dg-label" x="200" y="212" text-anchor="middle" style="font-size:13px">✓ Por hora del evento: v1</text>
+<text class="dg-tiny" x="200" y="229" text-anchor="middle">el mismo resultado hoy, mañana y en cada reproceso</text>
+<rect class="dg-bad" x="390" y="192" width="360" height="48" rx="6"/>
+<text class="dg-label" x="570" y="212" text-anchor="middle" style="font-size:13px">✗ Por hora de procesamiento: v2</text>
+<text class="dg-tiny" x="570" y="229" text-anchor="middle">depende del lag de Kafka: no se puede reproducir</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.4.</b> Un precio que cambia a medianoche, con precios inventados para el ejemplo. Tarifar por la hora de procesamiento haría que el precio dependiera del lag de Kafka.</figcaption>
+      </figure>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">prices</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Sin solapamiento: <b>EXCLUDE USING gist</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>price_id</code><span class="key">PK</span></td><td>bigint</td><td></td><td>Cada factura guarda qué precio usó</td></tr>
+              <tr><td><code>scope</code></td><td>text</td><td><code>list</code>, <code>plan:x</code>, <code>org:y</code></td><td>Lista pública, plan o contrato de un cliente</td></tr>
+              <tr><td><code>model</code>, <code>unit</code>, <code>tier</code></td><td>text</td><td>no nulos</td><td>A qué línea se aplica</td></tr>
+              <tr><td><code>nanousd_per_unit</code></td><td>bigint</td><td>≥ 0</td><td>Precio entero: 2 USD por millón de tokens son 2&#8239;000 nanodólares por token</td></tr>
+              <tr><td><code>valid_from</code>, <code>valid_to</code></td><td>timestamptz</td><td>rango semiabierto</td><td>Vigencia; la fila nunca se edita, se cierra y se crea otra</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>La búsqueda del precio va de lo particular a lo general: primero el contrato de la organización, después su plan, al final la lista. Un contrato con un compromiso anual (pagar 100&#8239;000 USD por año a cambio de un 20&#8239;% de descuento) es solo otra fila con <code>scope = org:…</code>.</p>
+
+      <h3 id="precios-ejemplo">Un ejemplo con precios reales</h3>
+
+      <p>Claude Sonnet 5.5 cuesta, por millón de tokens, 2 USD de entrada, 2.50 de escritura en caché de 5 minutos, 4 de escritura de 1 hora, 0.20 de lectura de caché y 10 de salida. Batch descuenta el 50&#8239;% de todo, y los multiplicadores del caché se combinan con el de batch y con el de residencia de datos: procesar solo en Estados Unidos (<code>inference_geo: "us"</code>) multiplica por 1.1. <span class="badge badge--doc">Documentado</span> La request de 21.2:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Línea</th><th>Cálculo</th><th class="r">USD</th></tr></thead>
+          <tbody>
+            <tr><td>Entrada sin caché</td><td>1&#8239;200 × 2 ÷ 1&#8239;000&#8239;000</td><td class="r">0.0024</td></tr>
+            <tr><td>Lectura de caché</td><td>8&#8239;000 × 0.20 ÷ 1&#8239;000&#8239;000</td><td class="r">0.0016</td></tr>
+            <tr><td>Salida</td><td>400 × 10 ÷ 1&#8239;000&#8239;000</td><td class="r">0.0040</td></tr>
+            <tr><td><b>Total</b></td><td></td><td class="r"><b>0.0080</b></td></tr>
+            <tr><td>Sin prompt caching</td><td>9&#8239;200 × 2 + 400 × 10, ÷ 1&#8239;000&#8239;000</td><td class="r">0.0224</td></tr>
+            <tr><td>En batch</td><td>0.0080 × 0.5</td><td class="r">0.0040</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La mitad del costo está en la salida, aunque sea el 4&#8239;% de los tokens, y el caché divide el costo por 2.8. El tokenizer también cuenta: según Anthropic, el de los modelos desde Claude 4.7 produce alrededor de un 30&#8239;% más de tokens para el mismo texto que el de los anteriores. <span class="badge badge--doc">Documentado</span> El metering cuenta los tokens del modelo que se usó, no los de otro.</p>
+
+      <h3 id="precios-redondeo">Dinero entero y un solo redondeo</h3>
+
+      <p>El <a href="m27-pagos-stripe.html#dinero">M27</a> dejó la regla: el dinero se guarda en enteros, nunca en coma flotante. Aquí aparece un problema nuevo: el costo de una request es una fracción de centavo. ¿Dónde se redondea?</p>
+
+      <ul>
+        <li><b>Por request, al centavo:</b> 0.008 USD pasan a 0.01. Con 100&#8239;000 requests por día, el mes da 30&#8239;000 USD en lugar de 24&#8239;000: un 25&#8239;% de más, sin que nadie haya consumido nada extra. Redondear hacia abajo daría 0, y el uso sería gratis.</li>
+        <li><b>Por línea de factura:</b> se suman las cantidades del mes por línea (3 millones de requests × 400 tokens de salida = 1&#8239;200 millones de tokens), se multiplica una vez por el precio y se redondea una vez. El error queda por debajo de medio centavo por línea.</li>
+      </ul>
+
+      <p>El saldo prepagado, que se descuenta request por request, guarda montos en una unidad más chica que el centavo (micro o nanodólares) y nunca redondea al descontar. Solo la factura redondea, y la diferencia entre lo descontado y lo facturado se concilia.</p>
+
+<pre data-lang="python"><code>from decimal import Decimal, ROUND_HALF_UP
+
+def rate_line(quantity: int, nanousd_per_unit: int, multipliers=(1,)) -&gt; int:
+    """Una línea de factura: cantidad del ciclo × precio, redondeada una vez a centavos."""
+    nano = Decimal(quantity) * nanousd_per_unit
+    for m in multipliers:                 # batch 0.5, residencia 1.1: se multiplican
+        nano *= Decimal(str(m))
+    cents = (nano / Decimal(10_000_000)).quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    return int(cents)
+
+# 1 200 millones de tokens de salida a 10 USD por millón: 12 000 USD
+assert rate_line(1_200_000_000, 10_000) == 1_200_000</code></pre>
+
+      <p>Prueba la calculadora con la request del ejemplo, y cambia los tokens leídos del caché a 0 o el modo a batch:</p>
+
+      <div data-calc="pricing"></div>
+
+      <h2 id="creditos"><span class="sec-num">21.8</span>Créditos prepagados</h2>
+
+      <p>Muchas APIs cobran por adelantado: el cliente compra un <dfn data-term="credito-prepagado">crédito prepagado</dfn> y el uso lo va descontando. Para el proveedor tiene dos ventajas, no hay riesgo de cobro (el dinero ya entró) y no hace falta verificar la identidad para una factura a 30 días. Para el diseño, cambia todo: el saldo se tiene que conocer en segundos, porque al llegar a cero hay que dejar de servir.</p>
+
+      <h3 id="creditos-ledger">El saldo es un ledger</h3>
+
+      <p>El saldo no es una columna que se resta. Es el resultado de un <a href="m27-pagos-stripe.html#ledger">ledger de doble entrada</a>, como en el M27. El dinero que el cliente pagó y todavía no usó no es ingreso del proveedor: es un <dfn data-term="ingreso-diferido">ingreso diferido</dfn>, una deuda en servicio con el cliente. Las normas contables (ASC 606 en Estados Unidos, NIIF 15 en el resto) reconocen el ingreso recién cuando se entrega el servicio, es decir, cuando se consume. <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Movimiento</th><th>Débito</th><th>Crédito</th><th class="r">USD</th></tr></thead>
+          <tbody>
+            <tr><td>El cliente compra créditos</td><td>Efectivo por cobrar en Stripe</td><td>Créditos del cliente (ingreso diferido)</td><td class="r">500</td></tr>
+            <tr><td>Promoción de bienvenida, vence en 30 días</td><td>Gasto promocional</td><td>Créditos promocionales del cliente</td><td class="r">100</td></tr>
+            <tr><td>Uso: se consume primero lo que vence antes</td><td>Créditos promocionales del cliente</td><td>Ingresos por uso</td><td class="r">0.008</td></tr>
+            <tr><td>La promoción vence con 30 USD sin usar</td><td>Créditos promocionales del cliente</td><td>Gasto promocional</td><td class="r">30</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span> Los créditos tienen vencimiento: los prepagos de OpenAI vencen al año de comprados. <span class="badge badge--doc">Documentado</span> Por eso se consumen por orden de vencimiento, y cada compra o promoción es un lote con su fecha y su saldo propio.</p>
+
+      <p>El saldo de una organización es la suma de sus lotes vigentes. Calcularlo sumando el ledger en cada request sería lento, así que se guarda un saldo materializado con una versión, que se actualiza en la misma transacción que los asientos y que se puede volver a calcular desde el ledger cuando se quiera comprobar.</p>
+
+      <h3 id="creditos-reserva">Autorizar contra un saldo mientras el stream sigue</h3>
+
+      <p>El problema es el del <a href="m18-cuotas-tokens.html#reservar">M18</a>, con dinero en lugar de tokens: el costo de una request se conoce al final, y hay que decidir al principio si se la deja empezar. Con 20 streams abiertos a la vez y un saldo que se acerca a cero, hay tres políticas:</p>
+
+      <ul>
+        <li><b>Cobrar al terminar.</b> Se admite mientras el saldo sea positivo y se descuenta al final. Los streams que ya estaban en vuelo cuando el saldo llegó a cero siguen generando, y el saldo termina negativo.</li>
+        <li><b>Reservar el máximo.</b> Cada request reserva su costo máximo (el prompt más <code>max_tokens</code> de salida, al precio de lista) y devuelve lo que sobra al terminar. El saldo nunca baja de cero, pero el dinero reservado y no usado bloquea requests que sí se podían pagar.</li>
+        <li><b>Reservar por tramos.</b> Cada request reserva un tramo chico y pide otro cuando lo gasta: los préstamos del <a href="m18-cuotas-tokens.html#tres-formas">escrow del M18</a> aplicados a dinero. Si no queda saldo para el tramo siguiente, el stream se corta con un evento de error y el uso hasta ahí se cobra.</li>
+      </ul>
+
+      <p>Con el saldo inicial en 20 USD, 20 streams a la vez y un máximo de 0.50 USD por request, el simulador muestra el costo de cada una: cobrar al terminar deja el saldo en −1.51 USD; reservar el máximo empieza a rechazar requests con 9.94 USD todavía en la cuenta, porque 20 reservas de 0.50 bloquean 10 USD; reservar por tramos nunca baja de cero, rechaza menos y corta 14 streams a la mitad.</p>
+
+      <div data-sim="credits"></div>
+
+      <p>La decisión es de producto tanto como técnica. Un stream cortado a la mitad es una mala experiencia; un saldo negativo es una deuda pequeña que muchos proveedores aceptan. El diseño habitual combina las dos ideas: <b>un sobregiro acotado</b> por organización (por ejemplo, hasta 5 USD), que se descuenta de la próxima compra, y una <b>recarga automática</b> que cobra la tarjeta guardada cuando el saldo baja de un umbral. La recarga es un PaymentIntent como los del <a href="m27-pagos-stripe.html#idempotencia">M27</a>, con una idempotency key derivada del cruce de umbral (<code>org_7:recarga:saldo-v4182</code>) para que dos gateways que ven el mismo cruce no cobren dos veces.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>No todos prepagan. La alternativa es el pospago: se usa durante el mes y se factura al final, con el riesgo de que el cobro falle. Claude Platform on AWS, por ejemplo, es solo pospago: el uso se tarifa en dólares y se informa cada hora a AWS Marketplace, que lo factura con el resto de la cuenta de AWS. <span class="badge badge--doc">Documentado</span> El prepago reduce el riesgo de cobro; el pospago reduce la fricción para empresas grandes. Los proveedores suelen ofrecer los dos, según el nivel del cliente.</p>
+      </aside>
+
+      <h2 id="topes"><span class="sec-num">21.9</span>Topes de gasto y alertas</h2>
+
+      <p>El <a href="m18-cuotas-tokens.html#jerarquia">M18</a> presentó el tope de gasto y sus códigos de error, y dejó dicho que se lleva con el metering. Este es el cómo.</p>
+
+      <p>El servicio de topes consume la misma salida que el saldo: el costo de cada evento, segundos después de que ocurre. Lleva por organización y proyecto el gasto acumulado del mes y lo compara con los umbrales. Al cruzar el 50 y el 80&#8239;% manda una alerta (correo y webhook), una sola vez por umbral y por mes, con una clave idempotente <code>org_7:2026-10:80</code>. Al cruzar el 100&#8239;%, publica una marca en el servicio de configuración del limitador, y los gateways empiezan a rechazar con los códigos que ya viste.</p>
+
+      <h3 id="topes-exceso">El exceso máximo, calculado</h3>
+
+      <p>Un tope llevado así no es instantáneo. El gasto que pasa por encima del tope tiene dos fuentes, y las dos se pueden acotar:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Fuente</th><th>Cálculo</th><th class="r">USD</th></tr></thead>
+          <tbody>
+            <tr><td>Retraso del metering</td><td>2 USD por segundo de gasto × 2 s de retraso</td><td class="r">4</td></tr>
+            <tr><td>Requests en vuelo</td><td>50 streams × 0.48 USD de costo máximo (200&#8239;000 de entrada a 2 USD y 8&#8239;000 de salida a 10 USD por millón)</td><td class="r">24</td></tr>
+            <tr><td><b>Exceso normal</b></td><td></td><td class="r"><b>28</b></td></tr>
+            <tr><td>Si Kafka se atrasa 60 s</td><td>2 × 60 + 24</td><td class="r">144</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El primer término crece con el lag, y por eso el lag del consumidor de topes es una alerta de prioridad alta (<a href="m11-observabilidad.html#alertas">M11</a>). Para que un Kafka atrasado no deje pasar gasto sin límite, el limitador del gateway lleva además un contador aproximado del gasto del mes en Redis, que se corrige con el valor exacto en cada conciliación: si el metering se atrasa, el contador aproximado frena al cliente cerca del tope igual. El segundo término se acota con las reservas de 21.8: un tope estricto reserva contra el margen que queda hasta el tope, como contra un saldo.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Si la marca del 100&#8239;% no llega a los gateways (el servicio de configuración caído), el tope no se aplica y el cliente sigue gastando. La configuración se publica con un TTL corto y los gateways, si no pueden renovarla, aplican la última conocida; la marca del tope se vuelve a evaluar en cada conciliación. Un tope fijado por el cliente es una promesa: superarlo por un bug genera reclamos que se resuelven con un crédito (21.12).</p>
+      </aside>
+
+      <h2 id="factura"><span class="sec-num">21.10</span>La factura y el cobro</h2>
+
+      <p>Al cerrar el ciclo, un job toma los agregados del mes de cada organización, les aplica los precios, resta lo que se pagó con créditos, agrega impuestos y produce una factura con una línea por modelo y unidad. Desde ahí el problema es el del M27: cobrar, enterarse del resultado por webhooks y reintentar si falla.</p>
+
+      <h3 id="factura-stripe">Stripe Billing con meters</h3>
+
+      <p>Stripe Billing cobra por uso con <i>meters</i>. Un meter define cómo se agrega el uso (suma o conteo) y se alimenta con <i>meter events</i>: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/v1/billing/meter_events</code>
+          <span class="badge badge--doc">Documentado</span>
+        </div>
+        <p class="ep-desc">Informa uso de un cliente a un meter. Stripe lo procesa de forma asíncrona y lo suma a la factura del período.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/billing/meter_events
+Authorization: Bearer sk_live_…
+Content-Type: application/x-www-form-urlencoded
+
+event_name=output_tokens_modelo_m
+&amp;payload[stripe_customer_id]=cus_Q7x…
+&amp;payload[value]=9109600
+&amp;identifier=org_7:output_tokens_modelo_m:2026-10-04T14
+&amp;timestamp=1791122400</code></pre>
+          <p class="ep-sec">Límites que condicionan el diseño</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">id</span><span><code>identifier</code> es único durante al menos 24 horas: un reenvío con el mismo valor no se suma dos veces.</span></li>
+            <li><span class="st st--4xx">hora</span><span><code>timestamp</code> dentro de los últimos 35 días y no más de 5 minutos en el futuro.</span></li>
+            <li><span class="st st--4xx">tasa</span><span>1&#8239;000 llamadas por segundo por cuenta en modo live, y una sola llamada a la vez por cliente y meter. La API v2 de streams de meter events acepta 10&#8239;000 eventos por segundo.</span></li>
+            <li><span class="st st--5xx">error</span><span>Los eventos que no se pueden procesar no fallan en la respuesta: llegan después como el evento <code>v1.billing.meter.error_report_triggered</code>.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <p>Con esos límites, mandar cada evento de uso a Stripe es mala idea: 520 por segundo en el pico es la mitad del límite de la cuenta, y la regla de una llamada a la vez por cliente y meter serializa a los clientes grandes. Lo que se manda es el agregado horario: 3&#8239;000 organizaciones × 8 meters × 24 horas son 576&#8239;000 eventos por día, unos 7 por segundo. El <code>identifier</code> se arma con la organización, el meter y la hora, así que reenviar una hora completa después de un fallo es seguro. Stripe incluye en el precio de Billing hasta 100 millones de meter events por mes. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Una hora corregida después de enviada (un evento tardío) no se manda como reemplazo: se manda la diferencia como otro meter event, con su propio <code>identifier</code>. Stripe permite cancelar un meter event solo en las 24 horas siguientes a recibirlo. <span class="badge badge--doc">Documentado</span> Después, una corrección a la baja es un valor negativo o una nota de crédito.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Usar meters de Stripe obliga a modelar los precios dentro de Stripe y a tener allí una copia del uso. La alternativa es tarifar en casa y mandar a Stripe solo facturas ya armadas, con una línea por modelo y unidad: más trabajo propio, pero el catálogo de precios y los contratos viven en un solo lugar. Para precios simples, los meters alcanzan; con contratos por cliente, créditos y compromisos, casi todos terminan tarifando en casa o con una herramienta especializada como Metronome, que hoy es parte de Stripe. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <h3 id="factura-dunning">Cuando el cobro falla</h3>
+
+      <p>Una tarjeta vencida o sin fondos hace fallar el cobro de la factura, y Stripe avisa con el webhook <code>invoice.payment_failed</code> (<a href="m27-pagos-stripe.html#webhooks">M27</a>). El <dfn data-term="dunning">dunning</dfn> es la secuencia que sigue:</p>
+      <ol class="steps">
+        <li><span class="step-title">Reintentar</span>Varias veces durante una o dos semanas, en días y horarios en que es más probable que el cobro pase.</li>
+        <li><span class="step-title">Avisar</span>Correos al responsable de facturación con un enlace para actualizar la tarjeta.</li>
+        <li><span class="step-title">Restringir</span>Pasar al cliente a prepago, o bajar su tope de gasto, mientras la deuda siga abierta.</li>
+        <li><span class="step-title">Suspender</span>Cortar el acceso a la API después de un plazo anunciado, sin borrar datos.</li>
+      </ol>
+      <p>Cada paso es un cambio de estado de la cuenta que viaja como configuración a los gateways, igual que el tope de gasto.</p>
+
+      <h3 id="factura-prorrateo">Cambiar de plan a mitad de mes</h3>
+
+      <p>Si un cliente pasa de un compromiso de 1&#8239;000 USD por mes a uno de 3&#8239;000 el día 10 de un ciclo de 30 días, el <dfn data-term="prorrateo">prorrateo</dfn> cobra la diferencia por los días que quedan: (3&#8239;000 − 1&#8239;000) × 20 ÷ 30 = 1&#8239;333.33 USD. El uso no se prorratea: cada evento se tarifa con el precio vigente en su hora, y el catálogo ya lo resuelve, porque el contrato nuevo es una fila de precio con <code>valid_from</code> en el día 10.</p>
+
+      <h2 id="conciliacion"><span class="sec-num">21.11</span>Conciliación de tres vías</h2>
+
+      <p>Todo lo anterior puede fallar sin hacer ruido: un gateway que muere antes de emitir, un estado de dedupe que se pierde, un consumidor que se salta un offset. La red de seguridad es la misma del <a href="m27-pagos-stripe.html#conciliacion">M27</a>: comparar el registro propio con fuentes independientes y explicar cada diferencia. En el metering hay tres fuentes que cuentan lo mismo por caminos distintos.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f21kt f21kd">
+<title id="f21kt">Conciliación de tres vías</title>
+<desc id="f21kd">Tres fuentes independientes cuentan la misma hora de uso: el log crudo con los eventos del gateway, los agregados que se van a facturar y el registro propio del motor. El comparador las cruza por request_id y clasifica cada diferencia: si coinciden, no hay nada que hacer; si al log le falta un evento que el motor registró, se publica un evento reconstruido; si los agregados no cuadran con el log, se reprocesa la hora desde el log; si el limitador se desvió del uso exacto, se corrigen sus contadores.</desc>
+<defs><marker id="f21ka" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f21ko" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--ok)"/></marker><marker id="f21kf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="30" width="150" height="60" rx="6"/>
+<text class="dg-label" x="85.0" y="57.5" text-anchor="middle" style="font-size:13.5px">Log crudo</text>
+<text class="dg-tiny" x="85.0" y="73.5" text-anchor="middle">eventos del gateway</text>
+<path class="dg-edge" d="M160 60 L236 150" marker-end="url(#f21ka)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="120" width="150" height="60" rx="6"/>
+<text class="dg-label" x="85.0" y="147.5" text-anchor="middle" style="font-size:13.5px">Agregados</text>
+<text class="dg-tiny" x="85.0" y="163.5" text-anchor="middle">lo que se va a facturar</text>
+<path class="dg-edge" d="M160 150 L236 150" marker-end="url(#f21ka)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="210" width="150" height="60" rx="6"/>
+<text class="dg-label" x="85.0" y="237.5" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<text class="dg-tiny" x="85.0" y="253.5" text-anchor="middle">lo que usó la GPU</text>
+<path class="dg-edge" d="M160 240 L236 150" marker-end="url(#f21ka)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="240" y="110" width="160" height="80" rx="6"/>
+<text class="dg-label" x="320.0" y="140.0" text-anchor="middle" style="font-size:13.5px">Comparador</text>
+<text class="dg-tiny" x="320.0" y="156.0" text-anchor="middle">por request_id,</text>
+<text class="dg-tiny" x="320.0" y="170.0" text-anchor="middle">una hora por vez</text>
+<rect class="dg-ok" x="470" y="14" width="290" height="54" rx="6"/>
+<text class="dg-label" x="615" y="37" text-anchor="middle" style="font-size:13px">✓ Coinciden</text>
+<text class="dg-tiny" x="615" y="55" text-anchor="middle">se marca la hora como conciliada</text>
+<path class="dg-edge" d="M400 150 L466 41" marker-end="url(#f21ka)"/>
+<rect class="dg-warnbox" x="470" y="84" width="290" height="54" rx="6"/>
+<text class="dg-label" x="615" y="107" text-anchor="middle" style="font-size:13px">Falta un evento</text>
+<text class="dg-tiny" x="615" y="125" text-anchor="middle">se publica uno reconstruido, mismo event_id</text>
+<path class="dg-edge" d="M400 150 L466 111" marker-end="url(#f21ka)"/>
+<rect class="dg-warnbox" x="470" y="154" width="290" height="54" rx="6"/>
+<text class="dg-label" x="615" y="177" text-anchor="middle" style="font-size:13px">Agregado distinto del log</text>
+<text class="dg-tiny" x="615" y="195" text-anchor="middle">se reprocesa la hora desde el log</text>
+<path class="dg-edge" d="M400 150 L466 181" marker-end="url(#f21ka)"/>
+<rect class="dg-warnbox" x="470" y="224" width="290" height="54" rx="6"/>
+<text class="dg-label" x="615" y="247" text-anchor="middle" style="font-size:13px">Limitador desviado</text>
+<text class="dg-tiny" x="615" y="265" text-anchor="middle">se corrigen sus contadores</text>
+<path class="dg-edge" d="M400 150 L466 251" marker-end="url(#f21ka)"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.5.</b> Cada diferencia tiene una acción. Ninguna corrige editando: se publica un evento, se reprocesa una hora o se ajusta un contador aproximado.</figcaption>
+      </figure>
+
+      <p>La conciliación corre cada hora sobre la hora que terminó hace dos, cuando ya pasó la tolerancia de los eventos tardíos (21.6). Compara:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Comparación</th><th>Debe dar</th><th>Si no da</th></tr></thead>
+          <tbody>
+            <tr><td>Registro del motor contra log crudo, por <code>request_id</code></td><td>Cada request del motor tiene su evento <code>final</code></td><td>Falta: se publica un evento reconstruido con el mismo <code>event_id</code>. Sobra: se investiga antes de cobrar.</td></tr>
+            <tr><td>Log crudo deduplicado contra agregados, por organización y hora</td><td>Las mismas cantidades, exactas</td><td>Se reprocesa esa hora desde el log (21.12)</td></tr>
+            <tr><td>Saldo descontado contra uso tarifado</td><td>La misma suma, con una diferencia menor al redondeo</td><td>Se corrige el saldo con un asiento</td></tr>
+            <tr><td>Contadores del limitador contra uso exacto</td><td>Una diferencia acotada</td><td>Se corrigen los contadores del limitador</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las cantidades de una request completada coinciden exactamente entre el motor y el gateway, porque el gateway copia las del motor. En una cancelada pueden diferir: el motor sigue generando unos milisegundos después de que el gateway dejó de mandar, y cuenta unos tokens más. La regla tiene que estar escrita: se cobra lo que informó el motor al abortar, que es lo que consumió la GPU, y la diferencia con lo que llegó al cliente se registra pero no se discute.</p>
+
+      <h3 id="conciliacion-limitador">Corregir al limitador, nunca al revés</h3>
+
+      <p>El <a href="m18-cuotas-tokens.html#una-vez">M18</a> prometió que el metering corrige los contadores del limitador. Los contadores de Redis se desvían por reconciliaciones perdidas, reservas que vencieron o un failover que perdió escrituras. La corrección reemplaza la parte ya conciliada del contador por el valor exacto y conserva lo que el limitador contó después:</p>
+
+<pre data-lang="python"><code>def correct_spend_counter(redis, org, month, exact_until, conciliated_hour):
+    """exact_until: gasto exacto del mes hasta el fin de conciliated_hour, en nanodólares."""
+    key = f"spend:{org}:{month}"
+    # el limitador guarda, además del total, cuánto sumó en cada hora
+    approx_until = sum(int(redis.hget(key + ":h", h) or 0) for h in hours_until(month, conciliated_hour))
+    delta = exact_until - approx_until
+    if abs(delta) &gt; ALERT_NANOUSD:
+        alert("limitador desviado", org=org, delta=delta)
+    redis.incrby(key, delta)     # atómico: no pisa lo que los gateways suman en paralelo
+    redis.hset(key + ":fix", conciliated_hour, delta)    # auditoría de cada corrección</code></pre>
+
+      <p>La dirección importa. Si el limitador corrigiera al metering, un failover de Redis podría borrar uso de una factura. Al revés, lo peor que pasa es que un cliente reciba un 429 un poco antes o un poco después.</p>
+
+      <h2 id="correcciones"><span class="sec-num">21.12</span>Correcciones y reprocesos</h2>
+
+      <p>Los errores van a ocurrir: un precio mal cargado, un evento contado dos veces, una caída que da derecho a un crédito por SLA. La regla del ledger se aplica a todo el metering: nada se edita, todo se corrige con un registro nuevo.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Error</th><th>Corrección</th></tr></thead>
+          <tbody>
+            <tr><td>Un evento contado dos veces en una factura ya emitida</td><td>Una línea de ajuste negativa en la factura siguiente, que referencia el <code>event_id</code></td></tr>
+            <tr><td>Un precio mal cargado durante tres días</td><td>Se cierra el precio malo, se crea el correcto con la misma vigencia en un catálogo nuevo, se vuelve a tarifar esos días y la diferencia va como ajuste</td></tr>
+            <tr><td>El servicio incumplió el SLA del mes</td><td>Un crédito, como asiento en el ledger y como nota de crédito en la factura</td></tr>
+            <tr><td>Un agregado horario no cuadra con el log</td><td>Se reprocesa la hora desde el log crudo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="correcciones-reproceso">Reprocesar sin cobrar dos veces</h3>
+
+      <p>Reprocesar es volver a pasar eventos ya procesados por el pipeline. Es la operación más útil y la más peligrosa del metering, porque se parece mucho a un doble cobro. Lo que la hace segura es lo que se construyó en las secciones anteriores:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Leer del log inmutable</span>El log crudo en S3 tiene todo lo que llegó, con las copias. El reproceso lo vuelve a deduplicar desde cero, sin depender del estado del procesador.</li>
+        <li><span class="step-title">Escribir valores, no incrementos</span>Cada fila recalculada lleva una versión mayor y reemplaza a la anterior (21.5). Correr el reproceso dos veces da el mismo resultado.</li>
+        <li><span class="step-title">Comparar antes de publicar</span>El resultado se escribe en una tabla aparte y un informe muestra la diferencia por organización y hora. Alguien la revisa antes de cambiar la tabla que leen el tablero y la facturación, como al reconstruir una vista en el <a href="m05-bases-de-datos.html#cqrs">M05</a>.</li>
+        <li><span class="step-title">No tocar lo facturado</span>Una factura emitida no cambia. Si el reproceso cambia una hora de un ciclo cerrado, la diferencia se convierte en una línea de ajuste del ciclo siguiente.</li>
+      </ol>
+
+      <p>Un <i>backfill</i> es lo mismo en otra dirección: calcular por primera vez algo nuevo sobre eventos viejos, como un desglose por proyecto que antes no existía. Por eso el log crudo se guarda con todos los campos aunque hoy no se usen, y por un plazo que cubra las disputas y las auditorías.</p>
+
+      <h2 id="margen"><span class="sec-num">21.13</span>Costo interno y margen</h2>
+
+      <p>El metering mide lo que paga el cliente. El mismo pipeline puede medir lo que le cuesta al proveedor, con otro catálogo de precios: el costo de la GPU. Las cuentas salen del <a href="m19-router-flota.html#flota">M19</a> y del <a href="m13-gpus.html#cifras">M13</a>: <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Costo de una réplica</td><td>4 H100 × 4 USD por hora</td><td class="r">16 USD por hora</td></tr>
+            <tr><td>Tokens de salida por segundo</td><td>64 streams ÷ 30 ms de TPOT</td><td class="r">2&#8239;133</td></tr>
+            <tr><td>Por hora, al 100&#8239;% de uso</td><td>2&#8239;133 × 3&#8239;600</td><td class="r">7.68 millones</td></tr>
+            <tr><td>Costo por millón de tokens de salida</td><td>16 ÷ 7.68</td><td class="r">2.08 USD</td></tr>
+            <tr><td>Al 75&#8239;% de uso, el objetivo del M19</td><td>2.08 ÷ 0.75</td><td class="r">2.78 USD</td></tr>
+            <tr><td>Prefill sin caché</td><td>16 USD ÷ (14&#8239;000 tokens/s × 3&#8239;600)</td><td class="r">0.32 USD por millón</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Es una simplificación: carga toda la réplica a los tokens de salida, porque el decode es lo que limita cuántos streams caben, y no cuenta la red, el almacenamiento ni el equipo. Sirve para lo que importa, comparar órdenes de magnitud. El mismo pipeline con este catálogo interno produce el <dfn data-term="showback">showback</dfn>: un informe de cuánta GPU consumió cada equipo o producto interno, sin cobrarle, para que vea lo que cuesta lo que usa.</p>
+
+      <h3 id="margen-suscripcion">El usuario pesado de una suscripción</h3>
+
+      <p>Los productos de consumo, como el del <a href="m20-producto-chatgpt.html">M20</a>, no cobran por token: cobran una suscripción fija. El metering existe igual, porque es la única forma de saber si el plan pierde plata. Con un plan de 20 USD por mes y el costo de 2.78 USD por millón de tokens de salida:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Usuario</th><th>Uso por día</th><th class="r">Tokens de salida por mes</th><th class="r">Costo de GPU por mes</th></tr></thead>
+          <tbody>
+            <tr><td>Liviano</td><td>10 mensajes de 600 tokens</td><td class="r">180&#8239;000</td><td class="r">0.50 USD</td></tr>
+            <tr><td>Promedio</td><td>40 mensajes de 800 tokens</td><td class="r">960&#8239;000</td><td class="r">2.67 USD</td></tr>
+            <tr><td>Pesado, con razonamiento</td><td>300 mensajes de 2&#8239;500 tokens</td><td class="r">22.5 millones</td><td class="r">62.50 USD</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El usuario pesado cuesta tres veces lo que paga. Ese es el motivo de los límites de mensajes por ventana de tiempo de los planes de consumo, que se aplican con el limitador del <a href="m18-cuotas-tokens.html#jerarquia">M18</a>, y de los planes más caros para quienes los superan. Sin metering, nadie en la empresa sabría qué porcentaje de usuarios está en la última fila.</p>
+
+      <h2 id="fallas"><span class="sec-num">21.14</span>Fallas</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Falla</th><th>Qué se ve</th><th>Impacto</th><th>Qué hacer</th></tr></thead>
+          <tbody>
+            <tr><td>Lag del consumidor de Kafka</td><td>El saldo y el tablero se atrasan</td><td>Facturas a tiempo y correctas; topes y saldos prepagados con más exceso (21.9)</td><td>Alerta sobre el lag en segundos, no en mensajes; el contador aproximado del limitador frena cerca del tope</td></tr>
+            <tr><td>Se pierde el estado de dedupe</td><td>Un salto de uso en las horas recientes</td><td>Doble conteo de esas horas</td><td>Reprocesar las horas afectadas desde el log crudo; la conciliación lo detecta si nadie lo vio</td></tr>
+            <tr><td>Un precio mal cargado</td><td>Facturas simuladas que cambian mucho</td><td>Cobros de más o de menos</td><td>Cada cambio de catálogo genera una factura simulada del mes anterior con los precios nuevos y requiere aprobación de dos personas</td></tr>
+            <tr><td>Un reloj desfasado en un gateway</td><td>Eventos con <code>event_time</code> en el futuro o muy atrasados</td><td>Uso contado en la hora equivocada, o rechazado por Stripe si está más de 5 minutos en el futuro</td><td>NTP con alarma de desfase; el procesador rechaza a una cola de revisión lo que viene del futuro</td></tr>
+            <tr><td>Doble cobro</td><td>Un cliente con el doble de uso que la semana anterior</td><td>Pérdida de confianza, disputas</td><td>Invariantes automáticas: a lo sumo un <code>final</code> por <code>request_id</code>; la suma de las líneas igual a la de los agregados</td></tr>
+            <tr><td>Una región aislada</td><td>Una región sin eventos durante horas</td><td>Uso tardío, saldos que no bajan</td><td>Spool local en cada gateway; al volver, los eventos entran como tardíos (21.6); los topes de esa región se aplican con el contador aproximado mientras tanto</td></tr>
+            <tr><td>Stripe no responde</td><td>Meter events y facturas en cola</td><td>Cobros atrasados, no perdidos</td><td>Reintentos con el mismo <code>identifier</code>; hay 35 días de margen para el <code>timestamp</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El metering se monitorea con métricas de negocio, no solo técnicas: ingresos por hora comparados con la misma hora de la semana anterior, duplicados descartados por hora, eventos tardíos por región y diferencias de la conciliación. Una caída del 30&#8239;% en los ingresos por hora sin una caída del tráfico es un incidente, aunque todos los servicios estén verdes (<a href="m11-observabilidad.html#incidentes">M11</a>).</p>
+      </aside>
+
+      <h2 id="implementalo"><span class="sec-num">21.15</span>Impleméntalo en AWS</h2>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f21at f21ad">
+<title id="f21at">El metering en AWS</title>
+<desc id="f21ad">Los gateways corren en Fargate detrás de un balanceador y publican en Amazon MSK. Una aplicación de Managed Service for Apache Flink deduplica y agrega, y escribe los agregados en ClickHouse sobre EC2; un conector copia el tópico a S3. El servicio de saldo y el ledger viven en Aurora PostgreSQL. Un job programado en Fargate cierra el ciclo y envía el uso a Stripe Billing, cuyos webhooks llegan por una cola SQS. La conciliación es otro job programado que lee S3, ClickHouse y los registros del motor.</desc>
+<defs><marker id="f21aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="70" y="22" text-anchor="middle">Entrada</text>
+<text class="dg-group" x="225" y="22" text-anchor="middle">Bus</text>
+<text class="dg-group" x="390" y="22" text-anchor="middle">Procesar y guardar</text>
+<text class="dg-group" x="560" y="22" text-anchor="middle">Dinero</text>
+<text class="dg-group" x="705" y="22" text-anchor="middle">Fuera de AWS</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="40" width="120" height="60" rx="6"/>
+<text class="dg-label" x="70.0" y="67.5" text-anchor="middle" style="font-size:13.5px">Gateways</text>
+<text class="dg-tiny" x="70.0" y="83.5" text-anchor="middle">Fargate + ALB</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="10" y="130" width="120" height="60" rx="6"/>
+<text class="dg-label" x="70.0" y="157.5" text-anchor="middle" style="font-size:13.5px">Motor</text>
+<text class="dg-tiny" x="70.0" y="173.5" text-anchor="middle">EKS con GPUs (M19)</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="170" y="40" width="110" height="150" rx="6"/>
+<text class="dg-label" x="225.0" y="105.0" text-anchor="middle" style="font-size:13.5px">Amazon MSK</text>
+<text class="dg-tiny" x="225.0" y="121.0" text-anchor="middle">3 brokers,</text>
+<text class="dg-tiny" x="225.0" y="135.0" text-anchor="middle">tópico usage</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="320" y="40" width="140" height="60" rx="6"/>
+<text class="dg-label" x="390.0" y="67.5" text-anchor="middle" style="font-size:13.5px">Managed Flink</text>
+<text class="dg-tiny" x="390.0" y="83.5" text-anchor="middle">dedupe y ventanas</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="320" y="130" width="140" height="60" rx="6"/>
+<text class="dg-label" x="390.0" y="157.5" text-anchor="middle" style="font-size:13.5px">S3</text>
+<text class="dg-tiny" x="390.0" y="173.5" text-anchor="middle">log crudo, por día</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="320" y="220" width="140" height="60" rx="6"/>
+<text class="dg-label" x="390.0" y="247.5" text-anchor="middle" style="font-size:13.5px">ClickHouse</text>
+<text class="dg-tiny" x="390.0" y="263.5" text-anchor="middle">EC2, agregados</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="500" y="40" width="120" height="60" rx="6"/>
+<text class="dg-label" x="560.0" y="67.5" text-anchor="middle" style="font-size:13.5px">Saldo</text>
+<text class="dg-tiny" x="560.0" y="83.5" text-anchor="middle">Fargate</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="500" y="130" width="120" height="60" rx="6"/>
+<text class="dg-label" x="560.0" y="157.5" text-anchor="middle" style="font-size:13.5px">Ledger</text>
+<text class="dg-tiny" x="560.0" y="173.5" text-anchor="middle">Aurora PostgreSQL</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="500" y="220" width="120" height="60" rx="6"/>
+<text class="dg-label" x="560.0" y="247.5" text-anchor="middle" style="font-size:13.5px">Facturas y</text>
+<text class="dg-tiny" x="560.0" y="263.5" text-anchor="middle">conciliación: jobs</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="660" y="130" width="100" height="60" rx="6"/>
+<text class="dg-label" x="710.0" y="157.5" text-anchor="middle" style="font-size:13.5px">Stripe</text>
+<text class="dg-tiny" x="710.0" y="173.5" text-anchor="middle">Billing</text>
+<path class="dg-edge" d="M130 70 H168" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M280 70 H318" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M280 160 H318" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M390 100 V128" marker-end="url(#f21aa)" style="stroke-dasharray:5 4"/>
+<path class="dg-edge" d="M460 60 H476 V250 H462" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M460 80 H498" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M560 100 V128" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M462 240 H498" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M620 250 H710 V192" marker-end="url(#f21aa)"/>
+<path class="dg-edge" d="M660 150 H622" marker-end="url(#f21aa)"/>
+<text class="dg-tiny" x="640" y="120" text-anchor="middle">webhooks</text>
+<path class="dg-edge" d="M130 160 H150 V292 H560 V282" marker-end="url(#f21aa)" style="stroke-dasharray:5 4"/>
+<text class="dg-tiny" x="236" y="286" text-anchor="middle">registro del motor</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.6.</b> El metering como servicios administrados. Lo único que corre en las GPUs es el registro propio del motor; todo lo demás es CPU barata.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Servicio</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>Transporte</td><td>Amazon MSK, 3 brokers en 3 zonas</td><td>Kafka administrado con productor idempotente y transacciones</td></tr>
+            <tr><td>Dedupe y ventanas</td><td>Managed Service for Apache Flink</td><td>Estado por partición, marcas de agua y salida de tardíos, sin operar un clúster</td></tr>
+            <tr><td>Log crudo</td><td>S3, con Firehose o un conector de MSK</td><td>Barato, inmutable con Object Lock, particionado por día</td></tr>
+            <tr><td>Agregados</td><td>ClickHouse en EC2 (o Redshift)</td><td>Columnar, <code>ReplacingMergeTree</code> para escrituras repetibles</td></tr>
+            <tr><td>Ledger, saldos y catálogo</td><td>Aurora PostgreSQL</td><td>Transacciones, restricciones de exclusión para las vigencias</td></tr>
+            <tr><td>Saldo en caliente y topes</td><td>ElastiCache (Valkey)</td><td>Lecturas de un milisegundo desde los gateways</td></tr>
+            <tr><td>Jobs de facturas y conciliación</td><td>Fargate con EventBridge Scheduler</td><td>Corren cada hora o cada mes, sin servidores encendidos</td></tr>
+            <tr><td>Cobro</td><td>Stripe Billing</td><td>Facturas, impuestos, dunning y webhooks (M27)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El orden de construcción sigue los planos, y cada paso ya sirve solo:</p>
+      <ol class="steps">
+        <li><span class="step-title">Eventos y log crudo</span>El gateway emite con spool local, MSK y la copia a S3. Con eso ya se puede facturar a mano con una consulta sobre S3.</li>
+        <li><span class="step-title">Dedupe y agregados</span>La aplicación de Flink y la tabla horaria. Aparece el tablero de uso.</li>
+        <li><span class="step-title">Rating y facturas</span>El catálogo versionado y el job de cierre que manda el uso a Stripe.</li>
+        <li><span class="step-title">Conciliación</span>Antes que los créditos: sin ella, los errores de los pasos anteriores no se ven.</li>
+        <li><span class="step-title">Créditos y topes</span>El ledger, las reservas y las alertas, cuando haya clientes prepagos.</li>
+      </ol>
+
+      <p>La factura mensual de AWS, en tres escalas. Producción es la flota del M19: 22.5 millones de eventos por día.</p>
+
+      <div data-calc="bom" data-preset="m21"></div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m21"></div>
+
+      <div data-exercise="m21-metering"></div>
+
+      <div data-checkpoint="m21"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m21.data.js"></script>
+<script src="../assets/js/data/exercises/m21.data.js"></script>
+<script src="../assets/js/data/maps/m21-metering.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-dbflow.js"></script>
+<script src="../assets/js/widgets/sim-meter.js"></script>
+<script src="../assets/js/widgets/sim-infra.js"></script>
+</body>
+</html>

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>M06. Teoría distribuida</title>
-<meta name="description" content="Modelos de sistema, safety y liveness, detectores de fallas (phi accrual y SWIM), CAP con su demostración, PACELC, linealizabilidad con un verificador, consistencia secuencial, de sesión y serializabilidad estricta, quórums (ABD, sloppy y flexibles), relojes (Lamport, vectoriales, HLC y TrueTime), Raft a fondo (seguridad, lecturas, membresía y operación), Paxos, FLP, two-phase commit y Percolator, CRDTs y anti-entropía, fallas bizantinas, leases y fencing tokens, y cómo se verifica todo con Jepsen, TLA+ y simulación determinista. Con siete ejercicios guiados.">
+<title>M06. Teoría distribuida: lo esencial</title>
+<meta name="description" content="Lo esencial de la teoría distribuida para quien va de paso: el cambio de paradigma de síncrono y asíncrono, CAP, PACELC y de dónde sale la latencia, la escalera de consistencia, por qué funcionan los quórums, líderes y consenso, y transacciones entre máquinas, con analogías y figuras. La versión a fondo es M06.1.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -37,213 +37,127 @@
     <article class="content">
 
       <header class="title-block">
-        <h1>Teoría distribuida</h1>
-        <p class="lead">Detrás de cada réplica, de cada lock y de cada elección de líder hay un puñado de resultados que dicen qué es posible, qué es imposible y cuánto cuesta lo posible. Este módulo los recorre a fondo: con las definiciones precisas, las demostraciones en una figura, un verificador de linealizabilidad, un simulador de Raft y siete ejercicios guiados que se resuelven decisión por decisión.</p>
+        <h1>Teoría distribuida: lo esencial</h1>
+        <p class="lead">Replicar datos en varias máquinas cambia las reglas: la red pierde mensajes, los relojes no coinciden y una parte del sistema puede fallar mientras el resto sigue. Esta es la versión esencial: las ideas que todo backend necesita para entender por qué una base distribuida se comporta como se comporta, con analogías y sin demostraciones. Si quieres el detalle completo, está en M06.1.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M06</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>180 min</dd></div>
+          <div><dt>Duración</dt><dd>75 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M05</dd></div>
           <div><dt>Estado</dt><dd data-status="m06">Sin empezar</dd></div>
         </dl>
       </header>
-<section class="objectives" data-toc="skip" aria-labelledby="obj">
+<aside class="level-switch" data-toc="skip">
+        <p><b>Esta es la versión esencial.</b> Cubre lo que necesitas para seguir el curso. Si quieres las definiciones precisas, las demostraciones, los modelos de consistencia uno por uno, relojes, Paxos, CRDTs y siete ejercicios guiados, sigue con M06.1, que es opcional.</p>
+        <a class="btn" href="m061-teoria-distribuida-a-fondo.html">Ir a la versión a fondo (M06.1)</a>
+      </aside>
+
+      <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
-          <li>Describir el modelo de un sistema (tiempo y fallas) y separar las propiedades de safety de las de liveness.</li>
-          <li>Explicar por qué todo detector de fallas puede equivocarse, y cómo phi accrual y SWIM reducen el error.</li>
-          <li>Demostrar CAP con dos réplicas, ubicar un sistema real con PACELC y elegir la garantía mínima que necesita cada dato.</li>
-          <li>Decidir si una historia de operaciones es linealizable, y distinguir linealizable, secuencial, de sesión y serializable estricta.</li>
-          <li>Usar quórums, relojes lógicos, HLC y TrueTime sabiendo qué garantiza cada uno.</li>
-          <li>Explicar cómo Raft y Paxos mantienen la seguridad (regla de commit, lecturas, cambios de membresía) y cómo se operan.</li>
-          <li>Aplicar FLP, los dos generales, two-phase commit, los CRDTs y las fallas bizantinas a decisiones de diseño.</li>
-          <li>Proteger recursos con leases y fencing tokens, y verificar un sistema distribuido con Jepsen, TLA+ y simulación.</li>
+          <li>Explicar qué significan síncrono y asíncrono en un sistema distribuido, y por qué no es lo mismo que en programación.</li>
+          <li>Usar CAP y PACELC para decidir qué hace cada operación durante una partición y cuánta latencia paga el resto del tiempo.</li>
+          <li>Ubicar un sistema en la escalera de consistencia y elegir la garantía mínima que necesita cada dato.</li>
+          <li>Explicar por qué funciona la regla W + R &gt; N y por qué los clústeres de consenso tienen un número impar de nodos.</li>
+          <li>Describir cómo un líder con Raft mantiene un log replicado, y por qué two-phase commit bloquea cuando falla el coordinador.</li>
         </ul>
       </section>
 
-      <h2 id="modelo"><span class="sec-num">6.1</span>El modelo: qué se puede suponer</h2>
+      <h2 id="dificil"><span class="sec-num">6.1</span>Por qué un sistema distribuido es distinto</h2>
 
-      <p>Cada resultado de este módulo vale dentro de un <dfn data-term="modelo-sistema">modelo de sistema</dfn>: un conjunto de supuestos sobre cuánto tardan los mensajes, cuánto se desvían los relojes y de qué formas puede fallar un nodo. Un algoritmo correcto en un modelo puede ser incorrecto en otro, y muchos incidentes nacen de un supuesto que nadie escribió: "la red no pierde mensajes", "el reloj no salta", "un proceso no se queda congelado 40 segundos".</p>
+      <p>En un solo servidor, una operación termina bien o falla, y si el servidor se cae, se cae todo. Cuando los datos viven en varias máquinas aparecen tres cosas que no existían:</p>
+      <ul>
+        <li><b>La red no es confiable.</b> Un mensaje puede perderse, llegar tarde, duplicarse o llegar desordenado. Y cuando no llega una respuesta, no sabes si el otro no recibió el pedido, si lo procesó y se perdió la respuesta, o si todavía lo está procesando.</li>
+        <li><b>Los relojes no coinciden.</b> Cada máquina tiene el suyo, y se desvían. No puedes ordenar eventos de máquinas distintas mirando la hora.</li>
+        <li><b>Las fallas son parciales.</b> Una máquina se cae, o se queda congelada 30 segundos por una pausa de GC, mientras las demás siguen. El sistema tiene que seguir funcionando con una parte rota.</li>
+      </ul>
 
-      <h3 id="modelo-tiempo">Tres supuestos sobre el tiempo</h3>
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Una empresa con tres sedes que solo se comunican por correo postal. Cada sede tiene su copia de los registros. Si una carta no llega, la sede que la mandó no sabe si se perdió o si viene en camino; si dos sedes cambian el mismo registro el mismo día, cada una cree que su versión es la última; y si una sede cierra por una inundación, las otras dos tienen que seguir atendiendo. Todo este módulo trata de cómo trabajar bien en esa empresa.</p>
+      </aside>
+
+      <p>De ahí sale la primera regla para diseñar. Hay dos tipos de propiedades: las de <dfn data-term="safety-liveness">safety</dfn> ("nunca pasa nada malo": nunca hay dos líderes, nunca se cobra dos veces) y las de liveness ("algo bueno termina pasando": toda escritura recibe respuesta). Los sistemas reales garantizan safety siempre, con mecanismos que no dependen del tiempo, y liveness solo cuando la red se porta bien. Es mejor quedarse un rato sin servicio que quedarse con datos corruptos.</p>
+
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#modelo">el modelo de un sistema, los tipos de fallas y safety y liveness con precisión</a>, en M06.1.</p>
+
+      <h2 id="sincrono"><span class="sec-num">6.2</span>Síncrono y asíncrono: la misma palabra, otro significado</h2>
+
+      <p>Si vienes de programar backends, una llamada síncrona es la que bloquea hasta tener la respuesta, y una asíncrona la que devuelve el control enseguida. En sistemas distribuidos las mismas palabras significan otra cosa, y conviene cambiar el chip antes de seguir: <b>no preguntan si esperas, sino si existe un límite conocido para cuánto puedes llegar a esperar</b>.</p>
 
       <div class="table-wrap">
         <table class="t">
-          <thead><tr><th>Modelo</th><th>Qué supone</th><th>Para qué sirve</th></tr></thead>
+          <thead><tr><th>Modelo</th><th>Qué supone</th><th>Qué mundo describe</th></tr></thead>
           <tbody>
-            <tr><td>Síncrono</td><td>Cotas conocidas para la demora de cada mensaje, la velocidad de cada proceso y el desvío de los relojes</td><td>Razonar y demostrar. En una red compartida casi nunca es realista</td></tr>
-            <tr><td>Asíncrono</td><td>Ninguna cota: un mensaje o un paso de un proceso pueden tardar cualquier tiempo finito</td><td>Algoritmos que no dependen del tiempo. Es el modelo de FLP (6.10)</td></tr>
-            <tr><td>Parcialmente síncrono</td><td>Hay un instante, llamado GST, a partir del cual se cumplen las cotas, pero nadie sabe cuándo llega</td><td>Es el modelo de Raft, Paxos y PBFT: seguros siempre, progresan después de GST</td></tr>
+            <tr><td>Síncrono</td><td>Todo mensaje llega antes de un tiempo máximo conocido. Si no llegó, algo falló, con certeza</td><td>El ideal, el de las demostraciones: un tren suizo que siempre llega a horario</td></tr>
+            <tr><td>Asíncrono</td><td>Un mensaje puede tardar cualquier tiempo. Un silencio no prueba nada</td><td>El caótico, el peor caso: un correo sin fecha de entrega</td></tr>
+            <tr><td>Parcialmente síncrono</td><td>A veces se porta como asíncrono, pero en algún momento se calma y los tiempos vuelven a ser normales</td><td>El real, el que suponen Raft y Paxos: el tráfico de una ciudad, con horas pico impredecibles que terminan pasando</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>El modelo síncrono parece razonable dentro de un datacenter hasta que llega una pausa de GC de 30 segundos, un disco que tarda 2 segundos en un fsync o un switch con las colas llenas: cualquier cota que elijas, algún día se rompe. El asíncrono es demasiado pesimista, porque en él el consenso es imposible (6.10). La salida práctica es la <dfn data-term="sincronia-parcial">sincronía parcial</dfn> de Dwork, Lynch y Stockmeyer (1988): el sistema puede portarse de forma asíncrona durante un tiempo, pero en algún momento, que nadie conoce, se estabiliza.</p>
-
       <figure class="figure">
         <div class="figure-frame">
-<svg viewBox="0 0 770 262" role="img" aria-labelledby="f6yt f6yd">
-<title id="f6yt">Sincronía parcial</title>
-<desc id="f6yd">Demora de cada mensaje a lo largo del tiempo. Antes de un instante llamado GST, las demoras no tienen cota: algunos mensajes tardan muy poco, otros mucho, y uno todavía no llegó. Después de GST, todas las demoras quedan por debajo de una cota Δ. Nadie sabe cuándo llega GST, así que el algoritmo tiene que ser seguro siempre y progresar en algún momento después de GST.</desc>
-<path d="M70 28 V200 H740" fill="none" stroke="var(--separator-strong)" stroke-width="1.5"/>
-<text class="sim-label" x="52" y="117.0" text-anchor="middle" transform="rotate(-90 52 117.0)">demora del mensaje</text>
-<text class="sim-label" x="740" y="218" text-anchor="end">tiempo</text>
-<path d="M430 24 V200" stroke="var(--label-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
-<text class="sim-label" x="430" y="218" text-anchor="middle">GST: nadie sabe cuándo llega</text>
-<path d="M430 150 H740" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="6 4"/>
-<text class="sim-val" x="748" y="154">Δ</text>
-<text class="dg-small" x="82" y="22">Antes de GST: cualquier demora (asíncrono)</text>
-<text class="dg-small" x="444" y="22">Después: toda demora es menor que Δ</text>
-<circle cx="96" cy="172" r="4.5" fill="var(--l-service)"/>
-<circle cx="128" cy="98" r="4.5" fill="var(--l-service)"/>
-<circle cx="158" cy="186" r="4.5" fill="var(--l-service)"/>
-<circle cx="198" cy="72" r="4.5" fill="var(--l-service)"/>
-<circle cx="222" cy="160" r="4.5" fill="var(--l-service)"/>
-<circle cx="252" cy="122" r="4.5" fill="var(--l-service)"/>
-<circle cx="284" cy="60" r="4.5" fill="var(--l-service)"/>
-<circle cx="318" cy="176" r="4.5" fill="var(--l-service)"/>
-<circle cx="350" cy="104" r="4.5" fill="var(--l-service)"/>
-<circle cx="382" cy="140" r="4.5" fill="var(--l-service)"/>
-<circle cx="410" cy="74" r="4.5" fill="var(--l-service)"/>
-<circle cx="458" cy="182" r="4.5" fill="var(--l-service)"/>
-<circle cx="488" cy="166" r="4.5" fill="var(--l-service)"/>
-<circle cx="518" cy="189" r="4.5" fill="var(--l-service)"/>
-<circle cx="548" cy="171" r="4.5" fill="var(--l-service)"/>
-<circle cx="578" cy="161" r="4.5" fill="var(--l-service)"/>
-<circle cx="608" cy="186" r="4.5" fill="var(--l-service)"/>
-<circle cx="638" cy="173" r="4.5" fill="var(--l-service)"/>
-<circle cx="668" cy="159" r="4.5" fill="var(--l-service)"/>
-<circle cx="698" cy="183" r="4.5" fill="var(--l-service)"/>
-<circle cx="726" cy="169" r="4.5" fill="var(--l-service)"/>
-<path d="M108 56 V36" stroke="var(--l-service)" stroke-width="2"/>
-<path d="M102 42 L108 34 L114 42" fill="none" stroke="var(--l-service)" stroke-width="2"/>
-<text class="dg-tiny" x="122" y="50">todavía no llega</text>
-<text class="dg-small" x="12" y="252">El algoritmo tiene que ser seguro siempre, y solo se le pide progresar en algún momento después de GST.</text>
+<svg viewBox="0 0 770 244" role="img" aria-labelledby="f6wt f6wd">
+<title id="f6wt">Tres mundos: síncrono, asíncrono y parcialmente síncrono</title>
+<desc id="f6wd">Tres gráficos de la demora de cada mensaje a lo largo del tiempo. En el síncrono, todas las demoras quedan por debajo de una cota Δ conocida: un silencio más largo que Δ prueba una falla. En el asíncrono, las demoras van de muy cortas a muy largas sin ninguna cota: un silencio no prueba nada. En el parcialmente síncrono, las demoras son caóticas hasta un instante llamado GST y, desde ahí, quedan por debajo de Δ; nadie sabe cuándo llega GST.</desc>
+<text class="dg-label" x="137" y="22" text-anchor="middle">Síncrono</text>
+<text class="dg-label" x="389" y="22" text-anchor="middle">Asíncrono</text>
+<text class="dg-label" x="641" y="22" text-anchor="middle">Parcialmente síncrono</text>
+<path d="M32 40 V180 H242" fill="none" stroke="var(--separator-strong)" stroke-width="1.5"/>
+<path d="M284 40 V180 H494" fill="none" stroke="var(--separator-strong)" stroke-width="1.5"/>
+<path d="M536 40 V180 H746" fill="none" stroke="var(--separator-strong)" stroke-width="1.5"/>
+<path d="M32 138 H242" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text class="dg-tiny" x="238" y="132" text-anchor="end">cota Δ</text>
+<circle cx="50" cy="160" r="4" fill="var(--l-service)"/>
+<circle cx="72" cy="150" r="4" fill="var(--l-service)"/>
+<circle cx="94" cy="168" r="4" fill="var(--l-service)"/>
+<circle cx="116" cy="156" r="4" fill="var(--l-service)"/>
+<circle cx="138" cy="172" r="4" fill="var(--l-service)"/>
+<circle cx="160" cy="152" r="4" fill="var(--l-service)"/>
+<circle cx="182" cy="164" r="4" fill="var(--l-service)"/>
+<circle cx="204" cy="158" r="4" fill="var(--l-service)"/>
+<circle cx="226" cy="170" r="4" fill="var(--l-service)"/>
+<circle cx="300" cy="160" r="4" fill="var(--l-service)"/>
+<circle cx="322" cy="84" r="4" fill="var(--l-service)"/>
+<circle cx="344" cy="170" r="4" fill="var(--l-service)"/>
+<circle cx="366" cy="120" r="4" fill="var(--l-service)"/>
+<circle cx="388" cy="146" r="4" fill="var(--l-service)"/>
+<circle cx="410" cy="98" r="4" fill="var(--l-service)"/>
+<circle cx="432" cy="174" r="4" fill="var(--l-service)"/>
+<circle cx="454" cy="128" r="4" fill="var(--l-service)"/>
+<circle cx="476" cy="52" r="4" fill="var(--l-service)"/>
+<text class="dg-tiny" x="466" y="56" text-anchor="end">una tarda muchísimo</text>
+<path d="M642 40 V180" stroke="var(--label-3)" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text class="dg-tiny" x="648" y="54">GST</text>
+<path d="M642 138 H746" stroke="var(--ok)" stroke-width="1.5" stroke-dasharray="6 4"/>
+<circle cx="552" cy="74" r="4" fill="var(--l-service)"/>
+<circle cx="574" cy="160" r="4" fill="var(--l-service)"/>
+<circle cx="596" cy="96" r="4" fill="var(--l-service)"/>
+<circle cx="618" cy="140" r="4" fill="var(--l-service)"/>
+<circle cx="662" cy="158" r="4" fill="var(--l-service)"/>
+<circle cx="684" cy="168" r="4" fill="var(--l-service)"/>
+<circle cx="706" cy="152" r="4" fill="var(--l-service)"/>
+<circle cx="728" cy="166" r="4" fill="var(--l-service)"/>
+<text class="dg-tiny" x="137" y="204" text-anchor="middle">El ideal: todo llega antes de Δ.</text>
+<text class="dg-tiny" x="137" y="222" text-anchor="middle">Un silencio largo prueba una falla.</text>
+<text class="dg-tiny" x="389" y="204" text-anchor="middle">El caótico: no hay ninguna cota.</text>
+<text class="dg-tiny" x="389" y="222" text-anchor="middle">Un silencio no prueba nada.</text>
+<text class="dg-tiny" x="641" y="204" text-anchor="middle">El real: caótico por momentos,</text>
+<text class="dg-tiny" x="641" y="222" text-anchor="middle">pero en algún momento se calma.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 6.1.</b> En el modelo parcialmente síncrono, el algoritmo no puede usar GST para nada, porque no sabe cuándo llega. Solo sabe que, si espera lo suficiente, sus timeouts empiezan a acertar.</figcaption>
+        <figcaption><b>Figura 6.1.</b> Lo que distingue a los tres mundos no es qué tan rápido es cada mensaje, sino si existe una cota y si se puede confiar en ella.</figcaption>
       </figure>
 
-      <h3 id="modelo-fallas">Qué puede fallar</h3>
-
-      <ul>
-        <li><b>Caída definitiva (crash-stop):</b> el nodo se detiene y no vuelve. Es el modelo más simple y el menos realista.</li>
-        <li><b>Caída y recuperación (<dfn data-term="crash-recovery">crash-recovery</dfn>):</b> el nodo se cae y vuelve con lo que había escrito en disco, sin lo que tenía en memoria. Es el modelo de los sistemas reales, y tiene una consecuencia directa: antes de prometer algo, hay que persistirlo. Un nodo de Raft guarda en disco su término y su voto antes de responder, porque si vota, se cae y al volver olvidó el voto, podría votar dos veces en el mismo término.</li>
-        <li><b>Omisión:</b> el nodo sigue vivo, pero se pierden algunos de sus mensajes: un enlace que descarta paquetes, una cola llena, un firewall mal configurado en una sola dirección.</li>
-        <li><b>Bizantina:</b> el nodo hace cualquier cosa, incluso mentir (6.13).</li>
-      </ul>
-
-      <p>Cuanto más general es el modelo, más caro es tolerarlo: con fallas por caída, f fallas se toleran con 2f + 1 nodos; con fallas bizantinas hacen falta 3f + 1. La red también tiene su modelo. Lo habitual es suponer enlaces que pueden perder, demorar, duplicar y reordenar mensajes, pero que no los inventan. Con reintentos y deduplicación se construye sobre ellos un canal confiable, que es lo que TCP hace dentro de una conexión. Entre conexiones distintas, la misma idea reaparece como "al menos una vez" más idempotencia (M02).</p>
-
-      <h3 id="safety-liveness">Safety y liveness</h3>
+      <p>La consecuencia práctica: como en el mundo real no hay una cota en la que confiar, un nodo nunca puede estar seguro de que otro murió. Un timeout es una apuesta, y a veces se equivoca. Por eso los buenos diseños nunca dependen de un timeout para la safety: lo usan para decidir cuándo reaccionar, y protegen los datos con otros mecanismos.</p>
 
       <aside class="callout callout--def">
-        <p class="callout-label">Definición</p>
-        <p class="def-term"><dfn data-term="safety-liveness">Safety y liveness</dfn> <span class="def-en">Lamport, 1977; Alpern y Schneider, 1985</span></p>
-        <p class="def-one">Una propiedad de safety dice que nunca pasa nada malo; una de liveness, que algo bueno termina pasando. Toda propiedad de un sistema es una de las dos o una combinación de ambas.</p>
-        <dl class="def-rows">
-          <dt>Intuición</dt>
-          <dd>Una violación de safety ocurre en un instante concreto y se puede señalar: "acá se confirmaron dos valores distintos". Una violación de liveness nunca se puede demostrar en un tiempo finito, porque siempre cabe que la respuesta llegue un segundo después.</dd>
-          <dt>Ejemplo</dt>
-          <dd>Safety: nunca hay dos líderes que confirmen en el mismo término; una lectura nunca devuelve un valor que nadie escribió. Liveness: toda escritura recibe respuesta; si la red se estabiliza, se termina eligiendo un líder.</dd>
-          <dt>Por qué importa en producción</dt>
-          <dd>Los algoritmos reales garantizan safety siempre y liveness solo cuando la red se porta bien. Si diseñas al revés, una partición no te deja sin servicio: te deja con datos corruptos, que es mucho peor.</dd>
-        </dl>
+        <p class="callout-label">Una convención para el resto del módulo</p>
+        <p>Cuando se hable de replicación, se dirá <b>replicación con espera</b> (el primario espera la confirmación de la réplica antes de responder, lo que las bases llaman replicación síncrona) o <b>replicación en segundo plano</b> (responde sin esperar, la replicación asíncrona). "Síncrono" y "asíncrono" a secas quedan para el modelo de tiempo.</p>
       </aside>
 
-      <aside class="callout callout--tradeoff">
-        <p class="callout-label">Trade-off</p>
-        <p>Al diseñar, escribe primero la propiedad de safety ("nunca dos facturas para el mismo cliente y período") y después la de liveness ("toda factura se emite antes de una hora"). La primera se impone con mecanismos que no dependen del tiempo: restricciones únicas, términos, fencing tokens. La segunda, con timeouts, reintentos y alertas. Mezclarlas, por ejemplo al confiar en un timeout para evitar duplicados, es la fuente de buena parte de los bugs de este módulo.</p>
-      </aside>
-
-      <h2 id="detectores"><span class="sec-num">6.2</span>Detectar fallas: timeouts, phi accrual y gossip</h2>
-
-      <p>En un sistema asíncrono no se puede distinguir un nodo caído de uno lento: los dos se ven igual, como un silencio. Todo <dfn data-term="failure-detector">detector de fallas</dfn> es, entonces, una apuesta: después de cierto silencio, sospecha. Si sospecha pronto, detecta rápido y se equivoca seguido; si sospecha tarde, se equivoca poco y detecta tarde. Ningún valor elimina ese compromiso; solo se puede mejorar usando más información.</p>
-
-      <h3 id="detector-teoria">Lo que se le puede pedir a un detector</h3>
-
-      <p>Chandra y Toueg (1996) describieron los detectores con dos propiedades:</p>
-      <ul>
-        <li><b>Completitud:</b> todo nodo caído termina siendo sospechado por todos los nodos correctos.</li>
-        <li><b>Exactitud:</b> los nodos correctos no son sospechados. Exigirla siempre es imposible con demoras sin cota; lo que se puede pedir es exactitud <em>eventual</em>: a partir de algún momento, hay al menos un nodo correcto del que nadie sospecha.</li>
-      </ul>
-      <p>El resultado importante es que el consenso se puede resolver con un detector que se equivoque durante un tiempo arbitrario, siempre que haya una mayoría de nodos correctos y que el detector termine acertando en ese sentido débil. Más aún, el detector más débil que alcanza, llamado Ω, solo tiene que lograr que, desde algún momento, todos los nodos correctos confíen en un mismo líder correcto (Chandra, Hadzilacos y Toueg, 1996). Es lo que hacen los timeouts de elección de Raft: mientras la red es inestable pueden equivocarse y nada malo pasa, porque la seguridad no depende de ellos (6.8).</p>
-
-      <h3 id="phi-accrual">Un timeout que se adapta: phi accrual</h3>
-
-      <p>Un timeout fijo ignora lo que se sabe del nodo: si sus heartbeats llegan cada 1&#8239;000 ms con poca variación, 3 segundos de silencio son muy raros; si llegan con mucha variación, no tanto. El detector <dfn data-term="phi-accrual">phi accrual</dfn> (Hayashibara y otros, 2004) guarda una ventana con los tiempos entre heartbeats de cada nodo y calcula, en cada instante, qué tan improbable es el silencio actual:</p>
-
-<pre data-lang="python"><code># P_tarde(t): probabilidad, según la historia reciente, de que el próximo heartbeat
-# llegue más de t segundos después del último
-phi = -math.log10(P_tarde(ahora - ultimo_heartbeat))
-sospechoso = phi &gt; umbral</code></pre>
-
-      <p>Un φ de 1 significa que, si declaras la falla en ese momento, la probabilidad de equivocarte es de alrededor del 10&#8239;%; un φ de 2, del 1&#8239;%; un φ de 8, de una en cien millones, siempre según el modelo de la distribución. El umbral se fija sobre φ y no sobre segundos, así que el mismo umbral sirve para un nodo con heartbeats regulares y para otro con heartbeats erráticos. Cassandra lo usa con <code>phi_convict_threshold</code>, que vale 8 por defecto, y Akka Cluster usa el mismo umbral. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="swim">Muchos nodos: SWIM y gossip</h3>
-
-      <p>Con decenas o miles de nodos, que cada uno le mande heartbeats a todos los demás cuesta n² mensajes, y un detector central es un punto único de falla. <dfn data-term="swim">SWIM</dfn> (Das, Gupta y Motivala, 2002) resuelve las dos cosas:</p>
-
-      <ol class="steps">
-        <li><span class="step-title">Probar al azar</span>En cada período, cada nodo le manda un ping a un miembro elegido al azar. El costo por nodo es constante, sin importar el tamaño del clúster.</li>
-        <li><span class="step-title">Pedir ayuda antes de sospechar</span>Si no hay respuesta, le pide a k nodos que prueben al silencioso por él (ping-req). Si alguno recibe respuesta, el problema era el enlace, no el nodo (figura 6.2).</li>
-        <li><span class="step-title">Sospechar antes de declarar</span>Sin respuestas, el nodo queda "sospechado" durante un tiempo, y él mismo puede desmentirlo si se entera. Recién después se lo declara muerto.</li>
-        <li><span class="step-title">Difundir de boca en boca</span>Los cambios de membresía viajan dentro de los propios pings: cada nodo les cuenta las novedades a unos pocos, que se las cuentan a otros, y en O(log n) rondas lo sabe todo el clúster.</li>
-      </ol>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 376" role="img" aria-labelledby="f6st f6sd">
-<title id="f6st">Detección de fallas con SWIM</title>
-<desc id="f6sd">El nodo A manda un ping a B y no recibe respuesta en el período: el problema puede ser B o el enlace entre A y B. En lugar de declararlo muerto, A pide a otros dos nodos, C y D, que prueben a B por él. C le manda un ping a B, que responde, y C le reenvía la confirmación a A. B está vivo: lo que fallaba era el enlace entre A y B, y la prueba indirecta evitó una falsa alarma.</desc>
-<defs><marker id="f6s-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f6s-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f6s-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f6s-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Nodo A</text>
-<path class="dg-frame" d="M70.0 40 V366"/>
-<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Nodo B</text>
-<path class="dg-frame" d="M280.0 40 V366"/>
-<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Nodo C</text>
-<path class="dg-frame" d="M490.0 40 V366"/>
-<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Nodo D</text>
-<path class="dg-frame" d="M700.0 40 V366"/>
-<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 72 L275.0 72" marker-end="url(#f6s-f)"/>
-<rect x="155.8" y="55" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">ping</text>
-<rect x="80.0" y="92" width="314" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="90.0" y="108">sin respuesta: todavía no lo da por muerto</text>
-<path class="dg-edge" d="M73.0 140 L485.0 140" marker-end="url(#f6s-a)"/>
-<rect x="237.7" y="123" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="280.0" y="134" text-anchor="middle">ping-req(B)</text>
-<path class="dg-edge" d="M73.0 174 L695.0 174" marker-end="url(#f6s-a)"/>
-<rect x="342.7" y="157" width="84.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="168" text-anchor="middle">ping-req(B)</text>
-<path class="dg-edge" d="M487.0 208 L285.0 208" marker-end="url(#f6s-a)"/>
-<rect x="365.8" y="191" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">ping</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M283.0 242 L485.0 242" marker-end="url(#f6s-r)"/>
-<rect x="369.1" y="225" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">ack</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 276 L75.0 276" marker-end="url(#f6s-r)"/>
-<rect x="247.6" y="259" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="280.0" y="270" text-anchor="middle">ack de B</text>
-<rect x="80.0" y="296" width="223" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="90.0" y="312">B vive: fallaba el enlace A–B</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.2.</b> La prueba indirecta separa dos fallas que un ping solo no distingue: un nodo caído y un enlace roto entre dos nodos sanos.</figcaption>
-      </figure>
-
-      <p>Ese último mecanismo, el <dfn data-term="gossip">gossip</dfn> o difusión epidémica (Demers y otros, 1987, en Xerox PARC), aparece en muchos sistemas. Cassandra lo usa para la membresía y el estado del anillo, y la biblioteca memberlist de HashiCorp, debajo de Consul, Serf y Nomad, implementa SWIM con extensiones, llamadas Lifeguard, para que un nodo sobrecargado no acuse a los demás de su propia lentitud. <span class="badge badge--doc">Documentado</span></p>
-
-      <aside class="callout callout--fail">
-        <p class="callout-label">Qué pasa si el detector se equivoca</p>
-        <p>Se va a equivocar: es inevitable. La pregunta es qué daño hace. Si una falsa sospecha solo dispara una elección o una redistribución innecesaria, el costo es disponibilidad. Si una falsa sospecha puede producir dos líderes que escriben a la vez, el diseño está mal: la corrección de los datos nunca puede depender del detector. Para eso están los términos de Raft y los fencing tokens (6.14).</p>
-      </aside>
-
-      <div data-exercise="m06-detector"></div>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#paradigma">el cambio de paradigma, la sincronía parcial y los detectores de fallas</a>, en M06.1.</p>
 
       <h2 id="cap"><span class="sec-num">6.3</span>CAP: lo que obliga una partición</h2>
 
@@ -254,14 +168,10 @@ sospechoso = phi &gt; umbral</code></pre>
         <dl class="def-rows">
           <dt>Intuición</dt>
           <dd>Dos sucursales de un banco pierden la comunicación. Si ambas siguen atendiendo retiros, una misma cuenta puede quedar en negativo (pierdes C). Si una deja de atender hasta que vuelva la conexión, sus clientes esperan (pierdes A).</dd>
-          <dt>Ejemplo</dt>
-          <dd>etcd elige C: el lado minoritario de una partición rechaza escrituras. DynamoDB con lecturas eventuales elige A: ambos lados responden y las réplicas se reconcilian después.</dd>
           <dt>Por qué importa en producción</dt>
-          <dd>Las particiones no son exóticas: un switch que falla, una zona aislada, una pausa de GC larga que hace parecer muerto a un nodo. La pregunta no es si pasará, sino qué debe hacer cada dato cuando pase.</dd>
+          <dd>Las particiones no son exóticas: un switch que falla, una zona aislada, una pausa de GC larga. La pregunta no es si pasará, sino qué debe hacer cada dato cuando pase.</dd>
         </dl>
       </aside>
-
-      <p>La demostración de Gilbert y Lynch cabe en una figura. Basta con el sistema más chico posible: dos réplicas de un registro x, G1 y G2, que dejan de verse.</p>
 
       <figure class="figure">
         <div class="figure-frame">
@@ -298,59 +208,83 @@ sospechoso = phi &gt; umbral</code></pre>
 <text class="dg-small" x="12" y="274">No hay tercera opción: responder 1 exigiría enterarse de la escritura cruzando la partición.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 6.3.</b> La demostración no depende del algoritmo: solo de que, durante la partición, la información de G1 no puede llegar a G2.</figcaption>
+        <figcaption><b>Figura 6.2.</b> Durante la partición, G2 no puede enterarse de la escritura en G1: o responde un valor viejo, o no responde.</figcaption>
       </figure>
 
-      <p>Si G2 responde 0 después de que G1 confirmó x = 1, la historia no es linealizable: una lectura que empezó después de una escritura terminada no la ve. Si G2 no responde, o responde con un error, no es disponible. Responder 1 exigiría enterarse de la escritura, y la partición lo impide.</p>
+      <p>Tres matices evitan la mayoría de los malentendidos. La P no se elige: las particiones ocurren igual, y no existe un sistema distribuido "CA". La elección es por operación, no por sistema: el mismo servicio puede exigir C para autorizar un pago y aceptar A para mostrar el historial. Y CAP solo habla de lo que pasa durante una partición, que es poco tiempo; para el resto existe PACELC.</p>
 
-      <h3 id="cap-matices">Lo que CAP dice y lo que no</h3>
-
-      <ul>
-        <li><b>La C es linealizabilidad</b> de un registro, no la C de ACID ni "consistencia" en general.</li>
-        <li><b>La A es muy exigente:</b> toda request a un nodo que no está caído debe recibir una respuesta que no sea un error. Con esa definición, etcd no es disponible durante una partición, aunque el lado mayoritario siga funcionando perfectamente. Por eso decir que un sistema "es CP" o "es AP" dice poco: casi ningún sistema real es una cosa o la otra en sentido estricto.</li>
-        <li><b>La P no se elige.</b> No existe un sistema distribuido "CA": las particiones ocurren igual, y la única pregunta es qué hace cada operación cuando ocurren.</li>
-        <li><b>La elección es por operación, no por sistema.</b> El mismo servicio puede exigir C para autorizar un pago y aceptar A para mostrar el historial.</li>
-        <li><b>CAP no habla de latencia ni del funcionamiento normal,</b> que es casi todo el tiempo. Para eso existe PACELC.</li>
-      </ul>
-
-      <p>Brewer volvió sobre el tema en 2012 con una propuesta más útil que la elección binaria: detectar la partición, entrar en un "modo partición" que limite las operaciones riesgosas y, al terminar, reconciliar lo que divergió. Antes, en 1999, Fox y Brewer habían propuesto medir la degradación con <dfn data-term="harvest-yield">harvest y yield</dfn>. El yield es la fracción de requests que reciben respuesta; el harvest, la fracción de los datos que refleja cada respuesta. Un buscador con un shard caído puede mantener el yield en 100&#8239;% respondiendo con el 90&#8239;% de los resultados: elige perder harvest para no perder yield.</p>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#cap">la demostración de CAP, lo que dice y lo que no, y harvest y yield</a>, en M06.1.</p>
 
       <h2 id="pacelc"><span class="sec-num">6.4</span>PACELC: el costo de todos los días</h2>
 
-      <aside class="callout callout--def">
-        <p class="callout-label">Definición</p>
-        <p class="def-term"><dfn data-term="pacelc">PACELC</dfn> <span class="def-en">Daniel Abadi, 2010</span></p>
-        <p class="def-one">Si hay Partición, elige entre Availability y Consistency; si no (Else), elige entre Latency y Consistency.</p>
-        <dl class="def-rows">
-          <dt>Intuición</dt>
-          <dd>Mantener réplicas de acuerdo exige que se hablen, y hablar cuesta tiempo aunque la red esté perfecta. Consistencia fuerte significa esperar la confirmación de otras réplicas en cada escritura (o lectura).</dd>
-          <dt>Ejemplo</dt>
-          <dd>Con réplicas en Virginia e Irlanda, una escritura linealizable espera al menos una ida y vuelta transatlántica (~75 ms). Una escritura que confirma localmente y replica después tarda 2 ms, pero otra región puede leer el valor viejo.</dd>
-          <dt>Por qué importa en producción</dt>
-          <dd>La latencia se paga en cada request, todos los días. Muchas veces el que elige "consistencia fuerte en todas partes" descubre que su p99 quedó atado a la región más lejana.</dd>
-        </dl>
-      </aside>
+      <p><dfn data-term="pacelc">PACELC</dfn> (Daniel Abadi, 2010) completa a CAP: si hay <b>P</b>artición, elige entre <b>A</b>vailability y <b>C</b>onsistency; si no (<b>E</b>lse), elige entre <b>L</b>atency y <b>C</b>onsistency. La segunda mitad es la que pagas todos los días, y se entiende mirando a quién espera cada escritura antes de responder.</p>
 
-      <div class="table-wrap">
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f6lt f6ld">
+<title id="f6lt">A quién espera cada escritura</title>
+<desc id="f6ld">Arriba, un primario en Virginia con dos réplicas: Ohio, a unos 11 ms de ida y vuelta, e Irlanda, a unos 75 ms. Abajo, la latencia de una escritura en tres estrategias. Confirmar en el disco local y replicar en segundo plano tarda unos 2 ms. Esperar a un quórum de 2 de 3, que cuenta al primario, espera a la réplica más rápida, Ohio: unos 11 ms. Esperar a las tres réplicas espera a Irlanda: unos 75 ms, y hereda su p99.</desc>
+<defs><marker id="f6la" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="12" y="40" width="110" height="46" rx="9"/>
+<text class="dg-label" x="67" y="68" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="200" y="34" width="190" height="58" rx="9"/>
+<text class="dg-label" x="295" y="58" text-anchor="middle" style="font-size:13.5px">Primario en Virginia</text>
+<text class="dg-tiny" x="295" y="76" text-anchor="middle">fsync local: ~2 ms</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="520" y="8" width="150" height="46" rx="9"/>
+<text class="dg-label" x="595" y="36" text-anchor="middle" style="font-size:13.5px">Réplica en Ohio</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="600" y="90" width="158" height="46" rx="9"/>
+<text class="dg-label" x="679" y="118" text-anchor="middle" style="font-size:13.5px">Réplica en Irlanda</text>
+<path class="dg-edge" d="M124 63 H196" marker-end="url(#f6la)"/>
+<path class="dg-edge" d="M392 52 L516 34" marker-end="url(#f6la)"/>
+<text class="dg-tiny" x="452" y="30" text-anchor="middle">~11 ms ida y vuelta</text>
+<path class="dg-edge" d="M392 76 L596 110" marker-end="url(#f6la)"/>
+<text class="dg-tiny" x="470" y="112" text-anchor="middle">~75 ms ida y vuelta</text>
+<text class="dg-small" x="12" y="178">Confirma local, replica después</text>
+<rect x="290" y="166" width="11" height="16" rx="3" style="fill: var(--l-service)"/>
+<text class="sim-val" x="309" y="179">~2 ms</text>
+<text class="dg-small" x="12" y="214">Quórum: 2 de 3</text>
+<rect x="290" y="202" width="59" height="16" rx="3" style="fill: var(--l-service)"/>
+<text class="sim-val" x="357" y="215">~11 ms: espera a Ohio</text>
+<text class="dg-small" x="12" y="250">Espera a las 3</text>
+<rect x="290" y="238" width="406" height="16" rx="3" style="fill: var(--l-queue)"/>
+<text class="sim-val" x="704" y="251">~75 ms</text>
+<path class="sim-grid" d="M290 160 V262"/>
+<text class="sim-axis" x="290" y="280" text-anchor="middle">0</text>
+<text class="sim-axis" x="398" y="280" text-anchor="middle">20</text>
+<text class="sim-axis" x="506" y="280" text-anchor="middle">40</text>
+<text class="sim-axis" x="614" y="280" text-anchor="middle">60</text>
+<text class="sim-axis" x="722" y="280" text-anchor="middle">80 ms</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 6.3.</b> Un quórum espera a la segunda respuesta más rápida, no a la más lenta. Solo esperar a todas ata cada escritura a la réplica más lejana.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Un sistema EL responde con lo que sabe el nodo al que le preguntaste,</b> sin esperar a los demás. No sufre la latencia de la réplica más lejana, pero otra réplica puede devolver un valor viejo, y si el primario cae antes de replicar, se pierden escrituras confirmadas.</li>
+        <li><b>Un quórum espera a la W-ésima respuesta más rápida, no a la más lenta.</b> Con 3 réplicas y W = 2, una réplica lejana o congelada no frena las escrituras.</li>
+        <li><b>Esperar a todas convierte a la peor réplica en tu latencia:</b> cualquier pausa de cualquier réplica frena la escritura, y tu p99 pasa a ser el de la réplica más lenta.</li>
+      </ul>
+
+<div class="table-wrap">
         <table class="t">
           <thead><tr><th>Sistema (configuración por defecto)</th><th>Si hay partición</th><th>Si no hay</th><th>Comentario</th></tr></thead>
           <tbody>
             <tr><td>DynamoDB, lecturas eventuales</td><td>PA</td><td>EL</td><td>Puedes pedir lecturas fuertes por request, que van al líder de la partición</td></tr>
             <tr><td>Cassandra con nivel ONE</td><td>PA</td><td>EL</td><td>Con QUORUM en lectura y escritura se acerca a PC/EC</td></tr>
-            <tr><td>PostgreSQL con réplica síncrona</td><td>PC</td><td>EC</td><td>Sin la réplica síncrona, el failover puede perder commits</td></tr>
+            <tr><td>PostgreSQL con replicación con espera (<code>synchronous_standby_names</code>, la "réplica síncrona")</td><td>PC</td><td>EC</td><td>Sin esa espera, el failover puede perder commits</td></tr>
             <tr><td>etcd, ZooKeeper, Consul</td><td>PC</td><td>EC</td><td>Consenso: la minoría no acepta escrituras</td></tr>
             <tr><td>Google Spanner</td><td>PC</td><td>EC</td><td>Paga la espera de TrueTime en cada commit</td></tr>
-            <tr><td>Redis con réplicas asíncronas</td><td>PA</td><td>EL</td><td>Un failover puede perder escrituras confirmadas</td></tr>
+            <tr><td>Redis con replicación en segundo plano (réplicas "asíncronas")</td><td>PA</td><td>EL</td><td>Un failover puede perder escrituras confirmadas</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="muted">Clasificación orientativa: la mayoría de estos sistemas son configurables, y la categoría depende de cómo los uses.</p>
+      <p class="muted">Clasificación orientativa: casi todos estos sistemas son configurables. "Síncrona" y "asíncrona" hablan aquí de replicación, no del modelo de tiempo de 6.2.</p>
 
-      <p>El costo de la "C" de todos los días también se ve en la factura. En DynamoDB, una lectura fuertemente consistente consume el doble de capacidad que una eventual y solo la puede servir el líder de la partición, mientras que la eventual la sirve cualquiera de las tres réplicas. <span class="badge badge--doc">Documentado</span> Elegir la garantía por operación, y no por sistema, es también elegir cuánto se paga por cada una.</p>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#pacelc-latencia">de dónde sale la latencia, con un simulador de W de N y réplicas lentas</a>, en M06.1.</p>
 
-      <h2 id="consistencia"><span class="sec-num">6.5</span>Modelos de consistencia</h2>
+      <h2 id="consistencia"><span class="sec-num">6.5</span>Consistencia: qué tan parecido a una sola copia</h2>
 
-      <p>"Consistencia" no es sí o no: es una escalera de garantías sobre qué puede ver un lector. Cuanto más arriba, más fácil razonar sobre el sistema y más coordinación (latencia) cuesta.</p>
+      <p>Imagina el sistema ideal: <b>una sola copia</b> del dato, en una sola máquina, que atiende las operaciones de a una. Nadie puede ver un valor viejo, porque no hay otra copia. Un sistema replicado puede prometer comportarse igual (eso es ser <span data-term="linearizable">linealizable</span>) o aflojar alguna regla a cambio de responder más rápido y seguir funcionando durante una partición. "Consistencia" no es sí o no: es una escalera.</p>
 
       <figure class="figure">
         <div class="figure-frame">
@@ -382,65 +316,84 @@ sospechoso = phi &gt; umbral</code></pre>
 <text class="dg-tiny" x="22" y="170" transform="rotate(-90 22 170)" text-anchor="middle">más fuerte: más fácil de razonar, más coordinación y latencia</text>
 </svg>
         </div>
-        <figcaption><b>Figura 6.4.</b> Cada escalón incluye las garantías de los de abajo.</figcaption>
+        <figcaption><b>Figura 6.4.</b> Cada escalón incluye las garantías de los de abajo. Hacia arriba, más fácil de razonar y más coordinación; hacia abajo, más rápido y disponible.</figcaption>
       </figure>
 
-      <p>Los dos extremos de abajo se definen rápido. La <dfn data-term="eventual">consistencia eventual</dfn> solo promete que, si dejan de llegar escrituras, las réplicas terminan iguales: no dice cuándo ni qué se ve mientras tanto, y sirve para contadores, cachés, búsquedas y feeds. La <dfn data-term="causal">consistencia causal</dfn> respeta el orden de lo que está relacionado: nadie ve la respuesta a un comentario antes que el comentario. Es, en esencia, la garantía más fuerte compatible con seguir disponible durante una partición (Mahajan, Alvisi y Dahlin, 2011). Los escalones de arriba piden más precisión.</p>
-
-      <h3 id="linealizabilidad">Linealizabilidad, con precisión</h3>
-
-      <p>La definición de Herlihy y Wing (1990): cada operación tiene un intervalo, desde que el cliente la invoca hasta que recibe la respuesta. Una historia es <dfn data-term="linearizable">linealizable</dfn> si se puede elegir, dentro de cada intervalo, un instante en el que la operación "ocurre", de modo que la secuencia resultante sea legal: cada lectura devuelve el valor de la última escritura anterior. Dos consecuencias:</p>
-      <ul>
-        <li>Si una operación terminó antes de que otra empezara, va antes. Las que se solapan en el tiempo pueden ordenarse de cualquier forma, pero una vez que alguien vio un valor nuevo, nadie que empiece después puede ver el viejo.</li>
-        <li>Es <b>local</b>: si cada objeto por separado es linealizable, el sistema entero lo es. Eso permite razonar sobre un registro, un lock o una cola sin mirar el resto.</li>
-      </ul>
-      <p>Decidir si una historia es linealizable es un problema NP-completo en general (Gibbons y Korach, 1997), aunque en la práctica las herramientas lo resuelven para historias de miles de operaciones con búsquedas podadas. El verificador de abajo prueba todos los órdenes posibles en historias chicas. Elige una historia y cambia lo que devolvieron las lecturas:</p>
-
-      <div data-sim="lin"></div>
-
-      <h3 id="secuencial">Secuencial: el mismo orden para todos, sin reloj</h3>
-
-      <p>La <dfn data-term="secuencial">consistencia secuencial</dfn> (Lamport, 1979) pide un orden total legal que respete el orden de cada cliente, pero no el tiempo real entre clientes distintos. En la historia "Una réplica atrasada" del verificador, B lee el 0 después de que A escribió y leyó el 1: no es linealizable, pero sí secuencial, porque la lectura de B puede ubicarse antes de la escritura. La diferencia entre los dos modelos es exactamente el reloj de pared.</p>
-      <p>ZooKeeper se parece a esto: sus escrituras son linealizables, y cada cliente ve las actualizaciones en orden y sin volver atrás aunque cambie de servidor, pero una lectura puede devolver un estado atrasado. Por eso existe <code>sync</code>, que pone al día al servidor antes de una lectura que necesita lo último. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="sesion">Garantías de sesión</h3>
-
-      <p>Entre lo linealizable y lo eventual hay garantías que no le prometen nada al sistema entero, solo a cada cliente sobre sus propias operaciones. Terry y otros las formularon en 1994, para la base de datos Bayou:</p>
-
-      <div class="table-wrap">
+<div class="table-wrap">
         <table class="t">
-          <thead><tr><th>Garantía</th><th>Promete</th><th>Evita</th></tr></thead>
+          <thead><tr><th>Nivel</th><th>Qué conserva de "una sola copia"</th><th>Qué regla afloja</th><th>Lo que ya puedes llegar a ver</th></tr></thead>
           <tbody>
-            <tr><td><span data-term="read-your-writes">Read-your-writes</span></td><td>Ves tus propias escrituras</td><td>Guardar un perfil y no ver el cambio al recargar</td></tr>
-            <tr><td>Lecturas monótonas</td><td>No ves un estado más viejo que uno que ya viste</td><td>Un comentario que aparece y desaparece al recargar</td></tr>
-            <tr><td>Escrituras monótonas</td><td>Tus escrituras se aplican en el orden en que las hiciste</td><td>Que un "borrar" llegue a una réplica antes que el "crear"</td></tr>
-            <tr><td>Escrituras después de lecturas</td><td>Lo que escribas a partir de algo que leíste queda ordenado después de eso</td><td>Una respuesta visible antes que la pregunta</td></tr>
+            <tr><td>Linealizable</td><td>Un orden único que respeta el tiempo real</td><td>Ninguna</td><td>Siempre lo último que terminó</td></tr>
+            <tr><td>Secuencial</td><td>Un orden único, igual para todos, que respeta el de cada cliente</td><td>El tiempo real entre clientes distintos</td><td>Un estado atrasado, pero el mismo atraso para todos y sin volver atrás</td></tr>
+            <tr><td>Causal</td><td>El orden de lo relacionado: la causa antes que el efecto</td><td>El orden entre operaciones concurrentes</td><td>Dos lectores que ven dos escrituras independientes en distinto orden</td></tr>
+            <tr><td>De sesión</td><td>Lo que cada cliente hizo y vio</td><td>Todo lo que hicieron los demás clientes</td><td>Datos ajenos atrasados, pero nunca lo tuyo</td></tr>
+            <tr><td>Eventual</td><td>Que al final todos coinciden</td><td>Todo lo demás, mientras haya escrituras</td><td>Cualquier versión, incluso una más vieja que la que ya viste</td></tr>
           </tbody>
         </table>
       </div>
 
-      <p>Las <dfn data-term="session-guarantees">garantías de sesión</dfn> se implementan sin coordinación global: el cliente guarda la versión más alta que vio o escribió (una posición del log, un token de sesión) y solo lee de réplicas que ya la tienen. Azure Cosmos DB ofrece cinco niveles (fuerte, staleness acotado, sesión, prefijo consistente y eventual), usa el de sesión por defecto y lo implementa con un token que viaja en cada respuesta; MongoDB las da con sus sesiones causales. <span class="badge badge--doc">Documentado</span> Las cuatro juntas equivalen, para lo que hace cada cliente, a consistencia causal, y resuelven la mayoría de las quejas de los usuarios con un costo muy bajo.</p>
-
-      <h3 id="serializable">Linealizable no es serializable</h3>
-
-      <p>Las dos palabras se confunden y hablan de cosas distintas:</p>
+      <p>Una analogía por escalón:</p>
       <ul>
-        <li><b>Serializable</b> (M05) es una garantía sobre <em>transacciones</em> que tocan varios objetos: el resultado equivale a ejecutarlas de a una, en <em>algún</em> orden. Ese orden no tiene que respetar el tiempo real: una base serializable puede responder una consulta con una foto de hace 10 segundos.</li>
-        <li><b>Linealizable</b> es una garantía sobre <em>operaciones individuales</em> en un objeto, y sí respeta el tiempo real.</li>
-        <li>La <dfn data-term="strict-serializability">serializabilidad estricta</dfn> exige las dos cosas: transacciones serializables, en un orden que respeta el tiempo real. Spanner la llama consistencia externa, y FoundationDB y etcd también la dan; Jepsen la verificó en etcd 3.4.3. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Linealizable:</b> una pizarra única en una sala. Si alguien escribió un número y se sentó, todo el que se levante después ve el número nuevo.</li>
+        <li><b>Secuencial:</b> un partido transmitido en diferido. Todos ven las mismas jugadas en el mismo orden, pero unos con 5 segundos de retraso y otros con 30.</li>
+        <li><b><dfn data-term="causal">Causal</dfn>:</b> un grupo de chat. Nadie ve una respuesta antes que la pregunta, pero dos mensajes sin relación pueden aparecerle a cada uno en distinto orden.</li>
+        <li><b>De sesión:</b> tu propio cuaderno. Siempre ves lo que tú escribiste y nunca retrocedes; de lo que hicieron otros no se promete nada.</li>
+        <li><b><dfn data-term="eventual">Eventual</dfn>:</b> un rumor en una oficina. Tarde o temprano lo saben todos, pero si preguntas a mitad de camino, cada uno te cuenta una versión.</li>
       </ul>
-      <p>La regla práctica: si una decisión depende de "lo último" (un saldo, un lock, el último asiento disponible), serializable no alcanza; hace falta el orden de tiempo real.</p>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>El error más caro no es elegir consistencia eventual, sino elegirla sin saberlo: leer de una réplica para decidir si un usuario tiene saldo, o usar una caché para verificar permisos. Hay que anotar, por cada dato, qué garantía necesita la decisión que se toma con él.</p>
+        <p>El error más caro no es elegir consistencia eventual, sino elegirla sin saberlo: leer de una réplica para decidir si un usuario tiene saldo, o usar una caché para verificar permisos. Anota, por cada dato, qué garantía necesita la decisión que se toma con él. Y no confundas linealizable con serializable: la segunda habla de transacciones (M05) y no promete ver lo último.</p>
       </aside>
 
-      <h2 id="quorums"><span class="sec-num">6.6</span>Quórums: la intersección que sostiene todo</h2>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#consistencia">cada nivel en detalle, cómo se implementa, una historia interactiva con cinco veredictos y un verificador de linealizabilidad</a>, en M06.1.</p>
 
-      <p>Casi todos los algoritmos de este módulo se apoyan en una sola propiedad: dos <span data-term="quorum">quórums</span> cualesquiera comparten al menos un nodo. Si una escritura llegó a un quórum y una lectura consulta otro, el nodo compartido lleva la información de uno al otro. La forma más simple de lograrlo es la mayoría: con N nodos, dos conjuntos de más de N/2 nodos se solapan siempre.</p>
+      <h2 id="quorums"><span class="sec-num">6.6</span>Quórums: por qué funciona W + R &gt; N</h2>
 
-      <div class="table-wrap">
+      <p>Casi todos los algoritmos de replicación se apoyan en una sola idea: si una escritura llega a un grupo de nodos y una lectura consulta otro grupo, y los dos grupos comparten al menos un nodo, ese nodo lleva el valor nuevo de uno al otro.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Cinco amigos guardan un dato entre todos. Para cambiarlo, llamas a tres cualesquiera y les cuentas el valor nuevo. Para consultarlo, llamas a tres cualesquiera y les preguntas. ¿Puede pasar que ninguno de los tres que consultaste se haya enterado? No: hiciste 6 llamadas a solo 5 personas, así que al menos una recibió las dos. Esa persona conoce el valor nuevo.</p>
+      </aside>
+
+      <p>Eso es todo: si la escritura toca W nodos y la lectura toca R, y W + R es mayor que N, no hay forma de elegir los dos grupos sin repetir a alguien. Si W + R no supera N, sí la hay, y la lectura puede consultar justo a los que no se enteraron. Para reconocer cuál de las respuestas es la más nueva, cada valor lleva una versión, y el lector se queda con la más alta.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 236" role="img" aria-labelledby="f6it f6id">
+<title id="f6it">Dos quórums que se solapan y dos que no</title>
+<desc id="f6id">A la izquierda, cinco nodos con un quórum de escritura de 3, los nodos 1, 2 y 3, y un quórum de lectura de 3, los nodos 3, 4 y 5. El nodo 3 está en los dos: 3 más 3 es 6, mayor que 5. A la derecha, un quórum de escritura de 2, los nodos 1 y 2, y uno de lectura de 3, los nodos 3, 4 y 5. No comparten ningún nodo: 2 más 3 es 5, que no es mayor que 5, y la lectura puede no ver la escritura.</desc>
+<text class="dg-label" x="190" y="24" text-anchor="middle">W = 3, R = 3, N = 5</text>
+<text class="dg-label" x="580" y="24" text-anchor="middle">W = 2, R = 3, N = 5</text>
+<rect x="22" y="72" width="200" height="76" rx="14" style="fill: none; stroke: var(--l-queue); stroke-width: 2.5"/>
+<rect x="158" y="62" width="200" height="96" rx="14" style="fill: none; stroke: var(--link); stroke-width: 2.5; stroke-dasharray: 7 5"/>
+<text class="dg-tiny" x="30" y="58" style="fill: var(--l-queue)">escritura: 1, 2, 3</text>
+<text class="dg-tiny" x="350" y="176" text-anchor="end" style="fill: var(--link)">lectura: 3, 4, 5</text>
+<circle class="dg-box" cx="56" cy="110" r="22"/><text class="dg-label" x="56" y="115" text-anchor="middle">1</text>
+<circle class="dg-box" cx="123" cy="110" r="22"/><text class="dg-label" x="123" y="115" text-anchor="middle">2</text>
+<circle class="dg-box dg-box--em" cx="190" cy="110" r="22"/><text class="dg-label" x="190" y="115" text-anchor="middle">3</text>
+<circle class="dg-box" cx="257" cy="110" r="22"/><text class="dg-label" x="257" y="115" text-anchor="middle">4</text>
+<circle class="dg-box" cx="324" cy="110" r="22"/><text class="dg-label" x="324" y="115" text-anchor="middle">5</text>
+<text class="dg-small" x="190" y="206" text-anchor="middle">✓ 3 + 3 = 6 &gt; 5: el nodo 3 está en los dos</text>
+<rect x="412" y="72" width="134" height="76" rx="14" style="fill: none; stroke: var(--l-queue); stroke-width: 2.5"/>
+<rect x="558" y="62" width="200" height="96" rx="14" style="fill: none; stroke: var(--link); stroke-width: 2.5; stroke-dasharray: 7 5"/>
+<text class="dg-tiny" x="420" y="58" style="fill: var(--l-queue)">escritura: 1, 2</text>
+<text class="dg-tiny" x="750" y="176" text-anchor="end" style="fill: var(--link)">lectura: 3, 4, 5</text>
+<circle class="dg-box" cx="446" cy="110" r="22"/><text class="dg-label" x="446" y="115" text-anchor="middle">1</text>
+<circle class="dg-box" cx="512" cy="110" r="22"/><text class="dg-label" x="512" y="115" text-anchor="middle">2</text>
+<circle class="dg-box" cx="592" cy="110" r="22"/><text class="dg-label" x="592" y="115" text-anchor="middle">3</text>
+<circle class="dg-box" cx="658" cy="110" r="22"/><text class="dg-label" x="658" y="115" text-anchor="middle">4</text>
+<circle class="dg-box" cx="724" cy="110" r="22"/><text class="dg-label" x="724" y="115" text-anchor="middle">5</text>
+<text class="dg-small dg-fail-text" x="580" y="206" text-anchor="middle">✗ 2 + 3 = 5, no más de 5: no se tocan</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 6.5.</b> La fórmula solo cuenta: si los dos grupos suman más nodos de los que hay, tienen que compartir alguno.</figcaption>
+      </figure>
+
+      <p>La forma más común de cumplirla es la mayoría: dos grupos de más de la mitad siempre se solapan. Es el quórum de Raft y Paxos, y explica por qué los clústeres de consenso tienen un número impar de nodos: un cuarto nodo no tolera más fallas que tres, y suma uno más al que esperar.</p>
+
+<div class="table-wrap">
         <table class="t">
           <thead><tr><th>Nodos</th><th>Mayoría</th><th>Fallas que tolera</th><th>Comentario</th></tr></thead>
           <tbody>
@@ -452,181 +405,13 @@ sospechoso = phi &gt; umbral</code></pre>
         </table>
       </div>
 
-      <p>Por eso los clústeres de consenso tienen un número impar de nodos, y por eso conviene repartirlos entre zonas de forma que ninguna zona tenga una mayoría: con 5 nodos en 3 zonas (2, 2 y 1), la caída de cualquier zona deja al menos 3.</p>
+      <p>Con un líder, el quórum garantiza que lo confirmado sobreviva a un cambio de líder: el nuevo líder fue votado por una mayoría, y esa mayoría comparte al menos un nodo con la que confirmó cada escritura. Sin líder (Dynamo, Cassandra), W + R &gt; N garantiza que una lectura vea la última escritura confirmada. Ojo: no garantiza que el sistema sea linealizable mientras hay escrituras en curso.</p>
 
-      <h3 id="quorum-lin">W + R &gt; N no alcanza para ser linealizable</h3>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#quorum-porque">por qué funciona la intersección, qué tiene que solaparse con qué en cada algoritmo, sloppy quorums y quórums flexibles</a>, en M06.1.</p>
 
-      <p>En la replicación sin líder (M05), la regla W + R &gt; N asegura que una lectura toque al menos una réplica con la última escritura <em>confirmada</em>. No dice nada de las escrituras en curso, y con ellas aparecen lecturas que retroceden:</p>
+      <h2 id="consenso"><span class="sec-num">6.7</span>Un líder y un log: consenso con Raft</h2>
 
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 512" role="img" aria-labelledby="f6qt f6qd">
-<title id="f6qt">Un quórum que no es linealizable</title>
-<desc id="f6qd">Tres réplicas con quórums de escritura y de lectura de 2. El escritor manda x igual a 1 y, por ahora, solo llegó a la réplica 1. El lector A lee de las réplicas 1 y 2, recibe 1 y 0, y devuelve 1, la versión más nueva. Después, el lector B lee de las réplicas 2 y 3, recibe 0 y 0, y devuelve 0. B empezó después de que A terminara, y aun así vio un valor más viejo: la historia no es linealizable, aunque W más R sea mayor que N.</desc>
-<defs><marker id="f6q-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f6q-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f6q-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f6q-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="11.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Escritor</text>
-<path class="dg-frame" d="M70.0 40 V502"/>
-<rect class="dg-box" x="137.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="196.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica 1</text>
-<path class="dg-frame" d="M196.0 40 V502"/>
-<rect class="dg-box" x="263.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="322.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica 2</text>
-<path class="dg-frame" d="M322.0 40 V502"/>
-<rect class="dg-box" x="389.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="448.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica 3</text>
-<path class="dg-frame" d="M448.0 40 V502"/>
-<rect class="dg-box" x="515.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="574.0" y="29" text-anchor="middle" style="font-size:13.5px">Lector A</text>
-<path class="dg-frame" d="M574.0 40 V502"/>
-<rect class="dg-box" x="641.0" y="8" width="118.0" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Lector B</text>
-<path class="dg-frame" d="M700.0 40 V502"/>
-<path class="dg-edge" d="M73.0 72 L191.0 72" marker-end="url(#f6q-a)"/>
-<rect x="110.5" y="55" width="45.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="133.0" y="66" text-anchor="middle">x = 1</text>
-<rect x="206.0" y="92" width="209" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="216.0" y="108">la escritura sigue en curso</text>
-<path class="dg-edge" d="M571.0 140 L201.0 140" marker-end="url(#f6q-a)"/>
-<rect x="365.8" y="123" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">leer</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M199.0 174 L569.0 174" marker-end="url(#f6q-r)"/>
-<rect x="375.7" y="157" width="18.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="168" text-anchor="middle">1</text>
-<path class="dg-edge" d="M571.0 208 L327.0 208" marker-end="url(#f6q-a)"/>
-<rect x="428.8" y="191" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="448.0" y="202" text-anchor="middle">leer</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M325.0 242 L569.0 242" marker-end="url(#f6q-r)"/>
-<rect x="438.7" y="225" width="18.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="448.0" y="236" text-anchor="middle">0</text>
-<rect x="458.0" y="262" width="202" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="468.0" y="278">A devuelve 1, el más nuevo</text>
-<path class="dg-edge" d="M697.0 310 L327.0 310" marker-end="url(#f6q-a)"/>
-<rect x="491.8" y="293" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="511.0" y="304" text-anchor="middle">leer</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M325.0 344 L695.0 344" marker-end="url(#f6q-r)"/>
-<rect x="501.7" y="327" width="18.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="511.0" y="338" text-anchor="middle">0</text>
-<path class="dg-edge" d="M697.0 378 L453.0 378" marker-end="url(#f6q-a)"/>
-<rect x="554.8" y="361" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="574.0" y="372" text-anchor="middle">leer</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M451.0 412 L695.0 412" marker-end="url(#f6q-r)"/>
-<rect x="564.7" y="395" width="18.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="574.0" y="406" text-anchor="middle">0</text>
-<rect x="458.0" y="432" width="230" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="468.0" y="448">B empieza después y devuelve 0</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.5.</b> Es la historia "Nuevo y después viejo" del verificador de 6.5: A vio el 1 y terminó; B empezó después y vio el 0.</figcaption>
-      </figure>
-
-      <p>La solución clásica es el algoritmo <dfn data-term="abd">ABD</dfn> (Attiya, Bar-Noy y Dolev, 1995): antes de responder, el lector escribe en un quórum el valor más nuevo que encontró, una reparación síncrona. Así, si A devolvió 1, el 1 ya está en un quórum y cualquier lectura posterior lo encuentra. Con varios escritores, la escritura también necesita una fase previa de lectura para elegir una versión mayor que todas. El precio es una ida y vuelta más en cada lectura.</p>
-      <p>Las bases estilo Dynamo con QUORUM se acercan, pero no lo garantizan en todos los casos: las escrituras que fallaron a medias y la resolución de conflictos por timestamp dejan anomalías posibles. Si necesitas linealizabilidad en una de ellas, usa la operación que la promete de forma explícita, como las transacciones ligeras de Cassandra, que corren Paxos (6.9).</p>
-
-      <h3 id="sloppy">Sloppy quorums y hinted handoff</h3>
-
-      <p>Dynamo (2007) agregó una relajación: si algunas de las N réplicas de una clave están caídas, la escritura se guarda en otros nodos sanos, que la retienen con una pista de a quién pertenece y se la entregan cuando vuelve. Esa entrega diferida es el <dfn data-term="hinted-handoff">hinted handoff</dfn>, y el quórum resultante es un <dfn data-term="sloppy-quorum">sloppy quorum</dfn>: mejora mucho la disponibilidad de escritura, pero rompe la intersección. W + R &gt; N ya no garantiza que una lectura vea la escritura, porque pueden haberse usado nodos distintos de los N de siempre. Riak usa sloppy quorums por defecto; Cassandra usa hinted handoff, pero no cuenta esas escrituras diferidas para alcanzar el nivel de consistencia pedido, salvo con el nivel ANY. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="quorums-flexibles">Quórums flexibles</h3>
-
-      <p>Durante décadas se asumió que Paxos necesitaba mayorías en sus dos fases. Howard, Malkhi y Spiegelman (2016) mostraron que alcanza con que se solapen los quórums de fases distintas: el de la elección de líder (fase 1) con el de la replicación (fase 2). Dos quórums de replicación no necesitan solaparse entre sí. Con 10 nodos, por ejemplo, se puede replicar cada escritura en solo 3 si la elección consulta a 8, porque 3 + 8 &gt; 10. Las escrituras de todos los días se vuelven más rápidas, y las elecciones, que son raras, más caras. Es la idea de <dfn data-term="flexible-paxos">Flexible Paxos</dfn>.</p>
-
-      <h2 id="relojes"><span class="sec-num">6.7</span>Tiempo y relojes</h2>
-
-      <h3 id="relojes-fisicos">Qué tan mal puede estar un reloj</h3>
-
-      <p>Cada máquina mide el tiempo con un oscilador de cuarzo que se adelanta o se atrasa según la temperatura y la edad del cristal. Para TrueTime, Google supone un desvío de hasta 200 microsegundos por segundo en el peor caso, que sin corrección serían 17 segundos por día. <span class="badge badge--doc">Documentado</span> NTP corrige el desvío consultando servidores de referencia: dentro de un datacenter deja el error en fracciones de milisegundo, y en Internet, en decenas, pero sin ninguna garantía. Lo que sale mal en la práctica:</p>
-      <ul>
-        <li><b>Saltos hacia atrás:</b> si el reloj iba adelantado, NTP puede corregirlo de golpe, y un <code>fin - inicio</code> calculado con la hora del sistema puede dar negativo.</li>
-        <li><b>Segundos intercalares:</b> el 1 de enero de 2017, un segundo intercalar hizo que el DNS de Cloudflare calculara una duración negativa, y un código que no esperaba un número negativo entró en pánico en parte de sus servidores. <span class="badge badge--doc">Documentado</span> Ese mismo año, Go 1.9 empezó a guardar una lectura del reloj monotónico dentro de cada <code>time.Time</code>. Google y AWS reparten cada segundo intercalar a lo largo de horas (leap smear) para que ningún reloj salte.</li>
-        <li><b>Un NTP roto:</b> una máquina con el demonio caído puede ir segundos o minutos adelantada sin que nada lo note, hasta que gana todas las escrituras de last-write-wins.</li>
-      </ul>
-      <p>Dos reglas salen de esto. Las duraciones (timeouts, latencias, leases) se miden con un reloj <b>monotónico</b>, que nunca retrocede. Y el orden entre eventos de máquinas distintas no se decide con la hora del sistema.</p>
-
-      <h3 id="happens-before">Ordenar sin relojes: happens-before</h3>
-
-      <p>Lamport (1978) propuso dejar de preguntar "¿qué pasó primero?" y preguntar "¿qué pudo influir en qué?". La relación <dfn data-term="happens-before">happens-before</dfn> (a → b) vale si:</p>
-      <ul>
-        <li>a y b ocurren en el mismo proceso y a va antes;</li>
-        <li>a es el envío de un mensaje y b, su recepción;</li>
-        <li>o hay una cadena: a → c y c → b.</li>
-      </ul>
-      <p>Si no vale ni a → b ni b → a, los eventos son <b>concurrentes</b>: ninguno pudo enterarse del otro, y no tiene sentido preguntar cuál fue primero. Un reloj de Lamport garantiza que, si a → b, el número de a es menor que el de b, pero no al revés: un número menor no prueba nada. Los relojes vectoriales (Fidge y Mattern, 1988) cierran esa brecha. Con ellos, a → b si y solo si el vector de a es menor o igual que el de b en cada posición, y distinto.</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 300" role="img" aria-labelledby="f6vt f6vd">
-<title id="f6vt">Relojes vectoriales</title>
-<desc id="f6vd">Tres procesos. P1 tiene el evento local a con vector 1,0,0 y después envía un mensaje, evento b con 2,0,0. P2 tiene el evento local c con 0,1,0, recibe el mensaje de P1 en d con 2,2,0 y envía un mensaje en f con 2,3,0. P3 tiene el evento local e con 0,0,1 y recibe el mensaje de P2 en g con 2,3,2. P1 tiene después el evento local h con 3,0,0. a ocurrió antes que g porque su vector es menor o igual en cada posición. h y g son concurrentes: ninguno es menor o igual al otro en todas las posiciones.</desc>
-<defs><marker id="f6va" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
-<text class="dg-label" x="30" y="65">P1</text>
-<path class="dg-edge" d="M70 60 H748" marker-end="url(#f6va)"/>
-<text class="dg-label" x="30" y="150">P2</text>
-<path class="dg-edge" d="M70 145 H748" marker-end="url(#f6va)"/>
-<text class="dg-label" x="30" y="235">P3</text>
-<path class="dg-edge" d="M70 230 H748" marker-end="url(#f6va)"/>
-<circle cx="150" cy="60" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="150" y="47" text-anchor="middle" style="font-size:13px">a</text>
-<text class="dg-tiny" x="150" y="82" text-anchor="middle">[1, 0, 0]</text>
-<circle cx="250" cy="60" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="250" y="47" text-anchor="middle" style="font-size:13px">b</text>
-<text class="dg-tiny" x="241" y="82" text-anchor="end">[2, 0, 0]</text>
-<circle cx="610" cy="60" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="610" y="47" text-anchor="middle" style="font-size:13px">h</text>
-<text class="dg-tiny" x="610" y="82" text-anchor="middle">[3, 0, 0]</text>
-<circle cx="190" cy="145" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="190" y="132" text-anchor="middle" style="font-size:13px">c</text>
-<text class="dg-tiny" x="190" y="167" text-anchor="middle">[0, 1, 0]</text>
-<circle cx="340" cy="145" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="351" y="136" style="font-size:13px">d</text>
-<text class="dg-tiny" x="340" y="167" text-anchor="middle">[2, 2, 0]</text>
-<circle cx="440" cy="145" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="440" y="132" text-anchor="middle" style="font-size:13px">f</text>
-<text class="dg-tiny" x="431" y="167" text-anchor="end">[2, 3, 0]</text>
-<circle cx="250" cy="230" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="250" y="217" text-anchor="middle" style="font-size:13px">e</text>
-<text class="dg-tiny" x="250" y="252" text-anchor="middle">[0, 0, 1]</text>
-<circle cx="540" cy="230" r="6" fill="var(--bg)" stroke="var(--label)" stroke-width="2"/>
-<text class="dg-label" x="551" y="221" style="font-size:13px">g</text>
-<text class="dg-tiny" x="540" y="252" text-anchor="middle">[2, 3, 2]</text>
-<path class="dg-edge" style="stroke:var(--l-queue)" d="M254 66 L336 138" marker-end="url(#f6va)"/>
-<path class="dg-edge" style="stroke:var(--l-queue)" d="M444 151 L536 223" marker-end="url(#f6va)"/>
-<text class="dg-small" x="12" y="276">a ocurrió antes que g: [1, 0, 0] es menor o igual que [2, 3, 2] en cada posición.</text>
-<text class="dg-small" x="12" y="294">h y g son concurrentes: [3, 0, 0] y [2, 3, 2] no se pueden ordenar. Un reloj de Lamport no lo detecta.</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.6.</b> Cada proceso incrementa su propia posición en cada evento y, al recibir un mensaje, toma el máximo posición por posición. Comparar dos vectores dice si un evento precede al otro o si son concurrentes.</figcaption>
-      </figure>
-
-      <p>El costo de un reloj vectorial es una entrada por proceso en cada mensaje, lo que no escala a millones de clientes. Los sistemas reales lo acotan: Dynamo y Riak guardan vectores de versión por clave con una entrada por réplica, no por cliente, y Riak pasó a vectores con "puntos" (dotted version vectors) para no confundir escrituras concurrentes que pasan por un mismo nodo.</p>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th>Reloj</th><th>Cómo funciona</th><th>Te dice</th><th>Lo usa</th></tr></thead>
-          <tbody>
-            <tr><td><dfn data-term="lamport">Lamport</dfn></td><td>Contador por nodo; en cada mensaje, <code>max(propio, recibido) + 1</code></td><td>Un orden total compatible con la causalidad</td><td>Ordenar eventos, desempates</td></tr>
-            <tr><td><dfn data-term="vector-clock">Vectorial</dfn></td><td>Un contador por nodo en cada evento</td><td>Si A pasó antes que B, después, o si fueron concurrentes</td><td>Detección de conflictos (Dynamo, Riak)</td></tr>
-            <tr><td><dfn data-term="hlc">HLC</dfn></td><td>Hora física más un contador lógico</td><td>Timestamps cercanos a la hora real y causales</td><td>CockroachDB</td></tr>
-            <tr><td><dfn data-term="truetime">TrueTime</dfn></td><td>Intervalo de incertidumbre acotado con GPS y relojes atómicos</td><td>Orden real garantizado si esperas la incertidumbre</td><td>Google Spanner</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h3 id="hlc-truetime">HLC y TrueTime: cerca de la hora real</h3>
-
-      <p>Un HLC (Kulkarni y otros, 2014) guarda dos números: el mayor tiempo físico que conoce el nodo, propio o recibido en un mensaje, y un contador que desempata los eventos con el mismo tiempo. El resultado se mantiene a una distancia acotada de la hora real, así que sirve para consultar los datos "tal como estaban a las 15:00", y además respeta happens-before. CockroachDB lo usa con un desfasaje máximo entre nodos, por defecto de 500 ms. Una lectura que encuentra un valor con un timestamp dentro de esa incertidumbre no sabe si se escribió antes o después que ella, y se reinicia con un timestamp mayor; y un nodo que detecta que su reloj se alejó más del 80&#8239;% de ese máximo respecto de al menos la mitad del clúster se apaga solo. <span class="badge badge--doc">Documentado</span></p>
-
-      <p>TrueTime va más lejos. Cada datacenter de Google tiene servidores de tiempo con GPS y con relojes atómicos, y la API no devuelve una hora sino un intervalo [más temprano, más tarde] que garantiza contener la hora real. Su ancho, ε, iba de 1 a 7 ms en el artículo de 2012. Con eso, Spanner hace <dfn data-term="commit-wait">commit wait</dfn>: le asigna a la transacción el timestamp s igual a "más tarde", y no la confirma hasta que "más temprano" supere s. Después de esa espera, de unos 2ε, cualquier transacción que empiece en cualquier lugar del mundo tendrá un timestamp mayor. Así consigue consistencia externa pagando unos milisegundos por commit, y buena parte de la espera se solapa con la replicación de Paxos. <span class="badge badge--doc">Documentado</span></p>
-
-      <p>Ya no es exclusivo de Google: AWS publica ClockBound, un demonio que devuelve la hora con una cota de error al estilo de TrueTime, sobre un servicio de sincronización que en algunas instancias llega a la precisión de microsegundos. <span class="badge badge--doc">Documentado</span></p>
-
-      <div data-exercise="m06-relojes"></div>
-
-      <h2 id="consenso"><span class="sec-num">6.8</span>Consenso con Raft</h2>
-
-      <p>El <dfn data-term="consenso">consenso</dfn> es lograr que varios nodos decidan un mismo valor aunque algunos fallen. Formalmente, son tres propiedades: <b>acuerdo</b> (dos nodos correctos no deciden valores distintos), <b>validez</b> (el valor decidido lo propuso alguien) y <b>terminación</b> (todo nodo correcto termina decidiendo). Las dos primeras son de safety; la tercera, de liveness.</p>
-
-      <p>Decidir un solo valor parece poco, pero decidir una secuencia de valores es decidir un log, y con un log se replica cualquier cosa: si todas las réplicas arrancan en el mismo estado y aplican las mismas operaciones en el mismo orden, terminan en el mismo estado. Es la <dfn data-term="smr">replicación de máquina de estados</dfn> (Schneider, 1990), y así funcionan etcd, ZooKeeper y las bases distribuidas con consistencia fuerte. El consenso repetido y la <dfn data-term="atomic-broadcast">difusión atómica</dfn>, que entrega los mismos mensajes en el mismo orden a todos, son de hecho problemas equivalentes. <dfn data-term="raft">Raft</dfn> (Ongaro y Ousterhout, 2014) resuelve el consenso sobre un log con tres ideas:</p>
+      <p>El <dfn data-term="consenso">consenso</dfn> es lograr que varios nodos decidan lo mismo aunque algunos fallen. Decidir una secuencia de valores es decidir un log, y con un log se replica cualquier cosa: si todas las réplicas aplican las mismas operaciones en el mismo orden, terminan en el mismo estado. Así funcionan etcd, ZooKeeper y las bases distribuidas con consistencia fuerte. <span data-term="raft">Raft</span> lo resuelve con tres ideas:</p>
 
       <ol class="steps">
         <li><span class="step-title">Un líder por término</span>El tiempo se divide en términos numerados. Si un seguidor no recibe heartbeats del líder antes de su timeout (aleatorio, para evitar empates), se vuelve candidato, incrementa el término y pide votos. Gana quien obtiene una mayoría; cada nodo vota una sola vez por término, y solo por candidatos con un log al menos tan actualizado como el suyo.</li>
@@ -634,724 +419,31 @@ sospechoso = phi &gt; umbral</code></pre>
         <li><span class="step-title">Confirmar con mayoría</span>Una entrada está confirmada cuando la tiene una mayoría. Como toda mayoría se solapa con cualquier otra, el próximo líder (elegido por una mayoría, con el log más actualizado) necesariamente la tiene.</li>
       </ol>
 
-      <p>Pruébalo. Envía algunas escrituras, mata al líder y mira la elección. Después parte la red con el líder en la minoría, escribe, y repara: las escrituras del líder viejo nunca se confirman, y quedan reemplazadas en cuanto el líder nuevo replica sus propias entradas en esas posiciones (haz otra escritura después de reparar para verlo).</p>
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Un comité con presidente por mandatos numerados. Solo el presidente propone cambios al acta, y un cambio queda aprobado cuando lo firmó la mayoría. Si el presidente desaparece, alguien se postula para el mandato siguiente. Como la mayoría que elige al nuevo presidente comparte al menos un miembro con la que firmó cada cambio, ningún presidente nuevo puede ignorar un cambio aprobado.</p>
+      </aside>
+
+      <p>Pruébalo: envía algunas escrituras, mata al líder y mira la elección. Después parte la red con el líder en la minoría y escribe: esas escrituras nunca se confirman.</p>
 
       <div data-sim="raft"></div>
 
-      <aside class="callout callout--prod">
-        <p class="callout-label">En producción real</p>
-        <p>Raft está debajo de etcd (y por lo tanto de Kubernetes), Consul, CockroachDB, TiKV y las colas de quórum de RabbitMQ; Kafka lo usa en KRaft para sus metadatos. <span class="badge badge--doc">Documentado</span> Casi nadie implementa consenso a mano: se usa uno de estos sistemas como servicio de coordinación. Los clústeres de consenso son chicos (3 o 5 nodos) porque cada escritura espera a la mayoría; la capacidad se escala particionando los datos en muchos grupos de Raft independientes.</p>
+      <p>Un último cuidado. El consenso evita que dos líderes confirmen a la vez, pero no evita que un nodo que cree tener un lock, porque se quedó congelado y no se enteró de que lo perdió, escriba en un recurso externo. La protección es un <span data-term="fencing">fencing token</span>: un número que sube cada vez que el lock cambia de manos y que el recurso verifica, como el número de turno de una carnicería, que nunca atiende a alguien con un número menor al último que atendió.</p>
+
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#consenso">por qué Raft es seguro, lecturas linealizables, cambios de membresía, Paxos, FLP, leases y fencing tokens</a>, en M06.1.</p>
+
+      <h2 id="transacciones"><span class="sec-num">6.8</span>Transacciones entre máquinas</h2>
+
+      <p>Cuando una transacción toca datos de dos máquinas, por ejemplo dos shards, hay que lograr que todas confirmen o ninguna. La solución clásica es el two-phase commit (2PC): un coordinador les pregunta a todos si pueden confirmar, y solo si todos dicen que sí, decide confirmar y les avisa.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Una boda. El oficiante pregunta a cada uno "¿aceptas?". Decir que sí es un compromiso: ya no puedes arrepentirte por tu cuenta. Solo cuando los dos dijeron que sí, el oficiante los declara casados. Si el oficiante se desmaya justo después de los dos "sí", los novios no saben si están casados, y no pueden irse ni celebrar hasta que alguien recupere el acta.</p>
       </aside>
 
-      <h3 id="raft-seguridad">Por qué Raft es seguro</h3>
+      <p>Esa es la debilidad de 2PC: si el coordinador cae después de la votación, los participantes quedan esperando con los locks tomados. Los sistemas modernos replican al coordinador con consenso para que no sea un punto único de falla, o evitan la transacción distribuida con una <a href="m05-bases-de-datos.html#sagas">saga</a>: una secuencia de transacciones locales, cada una con su compensación si algo falla después. La mejor transacción distribuida, casi siempre, es la que el diseño de los datos hace innecesaria.</p>
 
-      <p>Raft garantiza cinco propiedades, y cada una se apoya en las anteriores:</p>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th>Propiedad</th><th>Qué dice</th><th>Cómo se logra</th></tr></thead>
-          <tbody>
-            <tr><td>Un líder por término</td><td>Nunca hay dos líderes en el mismo término</td><td>Cada nodo vota una vez por término y guarda el voto en disco antes de responder</td></tr>
-            <tr><td>El líder solo agrega</td><td>Un líder nunca borra ni sobrescribe su propio log</td><td>Por diseño</td></tr>
-            <tr><td>Coincidencia de logs</td><td>Si dos logs tienen una entrada con el mismo índice y término, son idénticos hasta ahí</td><td>AppendEntries lleva el índice y el término de la entrada anterior, y el seguidor rechaza si no coinciden</td></tr>
-            <tr><td>Completitud del líder</td><td>Toda entrada confirmada está en el log de todos los líderes futuros</td><td>Solo se vota a un candidato con un log al menos tan actualizado: se compara el término de la última entrada y, si empata, la longitud</td></tr>
-            <tr><td>Seguridad de la máquina de estados</td><td>Si un nodo aplicó una entrada en un índice, ningún otro aplica una distinta en ese índice</td><td>Las anteriores, más la regla de commit</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p>La parte sutil es la regla de commit. Parecería que una entrada está confirmada en cuanto la tiene una mayoría, pero eso solo vale para las entradas del término actual del líder. Una entrada de un término anterior puede estar en una mayoría y aun así ser sobrescrita:</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 300" role="img" aria-labelledby="f6rt f6rd">
-<title id="f6rt">Por qué un líder no confirma entradas de términos anteriores contando copias</title>
-<desc id="f6rd">Cinco servidores. En el primer momento, S1 es líder del término 4 y acaba de copiar a S3 la entrada del índice 2, que es del término 2: ahora la tienen S1, S2 y S3, una mayoría. S5 tiene en el índice 2 una entrada del término 3. En el segundo momento, S1 cae y S5 gana el término 5 con los votos de S2, S3 y S4, porque su última entrada es de un término más alto. S5 copia su entrada del término 3 y sobrescribe el índice 2 en todos. Si S1 hubiera dado por confirmada la entrada del término 2 por estar en una mayoría, se habría perdido una entrada confirmada. Por eso Raft solo confirma contando copias las entradas del término actual.</desc>
-<text class="dg-label" x="12" y="22" style="font-size:13.5px">Término 4: S1 copia el índice 2</text>
-<text class="dg-tiny" x="12" y="40">la entrada del término 2 ya está en una mayoría</text>
-<text class="dg-num" x="142" y="66" text-anchor="middle">1</text>
-<text class="dg-num" x="188" y="66" text-anchor="middle">2</text>
-<text class="dg-num" x="234" y="66" text-anchor="middle">3</text>
-<text class="dg-small" x="12" y="95">S1 (líder)</text>
-<rect x="122" y="76" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="142" y="95" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="168" y="76" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="188" y="95" text-anchor="middle" style="font-size:13px">2</text>
-<rect x="214" y="76" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="234" y="95" text-anchor="middle" style="font-size:13px">4</text>
-<text class="dg-small" x="12" y="131">S2</text>
-<rect x="122" y="112" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="142" y="131" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="168" y="112" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="188" y="131" text-anchor="middle" style="font-size:13px">2</text>
-<rect x="214" y="112" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="12" y="167">S3</text>
-<rect x="122" y="148" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="142" y="167" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="168" y="148" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="188" y="167" text-anchor="middle" style="font-size:13px">2</text>
-<rect x="214" y="148" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="12" y="203">S4</text>
-<rect x="122" y="184" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="142" y="203" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="168" y="184" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<rect x="214" y="184" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="12" y="239">S5</text>
-<rect x="122" y="220" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="142" y="239" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="168" y="220" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 34%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="188" y="239" text-anchor="middle" style="font-size:13px">3</text>
-<rect x="214" y="220" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-label" x="402" y="22" style="font-size:13.5px">Término 5: gana S5 y sobrescribe</text>
-<text class="dg-tiny" x="402" y="40">S2, S3 y S4 lo votan: su log termina en un término mayor</text>
-<text class="dg-num" x="532" y="66" text-anchor="middle">1</text>
-<text class="dg-num" x="578" y="66" text-anchor="middle">2</text>
-<text class="dg-num" x="624" y="66" text-anchor="middle">3</text>
-<text class="dg-small" x="402" y="95">S1 (caído)</text>
-<rect x="512" y="76" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="532" y="95" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="558" y="76" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="578" y="95" text-anchor="middle" style="font-size:13px">2</text>
-<rect x="604" y="76" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="624" y="95" text-anchor="middle" style="font-size:13px">4</text>
-<text class="dg-small" x="402" y="131">S2</text>
-<rect x="512" y="112" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="532" y="131" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="558" y="112" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 34%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="578" y="131" text-anchor="middle" style="font-size:13px">3</text>
-<rect x="604" y="112" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="402" y="167">S3</text>
-<rect x="512" y="148" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="532" y="167" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="558" y="148" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 34%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="578" y="167" text-anchor="middle" style="font-size:13px">3</text>
-<rect x="604" y="148" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="402" y="203">S4</text>
-<rect x="512" y="184" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="532" y="203" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="558" y="184" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 34%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="578" y="203" text-anchor="middle" style="font-size:13px">3</text>
-<rect x="604" y="184" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="402" y="239">S5 (líder)</text>
-<rect x="512" y="220" width="40" height="28" rx="5" fill="var(--fill-2)" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="532" y="239" text-anchor="middle" style="font-size:13px">1</text>
-<rect x="558" y="220" width="40" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 34%, var(--bg))" stroke="var(--separator-strong)"/>
-<text class="dg-label" x="578" y="239" text-anchor="middle" style="font-size:13px">3</text>
-<rect x="604" y="220" width="40" height="28" rx="5" fill="none" stroke="var(--separator)" stroke-dasharray="3 3"/>
-<text class="dg-small" x="12" y="276">Los números son el término de cada entrada, por índice. Si S1 hubiera confirmado el índice 2 por</text>
-<text class="dg-small" x="12" y="294">estar en una mayoría, S5 habría borrado una entrada confirmada. Solo se cuentan copias del término actual.</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.7.</b> Es la figura 8 del artículo de Raft. S5 puede ganar porque su última entrada es de un término (3) mayor que el de las últimas entradas de S2, S3 y S4, aunque la entrada del término 2 esté en tres logs.</figcaption>
-      </figure>
-
-      <p>La regla: un líder solo confirma, contando copias, entradas de su propio término. Cuando confirma una de ellas, todas las anteriores quedan confirmadas de forma indirecta, por la coincidencia de logs. Por eso un líder recién elegido agrega enseguida una entrada vacía de su término: hasta confirmarla, no sabe con certeza qué está confirmado.</p>
-
-      <h3 id="raft-lecturas">Lecturas linealizables</h3>
-
-      <p>Una lectura que el líder responde desde su memoria no es linealizable: el líder puede haber sido depuesto por una partición sin saberlo, y otro puede haber confirmado escrituras nuevas. Hay tres formas de hacerlo bien:</p>
-
-      <ol class="steps">
-        <li><span class="step-title">Por el log</span>La lectura se agrega al log como una escritura más y se responde al aplicarla. Es correcta y cara: un fsync y una ronda de replicación por cada lectura.</li>
-        <li><span class="step-title">Con ReadIndex</span>El líder anota su índice de commit, confirma con una ronda de heartbeats que una mayoría lo sigue reconociendo, espera a aplicar hasta ese índice y responde (figura 6.8). No escribe en disco. Un seguidor también puede servir la lectura si le pide el índice al líder.</li>
-        <li><span class="step-title">Con un lease</span>El líder supone que nadie lo va a deponer durante un tiempo después de cada heartbeat confirmado (menor que el timeout de elección) y responde sin consultar a nadie. Es lo más rápido, pero depende de que los relojes no se desvíen más de lo previsto: una pausa larga o un reloj que corre rápido rompen la garantía.</li>
-      </ol>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 376" role="img" aria-labelledby="f6r2t f6r2d">
-<title id="f6r2t">Una lectura linealizable sin escribir en el log</title>
-<desc id="f6r2d">El cliente pide leer x al líder S1. El líder anota su índice de commit actual, 41, como readIndex, y manda un heartbeat a los seguidores. S2 responde: S1 y S2 son una mayoría de tres, así que nadie depuso al líder antes de que llegara la lectura. El líder espera a haber aplicado su log hasta el índice 41 y responde. La lectura no pasó por el log y aun así es linealizable.</desc>
-<defs><marker id="f6r2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f6r2-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f6r2-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f6r2-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
-<path class="dg-frame" d="M70.0 40 V366"/>
-<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Líder S1</text>
-<path class="dg-frame" d="M280.0 40 V366"/>
-<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">S2</text>
-<path class="dg-frame" d="M490.0 40 V366"/>
-<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">S3</text>
-<path class="dg-frame" d="M700.0 40 V366"/>
-<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f6r2-a)"/>
-<rect x="149.2" y="55" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">leer x</text>
-<rect x="290.0" y="92" width="216" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="300.0" y="108">readIndex = commitIndex = 41</text>
-<path class="dg-edge" d="M283.0 140 L485.0 140" marker-end="url(#f6r2-a)"/>
-<rect x="309.7" y="123" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">heartbeat (término 7)</text>
-<path class="dg-edge" d="M283.0 174 L695.0 174" marker-end="url(#f6r2-a)"/>
-<rect x="414.7" y="157" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="490.0" y="168" text-anchor="middle">heartbeat (término 7)</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 208 L285.0 208" marker-end="url(#f6r2-r)"/>
-<rect x="372.4" y="191" width="25.2" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">ok</text>
-<rect x="290.0" y="228" width="321" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="300.0" y="244">una mayoría lo reconoce: sigue siendo líder</text>
-<rect x="290.0" y="262" width="265" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="300.0" y="278">espera a aplicar hasta el índice 41</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 310 L75.0 310" marker-end="url(#f6r2-r)"/>
-<rect x="152.5" y="293" width="45.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="175.0" y="304" text-anchor="middle">x = 5</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.8.</b> El heartbeat demuestra que, en el momento de la lectura, ningún otro líder pudo haber confirmado nada: para eso habría necesitado una mayoría, y la mayoría todavía reconoce a S1.</figcaption>
-      </figure>
-
-      <p>etcd sirve las lecturas linealizables por defecto con <dfn data-term="read-index">ReadIndex</dfn>, y permite pedir una lectura "serializable" que responde cualquier miembro desde su estado local, más rápida y posiblemente atrasada. <span class="badge badge--doc">Documentado</span> Es PACELC dentro de una sola API.</p>
-
-      <h3 id="raft-membresia">Cambiar los miembros sin perder la seguridad</h3>
-
-      <p>Agregar o sacar nodos es la operación más delicada de un clúster de consenso. Si cada nodo pasara de la configuración vieja a la nueva en el momento en que se entera, durante la transición podrían convivir dos mayorías que no se tocan:</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 236" role="img" aria-labelledby="f6mt f6md">
-<title id="f6mt">Por qué no se cambia la configuración de golpe</title>
-<desc id="f6md">Un clúster de tres servidores, S1, S2 y S3, pasa a cinco. Durante la transición, S1 y S2 todavía usan la configuración vieja, donde 2 de 3 es mayoría, y eligen a S1. S3, S4 y S5 ya usan la nueva, donde 3 de 5 es mayoría, y eligen a S5. Las dos mayorías no comparten ningún nodo, así que hay dos líderes en el mismo término. Raft lo evita con joint consensus, donde cada decisión necesita mayoría en las dos configuraciones, o cambiando un servidor por vez, para que las mayorías siempre se solapen.</desc>
-<rect class="dg-box" x="40" y="58" width="120" height="44" rx="9"/>
-<text class="dg-label" x="100" y="77" text-anchor="middle" style="font-size:13.5px">S1</text>
-<text class="dg-tiny" x="100" y="93" text-anchor="middle">usa la vieja</text>
-<rect class="dg-box" x="180" y="58" width="120" height="44" rx="9"/>
-<text class="dg-label" x="240" y="77" text-anchor="middle" style="font-size:13.5px">S2</text>
-<text class="dg-tiny" x="240" y="93" text-anchor="middle">usa la vieja</text>
-<rect class="dg-box dg-box--em" x="320" y="58" width="120" height="44" rx="9"/>
-<text class="dg-label" x="380" y="77" text-anchor="middle" style="font-size:13.5px">S3</text>
-<text class="dg-tiny" x="380" y="93" text-anchor="middle">usa la nueva</text>
-<rect class="dg-box dg-box--em" x="460" y="58" width="120" height="44" rx="9"/>
-<text class="dg-label" x="520" y="77" text-anchor="middle" style="font-size:13.5px">S4</text>
-<text class="dg-tiny" x="520" y="93" text-anchor="middle">usa la nueva</text>
-<rect class="dg-box dg-box--em" x="600" y="58" width="120" height="44" rx="9"/>
-<text class="dg-label" x="660" y="77" text-anchor="middle" style="font-size:13.5px">S5</text>
-<text class="dg-tiny" x="660" y="93" text-anchor="middle">usa la nueva</text>
-<text class="dg-small" x="100" y="44" text-anchor="middle" style="font-weight:600">líder del término 7</text>
-<text class="dg-small" x="660" y="44" text-anchor="middle" style="font-weight:600">líder del término 7</text>
-<path class="dg-frame" d="M40 112 V120 H300 V112"/>
-<text class="dg-tiny" x="170" y="138" text-anchor="middle">vieja {S1, S2, S3}: 2 de 3 es mayoría</text>
-<path class="dg-frame" d="M320 112 V120 H720 V112"/>
-<text class="dg-tiny" x="520" y="138" text-anchor="middle">nueva {S1, S2, S3, S4, S5}: 3 de 5 es mayoría</text>
-<text class="dg-small dg-fail-text" x="12" y="172">Las dos mayorías no comparten ningún nodo: puede haber dos líderes en el mismo término.</text>
-<text class="dg-small" x="12" y="202">Raft lo evita de dos formas: con joint consensus, donde cada decisión necesita mayoría en las</text>
-<text class="dg-small" x="12" y="222">dos configuraciones, o cambiando un servidor por vez, para que las mayorías siempre se solapen.</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.9.</b> Los nodos no se enteran del cambio todos a la vez. Mientras conviven las dos configuraciones, cada una puede formar su propia mayoría.</figcaption>
-      </figure>
-
-      <p>Raft ofrece dos salidas. Con <dfn data-term="joint-consensus">joint consensus</dfn>, el clúster pasa primero por una configuración conjunta en la que toda elección y todo commit necesitan mayoría en la vieja <em>y</em> en la nueva, y recién después adopta la nueva. La alternativa, más simple y la más usada, es cambiar de a un servidor por vez: entre una configuración y la siguiente, cualquier mayoría de una se solapa con cualquier mayoría de la otra.</p>
-
-      <p>Lo simple también esconde trampas. En 2015, Diego Ongaro, el autor de Raft, publicó un bug en los cambios de a un servidor: si cambia el líder mientras hay cambios de membresía sin confirmar, dos configuraciones distintas pueden terminar formando mayorías disjuntas. La corrección es que un líder no puede agregar una configuración nueva hasta haber confirmado una entrada de su propio término. <span class="badge badge--doc">Documentado</span> Además, un nodo nuevo, con el log vacío, empieza como miembro sin voto (un <em>learner</em>, en etcd desde la versión 3.4): recibe el log y solo pasa a votar cuando se puso al día, para que un nodo que tardará horas en copiar todo no cuente para la mayoría. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="raft-operacion">Raft en producción</h3>
-
-      <p>La teoría garantiza la seguridad; la operación decide si el clúster está disponible. Lo que importa en la práctica:</p>
-      <ul>
-        <li><b>El disco marca la latencia.</b> Cada entrada se persiste con fsync antes de responder, en el líder y en la mayoría. etcd recomienda discos con fsync de pocos milisegundos y expone el histograma <code>etcd_disk_wal_fsync_duration_seconds</code>: un disco lento produce heartbeats tardíos, elecciones espurias y un clúster que parece caerse sin estar caído. <span class="badge badge--doc">Documentado</span></li>
-        <li><b>Los timeouts tienen que ser mucho mayores que una ida y vuelta.</b> La regla del artículo es: tiempo de difusión ≪ timeout de elección ≪ tiempo medio entre fallas. etcd manda heartbeats cada 100 ms y usa un timeout de elección de 1&#8239;000 ms por defecto. <span class="badge badge--doc">Documentado</span></li>
-        <li><b>Snapshots.</b> El log no puede crecer para siempre: cada nodo guarda periódicamente una foto del estado y descarta el log anterior, y a un seguidor muy atrasado el líder le manda la foto entera (InstallSnapshot).</li>
-        <li><b>PreVote y CheckQuorum.</b> Un nodo aislado incrementa su término en cada timeout; al volver, su término alto depone al líder sano y fuerza una elección inútil. Con <dfn data-term="prevote">PreVote</dfn>, un candidato primero pregunta si ganaría, sin incrementar el término, y solo sigue si una mayoría le dice que sí. Con CheckQuorum, un líder que no escucha a una mayoría durante un timeout de elección renuncia, en lugar de seguir creyéndose líder. etcd activa CheckQuorum siempre y PreVote por defecto desde la versión 3.5. <span class="badge badge--doc">Documentado</span></li>
-        <li><b>Muchos grupos chicos.</b> Un grupo de Raft no escala, porque todas sus escrituras pasan por un líder. CockroachDB divide los datos en rangos de hasta 512 MiB, cada uno con su propio grupo de Raft, y TiKV hace lo mismo con sus regiones. <span class="badge badge--doc">Documentado</span></li>
-      </ul>
-
-      <aside class="callout callout--fail">
-        <p class="callout-label">Qué pasa con un corte parcial</p>
-        <p>El 2 de noviembre de 2020, un switch de Cloudflare falló a medias: algunos protocolos de control seguían funcionando y otros no, y parte de los paquetes no se procesaba. En un clúster de etcd de tres nodos, el nodo 1 dejó de ver al líder, el nodo 3, pero seguía viendo al nodo 2, que también veía al líder. El nodo 1 inició elecciones una y otra vez, votándose a sí mismo, mientras el nodo 2 seguía votando por el nodo 3. etcd quedó en solo lectura, el sistema que gestionaba los clústeres de PostgreSQL no pudo registrar la salud de las réplicas y promovió una nueva primaria, y un defecto en ese camino obligó a reconstruir las réplicas. El incidente duró unas seis horas y media. <span class="badge badge--doc">Documentado</span></p>
-        <p>Los cortes parciales, en los que A ve a B y B ve a C pero A no ve a C, son los más difíciles para Raft. Howard y Abraham mostraron ese mismo año que PreVote sin CheckQuorum, o CheckQuorum sin PreVote, pueden dejar a un clúster sin un líder estable, y que con los dos juntos esos escenarios se resuelven.</p>
-      </aside>
-
-      <div data-exercise="m06-raft"></div>
-
-      <h2 id="paxos"><span class="sec-num">6.9</span>Paxos por dentro</h2>
-
-      <p><dfn data-term="paxos">Paxos</dfn>, de Leslie Lamport (escrito en 1989 y publicado en 1998), es el antecesor de Raft y la base de toda su familia. En su forma básica decide un solo valor, con tres roles: proponentes, que proponen valores; aceptadores, que votan; y aprendices, que se enteran del resultado. Un mismo nodo suele cumplir los tres. Cada propuesta lleva un número único y creciente, y el protocolo tiene dos fases:</p>
-
-      <ol class="steps">
-        <li><span class="step-title">Prepare y promesa</span>El proponente elige un número n y les manda prepare(n) a los aceptadores. Cada uno, si n es el mayor que vio, promete no aceptar propuestas con un número menor, y le cuenta la propuesta de número más alto que ya aceptó, si aceptó alguna.</li>
-        <li><span class="step-title">Accept</span>Con promesas de una mayoría, el proponente manda accept(n, v). El valor v no es libre: si alguna promesa trajo un valor aceptado, tiene que usar el de número más alto, y solo si ninguna trajo uno puede proponer el suyo. El valor queda elegido cuando lo acepta una mayoría.</li>
-      </ol>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 478" role="img" aria-labelledby="f6pt f6pd">
-<title id="f6pt">Paxos: un valor elegido no se pierde</title>
-<desc id="f6pd">El proponente 1 manda prepare con el número 1 a los aceptadores 1 y 2, que prometen no aceptar números menores. Después manda accept con el número 1 y el valor x, y los dos lo aceptan: x quedó elegido porque lo aceptó una mayoría. El proponente 2 manda prepare con el número 2 a los aceptadores 2 y 3. El 3 no aceptó nada; el 2 responde que ya aceptó x con el número 1. El proponente 2 está obligado a proponer el valor aceptado con el número más alto, x, en lugar del suyo, y el valor elegido se conserva.</desc>
-<defs><marker id="f6p-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f6p-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f6p-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f6p-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Proponente 1</text>
-<path class="dg-frame" d="M70.0 40 V468"/>
-<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">Aceptador 1</text>
-<path class="dg-frame" d="M227.5 40 V468"/>
-<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Aceptador 2</text>
-<path class="dg-frame" d="M385.0 40 V468"/>
-<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">Aceptador 3</text>
-<path class="dg-frame" d="M542.5 40 V468"/>
-<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Proponente 2</text>
-<path class="dg-frame" d="M700.0 40 V468"/>
-<path class="dg-edge" d="M73.0 72 L222.5 72" marker-end="url(#f6p-a)"/>
-<rect x="109.75" y="55" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="148.75" y="66" text-anchor="middle">prepare(1)</text>
-<path class="dg-edge" d="M73.0 106 L380.0 106" marker-end="url(#f6p-a)"/>
-<rect x="188.5" y="89" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="100" text-anchor="middle">prepare(1)</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 140 L75.0 140" marker-end="url(#f6p-r)"/>
-<rect x="188.5" y="123" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">promesa(1)</text>
-<path class="dg-edge" d="M73.0 174 L380.0 174" marker-end="url(#f6p-a)"/>
-<rect x="181.9" y="157" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="168" text-anchor="middle">accept(1, x)</text>
-<path class="dg-edge" d="M73.0 208 L222.5 208" marker-end="url(#f6p-a)"/>
-<rect x="103.15" y="191" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="148.75" y="202" text-anchor="middle">accept(1, x)</text>
-<rect x="395.0" y="228" width="244" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="405.0" y="244">x elegido: lo aceptó una mayoría</text>
-<path class="dg-edge" d="M697.0 276 L547.5 276" marker-end="url(#f6p-a)"/>
-<rect x="582.25" y="259" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="621.25" y="270" text-anchor="middle">prepare(2)</text>
-<path class="dg-edge" d="M697.0 310 L390.0 310" marker-end="url(#f6p-a)"/>
-<rect x="503.5" y="293" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="542.5" y="304" text-anchor="middle">prepare(2)</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M388.0 344 L695.0 344" marker-end="url(#f6p-r)"/>
-<rect x="444.1" y="327" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="542.5" y="338" text-anchor="middle">promesa(2), ya acepté (1, x)</text>
-<rect x="530.0" y="364" width="160" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="540.0" y="380">tiene que proponer x</text>
-<path class="dg-edge" d="M697.0 412 L547.5 412" marker-end="url(#f6p-a)"/>
-<rect x="575.65" y="395" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="621.25" y="406" text-anchor="middle">accept(2, x)</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.10.</b> El aceptador 2 está en las dos mayorías, y por eso el proponente 2 se entera de x. La regla de la fase 2 lo obliga a reproponerlo.</figcaption>
-      </figure>
-
-      <p>Por qué funciona: si un valor quedó elegido, lo aceptó una mayoría. Cualquier proponente posterior necesita promesas de otra mayoría, que se solapa con la primera en al menos un aceptador, y ese aceptador le cuenta el valor. Es la misma propiedad que sostiene a Raft: lo elegido no se pierde, porque toda mayoría futura lo ve. Los quórums flexibles de 6.6 salen de mirar con cuidado estas dos fases: solo hace falta que un quórum de la fase 1 se solape con uno de la fase 2.</p>
-
-      <h3 id="multi-paxos">De un valor a un log: Multi-Paxos</h3>
-
-      <p>Dos proponentes que compiten pueden anularse para siempre: cada uno hace prepare con un número mayor que el del otro antes de que el otro llegue a la fase 2. Es FLP en persona (6.10). La solución práctica es elegir un proponente distinguido, un líder, y dejar que solo él proponga. Con un líder estable, la fase 1 se hace una sola vez para todos los índices futuros del log, y cada valor nuevo cuesta una sola ronda hasta una mayoría. Eso es <dfn data-term="multi-paxos">Multi-Paxos</dfn>. Raft es, en esencia, Multi-Paxos con reglas más estrictas sobre quién puede ser líder (solo uno con el log más actualizado) y sobre cómo se reparan los logs (siempre del líder a los seguidores). Viewstamped Replication (Oki y Liskov, 1988) y Zab, el protocolo de ZooKeeper, son parientes cercanos.</p>
-
-      <p>Paxos está debajo de Chubby, el servicio de locks de Google, y de cada grupo de réplicas de Spanner. DynamoDB replica cada partición en tres zonas con Multi-Paxos, y solo el líder sirve escrituras y lecturas fuertes. Cassandra lo usa para sus transacciones ligeras (<code>INSERT … IF NOT EXISTS</code>), que por eso cuestan varias idas y vueltas. <span class="badge badge--doc">Documentado</span></p>
-
-      <aside class="callout callout--prod">
-        <p class="callout-label">En producción real</p>
-        <p>En "Paxos made live" (2007), Chandra, Griesemer y Redstone contaron lo que costó llevar Paxos a Chubby: el algoritmo ocupa una página, y el sistema, miles de líneas. Tuvieron que resolver discos que corrompen datos en silencio (agregaron checksums y la detección de un disco que perdió su contenido), leases de líder para servir lecturas sin consultar a la mayoría, snapshots, cambios de membresía y un modo de prueba que inyectaba fallas de forma repetible. <span class="badge badge--doc">Documentado</span> La lección se repite en cada sistema de este tipo: el algoritmo es la parte fácil.</p>
-      </aside>
-
-      <h2 id="imposibles"><span class="sec-num">6.10</span>Los límites: FLP y los dos generales</h2>
-
-      <aside class="callout callout--def">
-        <p class="callout-label">Definición</p>
-        <p class="def-term"><dfn data-term="flp">Imposibilidad FLP</dfn> <span class="def-en">Fischer, Lynch y Paterson, 1985</span></p>
-        <p class="def-one">En un sistema completamente asíncrono (sin límite de cuánto tarda un mensaje), ningún algoritmo determinista puede garantizar llegar a consenso si puede fallar aunque sea un nodo.</p>
-        <dl class="def-rows">
-          <dt>Intuición</dt>
-          <dd>Si un nodo no responde, no hay forma de saber si murió o si solo va lento. Esperarlo puede ser eterno; no esperarlo puede dejarlo afuera cuando sí iba a responder.</dd>
-          <dt>Ejemplo</dt>
-          <dd>En el simulador, si los timeouts de elección coincidieran siempre, dos candidatos se dividirían los votos para siempre. Raft rompe la simetría con timeouts aleatorios.</dd>
-          <dt>Por qué importa en producción</dt>
-          <dd>Los algoritmos reales eligen ser siempre <em>seguros</em> (nunca deciden dos cosas distintas) y solo <em>progresan</em> cuando la red se porta razonablemente. Una red inestable puede dejar a tu clúster sin líder, pero nunca con dos líderes que confirman.</dd>
-        </dl>
-      </aside>
-
-      <p>La idea de la demostración: una configuración del sistema es <em>bivalente</em> si, según cómo se ordenen los mensajes de ahí en adelante, todavía puede terminar decidiendo 0 o 1. Fischer, Lynch y Paterson muestran dos cosas: que existen configuraciones iniciales bivalentes, y que desde cualquier configuración bivalente un planificador adversario puede elegir qué mensaje entregar para que la siguiente siga siendo bivalente, aplazando un solo mensaje el tiempo que haga falta. Como ese mensaje podría ser de un nodo caído, el algoritmo no puede esperarlo para siempre ni ignorarlo con certeza, y el sistema puede quedar indeciso indefinidamente.</p>
-
-      <h3 id="flp-escapes">Cómo se esquiva FLP</h3>
-
-      <p>FLP no dice que el consenso sea imposible en la práctica: dice que no se puede garantizar que termine en todas las ejecuciones con esos supuestos. Se esquiva relajando uno de ellos:</p>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th>Se relaja</th><th>Cómo</th><th>Ejemplo</th></tr></thead>
-          <tbody>
-            <tr><td>La asincronía</td><td>Sincronía parcial: es seguro siempre y termina después de GST</td><td>Raft, Paxos, PBFT</td></tr>
-            <tr><td>El determinismo</td><td>Aleatorización: termina con probabilidad 1</td><td>Ben-Or (1983); en Raft, los timeouts aleatorios cumplen un papel parecido en la elección</td></tr>
-            <tr><td>La ignorancia sobre las fallas</td><td>Un detector de fallas no confiable, como Ω (6.2)</td><td>Chandra y Toueg (1996)</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p>Y hay cotas que ningún algoritmo puede mejorar:</p>
-      <ul>
-        <li>Con fallas por caída y sincronía parcial, tolerar f fallas exige al menos 2f + 1 nodos: con 2f, una partición en dos mitades iguales no deja avanzar a ninguna sin arriesgarse a decidir distinto.</li>
-        <li>Con fallas bizantinas, hacen falta 3f + 1 (6.13).</li>
-        <li>Incluso en un sistema síncrono, el consenso con f caídas necesita f + 1 rondas de mensajes en el peor caso (Fischer y Lynch, 1982).</li>
-      </ul>
-
-      <aside class="callout callout--def">
-        <p class="callout-label">Definición</p>
-        <p class="def-term"><dfn data-term="two-generals">Problema de los dos generales</dfn></p>
-        <p class="def-one">Dos partes que solo se comunican por un canal que puede perder mensajes no pueden estar nunca seguras de haber llegado a un acuerdo.</p>
-        <dl class="def-rows">
-          <dt>Intuición</dt>
-          <dd>El general A envía "atacamos al amanecer". B confirma. Pero B no sabe si su confirmación llegó, así que A confirma la confirmación… y así para siempre: el último mensaje siempre puede perderse.</dd>
-          <dt>Ejemplo</dt>
-          <dd>Tu servicio llama a un procesador de pagos y el timeout vence. ¿Se cobró? No hay forma de saberlo solo con ese intercambio.</dd>
-          <dt>Por qué importa en producción</dt>
-          <dd>No existe la entrega "exactamente una vez" por la red. Lo que se construye es "al menos una vez" más operaciones idempotentes, que en la práctica produce el efecto de "exactamente una vez" (M02, M07, M27).</dd>
-        </dl>
-      </aside>
-
-      <p>Los dos resultados se complementan. FLP habla de nodos que pueden caerse con mensajes que siempre llegan; los dos generales, de nodos que no se caen con mensajes que pueden perderse. En los dos casos la conclusión práctica es la misma: un timeout no informa lo que pasó del otro lado, y el diseño tiene que funcionar sin saberlo. Kafka ofrece "exactly-once" dentro de Kafka, con productores idempotentes y transacciones que confirman a la vez lo producido y el offset consumido, pero cualquier efecto fuera de Kafka, como un correo o un cobro, vuelve a necesitar su propia idempotencia. <span class="badge badge--doc">Documentado</span></p>
-
-      <h2 id="transacciones"><span class="sec-num">6.11</span>Transacciones entre máquinas</h2>
-
-      <p>Cuando una transacción toca datos de dos máquinas, por ejemplo de dos shards, aparece el problema del <b>compromiso atómico</b>: que todos los participantes confirmen o ninguno, aunque alguno falle. Se parece al consenso, con una diferencia importante: cualquier participante puede vetar la decisión (si un shard no puede confirmar, nadie confirma), mientras que el consenso solo pide elegir alguno de los valores propuestos.</p>
-
-      <h3 id="two-phase-commit">Two-phase commit</h3>
-
-      <p>El <dfn data-term="two-phase-commit">two-phase commit</dfn> (2PC) usa un coordinador:</p>
-      <ol class="steps">
-        <li><span class="step-title">Preparar</span>El coordinador les manda prepare a todos. Cada participante escribe la transacción en su log, toma los locks y vota sí o no. Votar sí es una promesa: pase lo que pase, podrá confirmar si se lo piden.</li>
-        <li><span class="step-title">Decidir</span>Si todos votaron sí, el coordinador escribe commit en su log, que es el punto de no retorno, y les avisa a todos. Si alguno votó no o no respondió, aborta.</li>
-      </ol>
-
-      <p>Su debilidad es conocida: si el coordinador cae después de la votación, los participantes que votaron sí quedan <b>en duda</b>. No pueden abortar solos, porque el coordinador pudo haber decidido commit y otro participante pudo haberlo aplicado; tampoco pueden confirmar, porque quizás decidió abortar. Se quedan esperando, con los locks tomados:</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 512" role="img" aria-labelledby="f6tt f6td">
-<title id="f6tt">Two-phase commit con el coordinador caído</title>
-<desc id="f6td">El coordinador manda prepare a los dos participantes. Cada uno escribe la transacción en su log, bloquea las filas y vota sí. El coordinador decide commit y lo escribe en su log, pero cae antes de avisar. Los participantes quedan en duda: votaron sí, así que no pueden abortar por su cuenta, y tampoco saben si la decisión fue commit. Sus locks siguen tomados hasta que el coordinador vuelve, lee su log y manda commit.</desc>
-<defs><marker id="f6t-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f6t-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f6t-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f6t-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Coordinador</text>
-<path class="dg-frame" d="M70.0 40 V502"/>
-<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Participante 1</text>
-<path class="dg-frame" d="M385.0 40 V502"/>
-<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Participante 2</text>
-<path class="dg-frame" d="M700.0 40 V502"/>
-<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f6t-a)"/>
-<rect x="198.4" y="55" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">prepare</text>
-<path class="dg-edge" d="M73.0 106 L695.0 106" marker-end="url(#f6t-a)"/>
-<rect x="355.9" y="89" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">prepare</text>
-<rect x="395.0" y="126" width="258" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="405.0" y="142">escribe su log y bloquea las filas</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 174 L75.0 174" marker-end="url(#f6t-r)"/>
-<rect x="214.9" y="157" width="25.2" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="168" text-anchor="middle">sí</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 208 L75.0 208" marker-end="url(#f6t-r)"/>
-<rect x="372.4" y="191" width="25.2" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">sí</text>
-<rect x="80.0" y="228" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="90.0" y="244">decide commit y lo escribe en su log</text>
-<path d="M20 274 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
-<rect x="235.0" y="263" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
-<text class="dg-small" x="385.0" y="278" text-anchor="middle" style="fill:var(--fail)">el coordinador cae antes de avisar</text>
-<rect x="395.0" y="296" width="300" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="405.0" y="312">en duda: votó sí y no puede abortar solo</text>
-<rect x="439.0" y="330" width="251" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="449.0" y="346">en duda: sus locks siguen tomados</text>
-<path d="M20 376 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
-<rect x="235.0" y="365" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
-<text class="dg-small" x="385.0" y="380" text-anchor="middle" style="fill:var(--fail)">minutos u horas después vuelve el coordinador</text>
-<path class="dg-edge" d="M73.0 412 L380.0 412" marker-end="url(#f6t-a)"/>
-<rect x="201.7" y="395" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="227.5" y="406" text-anchor="middle">commit</text>
-<path class="dg-edge" d="M73.0 446 L695.0 446" marker-end="url(#f6t-a)"/>
-<rect x="359.2" y="429" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="440" text-anchor="middle">commit</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.11.</b> Mientras el coordinador no vuelve, las filas que tocó la transacción quedan bloqueadas en los dos participantes, y cualquier otra transacción que las necesite espera con ellas.</figcaption>
-      </figure>
-
-      <p>Three-phase commit (Skeen, 1981) agrega una fase para que los participantes puedan decidir solos, pero solo es seguro si las demoras de los mensajes están acotadas: con particiones reales puede terminar con unos confirmando y otros abortando, y casi no se usa. La solución que sí se usa es otra: hacer que el coordinador no pueda desaparecer. En Paxos Commit (Gray y Lamport, 2006), el voto de cada participante se replica con consenso, así que cualquiera puede terminar el protocolo. Spanner corre 2PC entre grupos de Paxos, donde cada participante y el coordinador son, en realidad, un grupo replicado, y CockroachDB y TiKV hacen lo mismo sobre Raft. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="percolator">Percolator: el commit en una sola fila</h3>
-
-      <p>Google construyó <dfn data-term="percolator">Percolator</dfn> (2010) para actualizar su índice de búsqueda de forma incremental sobre Bigtable, que solo tenía transacciones de una fila. La idea: cada transacción elige una fila <em>primaria</em>. En la primera fase escribe todos sus cambios con locks que apuntan a la primaria; en la segunda, el commit es una sola escritura atómica: reemplazar el lock de la primaria por un registro de commit. Si el cliente muere a mitad, cualquier lector que encuentre un lock huérfano mira la primaria y sabe si la transacción se confirmó. Los timestamps los da un oráculo central, y el resultado es snapshot isolation. TiDB usa este modelo sobre TiKV. <span class="badge badge--doc">Documentado</span></p>
-
-      <p>Las <span data-term="saga">sagas</span>, por último, renuncian al aislamiento: cada paso confirma por su cuenta y, si uno falla, se compensan los anteriores (M27). Son la opción cuando los participantes son servicios distintos, con APIs, y no bases de datos que puedan votar.</p>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th>Mecanismo</th><th>Atomicidad</th><th>Si cae el coordinador</th><th>Aislamiento</th><th>Costo</th></tr></thead>
-          <tbody>
-            <tr><td>2PC clásico</td><td>Sí</td><td>Bloquea, con los locks tomados</td><td>Completo</td><td>Dos idas y vueltas más los fsync</td></tr>
-            <tr><td>2PC sobre consenso (Spanner, CockroachDB)</td><td>Sí</td><td>No bloquea: el coordinador está replicado</td><td>Serializable o estricto</td><td>Una ronda de consenso por participante</td></tr>
-            <tr><td>Percolator (TiDB)</td><td>Sí</td><td>No bloquea: el estado está en la fila primaria</td><td>Snapshot isolation</td><td>Oráculo de timestamps y limpieza de locks</td></tr>
-            <tr><td>Saga</td><td>Al final, compensando</td><td>No hay coordinador que bloquee</td><td>Ninguno: los pasos intermedios se ven</td><td>Compensaciones idempotentes</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <aside class="callout callout--tradeoff">
-        <p class="callout-label">Trade-off</p>
-        <p>La mejor transacción distribuida es la que no hace falta. Elige la partition key para que lo que cambia junto viva junto (M05), o registra la operación como un único asiento en un log del que se derivan los saldos (M27): un solo commit, en un solo lugar.</p>
-      </aside>
-
-      <div data-exercise="m06-transferencia"></div>
-
-      <h2 id="crdt"><span class="sec-num">6.12</span>Convergir sin coordinar: CRDTs y anti-entropía</h2>
-
-      <p>La consistencia eventual dice que las réplicas convergen "si dejan de llegar escrituras", pero no cómo se resuelven dos escrituras concurrentes. La respuesta más común, <dfn data-term="lww">last-write-wins</dfn> (gana el timestamp más alto), pierde datos en silencio: de dos escrituras concurrentes, una desaparece, y si un reloj va adelantado, siempre gana el mismo nodo. Los <dfn data-term="crdt">CRDTs</dfn> (Shapiro y otros, 2011) son la alternativa: estructuras diseñadas para que cualquier par de estados se pueda combinar sin perder nada, de modo que dos réplicas que recibieron las mismas actualizaciones, en cualquier orden, estén en el mismo estado.</p>
-
-      <p>En la versión basada en estado, la combinación (el merge) tiene que ser conmutativa, asociativa e idempotente: ni el orden en que llegan los estados ni las repeticiones cambian el resultado. El ejemplo más simple es un contador:</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 280" role="img" aria-labelledby="f6gt f6gd">
-<title id="f6gt">Un contador que converge sin coordinar</title>
-<desc id="f6gd">Tres réplicas de un contador. Cada una guarda un casillero por réplica y solo incrementa el suyo: A llega a 3, B a 2 y C a 1. Cuando A y B intercambian su estado, cada una toma el máximo de cada casillero y las dos quedan con 3, 2 y 0. Cuando C recibe el estado de B, queda con 3, 2 y 1. El valor del contador es la suma: 6. Recibir el mismo estado dos veces, o en otro orden, da el mismo resultado.</desc>
-<defs><marker id="f6ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
-<text class="dg-label" x="110" y="22" text-anchor="middle">Réplica A</text>
-<text class="dg-label" x="385" y="22" text-anchor="middle">Réplica B</text>
-<text class="dg-label" x="660" y="22" text-anchor="middle">Réplica C</text>
-<rect class="dg-box" x="40" y="40" width="140" height="40" rx="8"/>
-<text class="dg-label" x="110" y="65" text-anchor="middle" style="font-size:13px">A: 3  B: 0  C: 0</text>
-<rect class="dg-box" x="315" y="40" width="140" height="40" rx="8"/>
-<text class="dg-label" x="385" y="65" text-anchor="middle" style="font-size:13px">A: 0  B: 2  C: 0</text>
-<rect class="dg-box" x="590" y="40" width="140" height="40" rx="8"/>
-<text class="dg-label" x="660" y="65" text-anchor="middle" style="font-size:13px">A: 0  B: 0  C: 1</text>
-<text class="dg-tiny" x="40" y="96">local: cada réplica incrementa solo su casillero</text>
-<rect class="hb-a" x="40" y="110" width="140" height="40" rx="8"/>
-<text class="dg-label" x="110" y="135" text-anchor="middle" style="font-size:13px">A: 3  B: 2  C: 0</text>
-<rect class="hb-a" x="315" y="110" width="140" height="40" rx="8"/>
-<text class="dg-label" x="385" y="135" text-anchor="middle" style="font-size:13px">A: 3  B: 2  C: 0</text>
-<rect class="dg-box" x="590" y="110" width="140" height="40" rx="8"/>
-<text class="dg-label" x="660" y="135" text-anchor="middle" style="font-size:13px">A: 0  B: 0  C: 1</text>
-<text class="dg-tiny" x="40" y="166">A y B se combinan: el máximo de cada casillero</text>
-<rect class="dg-box" x="40" y="180" width="140" height="40" rx="8"/>
-<text class="dg-label" x="110" y="205" text-anchor="middle" style="font-size:13px">A: 3  B: 2  C: 0</text>
-<rect class="dg-box" x="315" y="180" width="140" height="40" rx="8"/>
-<text class="dg-label" x="385" y="205" text-anchor="middle" style="font-size:13px">A: 3  B: 2  C: 0</text>
-<rect class="hb-a" x="590" y="180" width="140" height="40" rx="8"/>
-<text class="dg-label" x="660" y="205" text-anchor="middle" style="font-size:13px">A: 3  B: 2  C: 1</text>
-<text class="dg-tiny" x="40" y="236">C recibe a B: valor = 3 + 2 + 1 = 6</text>
-<path class="dg-edge" style="stroke:var(--l-queue)" d="M184 128 H310" marker-end="url(#f6ga)" marker-start="url(#f6ga)"/>
-<path class="dg-edge" style="stroke:var(--l-queue)" d="M459 198 H585" marker-end="url(#f6ga)"/>
-<text class="dg-small" x="12" y="272">La combinación es conmutativa, asociativa e idempotente: el orden y los duplicados no cambian el resultado.</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.12.</b> Nadie escribe el casillero de otro, así que no hay escrituras en conflicto. El máximo por casillero es el merge, y el valor es la suma.</figcaption>
-      </figure>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th>CRDT</th><th>Estado</th><th>Merge</th><th>Para qué</th></tr></thead>
-          <tbody>
-            <tr><td>G-Counter</td><td>Un contador por réplica</td><td>Máximo por réplica; el valor es la suma</td><td>Vistas, "me gusta" que solo suben</td></tr>
-            <tr><td>PN-Counter</td><td>Dos G-Counters: sumas y restas</td><td>El de cada uno</td><td>Contadores que suben y bajan</td></tr>
-            <tr><td>OR-Set</td><td>Cada alta con una etiqueta única; cada baja, con las etiquetas que observó</td><td>Unión de altas y de bajas</td><td>Carritos y membresías: si un alta y una baja son concurrentes, gana el alta</td></tr>
-            <tr><td>LWW-Register</td><td>Valor con timestamp</td><td>El de timestamp mayor</td><td>Campos donde perder una escritura concurrente es aceptable</td></tr>
-            <tr><td>MV-Register</td><td>Todos los valores concurrentes</td><td>Conserva los que ninguno reemplaza</td><td>Lo que hacían Dynamo y Riak: devolver los "hermanos" y que decida la aplicación</td></tr>
-            <tr><td>Secuencias (RGA, Yjs, Automerge)</td><td>Cada carácter con un identificador único y ordenable</td><td>Intercalar por identificador</td><td>Edición colaborativa de texto</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p>Riak ofrece contadores, conjuntos y mapas CRDT; Redis Enterprise los usa en sus bases activo-activo entre regiones; y las bibliotecas Yjs y Automerge llevan la idea a la edición colaborativa en el navegador. <span class="badge badge--doc">Documentado</span></p>
-
-      <aside class="callout callout--tradeoff">
-        <p class="callout-label">Trade-off</p>
-        <p>Un CRDT converge, pero no puede impedir que se viole un invariante global. Dos regiones pueden vender la última entrada al mismo tiempo, y el conjunto resultante "converge" con dos compradores. Los invariantes que se mantienen aunque cada réplica decida sola se llaman <span data-term="i-confluencia">I-confluentes</span>; los demás exigen coordinar (M18). Además, los CRDTs acumulan metadatos, como las etiquetas de cada alta y las marcas de cada baja, que hay que limpiar con cuidado.</p>
-      </aside>
-
-      <h3 id="anti-entropia">Anti-entropía: encontrar las diferencias</h3>
-
-      <p>Que las réplicas <em>puedan</em> converger no significa que se enteren de lo que les falta. Tres mecanismos, del más rápido al más completo:</p>
-      <ul>
-        <li><b><dfn data-term="read-repair">Read repair</dfn>:</b> al leer de varias réplicas, se corrigen las que respondieron con una versión vieja. Repara lo que se lee, y nada más.</li>
-        <li><b>Hinted handoff:</b> las escrituras para una réplica caída se guardan en otra y se entregan cuando vuelve (6.6).</li>
-        <li><b><dfn data-term="anti-entropia">Anti-entropía</dfn> con árboles de Merkle:</b> dos réplicas comparan la raíz de un <dfn data-term="merkle-tree">árbol de Merkle</dfn>, un árbol de hashes construido sobre sus claves. Si las raíces coinciden, tienen lo mismo; si no, bajan solo por las ramas que difieren. Encontrar una diferencia entre millones de claves cuesta un puñado de hashes, no millones de comparaciones. Es lo que hace <code>nodetool repair</code> en Cassandra, que recomienda correrlo más seguido que el tiempo durante el que se conservan las marcas de los borrados (<code>gc_grace_seconds</code>, 10 días por defecto), para que un dato borrado no "resucite" desde una réplica que no se enteró. <span class="badge badge--doc">Documentado</span></li>
-      </ul>
-
-      <div data-exercise="m06-contador"></div>
-
-      <h2 id="bizantinas"><span class="sec-num">6.13</span>Fallas bizantinas</h2>
-
-      <aside class="callout callout--def">
-        <p class="callout-label">Definición</p>
-        <p class="def-term"><dfn data-term="byzantine">Falla bizantina</dfn> <span class="def-en">Lamport, Shostak y Pease, 1982</span></p>
-        <p class="def-one">Un nodo que no se limita a detenerse, sino que se comporta de forma arbitraria: envía datos corruptos o dice cosas distintas a distintos pares, por un bug, hardware defectuoso o un atacante.</p>
-        <dl class="def-rows">
-          <dt>Intuición</dt>
-          <dd>Generales que deben acordar si atacan, con traidores entre ellos que envían órdenes contradictorias. Los leales deben terminar de acuerdo entre sí, digan lo que digan los traidores.</dd>
-          <dt>Ejemplo</dt>
-          <dd>Tolerar f traidores exige al menos 3f + 1 nodos. Con 3 generales y 1 traidor, es imposible (figura 6.13).</dd>
-          <dt>Por qué importa en producción</dt>
-          <dd>Dentro de tu datacenter normalmente se asume que los nodos fallan por caída (Raft y Paxos, 2f + 1 nodos) y se protege contra la corrupción con checksums y autenticación. La tolerancia bizantina se paga cuando los participantes no confían entre sí: blockchains, sistemas de control de aviones y naves espaciales.</dd>
-        </dl>
-      </aside>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 300" role="img" aria-labelledby="f62t f62d">
-<title id="f62t">Por qué hacen falta 3f + 1 nodos para tolerar f traidores</title>
-<desc id="f62d">Con tres generales y un traidor, un leal recibe "atacar" del comandante y "el comandante dijo retirarse" del traidor, y no puede distinguir quién miente. Con cuatro generales y un traidor, cada leal recibe tres versiones, dos coinciden, y la mayoría decide correctamente.</desc>
-<defs><marker id="f62a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f62f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
-<text class="dg-group" x="10" y="20">3 generales, 1 traidor: imposible</text>
-<text class="dg-group" x="400" y="20">4 generales, 1 traidor: se logra</text>
-<path class="dg-frame" d="M385 8 V292"/>
-<circle class="dg-box" cx="190" cy="70" r="26"/><text class="dg-tiny dg-in" x="190" y="74" text-anchor="middle">Comandante</text>
-<circle class="dg-box" cx="90" cy="220" r="26"/><text class="dg-tiny dg-in" x="90" y="224" text-anchor="middle">Leal A</text>
-<circle class="dg-bad" cx="290" cy="220" r="26"/><text class="dg-tiny dg-in" x="290" y="224" text-anchor="middle">Traidor B</text>
-<path class="dg-edge" d="M172 90 L104 196" marker-end="url(#f62a)"/><text class="dg-tiny" x="100" y="140">"atacar"</text>
-<path class="dg-edge" d="M208 90 L276 196" marker-end="url(#f62a)"/><text class="dg-tiny" x="250" y="140">"atacar"</text>
-<path d="M262 222 H120" stroke="var(--fail)" stroke-width="1.5" marker-end="url(#f62f)"/><text class="dg-tiny" x="190" y="212" text-anchor="middle" style="fill:var(--fail)">"me dijo retirarse"</text>
-<text class="dg-small" x="20" y="272">A tiene "atacar" y "retirarse": no sabe quién miente.</text>
-<text class="dg-small" x="20" y="289">Si el traidor fuera el comandante, A vería exactamente lo mismo.</text>
-<circle class="dg-box" cx="580" cy="60" r="26"/><text class="dg-tiny dg-in" x="580" y="64" text-anchor="middle">Comandante</text>
-<circle class="dg-box" cx="460" cy="200" r="26"/><text class="dg-tiny dg-in" x="460" y="204" text-anchor="middle">Leal A</text>
-<circle class="dg-box" cx="580" cy="230" r="26"/><text class="dg-tiny dg-in" x="580" y="234" text-anchor="middle">Leal B</text>
-<circle class="dg-bad" cx="700" cy="200" r="26"/><text class="dg-tiny dg-in" x="700" y="204" text-anchor="middle">Traidor C</text>
-<path class="dg-edge" d="M580 86 L474 176" marker-end="url(#f62a)"/>
-<path class="dg-edge" d="M580 86 L580 202" marker-end="url(#f62a)"/>
-<path class="dg-edge" d="M580 86 L686 176" marker-end="url(#f62a)"/>
-<text class="dg-tiny" x="600" y="130">"atacar" a todos</text>
-<path class="dg-edge" d="M556 228 L486 208" marker-end="url(#f62a)"/>
-<path d="M674 204 L488 202" stroke="var(--fail)" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#f62f)"/>
-<text class="dg-tiny" x="600" y="196" text-anchor="middle" style="fill:var(--fail)">"retirarse"</text>
-<text class="dg-small" x="400" y="272">A recibe: atacar, atacar (de B), retirarse (de C).</text>
-<text class="dg-small" x="400" y="289">La mayoría dice atacar: los leales coinciden.</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.13.</b> Con un traidor entre tres, el leal no puede distinguir si el traidor es el comandante o el otro teniente. Con un cuarto general, la mayoría de los mensajes coincide.</figcaption>
-      </figure>
-
-      <p>La cota de 3f + 1 sale de los quórums. Con n = 3f + 1 nodos, un algoritmo bizantino espera respuestas de 2f + 1, porque f pueden no responder nunca. Dos quórums de 2f + 1 se solapan en al menos f + 1 nodos, y como solo f pueden mentir, al menos uno de los compartidos es honesto: ese nodo cumple el papel que en Raft cumple cualquier nodo de la intersección.</p>
-
-      <p>Las firmas cambian el problema menos de lo que parece. En el modelo síncrono, si cada orden va firmada y un traidor no puede falsificar la firma de otro, el problema de los generales se resuelve con cualquier cantidad de traidores (Lamport, Shostak y Pease, 1982). Pero en el modelo parcialmente síncrono, el que importa en la práctica, el consenso bizantino sigue necesitando 3f + 1 nodos aunque haya firmas (Dwork, Lynch y Stockmeyer, 1988).</p>
-
-      <p><dfn data-term="pbft">PBFT</dfn> (Castro y Liskov, 1999) fue el primer algoritmo bizantino práctico: tolera f nodos maliciosos con 3f + 1 réplicas y tres fases de mensajes entre todos los pares, del orden de n² mensajes por decisión, lo que lo hace mucho más caro que Raft. HotStuff (2019) bajó esa comunicación a lineal, con un líder que junta los votos en firmas agregadas, y fue la base del consenso de la blockchain Diem; Tendermint lo es de Cosmos.</p>
-
-      <h3 id="bizantinas-datacenter">Lo bizantino dentro de tu datacenter</h3>
-
-      <p>Dentro de un datacenter propio se asume que los nodos fallan por caída y no por malicia, y por eso Raft y Paxos alcanzan. Pero hay fallas que se comportan "a medias" y que el modelo de caída no cubre:</p>
-      <ul>
-        <li><b>Corrupción silenciosa:</b> CPUs que calculan mal sin dar ningún error. Google ("Cores that don't count") y Meta ("Silent data corruptions at scale") publicaron en 2021 que encuentran núcleos así en una fracción pequeña pero constante de sus flotas, del orden de una máquina cada pocos miles. <span class="badge badge--doc">Documentado</span></li>
-        <li><b>Discos y redes que alteran bytes:</b> por eso cada capa agrega checksums de punta a punta, y por eso Chubby tuvo que detectar discos corruptos.</li>
-        <li><b>Cortes parciales:</b> el switch de Cloudflare de 2020 (6.8) no se cayó: siguió funcionando para algunos protocolos y no para otros, y cada nodo vio un clúster distinto. Cloudflare tituló su análisis "Una falla bizantina en el mundo real".</li>
-      </ul>
-      <p>La defensa no es PBFT, que cuesta caro y protege contra mentiras deliberadas, sino verificar lo que se recibe (checksums en el disco y en cada RPC), tolerar las vistas inconsistentes (PreVote y CheckQuorum) y aislar los dominios de falla, para que un componente que miente afecte a pocos.</p>
-
-      <h2 id="leases"><span class="sec-num">6.14</span>Leases, split brain y fencing tokens</h2>
-
-      <p>Un <dfn data-term="lease">lease</dfn> (Gray y Cheriton, 1989) es un permiso con vencimiento: el servicio de locks le da a un cliente el derecho exclusivo de hacer algo durante, por ejemplo, 10 segundos, y el cliente lo renueva mientras lo necesita. Si el cliente muere, no hace falta detectarlo: el permiso vence solo. Es la herramienta estándar para elegir un único ejecutor, y su seguridad depende de dos supuestos que conviene escribir:</p>
-      <ul>
-        <li>Los relojes del cliente y del servidor <b>avanzan a ritmos parecidos</b>; no hace falta que marquen la misma hora. El cliente cuenta el plazo desde que pidió el lease, no desde que lo recibió, y deja un margen por el desvío.</li>
-        <li>El cliente <b>no se queda congelado</b> entre que verifica que tiene el lease y que actúa. Este es el supuesto que falla: una pausa de GC, una VM migrada en caliente, un proceso suspendido, un disco que tarda en responder.</li>
-      </ul>
-
-      <p>Un <dfn data-term="split-brain">split brain</dfn> ocurre cuando dos nodos creen, a la vez, que son el líder o que tienen un lock. El consenso evita que dos líderes <em>confirmen</em>, pero no evita que un nodo que <em>cree</em> tener el lock actúe sobre un recurso externo. El caso clásico es un lease vencido:</p>
-
-      <figure class="figure">
-        <div class="figure-frame">
-<svg viewBox="0 0 770 444" role="img" aria-labelledby="f63t f63d">
-<title id="f63t">Un lease vencido y el fencing token que evita el daño</title>
-<desc id="f63d">El worker 1 obtiene el lock con token 33 y sufre una pausa larga; el lease vence y el worker 2 obtiene el token 34 y escribe. Cuando el worker 1 despierta e intenta escribir con el token 33, el almacenamiento lo rechaza porque ya vio el 34.</desc>
-<defs><marker id="f63-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f63-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f63-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f63-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
-<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Worker 1</text>
-<path class="dg-frame" d="M70.0 40 V434"/>
-<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Servicio de locks</text>
-<path class="dg-frame" d="M280.0 40 V434"/>
-<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Worker 2</text>
-<path class="dg-frame" d="M490.0 40 V434"/>
-<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
-<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Almacenamiento</text>
-<path class="dg-frame" d="M700.0 40 V434"/>
-<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f63-a)"/>
-<rect x="126.1" y="55" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">adquirir lock</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 106 L75.0 106" marker-end="url(#f63-r)"/>
-<rect x="89.80000000000001" y="89" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="175.0" y="100" text-anchor="middle">OK, token 33, lease 10 s</text>
-<rect x="80.0" y="126" width="153" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="90.0" y="142">pausa de GC de 15 s</text>
-<rect x="290.0" y="160" width="195" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
-<text class="dg-tiny" x="300.0" y="176">el lease vence a los 10 s</text>
-<path class="dg-edge" d="M487.0 208 L285.0 208" marker-end="url(#f63-a)"/>
-<rect x="336.1" y="191" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">adquirir lock</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M283.0 242 L485.0 242" marker-end="url(#f63-r)"/>
-<rect x="339.4" y="225" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">OK, token 34</text>
-<path class="dg-edge" d="M493.0 276 L695.0 276" marker-end="url(#f63-a)"/>
-<rect x="526.3" y="259" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="595.0" y="270" text-anchor="middle">escribir (token 34)</text>
-<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 310 L495.0 310" marker-end="url(#f63-r)"/>
-<rect x="503.2" y="293" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="595.0" y="304" text-anchor="middle">OK; último token visto: 34</text>
-<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 344 L695.0 344" marker-end="url(#f63-f)"/>
-<rect x="316.3" y="327" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">escribir (token 33)</text>
-<path class="dg-edge" style="stroke:var(--fail)" d="M697.0 378 L75.0 378" marker-end="url(#f63-f)"/>
-<rect x="319.6" y="361" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
-<text class="dg-tiny" x="385.0" y="372" text-anchor="middle">rechazado: 33 &lt; 34</text>
-</svg>
-        </div>
-        <figcaption><b>Figura 6.14.</b> El worker 1 no puede saber que su lease venció durante la pausa. Lo que lo detiene es que el almacenamiento recuerda el último token visto.</figcaption>
-      </figure>
-
-      <p>La lección es que la protección tiene que vivir en el recurso compartido, no en el cliente: chequear "¿sigo teniendo el lock?" antes de escribir no alcanza, porque la pausa puede ocurrir justo entre el chequeo y la escritura. Con un <span data-term="fencing">fencing token</span> (en etcd, la revisión de la clave del lock; en ZooKeeper, el zxid), cualquier escritura con un token viejo se rechaza. En una base relacional basta con una condición en la escritura:</p>
-
-<pre data-lang="sql"><code>-- El recurso recuerda el último token y rechaza los menores
-UPDATE ejecuciones
-   SET token = :token, estado = :estado
- WHERE periodo = :periodo
-   AND token &lt;= :token;   -- 0 filas: alguien con un token mayor ya tomó el relevo</code></pre>
-
-      <p>Jepsen lo mostró en etcd 3.4.3, en 2020: dos clientes pueden tener el mismo lock de etcd a la vez, incluso en un clúster sano con relojes perfectamente sincronizados, porque el lock depende de un lease. La recomendación fue usar la revisión de la clave del lock como fencing token. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="redlock">El debate de Redlock</h3>
-
-      <p>En 2016, Martin Kleppmann analizó <dfn data-term="redlock">Redlock</dfn>, el algoritmo de locks distribuidos propuesto para Redis, en el que el cliente toma el lock en la mayoría de 5 nodos de Redis independientes y mide cuánto tardó. Su crítica tenía dos partes. Primero, Redlock no entrega un número creciente, así que no sirve como fencing token. Segundo, su seguridad depende de supuestos de tiempo: demoras de red acotadas, pausas acotadas y relojes que no saltan; si un nodo de Redis adelanta su reloj y vence el lock antes de tiempo, dos clientes pueden tenerlo. Salvatore Sanfilippo, el autor de Redis, respondió que esos supuestos son razonables con relojes monotónicos y una implementación cuidadosa, y que si el recurso puede verificar tokens, quizás no haga falta un lock distribuido. De ese debate sale la distinción más útil:</p>
-
-      <div class="table-wrap">
-        <table class="t">
-          <thead><tr><th></th><th>Lock por eficiencia</th><th>Lock por corrección</th></tr></thead>
-          <tbody>
-            <tr><td>Si dos clientes lo tienen a la vez</td><td>Se repite trabajo: dos procesos recalculan la misma clave de caché</td><td>Se corrompen datos: dos facturas, un archivo pisado</td></tr>
-            <tr><td>Qué alcanza</td><td>Un <code>SET NX PX</code> en un solo Redis</td><td>Consenso (etcd, ZooKeeper) más un fencing token que verifica el recurso</td></tr>
-            <tr><td>Mejor todavía</td><td>Lo mismo</td><td>Hacer idempotente el efecto, para que el lock solo evite trabajo repetido</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <p>Cuando el recurso no puede verificar tokens, como un disco compartido o una IP flotante, el fencing se aplica desde afuera. Los clústeres de alta disponibilidad como Pacemaker apagan el nodo viejo por su interfaz de administración antes de promover al nuevo, una práctica con nombre propio: <dfn data-term="stonith">STONITH</dfn> ("shoot the other node in the head"). En la nube, el equivalente es revocar las credenciales del nodo viejo o desconectarle el volumen antes de que el nuevo empiece.</p>
-
-      <div data-exercise="m06-lock"></div>
-
-      <h2 id="verificar"><span class="sec-num">6.15</span>Cómo se comprueba todo esto</h2>
-
-      <p>Los bugs de este módulo no aparecen en las pruebas unitarias: necesitan un orden de mensajes, una pausa o una partición en el momento justo. Tres técnicas los encuentran.</p>
-
-      <h3 id="jepsen">Jepsen: romper el sistema y verificar la historia</h3>
-
-      <p><dfn data-term="jepsen">Jepsen</dfn>, de Kyle Kingsbury, corre un sistema real en varios nodos y le manda operaciones concurrentes desde muchos clientes mientras inyecta fallas: particiones, pausas de procesos, relojes que saltan, caídas. Registra cada operación con su inicio, su fin y su resultado, y después verifica la historia contra el modelo que el sistema promete, con verificadores de linealizabilidad como Knossos o, para transacciones, con Elle, que busca ciclos de dependencias entre ellas. Sus análisis encontraron pérdidas de datos y anomalías en bases que prometían más de lo que daban, y llevaron a muchos proveedores a corregir código y documentación. En etcd 3.4.3, por ejemplo, confirmó que las operaciones son serializables estrictas y documentó que los locks no son seguros. <span class="badge badge--doc">Documentado</span></p>
-
-      <h3 id="tla">TLA+: encontrar el bug antes de escribir el código</h3>
-
-      <p><dfn data-term="tla-plus">TLA+</dfn>, de Lamport, describe un sistema como un conjunto de estados y de transiciones permitidas, y un model checker (TLC) recorre todas las ejecuciones posibles de un modelo chico buscando una que viole una propiedad. Amazon contó en 2015 que lo usó en S3, DynamoDB, EBS y un gestor de locks interno: en el sistema de replicación y membresía de DynamoDB encontró tres bugs, alguno de los cuales necesitaba una traza de 35 pasos para aparecer, algo que ninguna prueba ni revisión habría encontrado. <span class="badge badge--doc">Documentado</span> Raft tiene una especificación en TLA+ escrita por su autor, y su seguridad se demostró formalmente con Coq, en el proyecto Verdi (2016).</p>
-
-      <h3 id="simulacion">Simulación determinista</h3>
-
-      <p>FoundationDB llevó la idea más lejos. Todo el sistema puede correr dentro de un solo proceso, con la red, los discos y los relojes simulados y toda la aleatoriedad derivada de una semilla. Una prueba simula un clúster entero durante horas de tiempo virtual e inyecta fallas, incluidas macros llamadas BUGGIFY que activan a propósito caminos poco frecuentes del código; si encuentra un bug, la misma semilla lo reproduce exactamente. El artículo de FoundationDB (2021) cuenta que el simulador se construyó antes que la propia base, y la charla de Will Wilson de 2014 sobre el tema se volvió una referencia. <span class="badge badge--doc">Documentado</span> La <dfn data-term="simulacion-determinista">simulación determinista</dfn> la usan hoy otros sistemas, como TigerBeetle, y hay empresas, como Antithesis, que la ofrecen como servicio.</p>
-
-      <aside class="callout callout--prod">
-        <p class="callout-label">En producción real</p>
-        <p>Qué probar en tu propio sistema, además de las caídas limpias:</p>
-        <ul>
-          <li>Particiones parciales y asimétricas: A ve a B, pero B no ve a A.</li>
-          <li>Pausas largas de un proceso mientras tiene un lease (<code>kill -STOP</code> durante 30 segundos).</li>
-          <li>Relojes que saltan hacia adelante y hacia atrás.</li>
-          <li>Caídas a mitad de una escritura y discos que fallan en un fsync. En 2018 se descubrió que PostgreSQL, ante un error de fsync, podía reintentar y dar por guardados datos que el kernel ya había descartado; desde 2019, PostgreSQL se detiene ante ese error en lugar de reintentar.</li>
-          <li>Y después de cada prueba, verificar la historia completa, no solo que "el sistema siguió respondiendo".</li>
-        </ul>
-      </aside>
+      <p class="more-link">Para profundizar: <a href="m061-teoria-distribuida-a-fondo.html#transacciones">two-phase commit paso a paso, Percolator y un ejercicio guiado de transferencias entre shards</a>, en M06.1.</p>
 
       <h3 id="resumen">Resumen para decidir</h3>
 
@@ -1359,13 +451,11 @@ UPDATE ejecuciones
         <table class="t">
           <thead><tr><th>Si necesitas…</th><th>Usa</th><th>Pagas</th></tr></thead>
           <tbody>
-            <tr><td>Un único líder o ejecutor</td><td>Un lease en un servicio de consenso (etcd, ZooKeeper) y un fencing token</td><td>Una ida y vuelta a la mayoría en cada renovación; un recurso que verifique tokens</td></tr>
-            <tr><td>Que toda lectura vea lo último</td><td>Linealizabilidad: el líder con ReadIndex, o quórums con ABD</td><td>La latencia de una mayoría en cada lectura</td></tr>
-            <tr><td>Que cada usuario vea lo que escribió</td><td>Garantías de sesión: un token de versión o enrutamiento</td><td>Casi nada</td></tr>
-            <tr><td>Contadores y conjuntos en varias regiones</td><td>CRDTs</td><td>Metadatos; no sirven para invariantes globales</td></tr>
-            <tr><td>Ordenar eventos entre máquinas</td><td>Relojes vectoriales para detectar concurrencia; HLC para timestamps</td><td>El tamaño del vector; un desfasaje máximo acotado</td></tr>
-            <tr><td>Transacciones entre shards</td><td>2PC sobre consenso, Percolator o, mejor, evitar la transacción</td><td>Latencia, locks y complejidad</td></tr>
-            <tr><td>Sobrevivir a nodos que mienten</td><td>Consenso bizantino, con 3f + 1 nodos</td><td>Mensajes del orden de n² o firmas agregadas</td></tr>
+            <tr><td>Que toda lectura vea lo último</td><td>Linealizabilidad: un líder con consenso o quórums</td><td>La latencia de una mayoría en cada operación</td></tr>
+            <tr><td>Que cada usuario vea lo que escribió</td><td>Garantías de sesión: un token de versión o leer del líder</td><td>Casi nada</td></tr>
+            <tr><td>Responder siempre, aunque la red se parta</td><td>Consistencia eventual o causal</td><td>Datos viejos un rato y conflictos que resolver</td></tr>
+            <tr><td>Un único líder o ejecutor</td><td>Un lease en etcd o ZooKeeper, más un fencing token</td><td>Un recurso que verifique tokens</td></tr>
+            <tr><td>Transacciones entre shards</td><td>2PC sobre consenso, una saga o, mejor, evitar la transacción</td><td>Latencia, locks y complejidad</td></tr>
           </tbody>
         </table>
       </div>
@@ -1374,9 +464,26 @@ UPDATE ejecuciones
 
       <div data-quiz="m06"></div>
 
-      <div data-exercise="m06-planificador"></div>
+      <section class="exercise" aria-labelledby="ej-m06">
+        <p class="exercise-title" id="ej-m06">Ejercicio de diseño: el saldo de una billetera en dos regiones</p>
+        <p>Una billetera digital guarda el saldo de cada usuario en 3 réplicas: Virginia (primario), Ohio (~11 ms de ida y vuelta) e Irlanda (~75 ms). Tiene tres operaciones: mostrar el historial de movimientos, mostrar el saldo en la pantalla principal y autorizar un pago. Para cada una, decide qué consistencia necesita, a cuántas réplicas espera la escritura del pago y qué pasa si Irlanda queda aislada por una partición.</p>
+        <details><summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Autorizar un pago</b> decide con "lo último": necesita linealizabilidad. Escribe con un quórum de 2 de 3 (W = 2), que espera a Ohio: unos 11 ms, y la lentitud de Irlanda no lo afecta. La decisión se toma en el líder, nunca en una réplica.</li>
+            <li><b>El saldo en la pantalla principal</b> necesita, como mínimo, read-your-writes: después de pagar, el usuario tiene que ver su saldo nuevo. Basta con leer del líder durante unos segundos tras una escritura, o con un token de sesión.</li>
+            <li><b>El historial</b> tolera consistencia eventual: un movimiento que aparece medio segundo tarde no rompe nada.</li>
+            <li><b>Con Irlanda aislada</b>, Virginia y Ohio siguen siendo mayoría: los pagos siguen funcionando. Irlanda no puede autorizar pagos (elige C sobre A para esa operación), pero puede seguir mostrando el historial que ya tiene, marcado como posiblemente desactualizado.</li>
+            <li>Esperar a las 3 réplicas en cada pago costaría unos 75 ms y el p99 de Irlanda, y una caída de Irlanda bloquearía todos los pagos: no aporta nada que W = 2 no dé.</li>
+          </ul>
+        </details>
+      </section>
 
       <div data-checkpoint="m06"></div>
+
+      <aside class="level-switch" data-toc="skip">
+        <p><b>¿Quieres ir más hondo?</b> M06.1 tiene todo lo de este módulo con el detalle completo, y además detectores de fallas, relojes lógicos, HLC y TrueTime, Paxos, FLP, CRDTs, fallas bizantinas, leases y cómo se verifica un sistema distribuido. Es opcional y no cuenta para el progreso.</p>
+        <a class="btn" href="m061-teoria-distribuida-a-fondo.html">Ir a M06.1</a>
+      </aside>
 
     </article>
 
@@ -1390,13 +497,10 @@ UPDATE ejecuciones
 <script src="../assets/js/data/course.data.js"></script>
 <script src="../assets/js/data/glossary.data.js"></script>
 <script src="../assets/js/data/quizzes/m06.data.js"></script>
-<script src="../assets/js/data/exercises/m06.data.js"></script>
 <script src="../assets/js/core/progress.js"></script>
 <script src="../assets/js/core/nav.js"></script>
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
-<script src="../assets/js/core/exercise.js"></script>
 <script src="../assets/js/widgets/sim-raft.js"></script>
-<script src="../assets/js/widgets/sim-lin.js"></script>
 </body>
 </html>

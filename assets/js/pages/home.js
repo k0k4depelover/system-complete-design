@@ -67,7 +67,7 @@
     if (section) section.classList.toggle('is-compact', W < 880);
     if (W < 880) return;
 
-    var items = SD.courseItems();
+    var items = SD.courseItems().filter(function (it) { return it.kind !== 'deep'; });
     var rows = [
       items.filter(function (it) { return it.part.id === 'p1'; }),
       items.filter(function (it) { return it.part.id === 'p2'; }),
@@ -248,13 +248,14 @@
     host.innerHTML = '';
     var cur = currentId();
     SD.course.parts.forEach(function (p) {
-      var mins = p.items.reduce(function (acc, it) { return acc + (it.mins || 0); }, 0);
+      var core = p.items.filter(function (it) { return it.kind !== 'deep'; });
+      var mins = core.reduce(function (acc, it) { return acc + (it.mins || 0); }, 0);
       var block = h('section', { class: 'part-block', style: '--line: var(' + p.line + ')', 'data-phase': p.phase || 1, 'aria-labelledby': 'part-' + p.id });
       block.appendChild(h('header', { class: 'part-head' }, [
         h('p', { class: 'part-label', text: p.label }),
         h('h3', { class: 'part-title', id: 'part-' + p.id, text: p.title }),
         h('p', { class: 'part-intro', text: p.intro }),
-        h('p', { class: 'part-meta', text: p.items.length + ' paradas, unas ' + Math.round(mins / 60) + ' h' })
+        h('p', { class: 'part-meta', text: core.length + ' paradas, unas ' + Math.round(mins / 60) + ' h' })
       ]));
       var ol = h('ol', { class: 'part-list' });
       p.items.forEach(function (it) {
@@ -264,7 +265,7 @@
           : h('a', { class: 'pl-title', href: it.href, text: it.title });
         ol.appendChild(h('li', { class: 'pl-row is-' + st + (it.id === cur ? ' is-current' : ''), 'data-kind': it.kind || 'module' }, [
           h('span', { class: 'pl-num', text: it.num }),
-          h('div', { class: 'pl-main' }, [title, h('p', { class: 'pl-sum', text: it.summary })]),
+          h('div', { class: 'pl-main' }, [title, it.kind === 'deep' ? h('span', { class: 'pl-opt', text: 'Opcional' }) : null, h('p', { class: 'pl-sum', text: it.summary })]),
           h('span', { class: 'pl-mins', text: it.mins + ' min' }),
           h('span', { class: 'pl-status' }, [
             st === 'done' ? h('span', { class: 'pl-check', 'aria-hidden': 'true', text: '✓ ' }) : null,

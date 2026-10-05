@@ -1,0 +1,3158 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A09. Colas y pub/sub</title>
+<meta name="description" content="Una tienda que confirma cada pedido por correo: outbox transaccional en PostgreSQL, Redis Streams con un grupo de consumo, XACK después del correo, XPENDING y XCLAIM para lo que quedó colgado, una cola de mensajes muertos, un consumidor idempotente, lag y backpressure, y Redis Pub/Sub, que entrega a todos o a nadie. Las caídas se provocan a mano y los correos llegan a Mailpit.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a09" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Colas y pub/sub</h1>
+        <p class="lead">Un pedido, un correo: ni cero, ni dos. Entre la base, la cola y el servidor de correo no hay una transacción que los una, así que vas a perder correos con Pub/Sub y con una doble escritura, repetirlos con un relay que se cae, y matar a un worker en cada punto del camino para contar lo que sale. Lo que queda al final es entrega al menos una vez, con un consumidor que reconoce lo repetido.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A09</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 3</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>5 a 7 h</dd></div>
+          <div><dt>Módulos</dt><dd>M07</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a09">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Guardar un pedido y su evento en la misma transacción con una outbox, y publicarlo con un relay que reparte el trabajo con <code>FOR UPDATE SKIP LOCKED</code>.</li>
+          <li>Repartir eventos entre workers con un grupo de consumo de Redis Streams, confirmar con <code>XACK</code> después del efecto y rescatar lo que quedó pendiente con <code>XPENDING</code> y <code>XCLAIM</code>.</li>
+          <li>Provocar una caída en cada punto del camino y predecir, antes de mirar, cuántos correos salen, cuántos se repiten y cuántos se pierden.</li>
+          <li>Apartar lo que no se arregla reintentando en una cola de mensajes muertos, y devolverlo al stream cuando la causa está resuelta.</li>
+          <li>Medir el lag, frenar al productor con backpressure, y explicar por qué Pub/Sub sirve para avisar y no para repartir trabajo.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una tienda en línea manda un correo de confirmación por cada pedido. El correo no puede ir dentro de la request: el servidor de correo tarda, a veces rechaza y a veces no contesta, y nada de eso puede tumbar una venta. Entonces el pedido se guarda, la API responde, y el correo sale después, desde otro proceso: un worker que lee de una cola.</p>
+
+      <p>La promesa es simple: un pedido, un correo. Cumplirla no lo es, porque en el camino hay tres sistemas que no comparten transacción: PostgreSQL, Redis y el servidor SMTP. La API puede morir después del commit y antes de publicar el evento. El worker puede morir después de mandar el correo y antes de confirmarlo. Redis puede recortar un stream que nadie terminó de leer. Ninguna de estas fallas se evita del todo. Lo que sí se elige es qué pasa cuando ocurren: que el correo se pierda o que se repita. Este proyecto elige repetir, y después hace que repetir no se note.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa09t fa09d">
+<title id="fa09t">Del pedido al correo, por una outbox y un stream</title>
+<desc id="fa09d">curl crea un pedido en la API. La API guarda el pedido y su evento en PostgreSQL en el mismo commit, a través de PgBouncer, y su relay publica después los eventos con XADD en el stream orders de Redis, que tiene el grupo de consumo correos. Los workers del grupo leen cada entrada con XREADGROUP, de modo que cada una le llega a uno solo; anotan cada evento en PostgreSQL, mandan el correo a Mailpit por SMTP y confirman con XACK. Lo que falla tres veces va al stream orders.dlq. Una línea punteada muestra el otro transporte: en modo pubsub, la API publica cada evento con PUBLISH directo a todos los workers que escuchan.</desc>
+<defs><marker id="fa09a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="14" width="130" height="60" rx="6"/>
+<text class="dg-label" x="85" y="38" text-anchor="middle">curl</text>
+<text class="dg-tiny" x="85" y="58" text-anchor="middle">POST /api/orders</text>
+<path class="dg-edge" d="M152 44 H176" marker-end="url(#fa09a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="180" y="14" width="200" height="60" rx="6"/>
+<text class="dg-label" x="280" y="38" text-anchor="middle">api</text>
+<text class="dg-tiny" x="280" y="58" text-anchor="middle">pedidos, outbox y relay</text>
+<path class="dg-edge" d="M382 44 H446" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="414" y="36" text-anchor="middle">XADD</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="450" y="14" width="170" height="60" rx="6"/>
+<text class="dg-label" x="535" y="38" text-anchor="middle">stream orders</text>
+<text class="dg-tiny" x="535" y="58" text-anchor="middle">grupo correos</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="650" y="14" width="100" height="60" rx="6"/>
+<text class="dg-label" x="700" y="38" text-anchor="middle">orders.dlq</text>
+<text class="dg-tiny" x="700" y="58" text-anchor="middle">la DLQ</text>
+<path class="dg-edge" d="M535 76 V106" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="525" y="96" text-anchor="end">XREADGROUP, XACK</text>
+<path class="dg-feedback" d="M350 76 V150 H446" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="342" y="120" text-anchor="end">pubsub: PUBLISH</text>
+<path class="dg-edge" d="M220 76 V228" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="230" y="186">pedido y evento,</text>
+<text class="dg-tiny" x="230" y="201">en un commit</text>
+<rect class="dg-frame" x="450" y="110" width="300" height="82" rx="8"/>
+<text class="dg-group" x="464" y="128">workers: cada entrada a uno solo</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="464" y="138" width="86" height="44" rx="6"/>
+<text class="dg-label" x="507" y="157" text-anchor="middle">worker</text>
+<text class="dg-tiny" x="507" y="174" text-anchor="middle">y su reaper</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="558" y="138" width="86" height="44" rx="6"/>
+<text class="dg-label" x="601" y="157" text-anchor="middle">worker</text>
+<text class="dg-tiny" x="601" y="174" text-anchor="middle">y su reaper</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="652" y="138" width="86" height="44" rx="6"/>
+<text class="dg-label" x="695" y="157" text-anchor="middle">worker</text>
+<text class="dg-tiny" x="695" y="174" text-anchor="middle">y su reaper</text>
+<path class="dg-edge" d="M700 108 V78" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="708" y="97">3 fallas</text>
+<path class="dg-edge" d="M470 194 V258 H344" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="407" y="250" text-anchor="middle">anota cada evento</text>
+<path class="dg-edge" d="M675 194 V228" marker-end="url(#fa09a)"/>
+<text class="dg-tiny" x="685" y="214">SMTP</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="20" y="232" width="160" height="52" rx="6"/>
+<text class="dg-label" x="100" y="255" text-anchor="middle">PostgreSQL 18</text>
+<text class="dg-tiny" x="100" y="274" text-anchor="middle">orders, outbox, emails</text>
+<path class="dg-edge" d="M208 258 H184" marker-end="url(#fa09a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="210" y="232" width="130" height="52" rx="6"/>
+<text class="dg-label" x="275" y="255" text-anchor="middle">PgBouncer</text>
+<text class="dg-tiny" x="275" y="274" text-anchor="middle">modo transaction</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="600" y="232" width="150" height="52" rx="6"/>
+<text class="dg-label" x="675" y="255" text-anchor="middle">Mailpit</text>
+<text class="dg-tiny" x="675" y="274" text-anchor="middle">el buzón de prueba</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A09.1.</b> El pedido y su evento entran a PostgreSQL en el mismo commit, y el relay de la API los lleva al stream después. Cada entrada le llega a un solo worker del grupo, que la confirma con <code>XACK</code> cuando el correo salió y quedó anotado. La línea punteada es el otro transporte, Pub/Sub: cada evento le llega a todos los workers que escuchan en ese momento, y a ninguno si no hay nadie.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/orders</code></td><td>Crea un pedido y, en el mismo commit, su evento en la outbox.</td><td>201, 400</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/orders/batch</code></td><td>Para los experimentos: muchos pedidos para la misma dirección, en una sola transacción.</td><td>201, 400</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/orders/{id}</code></td><td>Un pedido con su recorrido: cuándo se publicó, qué worker lo tomó y cuántas veces volvió a llegar.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/dlq</code></td><td>Cuántas entradas tiene la cola de mensajes muertos, y las primeras 100.</td><td>200</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/dlq/replay</code></td><td>Devuelve todo lo de la DLQ al stream.</td><td>200</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las dos rutas de la DLQ solo existen con <code>TRANSPORT=stream</code>, el modo por defecto. En modo pubsub no hay DLQ, y responden 404.</p>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/orders</code>
+        </div>
+        <p class="ep-desc">Guarda el pedido y una fila en <code>outbox</code> con el evento <code>order.created</code>, en la misma transacción. Responde cuando hay commit; el correo sale después. Con <code>OUTBOX=false</code> no escribe la outbox: publica el evento directo en Redis, después del commit.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/orders HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{"email": "ana@clientes.test", "item": "taza"}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/1.1 201 Created
+Location: /api/orders/1
+
+{"id": 1, "email": "ana@clientes.test", "item": "taza", "createdAt": "…"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>El pedido y su evento tienen commit.</span></li>
+            <li><span class="st st--4xx">400</span><span>Un correo que no es un correo o un <code>item</code> vacío, con un ProblemDetail.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/orders/batch</code>
+        </div>
+        <p class="ep-desc">Crea <code>count</code> pedidos para <code>label@clientes.test</code>, con <code>label</code> como item, y sus <code>count</code> eventos, en una sola transacción. La etiqueta identifica el experimento: el informe y Mailpit filtran por esa dirección. Devuelve el primer y el último id, que son seguidos.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="json"><code>{"label": "lote1", "count": 20}</code></pre>
+          <p class="ep-sec">Respuesta 201, en una base recién creada</p>
+<pre data-lang="json"><code>{"from": 1, "to": 20}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Creados.</span></li>
+            <li><span class="st st--4xx">400</span><span>Una etiqueta con algo que no sea minúsculas, dígitos o guiones, o más de 40 caracteres, o <code>count</code> fuera de 1 a 10&#8239;000.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/orders/{id}</code>
+        </div>
+        <p class="ep-desc">El pedido con lo que pasó con su evento. <code>publishedAt</code> viene de la outbox; <code>worker</code>, <code>takenAt</code> y <code>repeats</code>, de la tabla <code>emails</code> que escriben los workers. <code>worker</code> es el id corto del contenedor que lo tomó primero.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"id": 1, "email": "ana@clientes.test", "item": "taza", "createdAt": "…",
+ "publishedAt": "…", "worker": "…", "takenAt": "…", "repeats": 0}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>Existe. Los campos del recorrido quedan en <code>null</code> mientras no pasen.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/dlq</code>
+        </div>
+        <p class="ep-desc">Lo que no se pudo procesar, de lo más viejo a lo más nuevo: los campos originales de la entrada, más el error, en qué entrega se rindió el worker y el id que tenía en <code>orders</code>. En un stream, todos los valores son texto.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"size": 1, "entries": [{"id": "…", "fields": {"type": "order.created", "email": "veneno@clientes.test",
+  "item": "taza", "error": "falta el campo eventId", "deliveries": "1", "originalId": "…"}}]}</code></pre>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/dlq/replay</code>
+        </div>
+        <p class="ep-desc">Vuelve a publicar cada entrada de la DLQ en <code>orders</code>, sin los tres campos que agregó el worker, y la borra de la DLQ. Llámalo después de arreglar la causa, no antes.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Respuesta 200</p>
+<pre data-lang="json"><code>{"replayed": 3}</code></pre>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API, con <code>@Email</code>, <code>@Pattern</code> y <code>@Max</code> en el cuerpo, y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td><code>JdbcClient</code> con Hikari, <code>TransactionTemplate</code> y la migración al arrancar.</td></tr>
+            <tr><td><code>spring-boot-starter-data-redis</code></td><td><code>StringRedisTemplate</code> sobre Lettuce: <code>XADD</code>, <code>XREADGROUP</code>, <code>XACK</code>, <code>XPENDING</code>, <code>XCLAIM</code>, <code>XINFO</code>, y <code>PUBLISH</code> con su listener.</td></tr>
+            <tr><td><code>commons-pool2</code></td><td>Una lectura con <code>BLOCK</code> no puede compartir la conexión de los demás comandos: Spring Data Redis la hace por una conexión aparte. Con este pool en el classpath, Spring Boot enciende el pool de Lettuce <span class="badge badge--doc">Documentado</span>, y esa conexión se reutiliza en lugar de abrirse una por lectura.</td></tr>
+            <tr><td><code>spring-boot-starter-mail</code></td><td><code>MailSender</code> hacia Mailpit, con plazos de conexión, lectura y escritura.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Trece pruebas contra un PostgreSQL 18 y un Redis 8.10 de verdad. El Redis es un <code>GenericContainer</code>, de Testcontainers, que llega con el módulo de PostgreSQL.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Redis Streams, no Kafka. Un stream de Redis tiene lo que este proyecto necesita: un log con ids crecientes, grupos de consumo que reparten las entradas, una lista de pendientes por consumidor y un comando para reclamar lo abandonado. Kafka agrega particiones replicadas en disco, retención por días o semanas y orden dentro de cada partición, pensados para volúmenes mucho más grandes. Lo pagas con un clúster que operar. Para un correo por pedido, a cientos por segundo, alcanza el Redis que ya tienes desde A03. El precio es que el stream vive en memoria y que su durabilidad depende del AOF y de las réplicas. <a href="../modules/m07-mensajeria.html#kafka">M07</a> compara los dos, y los conceptos de esta guía (grupo, lag, al menos una vez, DLQ) son los mismos en Kafka.</p>
+      </aside>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;tienda&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-data-redis&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;!-- Las lecturas con BLOCK usan una conexión aparte: con el pool, Lettuce la reutiliza en lugar de abrir una por lectura. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.apache.commons&lt;/groupId&gt;
+      &lt;artifactId&gt;commons-pool2&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-mail&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+      <p>Todo corre en Docker Compose: no hace falta nada más que Java, Maven y Docker. Crea el proyecto con Spring Initializr, con Java 25 y Spring Boot 4.1.1, como en A00, y reemplaza el pom por el de arriba. Los scripts son de bash: en Windows, córrelos en Git Bash. Así queda el proyecto:</p>
+
+<pre data-lang="bash"><code>a09-colas/
+├── pom.xml, compose.yaml, Dockerfile
+├── src/main/java/lab/tienda/   TiendaApplication, AppProps, CrashPoints
+│   ├── orders/                 Order, OrderStatus, OrderRepository, OrderService, OrderController
+│   ├── outbox/                 OutboxRepository, OutboxRelay
+│   ├── events/                 OrderEvent, PoisonMessage, EventPublisher, StreamPublisher, StreamGroup, PubSubPublisher
+│   ├── worker/                 Mailer, SmtpMailer, EmailLog, EmailHandler, RecordProcessor, StreamConsumer,
+│   │                           Reaper, PubSubConsumer
+│   └── dlq/                    DeadLetters, DlqController
+├── src/main/resources/         application.yaml, db/migration/V1__tienda.sql
+├── src/test/java/lab/tienda/   IntegrationTest, TestcontainersConfig, RecordingMailer y las pruebas
+└── scripts/                    psql.sh, consultas.sql, informe.sh, lag.sh, arranca.sh</code></pre>
+
+<pre data-lang="yaml" data-file="compose.yaml"><code># La misma imagen corre con dos perfiles: api (pedidos, outbox y relay) y worker (lee eventos y manda correos).
+# Cada experimento elige su configuración con variables de entorno, por ejemplo:
+#   TRANSPORT=pubsub DEDUPE=false docker compose up -d --build --scale worker=3
+# Sin restart: un proceso que se detiene en un experimento queda detenido hasta que lo vuelvas a arrancar.
+
+x-app: &amp;app
+  build: .
+  depends_on:
+    pgbouncer:
+      condition: service_started
+    redis:
+      condition: service_healthy
+    mailpit:
+      condition: service_healthy
+
+x-app-env: &amp;app-env
+  DB_URL: jdbc:postgresql://pgbouncer:5432/app
+  FLYWAY_URL: jdbc:postgresql://postgres:5432/app
+  REDIS_HOST: redis
+  MAIL_HOST: mailpit
+  TRANSPORT: ${TRANSPORT:-stream}
+  OUTBOX: ${OUTBOX:-true}
+  MAX_LEN: ${MAX_LEN:-0}
+  TRIM_POLICY: ${TRIM_POLICY:-keep}
+  MAX_LAG: ${MAX_LAG:-0}
+  DEDUPE: ${DEDUPE:-true}
+  MAIL_DELAY: ${MAIL_DELAY:-200ms}
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      retries: 30
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.0-p0
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/app
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: 20
+      MAX_CLIENT_CONN: 500
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.10
+    # AOF con fsync cada segundo: si Redis se cae, el stream pierde como mucho el último segundo de eventos.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  # Un servidor SMTP de pruebas: recibe los correos, no los entrega a nadie y los muestra en http://localhost:8025.
+  # La imagen trae su propio healthcheck.
+  mailpit:
+    image: axllent/mailpit:v1.31
+    environment:
+      # Por defecto guarda 500 y borra los más viejos: los experimentos mandan miles.
+      MP_MAX_MESSAGES: 5000
+      # Permite provocar errores SMTP con PUT /api/v1/chaos mientras corre.
+      MP_ENABLE_CHAOS: "true"
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
+  api:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      SPRING_PROFILES_ACTIVE: api
+    ports:
+      - "8080:8080"
+
+  # Sin puertos, para que --scale worker=N levante N copias. Cada una se llama como su contenedor (HOSTNAME).
+  worker:
+    &lt;&lt;: *app
+    environment:
+      &lt;&lt;: *app-env
+      SPRING_PROFILES_ACTIVE: worker
+      SPRING_MAIN_WEB_APPLICATION_TYPE: none
+
+volumes:
+  pgdata:
+  redisdata:</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Una imagen, dos papeles</dt><dd>El perfil decide qué es cada proceso. <code>api</code> atiende los pedidos y corre el relay; <code>worker</code> lee los eventos y manda los correos, sin servidor web (<code>SPRING_MAIN_WEB_APPLICATION_TYPE: none</code>) y sin puertos, para que <code>--scale worker=3</code> levante tres copias sin pelear por el 8080.</dd></div>
+        <div><dt>Las variables de cada experimento</dt><dd><code>TRANSPORT</code>, <code>OUTBOX</code>, <code>DEDUPE</code>, <code>MAX_LEN</code>, <code>TRIM_POLICY</code>, <code>MAX_LAG</code> y <code>MAIL_DELAY</code> se leen de tu terminal en cada <code>docker compose up</code>. Un <code>up</code> sin ellas vuelve a los valores por defecto y recrea los contenedores cuya configuración cambió. Con <code>--scale</code> pasa lo mismo: un <code>up</code> sin <code>--scale worker=3</code> deja un solo worker. Por eso los experimentos no llaman a <code>up</code> directamente: usan <code>scripts/arranca.sh</code>, del paso 9, con las variables delante.</dd></div>
+        <div><dt>Sin restart</dt><dd>Los experimentos matan procesos a propósito. Con <code>restart: on-failure</code>, Docker los levantaría en un segundo y no verías qué quedó a medias. Sin restart, el contenedor queda detenido hasta que lo arranques con <code>docker compose start</code>.</dd></div>
+        <div><dt>Redis con AOF</dt><dd>Con <code>appendfsync everysec</code>, Redis escribe el log a disco una vez por segundo: si se cae, pierde como mucho el último segundo de escrituras. <span class="badge badge--doc">Documentado</span> El stream sobrevive a un reinicio de Redis; un <code>XADD</code> del último segundo, no siempre.</dd></div>
+        <div><dt>Mailpit</dt><dd>Un servidor SMTP de pruebas: recibe por el 1025, no le entrega nada a nadie y muestra lo recibido en <code>http://localhost:8025</code>, con una API para buscar. Guarda 500 mensajes por defecto y borra los más viejos <span class="badge badge--doc">Documentado</span>; los experimentos mandan más, y por eso sube a 5&#8239;000. <code>MP_ENABLE_CHAOS</code> deja provocar rechazos SMTP mientras corre. <span class="badge badge--doc">Documentado</span></dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: tienda
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:6432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    hikari:
+      maximum-pool-size: 10
+      # En milisegundos: sin conexión en 5 s, falla en lugar de colgarse medio minuto.
+      connection-timeout: 5000
+  flyway:
+    url: ${FLYWAY_URL:jdbc:postgresql://localhost:5433/app}
+    user: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: 1025
+    # En milisegundos. Sin estos plazos, JavaMail espera para siempre a un servidor SMTP que no contesta.
+    properties:
+      "[mail.smtp.connectiontimeout]": 2000
+      "[mail.smtp.timeout]": 5000
+      "[mail.smtp.writetimeout]": 5000
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  # Por dónde viajan los eventos:
+  #   stream: un Redis Stream con un grupo de consumo; cada evento le llega a un worker, y espera si no hay ninguno.
+  #   pubsub: un canal de Redis Pub/Sub; cada evento le llega a todos los que escuchan en ese momento, y a nadie más.
+  transport: ${TRANSPORT:stream}
+  # false en las pruebas: ni el relay, ni el consumidor, ni el reaper corren solos; cada prueba los llama.
+  background: true
+  # true: el pedido y su evento se guardan en la misma transacción, y el relay publica el evento después.
+  # false: el pedido se guarda y el evento se publica directo, después del commit (la doble escritura).
+  outbox: ${OUTBOX:true}
+  stream:
+    key: orders
+    group: correos
+    dlq: orders.dlq
+    # 0: sin recorte. Con N, cada XADD deja el stream en N entradas exactas.
+    max-len: ${MAX_LEN:0}
+    # keep: recorta aunque el grupo no haya leído esas entradas. acked: solo recorta las leídas y confirmadas.
+    trim-policy: ${TRIM_POLICY:keep}
+  pubsub:
+    channel: orders.created
+  relay:
+    every-ms: 500
+    batch-size: 100
+    # 0: sin freno. Con N, el relay solo publica mientras el lag del grupo sea menor que N.
+    max-lag: ${MAX_LAG:0}
+  worker:
+    # El nombre de este consumidor en el grupo. En Docker, HOSTNAME es el id del contenedor.
+    name: ${HOSTNAME:local}
+    # true: anota cada evento en la tabla emails en la misma transacción en que manda el correo,
+    # y no manda dos veces el mismo evento. false: manda lo que le llegue.
+    dedupe: ${DEDUPE:true}
+    # Cuánto espera XREADGROUP a que llegue algo antes de volver a preguntar.
+    block: 2s
+    # Un evento sin confirmar por más de este plazo se considera abandonado: el reaper se lo lleva.
+    claim-idle: 15s
+    reap-every-ms: 5000
+    # En la entrega número max-deliveries, si vuelve a fallar, el evento va a la DLQ.
+    max-deliveries: 3
+    # Un consumidor sin pendientes que no pregunta hace este plazo es un worker que ya no existe: se borra del grupo.
+    forget-idle: 60s
+  mail:
+    from: tienda@tienda.test
+    # Lo que tarda un proveedor de correo de verdad en aceptar un mensaje.
+    delay: ${MAIL_DELAY:200ms}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>El transporte</dt><dd><code>app.transport</code> elige las clases: con <code>stream</code> se crean <code>StreamPublisher</code>, <code>StreamGroup</code>, el consumidor, el reaper y la DLQ; con <code>pubsub</code>, <code>PubSubPublisher</code> y <code>PubSubConsumer</code>. Cada una lleva <code>@ConditionalOnProperty</code>, y el resto del código, como el relay y el <code>EmailHandler</code>, no sabe por dónde viaja el evento.</dd></div>
+        <div><dt>Los plazos de JavaMail</dt><dd>Sin <code>mail.smtp.connectiontimeout</code>, <code>timeout</code> y <code>writetimeout</code>, JavaMail espera para siempre. <span class="badge badge--doc">Documentado</span> Un servidor SMTP que acepta la conexión y no contesta dejaría colgado al worker con su entrada pendiente, y el reaper de otro se la llevaría a los 15&#8239;s.</dd></div>
+        <div><dt>Los plazos del worker</dt><dd>Se leen juntos. <code>block</code> es cuánto espera una lectura vacía: 2&#8239;s. <code>claim-idle</code> es cuánto tiene que llevar una entrada sin confirmar para que otro worker la reclame: 15&#8239;s, más que lo que tarda un correo normal, que son 200&#8239;ms más el SMTP. <code>reap-every-ms</code> es cada cuánto mira el reaper: 5&#8239;s. Y <code>forget-idle</code> es cuánto tiene que pasar sin noticias de un consumidor para borrarlo del grupo: 60&#8239;s, cuando uno vivo pregunta cada 2&#8239;s como mucho.</dd></div>
+        <div><dt>El nombre del worker</dt><dd><code>HOSTNAME</code>, que en Docker es el id corto del contenedor. <span class="badge badge--doc">Documentado</span> Cada réplica tiene el suyo, aunque las tres compartan el mismo entorno.</dd></div>
+      </dl>
+
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/tienda-0.1.0.jar app.jar
+# exec: la JVM recibe el SIGTERM de docker compose stop directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver TiendaApplication, AppProps y CrashPoints</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/main/java/lab/tienda/TiendaApplication.java"><code>package lab.tienda;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class TiendaApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(TiendaApplication.class, args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/tienda/AppProps.java"><code>package lab.tienda;
+
+import java.time.Duration;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties("app")
+public record AppProps(String transport, boolean background, boolean outbox, Stream stream, PubSub pubsub,
+                       Relay relay, Worker worker, Mail mail) {
+
+    public enum TrimPolicy { KEEP, ACKED }
+
+    public record Stream(String key, String group, String dlq, long maxLen, TrimPolicy trimPolicy) {
+    }
+
+    public record PubSub(String channel) {
+    }
+
+    public record Relay(long everyMs, int batchSize, long maxLag) {
+    }
+
+    public record Worker(String name, boolean dedupe, Duration block, Duration claimIdle, long reapEveryMs,
+                         int maxDeliveries, Duration forgetIdle) {
+    }
+
+    public record Mail(String from, Duration delay) {
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/tienda/CrashPoints.java"><code>package lab.tienda;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Los experimentos de caídas. Si existe {@code /tmp/detener-&lt;punto&gt;}, el proceso borra el archivo y muere ahí mismo,
+ * sin apagarse en orden, como si se cortara la luz. El archivo se crea desde afuera:
+ * {@code docker compose exec api sh -c 'touch /tmp/detener-tras-publicar'}
+ */
+public final class CrashPoints {
+
+    private static final Logger log = LoggerFactory.getLogger(CrashPoints.class);
+
+    private CrashPoints() {
+    }
+
+    public static void haltIfAsked(String point) {
+        Path flag = Path.of(System.getProperty("java.io.tmpdir"), "detener-" + point);
+        try {
+            if (Files.deleteIfExists(flag)) {
+                log.error("Encontré {}: me detengo aquí", flag);
+                Runtime.getRuntime().halt(1);
+            }
+        } catch (IOException e) {
+            log.warn("No pude revisar {}: {}", flag, e.getMessage());
+        }
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <p><code>CrashPoints</code> es la puerta de los experimentos: si existe <code>/tmp/detener-&lt;punto&gt;</code> cuando el código pasa por ese punto, el proceso borra el archivo y muere con <code>Runtime.halt</code>, sin apagarse en orden, como si se cortara la luz. Hay cuatro puntos: <code>tras-commit</code> en la API, <code>tras-publicar</code> en el relay, y <code>tras-enviar</code> y <code>tras-anotar</code> en el worker. En un servicio real, sácala.</p>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-servicios">Paso 1. Los servicios</h3>
+
+<pre data-lang="bash"><code>docker compose up -d postgres pgbouncer redis mailpit
+docker compose ps</code></pre>
+
+      <p>Tienen que aparecer cuatro contenedores en <code>Up</code>; <code>postgres</code>, <code>redis</code> y <code>mailpit</code>, con <code>(healthy)</code>. PgBouncer no tiene healthcheck. Abre <code>http://localhost:8025</code>: es el buzón de Mailpit, vacío.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Redis 8.10, porque el recorte que respeta lo pendiente, <code>ACKED</code>, existe desde la 8.2. <span class="badge badge--doc">Documentado</span> Mailpit como servidor de correo: recibe todo, no entrega nada y tiene una API para contar lo recibido y para provocar rechazos. PostgreSQL detrás de PgBouncer, como en A00: la aplicación entra por el pooler en modo transaction, y Flyway, directo.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un proveedor de correo real: cobra, limita y cuida la reputación de tu dominio, y no te deja provocar un 451 cuando quieres. GreenMail dentro de las pruebas: sirve, pero aquí quieres ver los correos en el navegador mientras matas procesos. Y Kafka, por lo que dice el trade-off de arriba.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el 5433, el 6432, el 6379, el 8025, el 1025 o el 8080 estén ocupados, por ejemplo por el compose de A03, que usa varios de los mismos: <code>docker compose up</code> falla con "port is already allocated". Apaga el otro con <code>docker compose down</code> en su carpeta.</dd></div>
+      </dl>
+
+      <h3 id="paso-outbox">Paso 2. El pedido y su evento, en un commit</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__tienda.sql"><code>CREATE TABLE orders (
+    id         bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email      text        NOT NULL,
+    item       text        NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX orders_email ON orders (email);
+
+-- Los eventos que falta publicar, escritos en la misma transacción que el pedido.
+-- El relay los lee en orden de id y anota published_at cuando el broker los aceptó.
+CREATE TABLE outbox (
+    id           bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id     uuid        NOT NULL UNIQUE DEFAULT gen_random_uuid(),
+    type         text        NOT NULL DEFAULT 'order.created',
+    order_id     bigint      NOT NULL REFERENCES orders (id),
+    payload      jsonb       NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    published_at timestamptz
+);
+
+-- Solo los pendientes: el índice se queda chico aunque la tabla crezca.
+CREATE INDEX outbox_pending ON outbox (id) WHERE published_at IS NULL;
+
+-- Lo que hicieron los workers: una fila por evento.
+--   worker y deliveries: quién lo tomó primero, y en qué entrega del stream.
+--   repeats: cuántas veces volvió a llegar después. Con dedupe, ninguna de esas mandó correo.
+CREATE TABLE emails (
+    event_id   uuid        PRIMARY KEY,
+    order_id   bigint      NOT NULL,
+    worker     text        NOT NULL,
+    deliveries int         NOT NULL,
+    repeats    int         NOT NULL DEFAULT 0,
+    taken_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX emails_order ON emails (order_id);</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/orders/Order.java"><code>package lab.tienda.orders;
+
+import java.time.OffsetDateTime;
+
+public record Order(long id, String email, String item, OffsetDateTime createdAt) {
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/orders/OrderStatus.java"><code>package lab.tienda.orders;
+
+import java.time.OffsetDateTime;
+
+/**
+ * Un pedido y lo que pasó con su evento. publishedAt solo existe con outbox; worker, takenAt y repeats,
+ * cuando un worker tomó el evento.
+ */
+public record OrderStatus(long id, String email, String item, OffsetDateTime createdAt,
+                          OffsetDateTime publishedAt, String worker, OffsetDateTime takenAt, Integer repeats) {
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/orders/OrderRepository.java"><code>package lab.tienda.orders;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public class OrderRepository {
+
+    public record Range(long from, long to) {
+    }
+
+    private final JdbcClient jdbc;
+
+    public OrderRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public Order insert(String email, String item) {
+        return jdbc.sql("""
+                INSERT INTO orders (email, item) VALUES (:email, :item)
+                RETURNING id, email, item, created_at
+                """)
+                .param("email", email)
+                .param("item", item)
+                .query(Order.class)
+                .single();
+    }
+
+    /** count pedidos iguales en un solo INSERT, con ids seguidos. */
+    public Range insertBatch(String email, String item, int count) {
+        return jdbc.sql("""
+                WITH created AS (
+                    INSERT INTO orders (email, item)
+                    SELECT :email, :item FROM generate_series(1, :count) AS g
+                     ORDER BY g
+                    RETURNING id
+                )
+                SELECT min(id), max(id) FROM created
+                """)
+                .param("email", email)
+                .param("item", item)
+                .param("count", count)
+                .query((rs, n) -&gt; new Range(rs.getLong(1), rs.getLong(2)))
+                .single();
+    }
+
+    public List&lt;Order&gt; findRange(Range range) {
+        return jdbc.sql("""
+                SELECT id, email, item, created_at FROM orders
+                 WHERE id BETWEEN :from AND :to
+                 ORDER BY id
+                """)
+                .param("from", range.from())
+                .param("to", range.to())
+                .query(Order.class)
+                .list();
+    }
+
+    public Optional&lt;OrderStatus&gt; status(long id) {
+        return jdbc.sql("""
+                SELECT o.id, o.email, o.item, o.created_at, ob.published_at, e.worker, e.taken_at, e.repeats
+                  FROM orders o
+                  LEFT JOIN outbox ob ON ob.order_id = o.id
+                  LEFT JOIN emails e ON e.order_id = o.id
+                 WHERE o.id = :id
+                 LIMIT 1
+                """)
+                .param("id", id)
+                .query(OrderStatus.class)
+                .optional();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/outbox/OutboxRepository.java"><code>package lab.tienda.outbox;
+
+import java.util.List;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+import lab.tienda.orders.OrderRepository;
+
+@Repository
+public class OutboxRepository {
+
+    public record PendingEvent(long id, UUID eventId, String payload) {
+    }
+
+    private final JdbcClient jdbc;
+
+    public OutboxRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /** Un evento por cada pedido del rango, con lo que el worker necesita para mandar el correo. */
+    public int addFor(OrderRepository.Range range) {
+        return jdbc.sql("""
+                INSERT INTO outbox (order_id, payload)
+                SELECT id, jsonb_build_object('orderId', id, 'email', email, 'item', item)
+                  FROM orders
+                 WHERE id BETWEEN :from AND :to
+                 ORDER BY id
+                """)
+                .param("from", range.from())
+                .param("to", range.to())
+                .update();
+    }
+
+    /**
+     * Los más viejos sin publicar, bloqueados hasta el commit. SKIP LOCKED: si otro relay ya tiene algunos,
+     * este se los salta en lugar de esperarlo, y dos relays nunca publican la misma fila a la vez.
+     * Usa el índice parcial outbox_pending.
+     */
+    public List&lt;PendingEvent&gt; lockPending(int limit) {
+        return jdbc.sql("""
+                SELECT id, event_id, payload::text AS payload
+                  FROM outbox
+                 WHERE published_at IS NULL
+                 ORDER BY id
+                 LIMIT :limit
+                   FOR UPDATE SKIP LOCKED
+                """)
+                .param("limit", limit)
+                .query(PendingEvent.class)
+                .list();
+    }
+
+    public int markPublished(List&lt;Long&gt; ids) {
+        return jdbc.sql("UPDATE outbox SET published_at = now() WHERE id IN (:ids)")
+                .param("ids", ids)
+                .update();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/orders/OrderService.java"><code>package lab.tienda.orders;
+
+import java.util.UUID;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import lab.tienda.AppProps;
+import lab.tienda.CrashPoints;
+import lab.tienda.events.EventPublisher;
+import lab.tienda.events.OrderEvent;
+import lab.tienda.outbox.OutboxRepository;
+
+@Service
+@Profile("api")
+public class OrderService {
+
+    private final OrderRepository orders;
+    private final OutboxRepository outbox;
+    private final EventPublisher publisher;
+    private final TransactionTemplate tx;
+    private final boolean useOutbox;
+
+    public OrderService(OrderRepository orders, OutboxRepository outbox, EventPublisher publisher,
+                        TransactionTemplate tx, AppProps props) {
+        this.orders = orders;
+        this.outbox = outbox;
+        this.publisher = publisher;
+        this.tx = tx;
+        this.useOutbox = props.outbox();
+    }
+
+    public Order create(String email, String item) {
+        // Con outbox, el pedido y su evento entran juntos o no entra ninguno.
+        Order order = tx.execute(status -&gt; {
+            Order created = orders.insert(email, item);
+            if (useOutbox) {
+                outbox.addFor(new OrderRepository.Range(created.id(), created.id()));
+            }
+            return created;
+        });
+        CrashPoints.haltIfAsked("tras-commit");
+        if (!useOutbox) {
+            publishNow(order);
+        }
+        return order;
+    }
+
+    /** Los pedidos de los experimentos: count pedidos para label@clientes.test. */
+    public OrderRepository.Range createBatch(String label, int count) {
+        OrderRepository.Range range = tx.execute(status -&gt; {
+            OrderRepository.Range created = orders.insertBatch(label + "@clientes.test", label, count);
+            if (useOutbox) {
+                outbox.addFor(created);
+            }
+            return created;
+        });
+        CrashPoints.haltIfAsked("tras-commit");
+        if (!useOutbox) {
+            orders.findRange(range).forEach(this::publishNow);
+        }
+        return range;
+    }
+
+    /** La doble escritura: el pedido ya tiene commit, y el evento sale en otra escritura que puede no llegar a pasar. */
+    private void publishNow(Order order) {
+        publisher.publish(new OrderEvent(UUID.randomUUID(), order.id(), order.email(), order.item()));
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/orders/OrderController.java"><code>package lab.tienda.orders;
+
+import java.net.URI;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponseException;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@Profile("api")
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    public record NewOrder(@NotBlank @Email String email, @NotBlank String item) {
+    }
+
+    /** label: una palabra que identifica el experimento. Los pedidos van a label@clientes.test. */
+    public record NewBatch(@NotBlank @Pattern(regexp = "[a-z0-9-]{1,40}") String label,
+                           @Min(1) @Max(10_000) int count) {
+    }
+
+    private final OrderService service;
+    private final OrderRepository orders;
+
+    public OrderController(OrderService service, OrderRepository orders) {
+        this.service = service;
+        this.orders = orders;
+    }
+
+    @PostMapping
+    public ResponseEntity&lt;Order&gt; create(@Valid @RequestBody NewOrder body) {
+        Order order = service.create(body.email(), body.item());
+        return ResponseEntity.created(URI.create("/api/orders/" + order.id())).body(order);
+    }
+
+    @PostMapping("/batch")
+    @ResponseStatus(HttpStatus.CREATED)
+    public OrderRepository.Range createBatch(@Valid @RequestBody NewBatch body) {
+        return service.createBatch(body.label(), body.count());
+    }
+
+    @GetMapping("/{id}")
+    public OrderStatus get(@PathVariable long id) {
+        return orders.status(id).orElseThrow(() -&gt; new ErrorResponseException(HttpStatus.NOT_FOUND));
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Una outbox transaccional: el pedido y su evento entran juntos o no entra ninguno. El evento es una fila más, en la misma base y en la misma transacción, y publicarlo es problema de otro, del relay. Su <code>event_id</code> nace en PostgreSQL y viaja igual en cada entrega: es la clave con la que el worker reconoce un evento repetido. El <code>payload</code> lleva lo que el worker necesita para el correo, así que el worker no consulta <code>orders</code>. El lote inserta sus pedidos con un <code>generate_series</code> y sus eventos con un <code>INSERT … SELECT</code>: dos sentencias, una transacción.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>La doble escritura, que es lo que hace <code>OUTBOX=false</code>: commit del pedido y después <code>XADD</code>. Si el proceso muere entre las dos, el pedido existe y el evento no, y nada lo recuerda. Al revés, publicar y después hacer commit, manda el correo de un pedido que puede terminar en rollback. Y publicar dentro de la transacción no ayuda: Redis no participa de la transacción de PostgreSQL, y un rollback no deshace un <code>XADD</code>. También descartas leer el WAL con Debezium, el CDC de <a href="../modules/m07-mensajeria.html#outbox">M07</a>: da la misma garantía sin consultar la tabla cada medio segundo, pero suma Kafka Connect.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que la outbox crezca para siempre: nadie borra las filas publicadas. En producción, un trabajo periódico borra las publicadas hace más de unos días, o la tabla se parte por mes y se suelta la partición vieja, como en A06. El índice parcial <code>outbox_pending</code> mantiene rápida la consulta del relay aunque la tabla crezca, porque solo guarda las pendientes. Y que el cliente crea que el 201 significa "correo enviado": significa "lo vamos a mandar".</dd></div>
+      </dl>
+
+      <h3 id="paso-relay">Paso 3. El relay</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/OrderEvent.java"><code>package lab.tienda.events;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * El evento que sale de cada pedido nuevo. eventId es el mismo en todas sus entregas:
+ * es la clave con la que el worker reconoce un evento repetido.
+ */
+public record OrderEvent(UUID eventId, long orderId, String email, String item) {
+
+    public static final String TYPE = "order.created";
+
+    /** Los campos de la entrada del stream. En un stream todo es texto, y el tipo viaja con el evento. */
+    public Map&lt;String, String&gt; toFields() {
+        Map&lt;String, String&gt; fields = new LinkedHashMap&lt;&gt;();
+        fields.put("type", TYPE);
+        fields.put("eventId", eventId.toString());
+        fields.put("orderId", Long.toString(orderId));
+        fields.put("email", email);
+        fields.put("item", item);
+        return fields;
+    }
+
+    /** Lo contrario de toFields. Una entrada que no se puede leer es un mensaje venenoso: reintentarla no la arregla. */
+    public static OrderEvent fromFields(Map&lt;String, String&gt; fields) {
+        String type = fields.get("type");
+        if (!TYPE.equals(type)) {
+            throw new PoisonMessage("tipo desconocido: " + type);
+        }
+        try {
+            return new OrderEvent(UUID.fromString(required(fields, "eventId")),
+                    Long.parseLong(required(fields, "orderId")),
+                    required(fields, "email"),
+                    required(fields, "item"));
+        } catch (IllegalArgumentException e) {
+            throw new PoisonMessage("campo inválido: " + e.getMessage());
+        }
+    }
+
+    private static String required(Map&lt;String, String&gt; fields, String name) {
+        String value = fields.get(name);
+        if (value == null || value.isBlank()) {
+            throw new PoisonMessage("falta el campo " + name);
+        }
+        return value;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/PoisonMessage.java"><code>package lab.tienda.events;
+
+/** Una entrada del stream que no es un evento válido. Va directo a la DLQ, sin reintentos. */
+public class PoisonMessage extends RuntimeException {
+
+    public PoisonMessage(String message) {
+        super(message);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/EventPublisher.java"><code>package lab.tienda.events;
+
+/** Pone un evento en el broker. Si devuelve sin lanzar nada, el broker lo aceptó; nada más. */
+public interface EventPublisher {
+
+    void publish(OrderEvent event);
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/StreamPublisher.java"><code>package lab.tienda.events;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.redis.connection.RedisStreamCommands.StreamDeletionPolicy;
+import org.springframework.data.redis.connection.RedisStreamCommands.TrimOptions;
+import org.springframework.data.redis.connection.RedisStreamCommands.XAddOptions;
+import org.springframework.data.redis.connection.stream.StreamRecords;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+
+/** Publica cada evento con XADD. Con max-len, el mismo XADD recorta el stream. */
+@Component
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class StreamPublisher implements EventPublisher {
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final String key;
+    private final XAddOptions options;
+
+    public StreamPublisher(StringRedisTemplate redis, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.key = props.stream().key();
+        this.options = addOptions(props.stream());
+    }
+
+    static XAddOptions addOptions(AppProps.Stream stream) {
+        if (stream.maxLen() &lt;= 0) {
+            return XAddOptions.none();
+        }
+        // Recorte exacto (MAXLEN = N), para que las cuentas del experimento den justas. En producción va
+        // aproximado (MAXLEN ~ N): Redis recorta por nodos enteros, que es mucho más barato.
+        TrimOptions trim = TrimOptions.maxLen(stream.maxLen()).exact();
+        if (stream.trimPolicy() == AppProps.TrimPolicy.ACKED) {
+            // XADD ... ACKED (Redis 8.2): solo recorta entradas que todos los grupos leyeron y confirmaron.
+            trim = trim.deletionPolicy(StreamDeletionPolicy.removeAcknowledged());
+        }
+        return XAddOptions.trim(trim);
+    }
+
+    @Override
+    public void publish(OrderEvent event) {
+        // XADD orders [MAXLEN = N] * type order.created eventId ... orderId ... email ... item ...
+        streams.add(StreamRecords.newRecord().in(key).ofMap(event.toFields()), options);
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/StreamGroup.java"><code>package lab.tienda.events;
+
+import java.util.OptionalLong;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+
+/**
+ * El grupo de consumo del stream: lo crea al arrancar si no existe, y mide su lag.
+ * Lo usan los dos perfiles: el worker para leer y el relay para frenar.
+ */
+@Component
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class StreamGroup implements InitializingBean {
+
+    private static final Logger log = LoggerFactory.getLogger(StreamGroup.class);
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final String key;
+    private final String group;
+
+    public StreamGroup(StringRedisTemplate redis, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.key = props.stream().key();
+        this.group = props.stream().group();
+    }
+
+    @Override
+    public void afterPropertiesSet() {
+        ensureExists();
+    }
+
+    /**
+     * XGROUP CREATE orders correos 0 MKSTREAM. El grupo empieza en la primera entrada, así que también lee
+     * lo que se publicó antes de que existiera; con $ empezaría al final y se saltaría todo eso.
+     */
+    public void ensureExists() {
+        try {
+            streams.createGroup(key, ReadOffset.from("0"), group);
+            log.info("Creé el grupo {} en {}, desde la primera entrada", group, key);
+        } catch (DataAccessException e) {
+            String cause = String.valueOf(NestedExceptionUtils.getMostSpecificCause(e).getMessage());
+            if (!cause.contains("BUSYGROUP")) {
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Cuántas entradas del stream el grupo todavía no le entregó a ningún worker: el campo lag de XINFO GROUPS.
+     * Vacío si Redis no lo puede calcular: pasa si se borraron con XDEL entradas que el grupo todavía no leyó.
+     * Un recorte no lo deja vacío: si el grupo quedó detrás de la primera entrada, el lag es el largo del stream.
+     */
+    public OptionalLong lag() {
+        return streams.groups(key).stream()
+                .filter(info -&gt; info.groupName().equals(group))
+                .findFirst()
+                .map(info -&gt; info.getRaw().get("lag"))
+                .map(lag -&gt; OptionalLong.of(Long.parseLong(lag.toString())))
+                .orElse(OptionalLong.empty());
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/outbox/OutboxRelay.java"><code>package lab.tienda.outbox;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.OptionalLong;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
+
+import lab.tienda.AppProps;
+import lab.tienda.CrashPoints;
+import lab.tienda.events.EventPublisher;
+import lab.tienda.events.OrderEvent;
+import lab.tienda.events.StreamGroup;
+import lab.tienda.outbox.OutboxRepository.PendingEvent;
+
+/**
+ * Lleva los eventos de la outbox al broker: lee un lote, lo publica y lo marca, todo en una transacción.
+ * Si muere entre publicar y marcar, el lote vuelve a salir: el relay entrega cada evento al menos una vez.
+ */
+@Component
+@Profile("api")
+public class OutboxRelay {
+
+    private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
+
+    record Payload(long orderId, String email, String item) {
+    }
+
+    private final OutboxRepository outbox;
+    private final EventPublisher publisher;
+    private final Optional&lt;StreamGroup&gt; group;
+    private final TransactionTemplate tx;
+    private final JsonMapper json;
+    private final AppProps.Relay props;
+    private final boolean background;
+    private boolean held;   // solo lo toca el hilo que corre relayOnce
+
+    public OutboxRelay(OutboxRepository outbox, EventPublisher publisher, Optional&lt;StreamGroup&gt; group,
+                       TransactionTemplate tx, JsonMapper json, AppProps props) {
+        this.outbox = outbox;
+        this.publisher = publisher;
+        this.group = group;
+        this.tx = tx;
+        this.json = json;
+        this.props = props.relay();
+        this.background = props.background();
+    }
+
+    @Scheduled(fixedDelayString = "${app.relay.every-ms}")
+    void scheduled() {
+        if (!background) {
+            return;
+        }
+        try {
+            relayOnce();
+        } catch (RuntimeException e) {
+            log.warn("El relay no pudo publicar ({}); el lote sigue en la outbox", e.getMessage());
+        }
+    }
+
+    /** Publica un lote de la outbox y lo marca. Devuelve cuántos eventos publicó. */
+    public int relayOnce() {
+        int room = room();
+        if (room == 0) {
+            return 0;
+        }
+        Integer published = tx.execute(status -&gt; {
+            List&lt;PendingEvent&gt; batch = outbox.lockPending(room);
+            if (batch.isEmpty()) {
+                return 0;
+            }
+            for (PendingEvent pending : batch) {
+                publisher.publish(toEvent(pending));
+            }
+            // La caída de este experimento: el broker ya tiene el lote y la outbox todavía no lo sabe.
+            CrashPoints.haltIfAsked("tras-publicar");
+            outbox.markPublished(batch.stream().map(PendingEvent::id).toList());
+            return batch.size();
+        });
+        return published == null ? 0 : published;
+    }
+
+    /** Cuántos eventos caben en esta vuelta. Con max-lag, decide el lag del grupo: lo que todavía nadie leyó. */
+    int room() {
+        if (props.maxLag() &lt;= 0 || group.isEmpty()) {
+            return props.batchSize();
+        }
+        OptionalLong lag = group.get().lag();
+        // Sin lag conocido, no publica: prefiere esperar a llenar el stream a ciegas.
+        long room = lag.isPresent() ? Math.min(props.batchSize(), props.maxLag() - lag.getAsLong()) : 0;
+        boolean hold = room &lt;= 0;
+        if (hold != held) {
+            held = hold;
+            if (hold) {
+                log.info("Freno: lag {} con máximo {}. Los eventos esperan en la outbox",
+                        lag.isPresent() ? lag.getAsLong() : "desconocido", props.maxLag());
+            } else {
+                log.info("Sigo publicando: lag {}", lag.getAsLong());
+            }
+        }
+        return (int) Math.max(room, 0);
+    }
+
+    private OrderEvent toEvent(PendingEvent pending) {
+        Payload payload = json.readValue(pending.payload(), Payload.class);
+        return new OrderEvent(pending.eventId(), payload.orderId(), payload.email(), payload.item());
+    }
+}</code></pre>
+
+      <p>Cada medio segundo, una vuelta del relay hace esto:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Medir</span>Calcula cuántos eventos caben. Sin <code>MAX_LAG</code>, 100. Con <code>MAX_LAG</code>, lo que falta para llegar a ese consumer lag: las entradas que el grupo todavía no le entregó a ningún worker.</li>
+        <li><span class="step-title">Bloquear</span>Abre una transacción y toma los pendientes más viejos con <code>FOR UPDATE SKIP LOCKED</code>.</li>
+        <li><span class="step-title">Publicar</span>Un <code>XADD</code> por evento, en orden de id. Redis le pone a cada entrada un id con la hora en milisegundos y un número de secuencia.</li>
+        <li><span class="step-title">Marcar</span>Anota <code>published_at</code> en todo el lote y hace commit.</li>
+      </ol>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Leer, publicar y marcar en una sola transacción, con las filas bloqueadas. Si el relay muere después de publicar y antes del commit, la conexión se corta, PostgreSQL deshace la transacción y las filas siguen sin <code>published_at</code>: la próxima vuelta las publica otra vez. El relay entrega cada evento al menos una vez, y lo vas a provocar. <code>SKIP LOCKED</code> salta las filas que otra transacción tiene bloqueadas en lugar de esperarla <span class="badge badge--doc">Documentado</span>: con dos réplicas de la API, los dos relays se reparten la outbox sin publicar la misma fila a la vez. El grupo se crea con id <code>0</code> y <code>MKSTREAM</code>: empieza en la primera entrada del stream y lee también lo que se publicó antes de que existiera; con <code>$</code> empezaría al final. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>Marcar primero y publicar después: si muere en medio, el evento queda marcado y nunca sale, y eso es perder correos. Un commit por evento: achica la ventana de repetidos, pero son 100 commits por vuelta. <code>LISTEN</code>/<code>NOTIFY</code> para despertar al relay en lugar de preguntar cada 500&#8239;ms: necesita una conexión de sesión que PgBouncer en modo transaction no conserva, lo mismo que los advisory locks de A00, y la consulta periódica haría falta igual, de respaldo. Y <code>XADD … IDMP</code>, de Redis 8.6, que descarta un <code>XADD</code> repetido con el mismo productor y el mismo id de idempotencia <span class="badge badge--doc">Documentado</span>: quitaría los repetidos del relay en el origen, pero Spring Data Redis 4.1 no lo expone en <code>XAddOptions</code>, y el worker necesitaría su deduplicación igual, para sus propias caídas.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que Redis acepte el <code>XADD</code> y se caiga antes de escribirlo a disco: con <code>everysec</code>, el relay ya marcó el lote y se pierde hasta un segundo de eventos. <code>WAITAOF 1 0 1000</code> después del lote espera el fsync local antes de marcar <span class="badge badge--doc">Documentado</span>, a cambio de hasta un segundo por vuelta. Y el orden: un relay publica en orden de id, pero dos relays con <code>SKIP LOCKED</code> publican lotes intercalados. A un correo de confirmación no le importa; a una secuencia de cambios de saldo, sí.</dd></div>
+      </dl>
+
+      <h3 id="paso-worker">Paso 4. El worker</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/Mailer.java"><code>package lab.tienda.worker;
+
+import lab.tienda.events.OrderEvent;
+
+/** Manda el correo de confirmación de un pedido. Si falla, lanza una excepción: el evento vuelve a llegar. */
+public interface Mailer {
+
+    void send(OrderEvent event);
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/SmtpMailer.java"><code>package lab.tienda.worker;
+
+import java.time.Duration;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.MailSender;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+import lab.tienda.events.OrderEvent;
+
+@Component
+@Profile("worker")
+public class SmtpMailer implements Mailer {
+
+    private final MailSender sender;
+    private final String from;
+    private final Duration delay;
+
+    public SmtpMailer(MailSender sender, AppProps props) {
+        this.sender = sender;
+        this.from = props.mail().from();
+        this.delay = props.mail().delay();
+    }
+
+    @Override
+    public void send(OrderEvent event) {
+        pause();
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(from);
+        message.setTo(event.email());
+        // Un asunto por pedido: en Mailpit, dos correos con el mismo asunto son un duplicado.
+        message.setSubject("Pedido " + event.orderId() + " confirmado");
+        message.setText("Recibimos tu pedido: " + event.item() + ".\nEvento " + event.eventId());
+        sender.send(message);
+    }
+
+    // Lo que tarda un proveedor de correo de verdad. Mailpit contesta en milisegundos.
+    private void pause() {
+        if (delay.isZero()) {
+            return;
+        }
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new MailSendException("Interrumpido antes de mandar");
+        }
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/EmailLog.java"><code>package lab.tienda.worker;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+import lab.tienda.events.OrderEvent;
+
+@Repository
+@Profile("worker")
+public class EmailLog {
+
+    private final JdbcClient jdbc;
+
+    public EmailLog(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * Anota el evento y devuelve cuántas veces había llegado antes: 0 si es la primera.
+     * Si otra transacción insertó el mismo event_id y todavía no hizo commit, este INSERT la espera:
+     * si ella hace commit, este ve el conflicto; si hace rollback, este inserta.
+     */
+    public int record(OrderEvent event, String worker, long deliveries) {
+        return jdbc.sql("""
+                INSERT INTO emails (event_id, order_id, worker, deliveries)
+                VALUES (:eventId, :orderId, :worker, :deliveries)
+                ON CONFLICT (event_id) DO UPDATE SET repeats = emails.repeats + 1
+                RETURNING repeats
+                """)
+                .param("eventId", event.eventId())
+                .param("orderId", event.orderId())
+                .param("worker", worker)
+                .param("deliveries", deliveries)
+                .query(Integer.class)
+                .single();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/EmailHandler.java"><code>package lab.tienda.worker;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import lab.tienda.AppProps;
+import lab.tienda.CrashPoints;
+import lab.tienda.events.OrderEvent;
+
+/** Manda el correo de un evento, una sola vez por eventId si dedupe está encendido. Sirve a los dos transportes. */
+@Component
+@Profile("worker")
+public class EmailHandler {
+
+    public enum Outcome { SENT, REPEATED }
+
+    private final Mailer mailer;
+    private final EmailLog emails;
+    private final TransactionTemplate tx;
+    private final String worker;
+    private final boolean dedupe;
+
+    public EmailHandler(Mailer mailer, EmailLog emails, TransactionTemplate tx, AppProps props) {
+        this.mailer = mailer;
+        this.emails = emails;
+        this.tx = tx;
+        this.worker = props.worker().name();
+        this.dedupe = props.worker().dedupe();
+    }
+
+    /** deliveries: la entrega en que llegó el evento, 1 la primera vez. Si algo falla, lanza la excepción. */
+    public Outcome handle(OrderEvent event, long deliveries) {
+        if (!dedupe) {
+            // Sin dedupe, la tabla solo lleva la cuenta: el correo sale igual, llegue las veces que llegue.
+            emails.record(event, worker, deliveries);
+            mailer.send(event);
+            CrashPoints.haltIfAsked("tras-enviar");
+            CrashPoints.haltIfAsked("tras-anotar");
+            return Outcome.SENT;
+        }
+        // La anotación y el correo en una transacción: si el correo falla, la anotación se deshace y el evento
+        // se puede reintentar. La conexión queda tomada mientras dura el envío.
+        Outcome outcome = tx.execute(status -&gt; {
+            if (emails.record(event, worker, deliveries) &gt; 0) {
+                return Outcome.REPEATED;
+            }
+            mailer.send(event);
+            // La ventana que queda: el correo salió y la anotación todavía no tiene commit.
+            CrashPoints.haltIfAsked("tras-enviar");
+            return Outcome.SENT;
+        });
+        // El correo salió y la base lo sabe; falta el XACK.
+        CrashPoints.haltIfAsked("tras-anotar");
+        return outcome;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/RecordProcessor.java"><code>package lab.tienda.worker;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+import lab.tienda.dlq.DeadLetters;
+import lab.tienda.events.OrderEvent;
+import lab.tienda.events.PoisonMessage;
+
+/** Lo que el worker hace con cada entrada del stream, venga de una lectura o de un reclamo del reaper. */
+@Component
+@Profile("worker")
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class RecordProcessor {
+
+    private static final Logger log = LoggerFactory.getLogger(RecordProcessor.class);
+
+    public enum Result { SENT, REPEATED, DEAD, PENDING }
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final EmailHandler handler;
+    private final DeadLetters deadLetters;
+    private final String key;
+    private final String group;
+
+    public RecordProcessor(StringRedisTemplate redis, EmailHandler handler, DeadLetters deadLetters, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.handler = handler;
+        this.deadLetters = deadLetters;
+        this.key = props.stream().key();
+        this.group = props.stream().group();
+    }
+
+    public Result process(MapRecord&lt;String, String, String&gt; record, long deliveries) {
+        OrderEvent event;
+        try {
+            event = OrderEvent.fromFields(record.getValue());
+        } catch (PoisonMessage e) {
+            deadLetters.bury(record, e.getMessage(), deliveries);
+            return Result.DEAD;
+        }
+        try {
+            EmailHandler.Outcome outcome = handler.handle(event, deliveries);
+            // XACK orders correos &lt;id&gt;, después del correo y de su anotación: si el proceso muere antes,
+            // la entrada sigue pendiente a nombre de este worker y el reaper de otro se la lleva.
+            streams.acknowledge(key, group, record.getId());
+            if (outcome == EmailHandler.Outcome.REPEATED) {
+                log.info("El pedido {} ya tenía su correo: llegó otra vez en la entrega {} y no lo mando",
+                        event.orderId(), deliveries);
+                return Result.REPEATED;
+            }
+            return Result.SENT;
+        } catch (RuntimeException e) {
+            log.warn("Falló el pedido {} en la entrega {} ({}); queda pendiente", event.orderId(), deliveries,
+                    e.getMessage());
+            return Result.PENDING;
+        }
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/StreamConsumer.java"><code>package lab.tienda.worker;
+
+import java.time.Duration;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.SmartLifecycle;
+import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.connection.stream.Consumer;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.connection.stream.StreamReadOptions;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+import lab.tienda.events.StreamGroup;
+
+/** Un hilo que lee entradas nuevas del grupo, de a una, y se las pasa al RecordProcessor. */
+@Component
+@Profile("worker")
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class StreamConsumer implements SmartLifecycle {
+
+    private static final Logger log = LoggerFactory.getLogger(StreamConsumer.class);
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final RecordProcessor processor;
+    private final Consumer consumer;
+    private final StreamOffset&lt;String&gt; newEntries;
+    private final Duration block;
+    private final boolean background;
+
+    private volatile boolean running;
+    private Thread thread;
+
+    // StreamGroup en el constructor: Spring lo crea antes, así que el grupo existe antes de la primera lectura.
+    public StreamConsumer(StringRedisTemplate redis, RecordProcessor processor, StreamGroup group, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.processor = processor;
+        this.consumer = Consumer.from(props.stream().group(), props.worker().name());
+        // "&gt;": las entradas que el grupo todavía no le entregó a nadie.
+        this.newEntries = StreamOffset.create(props.stream().key(), ReadOffset.lastConsumed());
+        this.block = props.worker().block();
+        this.background = props.background();
+    }
+
+    /** Lee una entrada nueva sin esperar y la procesa. Devuelve cuántas leyó: 0 o 1. Lo usan las pruebas. */
+    public int pollOnce() {
+        return read(StreamReadOptions.empty().count(1));
+    }
+
+    private int read(StreamReadOptions options) {
+        // XREADGROUP GROUP correos &lt;nombre&gt; COUNT 1 [BLOCK 2000] STREAMS orders &gt;
+        List&lt;MapRecord&lt;String, String, String&gt;&gt; records = streams.read(consumer, options, newEntries);
+        if (records == null || records.isEmpty()) {
+            return 0;
+        }
+        records.forEach(record -&gt; processor.process(record, 1));
+        return records.size();
+    }
+
+    private void loop() {
+        StreamReadOptions options = StreamReadOptions.empty().count(1).block(block);
+        while (running) {
+            try {
+                read(options);
+            } catch (RuntimeException e) {
+                if (running) {
+                    log.warn("No pude leer de Redis ({}); pruebo de nuevo en 1 s", e.getMessage());
+                    pause();
+                }
+            }
+        }
+    }
+
+    private void pause() {
+        try {
+            Thread.sleep(Duration.ofSeconds(1));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            running = false;
+        }
+    }
+
+    @Override
+    public void start() {
+        running = true;
+        thread = Thread.ofPlatform().name("stream-consumer").start(this::loop);
+        log.info("Leo de {} como {}", newEntries.getKey(), consumer.getName());
+    }
+
+    // Spring lo llama al apagar: el hilo termina la entrada que tiene en la mano y no lee otra.
+    @Override
+    public void stop() {
+        running = false;
+        try {
+            thread.join(block.plusSeconds(10));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return background;
+    }
+}</code></pre>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 648" role="img" aria-labelledby="fa092t fa092d">
+<title id="fa092t">Las dos ventanas del worker</title>
+<desc id="fa092d">El worker 1 lee una entrada con XREADGROUP y queda pendiente a su nombre. Abre una transacción, anota el evento en la tabla emails, manda el correo a Mailpit, hace commit y confirma con XACK. Si muere después de mandar y antes del commit, la fila se deshace; si muere después del commit y antes del XACK, la fila queda. En los dos casos, la entrada sigue pendiente. Quince segundos después, el reaper del worker 2 la ve con XPENDING, se la lleva con XCLAIM y vuelve a anotarla: si la fila estaba, no manda nada; si se había deshecho, manda el correo otra vez.</desc>
+<defs><marker id="fa092-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="fa092-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="fa092-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="fa092-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Redis: orders</text>
+<path class="dg-frame" d="M70.0 40 V638"/>
+<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">worker 1</text>
+<path class="dg-frame" d="M227.5 40 V638"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">PostgreSQL</text>
+<path class="dg-frame" d="M385.0 40 V638"/>
+<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">Mailpit</text>
+<path class="dg-frame" d="M542.5 40 V638"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">worker 2</text>
+<path class="dg-frame" d="M700.0 40 V638"/>
+<path class="dg-edge" d="M224.5 72 L75.0 72" marker-end="url(#fa092-a)"/>
+<rect x="70.15" y="55" width="157.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="66" text-anchor="middle">XREADGROUP … COUNT 1 &gt;</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M73.0 106 L222.5 106" marker-end="url(#fa092-r)"/>
+<rect x="33.85000000000001" y="89" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="100" text-anchor="middle">la entrada: pendiente de worker 1</text>
+<path class="dg-edge" d="M230.5 140 L380.0 140" marker-end="url(#fa092-a)"/>
+<rect x="217.75" y="123" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="134" text-anchor="middle">BEGIN; INSERT INTO emails</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 174 L232.5 174" marker-end="url(#fa092-r)"/>
+<rect x="237.55" y="157" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="168" text-anchor="middle">repeats 0: es nuevo</text>
+<path class="dg-edge" d="M230.5 208 L537.5 208" marker-end="url(#fa092-a)"/>
+<rect x="349.3" y="191" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">el correo</text>
+<rect x="237.5" y="228" width="360" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="247.5" y="244">tras-enviar: salió el correo, la fila no tiene commit</text>
+<path class="dg-edge" d="M230.5 276 L380.0 276" marker-end="url(#fa092-a)"/>
+<rect x="280.45" y="259" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="270" text-anchor="middle">COMMIT</text>
+<rect x="237.5" y="296" width="286" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="247.5" y="312">tras-anotar: la base lo sabe, Redis no</text>
+<path class="dg-edge" d="M224.5 344 L75.0 344" marker-end="url(#fa092-a)"/>
+<rect x="129.55" y="327" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="338" text-anchor="middle">XACK</text>
+<path d="M20 376 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="365" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="380" text-anchor="middle" style="fill:var(--fail)">si worker 1 muere antes del XACK</text>
+<path class="dg-edge" d="M697.0 412 L75.0 412" marker-end="url(#fa092-a)"/>
+<rect x="316.3" y="395" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="406" text-anchor="middle">XPENDING IDLE 15000</text>
+<path class="dg-edge" d="M697.0 446 L75.0 446" marker-end="url(#fa092-a)"/>
+<rect x="276.7" y="429" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="440" text-anchor="middle">XCLAIM: ahora es mía, entrega 2</text>
+<path class="dg-edge" d="M697.0 480 L390.0 480" marker-end="url(#fa092-a)"/>
+<rect x="477.1" y="463" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="474" text-anchor="middle">INSERT INTO emails</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M388.0 514 L695.0 514" marker-end="url(#fa092-r)"/>
+<rect x="424.3" y="497" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="508" text-anchor="middle">con commit: repeats 1, no se manda</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M697.0 548 L547.5 548" marker-end="url(#fa092-f)"/>
+<rect x="496.45" y="531" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="542" text-anchor="middle">sin commit: el mismo correo otra vez</text>
+<path class="dg-edge" d="M697.0 582 L75.0 582" marker-end="url(#fa092-a)"/>
+<rect x="365.8" y="565" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="576" text-anchor="middle">XACK</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura A09.2.</b> Mientras el worker no hace <code>XACK</code>, la entrada es suya y está pendiente. Si muere, el reaper de otro worker se la lleva y la procesa otra vez. La fila de <code>emails</code> decide si el correo sale de nuevo: con commit no sale, y sin commit sí. La ventana entre el correo y el commit es la única que queda abierta.</figcaption>
+      </figure>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Los workers forman un grupo de consumo, el consumer group de Kafka con otro nombre. <code>XREADGROUP</code> con <code>&gt;</code> pide entradas que el grupo nunca le entregó a nadie: cada una le llega a un solo worker y queda en su lista de pendientes, la PEL, hasta el <code>XACK</code>. <span class="badge badge--doc">Documentado</span> <code>COUNT 1</code>, para que un worker tome solo lo que está procesando. <code>BLOCK</code> de 2&#8239;s, para esperar entradas nuevas sin martillar a Redis. El <code>XACK</code> va al final, después del correo y del commit: si el worker muere antes, la entrada sigue pendiente. La anotación en <code>emails</code> va en la misma transacción que el envío: si el correo falla, la fila se deshace y el reintento no encuentra nada. Si dos workers procesan el mismo evento a la vez, el segundo <code>INSERT</code> espera a que la primera transacción termine <span class="badge badge--doc">Documentado</span>; si ella hace commit, el segundo ve el conflicto y no manda nada.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>XACK</code> al leer, o leer con <code>NOACK</code>: si el worker muere, la entrada ya no está pendiente para nadie, y el correo se pierde. <code>COUNT 10</code>: menos viajes a Redis, pero un worker que muere deja diez entradas pendientes que esperan 15&#8239;s, y uno lento acapara diez mientras los demás esperan. El <code>StreamMessageListenerContainer</code> de Spring Data Redis: lee en su propio hilo y llama a tu listener, pero esconde el <code>COUNT</code>, el <code>BLOCK</code> y qué pasa con un error, que aquí son justo lo que se estudia.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>La ventana de la figura: el correo salió y el commit no llegó. Ninguna combinación de SMTP y PostgreSQL la cierra, porque el servidor de correo no participa de la transacción. La cerraría el que recibe, como el proveedor de A08 con su <code>Idempotency-Key</code>: el <code>eventId</code> sería la clave. Además, la transacción tiene tomada una conexión de PgBouncer durante los 200&#8239;ms del envío: con <code>DEFAULT_POOL_SIZE</code> en 20, el worker número 21 que envía a la vez espera en la fila del pooler.</dd></div>
+      </dl>
+
+      <p><code>StreamConsumer</code> implementa <code>SmartLifecycle</code>. Al apagarse, con <code>docker compose stop</code> o al bajar la escala, Spring llama a <code>stop()</code>: el hilo termina la entrada que tiene en la mano, la confirma y no lee otra. Como usa la fase por defecto, que es la más alta, se detiene antes que la fábrica de conexiones de Redis.</p>
+
+      <h3 id="paso-reaper">Paso 5. Lo que quedó colgado</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/Reaper.java"><code>package lab.tienda.worker;
+
+import java.time.Duration;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.RedisStreamCommands.XClaimOptions;
+import org.springframework.data.redis.connection.stream.Consumer;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessage;
+import org.springframework.data.redis.connection.stream.PendingMessages;
+import org.springframework.data.redis.connection.stream.StreamInfo.XInfoConsumer;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+import lab.tienda.dlq.DeadLetters;
+
+/**
+ * Rescata lo que quedó a medias: entradas que llevan más de claim-idle sin confirmar, de cualquier worker
+ * del grupo, porque ese worker murió o porque su intento falló. Las reclama y las procesa otra vez.
+ * Si una ya tuvo max-deliveries entregas, la manda a la DLQ en lugar de intentarlo de nuevo.
+ */
+@Component
+@Profile("worker")
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class Reaper {
+
+    private static final Logger log = LoggerFactory.getLogger(Reaper.class);
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final RecordProcessor processor;
+    private final DeadLetters deadLetters;
+    private final String key;
+    private final String group;
+    private final String name;
+    private final Duration claimIdle;
+    private final int maxDeliveries;
+    private final Duration forgetIdle;
+    private final boolean background;
+
+    public Reaper(StringRedisTemplate redis, RecordProcessor processor, DeadLetters deadLetters, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.processor = processor;
+        this.deadLetters = deadLetters;
+        this.key = props.stream().key();
+        this.group = props.stream().group();
+        this.name = props.worker().name();
+        this.claimIdle = props.worker().claimIdle();
+        this.maxDeliveries = props.worker().maxDeliveries();
+        this.forgetIdle = props.worker().forgetIdle();
+        this.background = props.background();
+    }
+
+    @Scheduled(fixedDelayString = "${app.worker.reap-every-ms}", initialDelayString = "${app.worker.reap-every-ms}")
+    void scheduled() {
+        if (!background) {
+            return;
+        }
+        try {
+            reapOnce();
+            forgetIdleConsumers();
+        } catch (RuntimeException e) {
+            log.warn("El reaper no pudo revisar los pendientes ({}); pruebo en la próxima vuelta", e.getMessage());
+        }
+    }
+
+    /** Una vuelta: reclama y procesa hasta 100 pendientes viejos. Devuelve cuántos reclamó. */
+    public int reapOnce() {
+        // XPENDING orders correos IDLE 15000 - + 100
+        PendingMessages stale = streams.pending(key, group, Range.unbounded(), 100, claimIdle);
+        int claimed = 0;
+        for (PendingMessage pending : stale) {
+            // XCLAIM orders correos &lt;yo&gt; 15000 &lt;id&gt;. Reclamar deja la entrada sin espera, así que si dos reapers
+            // van por la misma, el segundo ya no cumple el mínimo y recibe una lista vacía: gana uno solo.
+            List&lt;MapRecord&lt;String, String, String&gt;&gt; records = streams.claim(key, group, name,
+                    XClaimOptions.minIdle(claimIdle).ids(pending.getId()));
+            if (records.isEmpty()) {
+                // Otro worker se adelantó, o la entrada ya no existe: un recorte se la llevó, y XCLAIM la
+                // sacó de los pendientes sin devolverla. En ese caso, el evento se perdió.
+                continue;
+            }
+            claimed++;
+            long previous = pending.getTotalDeliveryCount();
+            MapRecord&lt;String, String, String&gt; record = records.getFirst();
+            if (previous &gt;= maxDeliveries) {
+                deadLetters.bury(record, previous + " entregas sin confirmar", previous);
+            } else {
+                log.info("Reclamé {} de {}: llevaba {} s sin confirmar. Entrega {}", pending.getIdAsString(),
+                        pending.getConsumerName(), pending.getElapsedTimeSinceLastDelivery().toSeconds(),
+                        previous + 1);
+                processor.process(record, previous + 1);
+            }
+        }
+        return claimed;
+    }
+
+    /**
+     * Borra del grupo a los consumidores sin pendientes que no preguntan hace más de forget-idle:
+     * contenedores que ya no existen. Un worker vivo pregunta cada block (2 s) como mucho.
+     */
+    public int forgetIdleConsumers() {
+        int forgotten = 0;
+        for (XInfoConsumer info : streams.consumers(key, group)) {
+            if (info.pendingCount() == 0 &amp;&amp; info.idleTime().compareTo(forgetIdle) &gt; 0
+                    &amp;&amp; !info.consumerName().equals(name)) {
+                // XGROUP DELCONSUMER orders correos &lt;nombre&gt;
+                streams.deleteConsumer(key, Consumer.from(group, info.consumerName()));
+                log.info("Borré del grupo a {}: sin pendientes y {} s sin preguntar", info.consumerName(),
+                        info.idleTime().toSeconds());
+                forgotten++;
+            }
+        }
+        return forgotten;
+    }
+}</code></pre>
+
+      <p>Cada worker corre su reaper cada 5&#8239;s. Una vuelta hace esto:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Buscar</span><code>XPENDING orders correos IDLE 15000 - + 100</code>: las entradas que llevan más de 15&#8239;s entregadas y sin confirmar, de cualquier worker, con su dueño y cuántas veces se entregaron.</li>
+        <li><span class="step-title">Reclamar</span><code>XCLAIM orders correos &lt;yo&gt; 15000 &lt;id&gt;</code>. El reclamo cambia el dueño, pone en cero el tiempo sin confirmar y suma una entrega. Repetir el mínimo de 15&#8239;s cuida de una carrera: si dos reapers van por la misma entrada, al segundo ya no le cumple el mínimo y no recibe nada. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Decidir</span>Si ya se entregó tres veces, va a la DLQ. Si no, se procesa como cualquier entrada, con su número de entrega.</li>
+        <li><span class="step-title">Olvidar</span>Borra del grupo a los consumidores sin pendientes que no preguntan hace más de 60&#8239;s: contenedores que ya no existen. Desde Redis 7.2, el <code>idle</code> de <code>XINFO CONSUMERS</code> cuenta desde el último intento, aunque no haya traído nada <span class="badge badge--doc">Documentado</span>: el de un worker vivo, que vuelve a preguntar en cuanto termina un correo o a los 2&#8239;s de espera, se queda en pocos segundos.</li>
+      </ol>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un reaper en cada worker, sin líder: <code>XCLAIM</code> con tiempo mínimo hace que dos no se lleven la misma entrada. Una entrada abandonada se rescata entre 15 y 20&#8239;s después de su última entrega. El contador de entregas lo lleva Redis: <code>XPENDING</code> lo muestra y <code>XCLAIM</code> lo sube. <span class="badge badge--doc">Documentado</span> Cuenta entregas, no fallas: un worker que muere también gasta una.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>XAUTOCLAIM</code>, de Redis 6.2, que hace la búsqueda y el reclamo en un solo comando con un cursor <span class="badge badge--doc">Documentado</span>; <code>XREADGROUP</code> con <code>CLAIM</code>, de Redis 8.4, que lee lo nuevo y lo abandonado en la misma llamada <span class="badge badge--doc">Documentado</span>; y <code>XNACK</code>, de Redis 8.8, con el que un worker que falla suelta la entrada para que otro la tome enseguida, sin esperar 15&#8239;s. <span class="badge badge--doc">Documentado</span> <code>StreamOperations</code> de Spring Data Redis 4.1 no tiene ninguno de los tres: tendrías que mandarlos a mano con <code>execute</code> y leer la respuesta cruda. <code>XPENDING</code> más <code>XCLAIM</code> hace lo mismo con dos comandos que sí tiene. También descartas reintentar en el mismo worker, en un bucle: si la causa es el servidor de correo, todos los workers reintentan a la vez, que es la tormenta de reintentos de M08.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un <code>claim-idle</code> más corto que el procesamiento normal: el reaper se lleva entradas que otro worker todavía está mandando. Con dedupe, el segundo <code>INSERT</code> espera al primero y no sale un correo de más; sin dedupe, salen dos. Borrar un consumidor que tiene pendientes los deja sin dueño: <code>XGROUP DELCONSUMER</code> los vuelve imposibles de reclamar <span class="badge badge--doc">Documentado</span>, y por eso el reaper solo borra consumidores con cero pendientes. Y si un recorte borró una entrada pendiente, <code>XCLAIM</code> la saca de los pendientes y no devuelve nada <span class="badge badge--doc">Documentado</span>: el evento se perdió, y el reaper sigue de largo sin decir nada.</dd></div>
+      </dl>
+
+      <h3 id="paso-dlq">Paso 6. La cola de mensajes muertos</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/dlq/DeadLetters.java"><code>package lab.tienda.dlq;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.Limit;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.StreamRecords;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import lab.tienda.AppProps;
+
+/**
+ * La cola de mensajes muertos: otro stream, orders.dlq, con lo que no se pudo procesar y por qué.
+ * Nadie la lee sola: una persona mira, arregla la causa y la devuelve al stream con POST /api/dlq/replay.
+ */
+@Component
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+public class DeadLetters {
+
+    private static final Logger log = LoggerFactory.getLogger(DeadLetters.class);
+    private static final List&lt;String&gt; ADDED = List.of("error", "deliveries", "originalId");
+
+    public record DeadLetter(String id, Map&lt;String, String&gt; fields) {
+    }
+
+    private final StreamOperations&lt;String, String, String&gt; streams;
+    private final String key;
+    private final String group;
+    private final String dlq;
+
+    public DeadLetters(StringRedisTemplate redis, AppProps props) {
+        this.streams = redis.opsForStream();
+        this.key = props.stream().key();
+        this.group = props.stream().group();
+        this.dlq = props.stream().dlq();
+    }
+
+    public void bury(MapRecord&lt;String, String, String&gt; record, String error, long deliveries) {
+        Map&lt;String, String&gt; fields = new LinkedHashMap&lt;&gt;(record.getValue());
+        fields.put("error", error);
+        fields.put("deliveries", Long.toString(deliveries));
+        fields.put("originalId", record.getId().getValue());
+        // Dos escrituras: si el proceso muere entre las dos, la entrada queda en la DLQ y también pendiente,
+        // y el reaper la vuelve a mandar a la DLQ. Una copia de más en la DLQ es mejor que un evento perdido.
+        streams.add(StreamRecords.newRecord().in(dlq).ofMap(fields));
+        streams.acknowledge(key, group, record.getId());
+        log.warn("{} a la DLQ: {}", record.getId(), error);
+    }
+
+    public long size() {
+        Long size = streams.size(dlq);
+        return size == null ? 0 : size;
+    }
+
+    public List&lt;DeadLetter&gt; list(int limit) {
+        return streams.range(dlq, Range.unbounded(), Limit.limit().count(limit)).stream()
+                .map(record -&gt; new DeadLetter(record.getId().getValue(), record.getValue()))
+                .toList();
+    }
+
+    /** Devuelve cada entrada al stream principal, sin los campos que agregó bury, y la borra de la DLQ. */
+    public int replay() {
+        List&lt;MapRecord&lt;String, String, String&gt;&gt; dead = streams.range(dlq, Range.unbounded());
+        for (MapRecord&lt;String, String, String&gt; record : dead) {
+            Map&lt;String, String&gt; fields = new LinkedHashMap&lt;&gt;(record.getValue());
+            ADDED.forEach(fields::remove);
+            streams.add(StreamRecords.newRecord().in(key).ofMap(fields));
+            streams.delete(dlq, record.getId());
+        }
+        return dead.size();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/dlq/DlqController.java"><code>package lab.tienda.dlq;
+
+import java.util.List;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@Profile("api")
+@ConditionalOnProperty(name = "app.transport", havingValue = "stream")
+@RequestMapping("/api/dlq")
+public class DlqController {
+
+    public record Listing(long size, List&lt;DeadLetters.DeadLetter&gt; entries) {
+    }
+
+    public record Replayed(int replayed) {
+    }
+
+    private final DeadLetters deadLetters;
+
+    public DlqController(DeadLetters deadLetters) {
+        this.deadLetters = deadLetters;
+    }
+
+    /** Cuántas hay y las primeras 100, de la más vieja a la más nueva. */
+    @GetMapping
+    public Listing list() {
+        return new Listing(deadLetters.size(), deadLetters.list(100));
+    }
+
+    @PostMapping("/replay")
+    public Replayed replay() {
+        return new Replayed(deadLetters.replay());
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Dos clases de falla. Una transitoria, como un 451 del servidor de correo o un timeout, se reintenta más tarde, hasta tres entregas. Una permanente, como una entrada que no se puede leer, que es un poison message, no se arregla reintentando: <code>OrderEvent.fromFields</code> lanza <code>PoisonMessage</code> y la entrada va a la DLQ en su primera entrega. La DLQ es otro stream, <code>orders.dlq</code>, con los campos originales más el error, las entregas y el id original; en el stream principal, la entrada se confirma para que nadie la vuelva a tomar. Devolverla es una decisión de una persona, con <code>POST /api/dlq/replay</code>.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Reintentar para siempre: una entrada venenosa volvería cada 15&#8239;s, ocuparía al reaper y llenaría el log. En un stream no frena a las demás, porque cada entrada se confirma por separado, pero nunca sale de la PEL. Borrarla: pierdes el registro de qué falló. Y devolver la DLQ sola, con un temporizador: si la causa sigue ahí, las entradas dan vueltas entre los dos streams.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Devolver sin arreglar la causa: lo transitorio vuelve después de tres entregas más, y lo venenoso, en la primera. <code>bury</code> son dos escrituras sin transacción: si el worker muere entre el <code>XADD</code> a la DLQ y el <code>XACK</code>, la entrada sigue pendiente y el reaper la vuelve a mandar a la DLQ. Una copia de más en la DLQ no hace daño, porque al devolverla el dedupe reconoce el <code>eventId</code>; si quieres las dos juntas, van en un <code>MULTI</code>/<code>EXEC</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-pubsub">Paso 7. El otro transporte: Pub/Sub</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/events/PubSubPublisher.java"><code>package lab.tienda.events;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
+
+import lab.tienda.AppProps;
+
+/** Publica cada evento con PUBLISH. Redis se lo entrega a los que escuchan en ese momento y no lo guarda. */
+@Component
+@ConditionalOnProperty(name = "app.transport", havingValue = "pubsub")
+public class PubSubPublisher implements EventPublisher {
+
+    private static final Logger log = LoggerFactory.getLogger(PubSubPublisher.class);
+
+    private final StringRedisTemplate redis;
+    private final JsonMapper json;
+    private final String channel;
+
+    public PubSubPublisher(StringRedisTemplate redis, JsonMapper json, AppProps props) {
+        this.redis = redis;
+        this.json = json;
+        this.channel = props.pubsub().channel();
+    }
+
+    @Override
+    public void publish(OrderEvent event) {
+        // PUBLISH devuelve a cuántos clientes se lo entregó. Ni siquiera eso dice que alguno lo procesó.
+        Long receivers = redis.convertAndSend(channel, json.writeValueAsString(event));
+        if (receivers == null || receivers == 0) {
+            log.warn("Nadie escuchaba en {}: el evento del pedido {} se perdió", channel, event.orderId());
+        }
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/tienda/worker/PubSubConsumer.java"><code>package lab.tienda.worker;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import tools.jackson.databind.json.JsonMapper;
+
+import lab.tienda.AppProps;
+import lab.tienda.events.OrderEvent;
+
+/** En modo pubsub, cada worker se suscribe al canal y manda el correo de lo que le llegue. */
+@Configuration(proxyBeanMethods = false)
+@Profile("worker")
+@ConditionalOnProperty(name = "app.transport", havingValue = "pubsub")
+public class PubSubConsumer {
+
+    private static final Logger log = LoggerFactory.getLogger(PubSubConsumer.class);
+
+    @Bean
+    RedisMessageListenerContainer orderEvents(RedisConnectionFactory connections, EmailHandler handler,
+                                              JsonMapper json, AppProps props) {
+        String channel = props.pubsub().channel();
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connections);
+        container.addMessageListener((message, pattern) -&gt; {
+            try {
+                handler.handle(json.readValue(message.getBody(), OrderEvent.class), 1);
+            } catch (RuntimeException e) {
+                // No hay confirmación ni reintento: Redis ya lo entregó y no guardó copia.
+                log.warn("Se perdió un evento de {}: {}", channel, e.getMessage());
+            }
+        }, new ChannelTopic(channel));
+        return container;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>La misma outbox, el mismo relay y el mismo <code>EmailHandler</code>; cambia solo el transporte. <code>PUBLISH</code> le entrega el mensaje a cada cliente suscrito al canal en ese momento, y no guarda nada: es entrega como mucho una vez. <span class="badge badge--doc">Documentado</span> Devuelve a cuántos clientes se lo entregó <span class="badge badge--doc">Documentado</span>, y el publicador avisa en el log cuando fueron cero. Está aquí para compararlo, no para usarlo con los correos.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Usarlo para repartir trabajo. Pub/Sub es para avisos que pueden perderse, como la invalidación de caché de A03, que tenía un TTL corto de respaldo. Sharded Pub/Sub, con <code>SPUBLISH</code>, reparte los canales en un clúster, y tiene la misma semántica.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>La outbox marca <code>published_at</code> aunque nadie haya recibido el evento: para el relay, Redis aceptó el <code>PUBLISH</code>, y es verdad. Un suscriptor lento acumula mensajes en su buffer de salida, y Redis lo desconecta cuando pasa el límite de <code>client-output-buffer-limit pubsub</code> <span class="badge badge--doc">Documentado</span>: pierde todo lo que estaba en camino.</dd></div>
+      </dl>
+
+      <h3 id="paso-imagen">Paso 8. La imagen y el arranque</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package
+docker compose up -d --build
+docker compose ps
+docker compose logs api worker | grep -E "Creé el grupo|Leo de"</code></pre>
+
+      <p>Ahora están los seis servicios en <code>Up</code>. En los logs aparece una vez "Creé el grupo correos en orders, desde la primera entrada", de la API o del worker, el que arrancó primero; el otro recibió <code>BUSYGROUP</code> y siguió en silencio. El worker dice "Leo de orders como" y el id corto de su contenedor.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Una sola imagen para los dos perfiles, que se construye una vez y sirve a los dos servicios. El grupo se crea en los dos procesos, porque cualquiera puede arrancar primero: el relay lo necesita para medir el lag, y el worker, para leer.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un nombre fijo para el worker, como <code>WORKER_NAME=worker</code>: con <code>--scale</code>, las réplicas comparten el entorno, y las tres serían el mismo consumidor para Redis, con una sola PEL. El reaper de una se saltaría las entradas de las otras, porque se saltea a sí mismo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Cambiar el código y correr <code>docker compose up -d</code> sin <code>--build</code>: usa la imagen vieja. Y un worker recreado es un contenedor nuevo, con otro id: es otro consumidor. El viejo queda en el grupo hasta que un reaper lo olvida, un minuto después; si tenía pendientes, otro worker los reclama a los 15&#8239;s.</dd></div>
+      </dl>
+
+      <h3 id="paso-mirar">Paso 9. Mirar el camino</h3>
+
+<pre data-lang="bash" data-file="scripts/psql.sh"><code>#!/usr/bin/env bash
+# psql dentro del contenedor de PostgreSQL, en la base app.
+# Uso: scripts/psql.sh -c "SELECT count(*) FROM orders"
+#      scripts/psql.sh -v etiqueta=lote1 &lt; scripts/consultas.sql
+cd "$(dirname "$0")/.."
+exec docker compose exec -T postgres psql -U app -d app -X -v ON_ERROR_STOP=1 "$@"</code></pre>
+
+<pre data-lang="sql" data-file="scripts/consultas.sql"><code>-- El informe de un experimento. Lo corre scripts/informe.sh con -v etiqueta=&lt;etiqueta&gt;.
+\pset footer off
+
+-- Del pedido al worker.
+--   published / unpublished: eventos que el relay ya puso en Redis y los que siguen en la outbox (sin outbox, 0 y 0).
+--   taken: eventos que algún worker tomó y anotó en la tabla emails.
+--   repeated: las veces que un evento volvió a llegar a un worker. Con DEDUPE=true, ninguna mandó correo.
+SELECT count(*)                                                   AS orders,
+       count(ob.id) FILTER (WHERE ob.published_at IS NOT NULL)    AS published,
+       count(ob.id) FILTER (WHERE ob.published_at IS NULL)        AS unpublished,
+       count(e.event_id)                                          AS taken,
+       coalesce(sum(e.repeats), 0)                                AS repeated
+  FROM orders o
+  LEFT JOIN outbox ob ON ob.order_id = o.id
+  LEFT JOIN emails e ON e.order_id = o.id
+ WHERE o.email = :'etiqueta' || '@clientes.test';
+
+-- Quién tomó qué. Cada worker se llama como su HOSTNAME, el id corto de su contenedor: docker ps -a lo muestra en CONTAINER ID.
+SELECT e.worker, count(*) AS events
+  FROM emails e
+  JOIN orders o ON o.id = e.order_id
+ WHERE o.email = :'etiqueta' || '@clientes.test'
+ GROUP BY e.worker
+ ORDER BY events DESC;
+
+-- En qué entrega lo tomó: 1 es la primera lectura; 2 y 3, reclamos del reaper después de un fallo o una caída.
+SELECT e.deliveries, count(*) AS events
+  FROM emails e
+  JOIN orders o ON o.id = e.order_id
+ WHERE o.email = :'etiqueta' || '@clientes.test'
+ GROUP BY e.deliveries
+ ORDER BY e.deliveries;
+
+-- Cuánto esperaron en la cola, en segundos: desde que se guardó el pedido hasta que un worker lo tomó.
+SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM e.taken_at - o.created_at)::float8)::numeric, 2)  AS p50_s,
+       round(percentile_cont(0.99) WITHIN GROUP (ORDER BY extract(epoch FROM e.taken_at - o.created_at)::float8)::numeric, 2) AS p99_s,
+       round(max(extract(epoch FROM e.taken_at - o.created_at))::numeric, 2)                                                  AS max_s
+  FROM emails e
+  JOIN orders o ON o.id = e.order_id
+ WHERE o.email = :'etiqueta' || '@clientes.test';</code></pre>
+
+<pre data-lang="bash" data-file="scripts/informe.sh"><code>#!/usr/bin/env bash
+# Qué pasó con los pedidos de un experimento: la base, los correos que recibió Mailpit y la DLQ.
+# Uso: scripts/informe.sh &lt;etiqueta&gt;
+set -euo pipefail
+cd "$(dirname "$0")"
+ETIQUETA=${1:?Uso: scripts/informe.sh &lt;etiqueta&gt;}
+CORREO="$ETIQUETA@clientes.test"
+
+./psql.sh -q -v etiqueta="$ETIQUETA" &lt; consultas.sql
+
+# Mailpit guarda cada correo que recibió. Cada pedido tiene su propio asunto: un asunto repetido es un correo de más.
+RESPUESTA=$(curl -s --get --data-urlencode "query=to:$CORREO" --data-urlencode "limit=10000" \
+  http://localhost:8025/api/v1/search)
+CORREOS=$(echo "$RESPUESTA" | grep -o '"messages_count":[0-9]*' | cut -d: -f2 || true)
+DISTINTOS=$(echo "$RESPUESTA" | grep -o '"Subject":"[^"]*"' | sort -u | wc -l || true)
+CORREOS=${CORREOS:-0}
+echo "Correos en Mailpit: $CORREOS para $DISTINTOS pedidos distintos ($((CORREOS - DISTINTOS)) duplicados)"
+
+# La DLQ: entradas de orders.dlq cuyo campo email es el de este experimento.
+DLQ=$(cd .. &amp;&amp; docker compose exec -T redis redis-cli XRANGE orders.dlq - + | grep -c -x "$CORREO" || true)
+echo "En la DLQ: $DLQ"</code></pre>
+
+<pre data-lang="bash" data-file="scripts/lag.sh"><code>#!/usr/bin/env bash
+# Una línea por segundo: el largo del stream, el lag y los pendientes del grupo correos, cuántos consumidores
+# tiene, y cuántos eventos siguen en la outbox. Un guion en lag es el NULL de Redis: no lo puede calcular.
+# Uso: scripts/lag.sh   (Ctrl+C para salir)
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+printf '%-8s %7s %6s %8s %10s %7s\n' hora stream lag pending consumers outbox
+while true; do
+  # Los dos comandos en una sola llamada a redis-cli. Sin terminal, redis-cli escribe un valor por línea.
+  REDIS=$(printf 'XLEN orders\nXINFO GROUPS orders\n' | docker compose exec -T redis redis-cli 2&gt;/dev/null)
+  read -r LARGO LAG PENDING CONSUMERS &lt; &lt;(echo "$REDIS" | awk '
+    NR == 1 { largo = $0; next }
+    previo == "consumers" { consumers = $0 }
+    previo == "pending" { pending = $0 }
+    previo == "lag" { lag = ($0 == "" ? "-" : $0) }
+    { previo = $0 }
+    END { print largo, (lag == "" ? "-" : lag), pending, consumers }')
+  OUTBOX=$(docker compose exec -T postgres psql -U app -d app -X -qtA \
+    -c "SELECT count(*) FROM outbox WHERE published_at IS NULL" 2&gt;/dev/null)
+  printf '%-8s %7s %6s %8s %10s %7s\n' "$(date +%T)" "$LARGO" "$LAG" "$PENDING" "$CONSUMERS" "$OUTBOX"
+  sleep 1
+done</code></pre>
+
+<pre data-lang="bash" data-file="scripts/arranca.sh"><code>#!/usr/bin/env bash
+# Arranca la API y N workers desde cero, con las variables de esta terminal, y espera a que estén listos.
+# Uso: [TRANSPORT=pubsub] [DEDUPE=false] [...] scripts/arranca.sh &lt;workers&gt;
+set -euo pipefail
+cd "$(dirname "$0")/.."
+WORKERS=${1:?Uso: scripts/arranca.sh &lt;workers&gt;}
+
+# Contenedores nuevos: cada uno empieza con su log vacío, así que los grep de un experimento solo cuentan ese.
+# Detenerlos es un apagado en orden: el worker termina el correo que tiene en la mano y lo confirma.
+docker compose rm --stop --force api worker &gt; /dev/null
+docker compose up -d --scale worker="$WORKERS"
+
+# La API está lista cuando contesta, aunque sea con un 404. Un worker, cuando Spring dice Started:
+# en modo pubsub ya está suscrito, y en modo stream ya está leyendo.
+until curl -s -o /dev/null localhost:8080/api/orders/0; do sleep 1; done
+until [ "$(docker compose logs worker | grep -c 'Started TiendaApplication')" -ge "$WORKERS" ]; do sleep 1; done
+echo "Listos: la API y $WORKERS workers"</code></pre>
+
+      <p><code>informe.sh</code> cuenta lo que pasó con los pedidos de una etiqueta, en la base, en Mailpit y en la DLQ. <code>lag.sh</code> muestra el stream una vez por segundo. <code>arranca.sh</code> es el primer paso de cada experimento: borra la API y los workers y los crea de nuevo con la configuración que le pongas delante. No construye la imagen: si cambias el código, corre antes <code>./mvnw -DskipTests package</code> y <code>docker compose build</code>.</p>
+
+      <p>Abre una segunda terminal en la carpeta del proyecto y deja corriendo <code>lag.sh</code>. En la primera, crea un pedido:</p>
+
+<pre data-lang="bash"><code>chmod +x scripts/*.sh
+scripts/lag.sh                                   # en la segunda terminal
+
+curl -s -i -X POST localhost:8080/api/orders -H 'Content-Type: application/json' \
+     -d '{"email": "primero@clientes.test", "item": "taza"}'
+sleep 3
+curl -s localhost:8080/api/orders/1
+scripts/informe.sh primero</code></pre>
+
+      <p>El <code>POST</code> responde 201 con <code>Location: /api/orders/1</code>, y el <code>GET</code>, el pedido con <code>publishedAt</code>, <code>worker</code> y <code>takenAt</code> llenos y <code>repeats</code> en 0. En Mailpit aparece "Pedido 1 confirmado". En <code>lag.sh</code>, <code>stream</code> sube a 1, <code>lag</code> y <code>pending</code> se quedan en 0 y <code>consumers</code> en 1. El informe tiene que decir 1 en <code>orders</code>, <code>published</code> y <code>taken</code>, 0 en <code>unpublished</code> y <code>repeated</code>, una fila con tu worker, la entrega 1, y "Correos en Mailpit: 1 para 1 pedidos distintos (0 duplicados)".</p>
+
+      <p>La espera se calcula antes de mirarla. El relay pasa cada 500&#8239;ms, así que el evento espera en la outbox entre 0 y 0.5&#8239;s. El worker está bloqueado en <code>XREADGROUP</code> y lo recibe en cuanto llega. <code>taken_at</code> es el comienzo de la transacción del worker, antes de los 200&#8239;ms del correo. Entonces <code>max_s</code> tiene que quedar cerca de 0.5 o por debajo. Anota tu número: es la referencia de los experimentos.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Medir donde lo nota el cliente. La tabla <code>emails</code> es lo que los workers creen que hicieron; Mailpit es lo que llegó al buzón. La diferencia entre las dos es de lo que trata este proyecto. Cada experimento usa su propia etiqueta, así que los informes no se mezclan, y parte de contenedores nuevos, así que un <code>grep</code> en los logs cuenta solo ese experimento.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Contar líneas de log: un worker que muere no alcanza a escribir la última. Y Redis Insight, que muestra los streams en una interfaz gráfica: es otra cosa que instalar, y <code>lag.sh</code> muestra los cinco números que importan, uno por segundo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>En Git Bash, un argumento que empieza con <code>/</code> se convierte en una ruta de Windows antes de llegar a <code>docker.exe</code>. Por eso los comandos dentro de los contenedores van como <code>sh -c '…'</code>. Si escribes uno a mano con una ruta suelta, anteponle <code>MSYS_NO_PATHCONV=1</code>.</dd></div>
+      </dl>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a09-colas"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta un PostgreSQL 18 y un Redis 8.10 con Testcontainers y corre trece pruebas. Nada corre solo: con <code>app.background=false</code>, cada prueba llama al relay, al consumidor y al reaper cuando le toca, y <code>RecordingMailer</code> reemplaza al servidor de correo y falla a pedido. <code>claim-idle</code> baja a 200&#8239;ms para no esperar 15&#8239;s. Al final, Surefire tiene que decir <code>Tests run: 13, Failures: 0, Errors: 0, Skipped: 0</code>.</p>
+
+      <ul>
+        <li><code>OrderApiTest</code>, tres pruebas: crear un pedido guarda su evento en la outbox, y un id que no existe da 404; el lote devuelve ids seguidos y un evento por pedido; y un correo inválido o una etiqueta con espacios dan 400.</li>
+        <li><code>RelayTest</code>, dos pruebas: el relay publica en orden y marca, y una segunda vuelta no publica nada; y con <code>max-lag</code> 2, publica 2, se frena, y publica 1 más cuando un worker lee uno.</li>
+        <li><code>ConsumerTest</code>, seis pruebas: un evento sale una vez y se confirma; el mismo evento dos veces es un solo correo; una falla queda pendiente y el reaper la reintenta después del plazo, no antes; tres entregas fallidas van a la DLQ; una entrada sin <code>eventId</code> va directo a la DLQ; y la DLQ se consulta y se devuelve por la API.</li>
+        <li><code>PubSubTest</code>, dos pruebas, en otro contexto con <code>transport=pubsub</code>: sin nadie escuchando, el evento queda publicado y un suscriptor que llega después no recibe nada; y uno que escucha antes lo recibe una vez.</li>
+      </ul>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver las pruebas: IntegrationTest, TestcontainersConfig, RecordingMailer, OrderApiTest, RelayTest, ConsumerTest y PubSubTest</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/tienda/IntegrationTest.java"><code>package lab.tienda;
+
+import java.util.List;
+
+import org.junit.jupiter.api.BeforeEach;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.ActiveProfiles;
+
+import lab.tienda.events.StreamGroup;
+
+/**
+ * La base de las clases de prueba del modo stream: un solo contexto, un PostgreSQL y un Redis para todas.
+ * Los dos perfiles en el mismo proceso, y nada corre solo (background=false): cada prueba llama al relay,
+ * al consumidor y al reaper cuando le toca. claim-idle baja a 200 ms para no esperar 15 s.
+ */
+@SpringBootTest(properties = {"app.background=false", "app.mail.delay=0ms", "app.worker.claim-idle=200ms",
+        "app.worker.name=prueba"})
+@ActiveProfiles({"api", "worker"})
+@AutoConfigureMockMvc
+@Import({TestcontainersConfig.class, RecordingMailer.Config.class})
+public abstract class IntegrationTest {
+
+    @Autowired
+    protected JdbcClient jdbc;
+    @Autowired
+    protected StringRedisTemplate redis;
+    @Autowired
+    protected StreamGroup group;
+    @Autowired
+    protected RecordingMailer mailer;
+    @Autowired
+    protected AppProps props;
+
+    @BeforeEach
+    protected void cleanSlate() {
+        jdbc.sql("TRUNCATE orders, outbox, emails").update();
+        redis.delete(List.of("orders", "orders.dlq"));
+        group.ensureExists();
+        mailer.reset();
+    }
+
+    protected long count(String sql) {
+        return jdbc.sql(sql).query(Long.class).single();
+    }
+
+    /** Las entradas que el grupo entregó y nadie confirmó todavía: XPENDING orders correos. */
+    protected long pending() {
+        return redis.opsForStream().pending("orders", "correos").getTotalPendingMessages();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/TestcontainersConfig.java"><code>package lab.tienda;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer&lt;?&gt; redis() {
+        return new GenericContainer&lt;&gt;("redis:8.10").withExposedPorts(6379);
+    }
+
+    // Flyway tiene su propia URL en application.yaml (sin PgBouncer): aquí apunta al mismo contenedor.
+    @Bean
+    DynamicPropertyRegistrar flywayEnElContenedor(PostgreSQLContainer postgres) {
+        return registry -&gt; {
+            registry.add("spring.flyway.url", postgres::getJdbcUrl);
+            registry.add("spring.flyway.user", postgres::getUsername);
+            registry.add("spring.flyway.password", postgres::getPassword);
+        };
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/RecordingMailer.java"><code>package lab.tienda;
+
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.mail.MailSendException;
+
+import lab.tienda.events.OrderEvent;
+import lab.tienda.worker.Mailer;
+
+/** El Mailer de las pruebas: guarda lo que manda y falla a pedido. Reemplaza al SmtpMailer. */
+public class RecordingMailer implements Mailer {
+
+    private final List&lt;OrderEvent&gt; sent = new CopyOnWriteArrayList&lt;&gt;();
+    private final AtomicInteger failures = new AtomicInteger();
+
+    @Override
+    public void send(OrderEvent event) {
+        if (failures.getAndUpdate(n -&gt; Math.max(n - 1, 0)) &gt; 0) {
+            throw new MailSendException("Falla provocada por la prueba");
+        }
+        sent.add(event);
+    }
+
+    /** Los próximos times envíos fallan como falla un servidor SMTP. */
+    public void failNext(int times) {
+        failures.set(times);
+    }
+
+    public List&lt;OrderEvent&gt; sent() {
+        return sent;
+    }
+
+    public void reset() {
+        sent.clear();
+        failures.set(0);
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    public static class Config {
+
+        @Bean
+        @Primary
+        RecordingMailer recordingMailer() {
+            return new RecordingMailer();
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/orders/OrderApiTest.java"><code>package lab.tienda.orders;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.tienda.IntegrationTest;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+class OrderApiTest extends IntegrationTest {
+
+    @Autowired
+    MockMvcTester mvc;
+
+    @Test
+    void crearUnPedidoGuardaElPedidoYSuEventoEnLaOutbox() {
+        MvcTestResult created = post("/api/orders", "{\"email\": \"ana@clientes.test\", \"item\": \"taza\"}");
+        assertThat(created).hasStatus(HttpStatus.CREATED);
+        String location = created.getResponse().getHeader("Location");
+
+        assertThat(mvc.get().uri(location))
+                .hasStatusOk().bodyJson().extractingPath("$.email").isEqualTo("ana@clientes.test");
+        assertThat(count("SELECT count(*) FROM outbox WHERE published_at IS NULL")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM outbox WHERE payload -&gt;&gt; 'email' = 'ana@clientes.test'")).isEqualTo(1);
+        assertThat(mvc.get().uri("/api/orders/999999")).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void elLoteDevuelveIdsSeguidosYUnEventoPorPedido() throws Exception {
+        MvcTestResult batch = post("/api/orders/batch", "{\"label\": \"lote\", \"count\": 3}");
+        assertThat(batch).hasStatus(HttpStatus.CREATED);
+        String body = batch.getResponse().getContentAsString();
+        long from = ((Number) JsonPath.read(body, "$.from")).longValue();
+        long to = ((Number) JsonPath.read(body, "$.to")).longValue();
+
+        assertThat(to - from).isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM orders WHERE email = 'lote@clientes.test'")).isEqualTo(3);
+        assertThat(count("SELECT count(*) FROM outbox")).isEqualTo(3);
+    }
+
+    @Test
+    void unCorreoInvalidoOUnaEtiquetaConEspaciosSon400() {
+        assertThat(post("/api/orders", "{\"email\": \"no-es-un-correo\", \"item\": \"taza\"}"))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+        assertThat(post("/api/orders/batch", "{\"label\": \"con espacios\", \"count\": 3}"))
+                .hasStatus(HttpStatus.BAD_REQUEST);
+    }
+
+    MvcTestResult post(String uri, String json) {
+        return mvc.post().uri(uri).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/outbox/RelayTest.java"><code>package lab.tienda.outbox;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.List;
+import java.util.Optional;
+
+import lab.tienda.AppProps;
+import lab.tienda.IntegrationTest;
+import lab.tienda.events.EventPublisher;
+import lab.tienda.orders.OrderRepository;
+import lab.tienda.orders.OrderService;
+import lab.tienda.worker.StreamConsumer;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.transaction.support.TransactionTemplate;
+
+class RelayTest extends IntegrationTest {
+
+    @Autowired
+    OrderService orders;
+    @Autowired
+    OutboxRelay relay;
+    @Autowired
+    OutboxRepository outbox;
+    @Autowired
+    EventPublisher publisher;
+    @Autowired
+    TransactionTemplate tx;
+    @Autowired
+    JsonMapper json;
+    @Autowired
+    StreamConsumer consumer;
+
+    @Test
+    void publicaEnOrdenYMarcaLoPublicado() {
+        OrderRepository.Range range = orders.createBatch("relay", 3);
+
+        assertThat(relay.relayOnce()).isEqualTo(3);
+        assertThat(relay.relayOnce()).isZero();
+
+        StreamOperations&lt;String, String, String&gt; streams = redis.opsForStream();
+        List&lt;MapRecord&lt;String, String, String&gt;&gt; entries = streams.range("orders", Range.unbounded());
+        assertThat(entries).extracting(entry -&gt; Long.parseLong(entry.getValue().get("orderId")))
+                .containsExactly(range.from(), range.from() + 1, range.to());
+        assertThat(count("SELECT count(*) FROM outbox WHERE published_at IS NULL")).isZero();
+    }
+
+    @Test
+    void conMaxLagElRelayEsperaAQueLosWorkersLean() {
+        orders.createBatch("freno", 5);
+        OutboxRelay braked = new OutboxRelay(outbox, publisher, Optional.of(group), tx, json, withMaxLag(2));
+
+        assertThat(braked.relayOnce()).isEqualTo(2);    // lag 0: caben 2
+        assertThat(braked.relayOnce()).isZero();        // lag 2: no cabe nada
+        assertThat(consumer.pollOnce()).isEqualTo(1);   // un worker lee uno: lag 1
+        assertThat(braked.relayOnce()).isEqualTo(1);
+
+        assertThat(group.lag()).hasValue(2);
+        assertThat(count("SELECT count(*) FROM outbox WHERE published_at IS NULL")).isEqualTo(2);
+    }
+
+    AppProps withMaxLag(long maxLag) {
+        AppProps.Relay braking = new AppProps.Relay(props.relay().everyMs(), props.relay().batchSize(), maxLag);
+        return new AppProps(props.transport(), props.background(), props.outbox(), props.stream(), props.pubsub(),
+                braking, props.worker(), props.mail());
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/worker/ConsumerTest.java"><code>package lab.tienda.worker;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Map;
+import java.util.UUID;
+
+import lab.tienda.IntegrationTest;
+import lab.tienda.dlq.DeadLetters;
+import lab.tienda.events.OrderEvent;
+import lab.tienda.events.StreamPublisher;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+
+class ConsumerTest extends IntegrationTest {
+
+    @Autowired
+    StreamPublisher publisher;
+    @Autowired
+    StreamConsumer consumer;
+    @Autowired
+    Reaper reaper;
+    @Autowired
+    DeadLetters deadLetters;
+    @Autowired
+    MockMvcTester mvc;
+
+    @Test
+    void mandaElCorreoUnaVezYConfirma() {
+        OrderEvent event = event(1);
+        publisher.publish(event);
+
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+        assertThat(consumer.pollOnce()).isZero();
+
+        assertThat(mailer.sent()).containsExactly(event);
+        assertThat(pending()).isZero();
+        assertThat(count("SELECT deliveries FROM emails")).isEqualTo(1);
+    }
+
+    @Test
+    void elMismoEventoDosVecesEsUnSoloCorreo() {
+        OrderEvent event = event(2);
+        publisher.publish(event);
+        publisher.publish(event);   // el relay se cayó antes de marcarlo y lo publicó otra vez
+
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+
+        assertThat(mailer.sent()).hasSize(1);
+        assertThat(count("SELECT repeats FROM emails")).isEqualTo(1);
+        assertThat(pending()).isZero();   // el repetido también se confirma
+    }
+
+    @Test
+    void unFalloQuedaPendienteYElReaperLoReintenta() throws InterruptedException {
+        mailer.failNext(1);
+        publisher.publish(event(3));
+
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+        assertThat(mailer.sent()).isEmpty();
+        assertThat(pending()).isEqualTo(1);
+
+        assertThat(reaper.reapOnce()).isZero();   // todavía no pasaron los 200 ms de claim-idle
+        Thread.sleep(300);
+        assertThat(reaper.reapOnce()).isEqualTo(1);
+
+        assertThat(mailer.sent()).hasSize(1);
+        assertThat(pending()).isZero();
+        assertThat(count("SELECT deliveries FROM emails")).isEqualTo(2);
+    }
+
+    @Test
+    void despuesDeTresEntregasFallidasVaALaDlq() throws InterruptedException {
+        sendToDlq(event(4));
+
+        assertThat(mailer.sent()).isEmpty();
+        assertThat(pending()).isZero();
+        assertThat(deadLetters.list(10)).singleElement().satisfies(dead -&gt; assertThat(dead.fields())
+                .containsEntry("deliveries", "3")
+                .containsEntry("orderId", "4"));
+    }
+
+    @Test
+    void unMensajeMalFormadoVaDirectoALaDlq() {
+        // Sin eventId ni orderId: reintentarlo no lo arregla.
+        redis.opsForStream().add("orders", Map.of("type", "order.created", "email", "veneno@clientes.test",
+                "item", "taza"));
+
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+
+        assertThat(mailer.sent()).isEmpty();
+        assertThat(pending()).isZero();
+        assertThat(deadLetters.size()).isEqualTo(1);
+    }
+
+    @Test
+    void laDlqSeConsultaYSeDevuelveAlStream() throws InterruptedException {
+        OrderEvent event = event(5);
+        sendToDlq(event);
+
+        assertThat(mvc.get().uri("/api/dlq")).hasStatusOk().bodyJson().extractingPath("$.size").isEqualTo(1);
+        assertThat(mvc.post().uri("/api/dlq/replay"))
+                .hasStatusOk().bodyJson().extractingPath("$.replayed").isEqualTo(1);
+        assertThat(deadLetters.size()).isZero();
+
+        assertThat(consumer.pollOnce()).isEqualTo(1);
+        assertThat(mailer.sent()).containsExactly(event);
+    }
+
+    /** Tres entregas que fallan: la lectura y dos reclamos. En el tercer reclamo, el reaper lo manda a la DLQ. */
+    void sendToDlq(OrderEvent event) throws InterruptedException {
+        mailer.failNext(3);
+        publisher.publish(event);
+        consumer.pollOnce();
+        for (int i = 0; i &lt; 3; i++) {
+            Thread.sleep(300);
+            reaper.reapOnce();
+        }
+    }
+
+    OrderEvent event(long orderId) {
+        return new OrderEvent(UUID.randomUUID(), orderId, "cliente@clientes.test", "taza");
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/tienda/events/PubSubTest.java"><code>package lab.tienda.events;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+import lab.tienda.TestcontainersConfig;
+import lab.tienda.orders.Order;
+import lab.tienda.orders.OrderService;
+import lab.tienda.outbox.OutboxRelay;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.ActiveProfiles;
+
+/** Otro contexto: solo la API, con transport=pubsub. Sin workers, nadie escucha el canal salvo la prueba. */
+@SpringBootTest(properties = {"app.transport=pubsub", "app.background=false"})
+@ActiveProfiles("api")
+@Import(TestcontainersConfig.class)
+class PubSubTest {
+
+    @Autowired
+    OrderService orders;
+    @Autowired
+    OutboxRelay relay;
+    @Autowired
+    JdbcClient jdbc;
+    @Autowired
+    RedisConnectionFactory connections;
+
+    final List&lt;RedisMessageListenerContainer&gt; listeners = new ArrayList&lt;&gt;();
+
+    @BeforeEach
+    void cleanSlate() {
+        jdbc.sql("TRUNCATE orders, outbox, emails").update();
+    }
+
+    @AfterEach
+    void unsubscribe() throws Exception {
+        for (RedisMessageListenerContainer listener : listeners) {
+            listener.destroy();
+        }
+    }
+
+    @Test
+    void sinNadieEscuchandoElEventoQuedaPublicadoYSePierde() throws InterruptedException {
+        orders.create("ana@clientes.test", "taza");
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM outbox WHERE published_at IS NOT NULL").query(Long.class).single())
+                .isEqualTo(1);
+
+        // Suscribirse después no sirve: Pub/Sub no guarda nada para los que llegan tarde.
+        BlockingQueue&lt;String&gt; received = subscribe();
+        assertThat(received.poll(500, TimeUnit.MILLISECONDS)).isNull();
+    }
+
+    @Test
+    void elQueEscuchaLoRecibeUnaVez() throws InterruptedException {
+        BlockingQueue&lt;String&gt; received = subscribe();
+        Order order = orders.create("ana@clientes.test", "taza");
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        assertThat(received.poll(2, TimeUnit.SECONDS)).contains("\"orderId\":" + order.id());
+        assertThat(received.poll(300, TimeUnit.MILLISECONDS)).isNull();
+    }
+
+    /** Un suscriptor del canal. start() vuelve cuando Redis confirmó el SUBSCRIBE. */
+    BlockingQueue&lt;String&gt; subscribe() {
+        BlockingQueue&lt;String&gt; received = new LinkedBlockingQueue&lt;&gt;();
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connections);
+        container.addMessageListener(
+                (message, pattern) -&gt; received.add(new String(message.getBody(), StandardCharsets.UTF_8)),
+                new ChannelTopic("orders.created"));
+        container.afterPropertiesSet();
+        container.start();
+        listeners.add(container);
+        return received;
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <p>Para los experimentos, deja <code>lag.sh</code> corriendo en la segunda terminal. Cada uno empieza con <code>scripts/arranca.sh</code>, que borra la API y los workers, los crea de nuevo con las variables que le pongas delante y espera a que estén listos. Así cada experimento parte de contenedores nuevos, con su configuración y con los logs vacíos, y los puedes hacer en el orden que quieras. Lo que pasa de uno a otro vive en PostgreSQL, Redis y Mailpit, y cada experimento tiene su etiqueta. Antes de pasar al siguiente, mira que el informe del anterior esté completo: si un worker no terminó, lo que dejó en el stream se mezcla con lo que viene.</p>
+
+      <h3 id="comprueba-pubsub">Pub/Sub: a todos o a nadie</h3>
+
+      <p>Primero, sin nadie escuchando:</p>
+
+<pre data-lang="bash"><code>TRANSPORT=pubsub scripts/arranca.sh 0
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "nadie", "count": 20}'
+sleep 3
+scripts/informe.sh nadie
+docker compose logs api | grep -c "Nadie escuchaba"</code></pre>
+
+      <p>El informe tiene que dar <code>orders</code> 20, <code>published</code> 20 y <code>taken</code> 0, y Mailpit, 0 correos; el <code>grep</code>, 20. La outbox dice "publicado", y es cierto: Redis aceptó cada <code>PUBLISH</code>. No había nadie suscrito, y Redis no guardó nada.</p>
+
+      <p>Ahora, con tres workers escuchando y el dedupe apagado:</p>
+
+<pre data-lang="bash"><code>TRANSPORT=pubsub DEDUPE=false scripts/arranca.sh 3
+docker compose exec redis redis-cli PUBSUB NUMSUB orders.created
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "todos", "count": 20}'
+sleep 10
+scripts/informe.sh todos</code></pre>
+
+      <p><code>PUBSUB NUMSUB</code> cuenta los clientes suscritos al canal, y tiene que dar 3. <span class="badge badge--doc">Documentado</span> La cuenta: cada uno de los tres recibe los 20 eventos y manda los 20 correos. Son 60 correos para 20 pedidos, 40 duplicados. La tabla dice <code>taken</code> 20 y <code>repeated</code> 40: sin dedupe, el worker anota cada evento, pero no mira la anotación antes de mandar. Repite con el dedupe encendido:</p>
+
+<pre data-lang="bash"><code>TRANSPORT=pubsub scripts/arranca.sh 3
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "todos-dedupe", "count": 20}'
+sleep 10
+scripts/informe.sh todos-dedupe</code></pre>
+
+      <p>Ahora salen 20 correos, sin duplicados, y <code>repeated</code> sigue en 40. Los tres workers hicieron el trabajo de uno: cada evento les llegó a los tres, y dos de ellos esperaron en el índice único para enterarse de que no les tocaba. Pub/Sub reparte avisos, no trabajo.</p>
+
+      <h3 id="comprueba-stream">El stream: espera y reparte</h3>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 0
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "espera", "count": 20}'
+sleep 3
+scripts/informe.sh espera
+docker compose up -d --scale worker=3
+sleep 20
+scripts/informe.sh espera</code></pre>
+
+      <p>Sin workers, el primer informe da <code>published</code> 20, <code>taken</code> 0 y ningún correo, y <code>lag.sh</code> muestra <code>lag</code> 20: los eventos están en el stream, esperando. Para agregar los workers, aquí va un <code>up</code> y no <code>arranca.sh</code>: no hace falta tocar la API. El segundo informe da 20 correos sin duplicados, y la tabla por worker muestra a los tres. El reparto no es exacto: el primero que termina de arrancar lee solo hasta que llegan los otros. <code>consumers</code> muestra por un rato a los workers de experimentos anteriores, que ya no existen; el reaper los borra cuando llevan más de un minuto sin preguntar.</p>
+
+      <h3 id="comprueba-doble">Falla: la API muere después del commit</h3>
+
+      <p>La doble escritura, con la API detenida justo después del commit del pedido:</p>
+
+<pre data-lang="bash"><code>OUTBOX=false scripts/arranca.sh 1
+docker compose exec api sh -c 'touch /tmp/detener-tras-commit'
+curl -sS -X POST localhost:8080/api/orders -H 'Content-Type: application/json' \
+     -d '{"email": "doble@clientes.test", "item": "taza"}'
+docker compose ps -a api
+docker compose start api
+until curl -s -o /dev/null localhost:8080/api/orders/0; do sleep 1; done
+sleep 3
+scripts/informe.sh doble</code></pre>
+
+      <p><code>curl</code> termina con un error de conexión, por ejemplo "(52) Empty reply from server", y <code>docker compose ps -a</code> muestra la API en <code>Exited (1)</code>. Después de arrancarla, el informe da <code>orders</code> 1 y todo lo demás en 0: el pedido existe, el cliente recibió un error, y nadie va a mandar el correo, porque nada recuerda que faltaba. Si el cliente reintenta, además, crea un segundo pedido. La misma caída, con la outbox:</p>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 1
+docker compose exec api sh -c 'touch /tmp/detener-tras-commit'
+curl -sS -X POST localhost:8080/api/orders -H 'Content-Type: application/json' \
+     -d '{"email": "outbox@clientes.test", "item": "taza"}'
+docker compose start api
+until curl -s -o /dev/null localhost:8080/api/orders/0; do sleep 1; done
+sleep 3
+scripts/informe.sh outbox</code></pre>
+
+      <p>El cliente ve el mismo error, pero el pedido y su evento entraron juntos. Al volver, el relay encuentra el evento sin publicar y lo publica: <code>published</code> 1, <code>taken</code> 1 y un correo. El correo se demora lo que la API estuvo caída, pero no se pierde.</p>
+
+      <h3 id="comprueba-relay">Falla: el relay muere después de publicar</h3>
+
+<pre data-lang="bash"><code>DEDUPE=false scripts/arranca.sh 1
+docker compose exec api sh -c 'touch /tmp/detener-tras-publicar'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "relay", "count": 20}'
+until [ "$(docker compose ps -a --format '{{.State}}' api)" = exited ]; do sleep 1; done
+docker compose start api
+until curl -s -o /dev/null localhost:8080/api/orders/0; do sleep 1; done
+sleep 15
+scripts/informe.sh relay</code></pre>
+
+      <p>Haz la cuenta antes de mirar. El relay tomó los 20, los publicó y murió antes del commit: el stream tiene 20 entradas, la outbox sigue con los 20 sin marcar, y el worker manda los 20 correos. Al volver, el relay publica los mismos 20 otra vez, con los mismos <code>event_id</code>: son 20 entradas más y, sin dedupe, 20 correos más. Tiene que dar <code>taken</code> 20, <code>repeated</code> 20, y 40 correos para 20 pedidos, con 20 duplicados. En <code>lag.sh</code>, <code>stream</code> sube 40. Repite con el dedupe encendido:</p>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 1
+docker compose exec api sh -c 'touch /tmp/detener-tras-publicar'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "relay-dedupe", "count": 20}'
+until [ "$(docker compose ps -a --format '{{.State}}' api)" = exited ]; do sleep 1; done
+docker compose start api
+until curl -s -o /dev/null localhost:8080/api/orders/0; do sleep 1; done
+sleep 15
+scripts/informe.sh relay-dedupe
+docker compose logs worker | grep -c "ya tenía su correo"</code></pre>
+
+      <p>Ahora son 20 correos sin duplicados, con <code>repeated</code> en 20, y el <code>grep</code> da 20: cada evento repetido llegó, se reconoció y se confirmó sin mandar nada. El relay entrega al menos una vez; el consumidor idempotente hace que el cliente lo vea como una sola.</p>
+
+      <h3 id="comprueba-worker">Falla: un worker muere a mitad de camino</h3>
+
+      <p>Con dos workers, el primero muere en su primer evento, en uno de los puntos de la figura A09.2. Son tres corridas:</p>
+
+<pre data-lang="bash"><code># 1. Sin dedupe, después de anotar y mandar
+DEDUPE=false scripts/arranca.sh 2
+docker compose exec --index 1 worker sh -c 'touch /tmp/detener-tras-anotar'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "caida1", "count": 20}'
+sleep 30
+scripts/informe.sh caida1
+
+# 2. Con dedupe, después del commit y antes del XACK
+scripts/arranca.sh 2
+docker compose exec --index 1 worker sh -c 'touch /tmp/detener-tras-anotar'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "caida2", "count": 20}'
+sleep 30
+scripts/informe.sh caida2
+
+# 3. Con dedupe, después de mandar y antes del commit
+scripts/arranca.sh 2
+docker compose exec --index 1 worker sh -c 'touch /tmp/detener-tras-enviar'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "caida3", "count": 20}'
+sleep 30
+scripts/informe.sh caida3
+docker compose logs worker | grep "Reclamé"</code></pre>
+
+      <p>En cada corrida, el worker 1 toma un evento y muere. El worker 2 manda el resto, y su reaper reclama la entrada huérfana entre 15 y 20&#8239;s después. La cuenta de cada una:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Corrida</th><th>Dónde muere</th><th class="r">Correos</th><th class="r">Duplicados</th><th class="r">repeated</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>caida1</td><td>Sin dedupe, ya mandó y anotó</td><td class="r">21</td><td class="r">1</td><td class="r">1</td><td>El reaper anota otra vez y manda sin mirar.</td></tr>
+            <tr><td>caida2</td><td>Con dedupe, ya hizo commit</td><td class="r">20</td><td class="r">0</td><td class="r">1</td><td>La fila tiene commit: el reaper la encuentra y no manda.</td></tr>
+            <tr><td>caida3</td><td>Con dedupe, mandó sin commit</td><td class="r">21</td><td class="r">1</td><td class="r">0</td><td>La fila se deshizo con la conexión: para el reaper, el evento es nuevo.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En la tercera, la tabla de entregas tiene que mostrar 19 eventos en la entrega 1 y uno en la 2, el que tomó el reaper. La línea "Reclamé" dice de quién era, cuántos segundos llevaba sin confirmar y en qué entrega iba. Compara esos segundos con los 15 de <code>claim-idle</code> y los 5 del reaper. La corrida 3 es el duplicado que ninguna configuración de este proyecto evita.</p>
+
+      <h3 id="comprueba-dlq">Falla: lo que no se puede mandar</h3>
+
+      <p>Un mensaje venenoso, escrito a mano en el stream, sin <code>eventId</code> ni <code>orderId</code>:</p>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 1
+docker compose exec redis redis-cli XADD orders '*' type order.created email veneno@clientes.test item taza
+sleep 3
+curl -s localhost:8080/api/dlq
+docker compose logs worker | grep "a la DLQ"</code></pre>
+
+      <p>La DLQ tiene que tener una entrada, con <code>error</code> "falta el campo eventId", <code>deliveries</code> "1", y como <code>originalId</code>, el id que devolvió el <code>XADD</code>. Fue en la primera entrega, sin reintentos. Devuélvela al stream sin arreglarla, y mira cómo vuelve:</p>
+
+<pre data-lang="bash"><code>curl -s -X POST localhost:8080/api/dlq/replay
+sleep 3
+curl -s localhost:8080/api/dlq
+docker compose exec redis redis-cli DEL orders.dlq</code></pre>
+
+      <p>La DLQ vuelve a tener una entrada, ahora con otro id y con el <code>originalId</code> de la copia devuelta. El <code>DEL</code> la limpia para el experimento siguiente. Ahora, un servidor de correo que rechaza el 30&#8239;% de los intentos, al azar:</p>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 3
+curl -s -X PUT localhost:8025/api/v1/chaos -H 'Content-Type: application/json' \
+     -d '{"Sender": {"ErrorCode": 451, "Probability": 30}}'
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "caos", "count": 100}'
+sleep 90
+scripts/informe.sh caos
+docker compose logs worker | grep -c "Falló el pedido"</code></pre>
+
+      <p>Cada intento falla con probabilidad 0.3, sin importar los anteriores, y el log del worker trae el "451 Chaos sender error" de Mailpit. La cuenta esperada para 100 pedidos:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Entrega</th><th>Cuándo</th><th class="r">Llegan</th><th class="r">Salen</th><th class="r">Fallan</th></tr></thead>
+          <tbody>
+            <tr><td>1, la lectura</td><td>Al publicarse</td><td class="r">100</td><td class="r">70</td><td class="r">30</td></tr>
+            <tr><td>2, primer reclamo</td><td>15 a 20&#8239;s después</td><td class="r">30</td><td class="r">21</td><td class="r">9</td></tr>
+            <tr><td>3, segundo reclamo</td><td>30 a 40&#8239;s después</td><td class="r">9</td><td class="r">6.3</td><td class="r">2.7</td></tr>
+            <tr><td>A la DLQ, tercer reclamo</td><td>45 a 60&#8239;s después</td><td class="r">2.7</td><td class="r">—</td><td class="r">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Lo que va a la DLQ es 100 × 0.3³ = 2.7 en promedio, y los intentos fallidos son 30 + 9 + 2.7 = 41.7: eso tiene que contar, más o menos, el <code>grep</code>. Tus números van a variar alrededor de estos. La DLQ sigue una distribución binomial con 100 intentos y probabilidad 0.027: da entre 0 y 6 en 98 de cada 100 corridas, y da 0 en unas 6 de cada 100. Compara la tabla de entregas del informe con 70, 21 y 6.3, y los correos de Mailpit con 100 menos lo que hay en la DLQ. Ninguno sale duplicado, porque cada intento fallido se deshizo. Ahora apaga el caos y devuelve la DLQ:</p>
+
+<pre data-lang="bash"><code>curl -s -X PUT localhost:8025/api/v1/chaos -H 'Content-Type: application/json' -d '{}'
+curl -s -X POST localhost:8080/api/dlq/replay
+sleep 5
+scripts/informe.sh caos</code></pre>
+
+      <p><code>replayed</code> es lo que había en la DLQ, y el informe tiene que quedar en 100 correos para 100 pedidos, sin duplicados y con 0 en la DLQ. Los devueltos aparecen en la entrega 1: para el stream son entradas nuevas.</p>
+
+      <h3 id="comprueba-lag">Lag y backpressure</h3>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 1
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "lag1", "count": 300}'
+sleep 120
+scripts/informe.sh lag1
+
+scripts/arranca.sh 3
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "lag3", "count": 300}'
+sleep 60
+scripts/informe.sh lag3</code></pre>
+
+      <p>Si un informe da <code>taken</code> menor que 300, el worker no terminó: espera unos segundos y córrelo de nuevo antes de seguir.</p>
+
+      <p>La cuenta con un worker. Los 300 pedidos tienen el mismo <code>created_at</code>, porque entraron en una transacción, y el relay los publica en tres vueltas de 100, en algo más de un segundo. Si un correo le toma <em>T</em> segundos al worker, el pedido número <em>k</em> se toma a los (<em>k</em> − 1) × <em>T</em>. Con <em>T</em> = 0.2&#8239;s, que es solo la espera de <code>MAIL_DELAY</code>, el <code>p50_s</code> sería 149.5 × 0.2 = 29.9, el <code>p99_s</code>, 296 × 0.2 ≈ 59.2, y el <code>max_s</code>, 299 × 0.2 = 59.8. Tus números van a ser algo más altos, porque <em>T</em> también incluye el SMTP y la base: despeja tu <em>T</em> como <code>max_s</code> / 299. En <code>lag.sh</code>, <code>lag</code> baja 1 / <em>T</em> por segundo, y <code>pending</code> no pasa de 1. Con tres workers, cada uno toma uno de cada tres: las esperas se dividen por tres, y el <code>max_s</code> tiene que acercarse a 99 × <em>T</em>.</p>
+
+      <p>Es la ley de Little al revés. Un worker atiende 1 / <em>T</em> correos por segundo. Si llegan λ pedidos por segundo durante un rato, hacen falta al menos λ × <em>T</em> workers ocupados a la vez. Con <em>T</em> = 0.25&#8239;s y una oferta que trae 10 pedidos por segundo, son 2.5: tres workers. Con <em>N</em> workers, menos que eso, el lag crece λ − <em>N</em> / <em>T</em> entradas por segundo mientras dure la oferta.</p>
+
+      <p>Ahora el freno, que es backpressure: el consumidor lento hace esperar al productor. Con los workers detenidos y <code>MAX_LAG=50</code>, el relay deja de publicar cuando el grupo tiene 50 entradas sin entregar:</p>
+
+<pre data-lang="bash"><code>MAX_LAG=50 scripts/arranca.sh 1
+docker compose stop worker
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "freno", "count": 300}'
+sleep 5
+docker compose logs api | grep -E "Freno|Sigo"
+docker compose start worker
+sleep 120
+docker compose logs api | grep -E "Freno|Sigo"
+scripts/informe.sh freno</code></pre>
+
+      <p>Con el worker detenido, <code>lag.sh</code> tiene que mostrar <code>lag</code> 50 y <code>outbox</code> 250, y el log de la API, "Freno: lag 50 con máximo 50. Los eventos esperan en la outbox". Al arrancar el worker aparece "Sigo publicando", y desde ahí el relay rellena cada medio segundo lo que el worker consumió: <code>lag</code> no pasa de 50 mientras <code>outbox</code> baja. Si en alguna vuelta el worker no alcanzó a leer nada, el par "Freno" y "Sigo publicando" se repite. El total tarda lo mismo que sin freno, porque el que limita es el worker. Lo que cambia es dónde espera el trabajo: en PostgreSQL, en disco, y no en la memoria de Redis.</p>
+
+      <h3 id="comprueba-recorte">Falla: un recorte que nadie nota</h3>
+
+      <p>Un stream sin recorte crece para siempre, así que lo normal es ponerle un largo máximo. Con <code>MAX_LEN=50</code>, cada <code>XADD</code> deja el stream en 50 entradas. Con <code>keep</code>, la política por defecto, borra las más viejas aunque nadie las haya leído:</p>
+
+<pre data-lang="bash"><code>MAX_LEN=50 scripts/arranca.sh 1
+docker compose stop worker
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "recorte", "count": 300}'
+sleep 5
+docker compose exec redis redis-cli XLEN orders
+docker compose exec redis redis-cli XINFO GROUPS orders
+docker compose exec -T redis redis-cli XINFO STREAM orders | grep -A1 entries-added
+docker compose start worker
+sleep 30
+scripts/informe.sh recorte</code></pre>
+
+      <p><code>XLEN</code> da 50, y el <code>lag</code> del grupo, 50. El informe da <code>published</code> 300, <code>taken</code> 50 y 50 correos: se perdieron 250 eventos, sin un error, sin una entrada en la DLQ, y sin que el lag mostrara nunca más de 50. Así lo calcula Redis 8.10, leído en su código: si la última entrada que el grupo entregó quedó antes de la primera que sobrevivió al recorte, el lag es el largo del stream. <span class="badge badge--doc">Documentado</span> Lo único que lo delata, mientras el worker está detenido, es <code>entries-read</code> en la salida de <code>XINFO GROUPS</code>: se quedó donde estaba antes del lote, y <code>entries-added</code> creció 300. La resta da 300, no 50. En cuanto el grupo entrega la primera entrada que sobrevivió, Redis vuelve a calcular <code>entries-read</code>, y la resta coincide otra vez con el lag. El informe encuentra la pérdida porque compara la outbox con la tabla <code>emails</code>, de punta a punta.</p>
+
+      <p>Con <code>ACKED</code>, de Redis 8.2, el recorte solo borra entradas que todos los grupos leyeron y confirmaron. <span class="badge badge--doc">Documentado</span></p>
+
+<pre data-lang="bash"><code>MAX_LEN=50 TRIM_POLICY=acked scripts/arranca.sh 1
+docker compose stop worker
+curl -s -X POST localhost:8080/api/orders/batch -H 'Content-Type: application/json' \
+     -d '{"label": "recorte-acked", "count": 300}'
+sleep 5
+docker compose exec redis redis-cli XLEN orders
+docker compose start worker
+sleep 120
+docker compose exec redis redis-cli XLEN orders
+curl -s -X POST localhost:8080/api/orders -H 'Content-Type: application/json' \
+     -d '{"email": "recorte-acked@clientes.test", "item": "uno-mas"}'
+sleep 3
+docker compose exec redis redis-cli XLEN orders
+scripts/informe.sh recorte-acked</code></pre>
+
+      <p>El primer <code>XLEN</code> da 300: las entradas viejas, ya confirmadas, se borraron, y las 300 nuevas no se tocan porque nadie las leyó. Después de que el worker las confirma, el segundo <code>XLEN</code> sigue en 300, porque el recorte solo ocurre en un <code>XADD</code>. El pedido de más trae ese <code>XADD</code>, y el tercer <code>XLEN</code> da 50. El informe tiene que dar 301 pedidos y 301 correos. El precio de <code>ACKED</code> es el contrario: un grupo que deja de confirmar, o uno que alguien creó y olvidó, hace crecer el stream sin límite. Para volver a la configuración de la guía:</p>
+
+<pre data-lang="bash"><code>scripts/arranca.sh 1</code></pre>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a09">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a09-colas</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las trece pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="pubsub">Con Pub/Sub contaste 0 correos sin nadie escuchando, y el triple con tres workers y el dedupe apagado.</li>
+          <li data-check="stream">Con el stream, los eventos esperaron a que hubiera workers y se repartieron entre tres.</li>
+          <li data-check="doble">Mataste a la API después del commit: sin outbox el correo se perdió, y con outbox llegó.</li>
+          <li data-check="relay">El relay publicó dos veces el mismo lote, y con dedupe salió un correo por pedido.</li>
+          <li data-check="worker">Mataste a un worker en tres puntos y encontraste el único duplicado que el dedupe no evita.</li>
+          <li data-check="dlq">Mandaste un mensaje venenoso y los rechazos de Mailpit a la DLQ, y comparaste la DLQ con 2.7.</li>
+          <li data-check="lag">Mediste las esperas con uno y con tres workers, despejaste tu <em>T</em> y frenaste al relay con <code>MAX_LAG</code>.</li>
+          <li data-check="recorte">Perdiste 250 eventos con un recorte que el lag no mostró, y ninguno con <code>ACKED</code>.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Es la misma división de A00: la aplicación entra por PgBouncer en modo transaction y Flyway va directo. El relay funciona en ese modo porque todo lo que necesita vive dentro de una transacción: el bloqueo de <code>FOR UPDATE</code> se suelta en el commit. <code>LISTEN</code>/<code>NOTIFY</code>, en cambio, necesita una sesión que dure, y detrás de PgBouncer se rompe por la misma razón que los advisory locks de sesión.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>Pon dos réplicas de la API detrás de Nginx: son dos relays sobre la misma outbox, y <code>SKIP LOCKED</code> hace que se repartan las filas sin repetirlas. Los workers no necesitan balanceador: el grupo de consumo es el balanceador. Ellos piden trabajo cuando están libres, en lugar de recibirlo.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>En la caída después del commit, el cliente recibió un error con el pedido ya guardado. Si reintenta, crea otro. Con la <code>Idempotency-Key</code> de A02 en <code>POST /api/orders</code>, el reintento devuelve el mismo pedido. La outbox protege al evento; la clave protege al pedido.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>A03 usaba Pub/Sub para avisar a la otra réplica que cambió un precio, con un TTL local de 2&#8239;s de respaldo. Ahí perder un aviso cuesta, como mucho, 2&#8239;s de precio viejo; aquí costaría un correo que no llega nunca. Es el criterio para elegir: Pub/Sub cuando perder un mensaje es barato y tiene un límite.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>El relay tiene que leer la outbox del primario. En una réplica, <code>SELECT … FOR UPDATE</code> ni siquiera corre: escribe bloqueos de fila, y una réplica en hot standby no acepta escrituras. <span class="badge badge--doc">Documentado</span> El <code>GET /api/orders/{id}</code>, en cambio, puede ir a una réplica: un <code>takenAt</code> que llega un segundo tarde no le hace daño a nadie.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A05, dos primarios</p>
+          <p>Si la outbox se replica entre las dos sucursales, los dos relays publican el mismo evento. El <code>event_id</code> viaja igual en las dos copias y el worker lo reconoce, pero es más limpio aplicar la regla de A05: cada fila tiene una sucursal dueña, y solo su relay la publica.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A06, repartir los datos</p>
+          <p>Con los pedidos repartidos en shards, la outbox va en cada shard, junto a sus pedidos, para que el pedido y su evento sigan en una transacción local, con un relay por shard. El stream también se puede partir por cliente, <code>orders:0</code>, <code>orders:1</code> y así, con un grupo en cada uno: son las particiones de Kafka hechas a mano, con el orden garantizado dentro de cada una.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A07, Kubernetes</p>
+          <p>Los workers son un Deployment, y el nombre del consumidor, el del pod. El apagado ordenado de A07 es el <code>stop()</code> de <code>StreamConsumer</code>: con el período de gracia de Kubernetes, el worker termina el correo que tiene en la mano antes de salir. Y conviene escalar por el lag, no por la CPU: un worker que espera al servidor de correo casi no usa CPU.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A08, un solo líder</p>
+          <p>El reaper no necesita líder: el tiempo mínimo de <code>XCLAIM</code> hace que, de dos reapers que van por la misma entrada, gane uno. El relay tampoco: <code>SKIP LOCKED</code> reparte las filas. Y el dedupe por <code>event_id</code> es la <code>Idempotency-Key</code> de A08 del lado del que recibe: si el servidor de correo aceptara una, la ventana de la figura A09.2 se cerraría.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Colas, logs y Kafka</p>
+          <p>Qué cambia entre una cola que borra lo entregado y un log que lo conserva: <a href="../modules/m07-mensajeria.html#cola-log">M07. Cola contra log</a> y <a href="../modules/m07-mensajeria.html#kafka">Kafka por dentro</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Semánticas de entrega</p>
+          <p>Al menos una vez, como mucho una vez, y por qué "exactamente una vez" es al menos una vez más deduplicación: <a href="../modules/m07-mensajeria.html#semanticas">M07. Semánticas de entrega</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Outbox y DLQ</p>
+          <p>La outbox, el CDC y la doble escritura: <a href="../modules/m07-mensajeria.html#outbox">M07. Outbox</a>. Los mensajes venenosos y la cola de mensajes muertos: <a href="../modules/m07-mensajeria.html#dlq">M07. DLQ</a>. Y lo que falla en la mensajería en producción: <a href="../modules/m07-mensajeria.html#fallos">M07. Qué falla</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Idempotencia y reintentos</p>
+          <p>Cómo se diseña una clave: <a href="../modules/m02-apis.html#idempotencia">M02. Idempotencia en la API</a>. Por qué reintentar todos a la vez empeora una caída: <a href="../modules/m08-resiliencia.html#reintentos">M08. Reintentos sin tormentas</a>. Y qué hacer cuando la carga no cabe: <a href="../modules/m08-resiliencia.html#shedding">M08. Descartar carga</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Estimaciones</p>
+          <p>La ley de Little y las cuentas de capacidad: <a href="../modules/m00-metodo.html#estimaciones">M00. Estimaciones</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-outbox">Outbox</a>, <a href="../glosario.html#t-cdc">CDC</a>, <a href="../glosario.html#t-cola">cola de mensajes</a>, <a href="../glosario.html#t-log-distribuido">log distribuido</a>, <a href="../glosario.html#t-consumer-group">consumer group</a>, <a href="../glosario.html#t-consumer-lag">lag del consumidor</a>, <a href="../glosario.html#t-at-least-once">al menos una vez</a>, <a href="../glosario.html#t-dlq">DLQ</a>, <a href="../glosario.html#t-poison">mensaje envenenado</a>, <a href="../glosario.html#t-backpressure">backpressure</a>, <a href="../glosario.html#t-pubsub">pub/sub</a>, <a href="../glosario.html#t-fan-out">fan-out</a>, <a href="../glosario.html#t-idempotencia">idempotencia</a>, <a href="../glosario.html#t-idempotency-key">idempotency key</a> y <a href="../glosario.html#t-ley-little">ley de Little</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a09.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

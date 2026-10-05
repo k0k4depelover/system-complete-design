@@ -1,5 +1,7 @@
 /* Estructura del curso. status: 'ready' (publicado) | 'soon' (en construcción).
-   kind: 'module' (por defecto) | 'checkpoint' | 'map'. href es relativo a la raíz. */
+   kind: 'module' (por defecto) | 'checkpoint' | 'map' | 'deep'. href es relativo a la raíz.
+   'deep' es la versión a fondo y opcional de un módulo (M06.1): aparece en la ruta, pero no cuenta para el
+   progreso ni entra en el anterior/siguiente de los demás módulos. */
 window.SD = window.SD || {};
 window.SD.course = {
   parts: [
@@ -11,16 +13,18 @@ window.SD.course = {
           summary: 'Requisitos medibles, estimaciones, SLO y error budgets, disponibilidad compuesta y design docs.' },
         { id: 'm01', num: 'M01', title: 'El viaje de una request', short: 'Viaje de una request', mins: 120, href: 'modules/m01-viaje-request.html', status: 'ready',
           summary: 'DNS, TCP, TLS 1.3, HTTP/1.1, 2 y 3, y en qué se va cada milisegundo.' },
-        { id: 'm02', num: 'M02', title: 'Protocolos y diseño de APIs', short: 'APIs y protocolos', mins: 70, href: 'modules/m02-apis.html', status: 'ready',
+        { id: 'm02', num: 'M02', title: 'Protocolos y diseño de APIs', short: 'APIs y protocolos', mins: 150, href: 'modules/m02-apis.html', status: 'ready',
           summary: 'REST, gRPC, GraphQL, WebSockets, SSE y webhooks; paginación, versionado, errores e idempotencia.' },
-        { id: 'm03', num: 'M03', title: 'Balanceadores, gateways y proxies', short: 'Balanceo y gateways', mins: 60, href: 'modules/m03-balanceo-gateways.html', status: 'ready',
+        { id: 'm03', num: 'M03', title: 'Balanceadores, gateways y proxies', short: 'Balanceo y gateways', mins: 120, href: 'modules/m03-balanceo-gateways.html', status: 'ready',
           summary: 'L4 vs L7, algoritmos de balanceo, health checks, API gateway, BFF y service mesh.' },
-        { id: 'm04', num: 'M04', title: 'Caché', short: 'Caché', mins: 70, href: 'modules/m04-cache.html', status: 'ready',
+        { id: 'm04', num: 'M04', title: 'Caché', short: 'Caché', mins: 110, href: 'modules/m04-cache.html', status: 'ready',
           summary: 'Patrones, invalidación, cache stampede, hot keys y qué pasa cuando la caché entera cae.' },
-        { id: 'm05', num: 'M05', title: 'Bases de datos', short: 'Bases de datos', mins: 90, href: 'modules/m05-bases-de-datos.html', status: 'ready',
+        { id: 'm05', num: 'M05', title: 'Bases de datos', short: 'Bases de datos', mins: 210, href: 'modules/m05-bases-de-datos.html', status: 'ready',
           summary: 'Modelos de datos, B-tree vs LSM, aislamiento, replicación, sharding y rebalanceo.' },
-        { id: 'm06', num: 'M06', title: 'Teoría distribuida', short: 'Teoría distribuida', mins: 180, href: 'modules/m06-teoria-distribuida.html', status: 'ready',
-          summary: 'Modelos de sistema, detectores de fallas, CAP, consistencia, quórums, relojes, Raft y Paxos a fondo, FLP, 2PC, CRDTs, bizantinas y verificación, con siete ejercicios guiados.' },
+        { id: 'm06', num: 'M06', title: 'Teoría distribuida: lo esencial', short: 'Teoría distribuida', mins: 75, href: 'modules/m06-teoria-distribuida.html', status: 'ready',
+          summary: 'El cambio de paradigma, CAP y PACELC, la escalera de consistencia, por qué funcionan los quórums, líderes y consenso, y transacciones entre máquinas, con analogías.' },
+        { id: 'm061', num: 'M06.1', kind: 'deep', title: 'Teoría distribuida a fondo', short: 'A fondo: teoría distribuida', mins: 240, href: 'modules/m061-teoria-distribuida-a-fondo.html', status: 'ready',
+          summary: 'Opcional. Modelos de sistema, detectores de fallas, CAP demostrado, modelos de consistencia en detalle, quórums, relojes, Raft y Paxos, FLP, 2PC, CRDTs, bizantinas y verificación, con siete ejercicios guiados.' },
         { id: 'm07', num: 'M07', title: 'Mensajería asíncrona', short: 'Colas y pub/sub', mins: 70, href: 'modules/m07-mensajeria.html', status: 'ready',
           summary: 'Colas vs logs, pub/sub, particiones, semánticas de entrega, outbox, CDC y DLQ.' },
         { id: 'm08', num: 'M08', title: 'Resiliencia', short: 'Resiliencia', mins: 70, href: 'modules/m08-resiliencia.html', status: 'ready',
@@ -57,12 +61,12 @@ window.SD.course = {
           summary: 'Plano de control y de datos, routing por prefijo con carga acotada, autoscaling, cold starts, spot y multi-región.' },
         { id: 'm20', num: 'M20', title: 'El producto ChatGPT', short: 'Producto ChatGPT', mins: 80, href: 'modules/m20-producto-chatgpt.html', status: 'ready',
           summary: 'Conversaciones como árbol, uploads, RAG, herramientas en sandbox y moderación.' },
-        { id: 'm21', num: 'M21', title: 'Metering y facturación por uso', short: 'Metering', mins: 50, href: 'modules/m21-metering.html', status: 'soon',
-          summary: 'Eventos de uso, agregación idempotente, créditos prepagados y límites de gasto.' },
-        { id: 'm22', num: 'M22', title: 'Operar modelos en producción', short: 'Operar modelos', mins: 50, href: 'modules/m22-operar-modelos.html', status: 'soon',
-          summary: 'Canary de modelos, shadow traffic, evals online, prompt injection y runbooks.' },
-        { id: 'm23', num: 'M23', title: 'Imágenes y multimodal', short: 'Multimodal', mins: 60, href: 'modules/m23-multimodal.html', status: 'soon',
-          summary: 'Imágenes convertidas en tokens, visión en el serving y generación de imágenes como servicio asíncrono.' },
+        { id: 'm21', num: 'M21', title: 'Metering y facturación por uso', short: 'Metering', mins: 150, href: 'modules/m21-metering.html', status: 'ready',
+          summary: 'Eventos de uso, Kafka y deduplicación, ventanas por hora, precios versionados, créditos prepagados, topes, facturas con Stripe y conciliación.' },
+        { id: 'm22', num: 'M22', title: 'Operar modelos en producción', short: 'Operar modelos', mins: 150, href: 'modules/m22-operar-modelos.html', status: 'ready',
+          summary: 'Señales de calidad, evals con barras de error, shadow, canary, A/B, LLM como juez, regresiones silenciosas, guardrails, prompt injection, datos de los usuarios e incidentes.' },
+        { id: 'm23', num: 'M23', title: 'Imágenes y multimodal', short: 'Multimodal', mins: 150, href: 'modules/m23-multimodal.html', status: 'ready',
+          summary: 'Tokens por imagen, encoders de visión, validación de la entrada, difusión contra autorregresiva, jobs asíncronos, colas por prioridad, GPUs por imagen, moderación, C2PA y costo.' },
         { id: 'm24', num: 'M24', title: 'Voz y tiempo real', short: 'Voz y tiempo real', mins: 60, href: 'modules/m24-voz-tiempo-real.html', status: 'soon',
           summary: 'WebRTC y WebSocket, cascada o speech-to-speech, interrupciones y un presupuesto de 800 ms.' },
         { id: 'm25', num: 'M25', title: 'Agentes y herramientas', short: 'Agentes', mins: 70, href: 'modules/m25-agentes.html', status: 'soon',

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M04. Caché</title>
-<meta name="description" content="Niveles de caché, cache-aside y write-through, invalidación y sus carreras, cache stampede, claves calientes, evicción, Redis Cluster y qué hacer cuando la caché entera cae.">
+<meta name="description" content="Niveles de caché, seis patrones animados (cache-aside, read-through, write-through, write-behind, write-around y refresh-ahead), invalidación con su ventana de datos viejos, CDC y cachés en memoria, leases paso a paso y en Redis, un simulador de estampida animado, claves calientes, evicción, Redis Cluster y qué hacer cuando la caché entera cae.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -43,7 +43,7 @@
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M04</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>70 min</dd></div>
+          <div><dt>Duración</dt><dd>110 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M01, M03</dd></div>
           <div><dt>Estado</dt><dd data-status="m04">Sin empezar</dd></div>
         </dl>
@@ -51,8 +51,9 @@
 <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
-          <li>Elegir en qué nivel cachear y con qué patrón (cache-aside, write-through, write-behind).</li>
-          <li>Invalidar sin dejar datos viejos por carreras, usando TTL, versiones, leases y CDC.</li>
+          <li>Elegir en qué nivel cachear y con qué patrón (cache-aside, read-through, write-through, write-behind, write-around, refresh-ahead), y explicar quién habla con la base en cada uno.</li>
+          <li>Invalidar sin dejar datos viejos por carreras, usando TTL, borrado, versiones y CDC, y estimar cuánto dura el valor viejo con cada estrategia.</li>
+          <li>Explicar un lease de caché regla por regla e implementarlo en Redis con un script de Lua.</li>
           <li>Prevenir estampidas con single-flight, leases, stale-while-revalidate y expiración anticipada.</li>
           <li>Resolver claves calientes y elegir una política de evicción.</li>
           <li>Diseñar el sistema para sobrevivir a la caída completa de la caché.</li>
@@ -81,18 +82,27 @@
 
       <h2 id="patrones"><span class="sec-num">4.2</span>Patrones de lectura y escritura</h2>
 
+      <p>Un patrón de caché responde dos preguntas: en una lectura, quién llena la caché cuando la clave falta; en una escritura, qué le pasa a la caché. Estas seis respuestas cubren casi todos los casos:</p>
+
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Patrón</th><th>Lectura</th><th>Escritura</th><th>Ganas</th><th>Pagas</th></tr></thead>
           <tbody>
             <tr><td><b><dfn data-term="cache-aside">Cache-aside</dfn></b></td><td>La app busca en caché; si falta, lee la base y llena la caché</td><td>La app escribe en la base y borra la clave</td><td>Simple; la caché puede caer sin perder datos</td><td>El primer lector paga el miss; carreras de invalidación</td></tr>
-            <tr><td><b>Read-through</b></td><td>La caché misma va a la base si falta</td><td>Igual que cache-aside</td><td>Código de la app más simple</td><td>La caché necesita saber leer la base</td></tr>
-            <tr><td><b><dfn data-term="write-through">Write-through</dfn></b></td><td>Siempre de la caché</td><td>A caché y base juntas</td><td>La caché siempre está al día</td><td>Escrituras más lentas; se cachea también lo que nadie lee</td></tr>
+            <tr><td><b><dfn data-term="read-through">Read-through</dfn></b></td><td>La caché misma va a la base si falta</td><td>Se combina con write-through o con borrar la clave</td><td>Código de la app más simple</td><td>La caché necesita saber leer la base</td></tr>
+            <tr><td><b><dfn data-term="write-through">Write-through</dfn></b></td><td>Siempre de la caché</td><td>A caché y base juntas, de forma síncrona</td><td>La caché siempre está al día</td><td>Escrituras más lentas; se cachea también lo que nadie lee</td></tr>
             <tr><td><b><dfn data-term="write-behind">Write-behind</dfn></b></td><td>De la caché</td><td>A la caché; a la base después, en lote</td><td>Escrituras rapidísimas, agrupadas</td><td>Pérdida de datos si la caché muere antes de volcar</td></tr>
-            <tr><td><b>Refresh-ahead</b></td><td>De la caché</td><td>—</td><td>Las claves populares se renuevan antes de vencer</td><td>Recalcula cosas que quizá nadie vuelva a pedir</td></tr>
+            <tr><td><b><dfn data-term="write-around">Write-around</dfn></b></td><td>Como cache-aside</td><td>Solo a la base; la clave se borra si estaba</td><td>La caché no se llena de lo que nadie lee</td><td>La primera lectura después de escribir es un miss</td></tr>
+            <tr><td><b><dfn data-term="refresh-ahead">Refresh-ahead</dfn></b></td><td>De la caché, que renueva antes de vencer</td><td>—</td><td>Las claves populares no vencen nunca</td><td>Recalcula cosas que quizá nadie vuelva a pedir</td></tr>
           </tbody>
         </table>
       </div>
+
+      <p>La tabla dice lo mismo que la animación de abajo, pero en la animación se ve el orden. Elige un patrón con los botones de abajo; el botón azul alterna lento, rápido y pausa. En cada patrón, fíjate en dos cosas: quién habla con la base, la app o la caché, y en qué momento la caché y la base dicen cosas distintas.</p>
+
+      <div data-sim="cachepat"></div>
+
+      <p>Los productos mezclan patrones. DAX, la caché delante de DynamoDB, es read-through para las lecturas y write-through para las escrituras. <span class="badge badge--doc">Documentado</span> Caffeine, una caché en memoria para Java, hace read-through con un cargador (<code>LoadingCache</code>) y algo muy parecido a refresh-ahead con <code>refreshAfterWrite</code>: la primera lectura después del plazo dispara la recarga en segundo plano y recibe el valor anterior mientras tanto. <span class="badge badge--doc">Documentado</span> Redis no trae ninguno de los dos: con Redis, la lógica de cache-aside la escribe tu aplicación.</p>
 
       <p>Cache-aside es el punto de partida razonable en casi todos los casos. El mapa de abajo es un servicio de catálogo real con dos niveles de caché (L1 en proceso y Redis compartido) e invalidación por eventos. Recorre los escenarios en orden.</p>
 
@@ -105,11 +115,14 @@
       <ol class="steps">
         <li><span class="step-title">TTL</span>Todo vence tarde o temprano. Es la red de seguridad: por mal que salga todo lo demás, el error dura como mucho un TTL. Nunca guardes algo sin TTL.</li>
         <li><span class="step-title">Borrar al escribir</span>Quien actualiza la base hace <code>DEL</code> de la clave. Borrar es mejor que escribir el valor nuevo: dos escrituras desordenadas podrían dejar el valor viejo, mientras que un borrado siempre obliga a releer la fuente.</li>
+        <li><span class="step-title">Doble borrado diferido</span>Borrar, y volver a borrar unos cientos de milisegundos después, con una tarea programada o un mensaje con retraso. El segundo <code>DEL</code> limpia el valor viejo que pudo dejar un lector lento entre medio. No cierra la carrera de abajo, pero la acota a ese retraso.</li>
         <li><span class="step-title">Claves versionadas</span>Poner la versión en la clave (<code>prod:4471:v13</code>) hace que el valor nuevo sea otra clave: no hay nada que invalidar, lo viejo simplemente deja de pedirse y vence.</li>
         <li><span class="step-title">Invalidación por eventos (<dfn data-term="cdc">CDC</dfn>)</span>Un proceso lee el log de cambios de la base y borra las claves afectadas. Captura cualquier escritura, incluso las de otros servicios o las manuales.</li>
       </ol>
 
-      <p>Aun con todo eso, cache-aside tiene una carrera clásica que deja un valor viejo en la caché:</p>
+      <h3 id="invalidacion-carrera">La carrera de cache-aside</h3>
+
+      <p>Aun con todo eso, cache-aside tiene una carrera clásica que deja un valor viejo en la caché. Léela de arriba abajo: cada flecha ocurre después de la anterior.</p>
 
       <figure class="figure">
         <div class="figure-frame">
@@ -153,12 +166,255 @@
 <text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">soluciones: lease que el DEL invalida, versión en el valor, TTL corto como red de seguridad</text>
 </svg>
         </div>
-        <figcaption><b>Figura 4.1.</b> El lector escribe en la caché un valor que leyó antes de la actualización, pero después del borrado.</figcaption>
+        <figcaption><b>Figura 4.1.</b> El lector escribe en la caché un valor que leyó antes de la actualización, pero lo escribe después del borrado. Nadie hizo nada mal, y el valor viejo queda hasta que vence el TTL.</figcaption>
       </figure>
 
-      <p>Facebook documentó esta carrera en su paper sobre memcache y la resolvió con <dfn data-term="lease">leases</dfn>: al fallar un GET, la caché entrega un token al lector; un DEL posterior invalida ese token, y el SET con un token inválido se rechaza. <span class="badge badge--doc">Documentado</span> Sin leases, las mitigaciones son guardar la versión junto al valor (y no sobrescribir una versión mayor con una menor) o aceptar el error acotado por un TTL corto.</p>
+      <p>Lo que hace posible la carrera es que el <code>SET</code> del lector no dice cuándo leyó: la caché no puede distinguir un valor recién leído de uno leído antes del <code>UPDATE</code>. Las soluciones le agregan esa información al <code>SET</code>: un token que el <code>DEL</code> anula (un lease, <a href="#leases">4.4</a>) o una versión que la caché compara antes de sobrescribir. En <a href="#leases">4.4</a>, esta misma carrera aparece animada, con y sin lease.</p>
 
-      <h2 id="stampede"><span class="sec-num">4.4</span>Cache stampede</h2>
+      <h3 id="invalidacion-ventana">Cuánto dura el valor viejo</h3>
+
+      <p>Otra forma de comparar las estrategias es preguntar, para cada una: después de un <code>UPDATE</code>, ¿cuánto tiempo puede la caché seguir sirviendo el valor viejo? Cada estrategia tiene dos respuestas, la que ocurre siempre y la que ocurre cuando algo sale mal, y la segunda es la que define el diseño:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f4vwt f4vwd">
+<title id="f4vwt">Cuánto dura el valor viejo con cada estrategia</title>
+<desc id="f4vwd">Para cinco estrategias de invalidación, una barra muestra cuánto tiempo, después del UPDATE en la base, la caché puede seguir sirviendo el valor viejo, en escala logarítmica de 1 milisegundo a 300 segundos. Solo TTL: hasta 300 s siempre. Borrar al escribir: unos milisegundos, pero hasta el TTL si pierde la carrera o se pierde el DEL. Doble borrado diferido: unos milisegundos, y como mucho medio segundo si hay carrera. CDC: el retraso del log, unos cientos de milisegundos, y hasta el TTL si el consumidor se cae. Borrar con lease: unos milisegundos, sin cola.</desc>
+<defs><marker id="f4vwa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-grid" d="M220.0 16 V296"/>
+<path class="sim-grid" d="M308.0 16 V296"/>
+<path class="sim-grid" d="M396.0 16 V296"/>
+<path class="sim-grid" d="M484.0 16 V296"/>
+<path class="sim-grid" d="M572.0 16 V296"/>
+<path class="sim-grid" d="M660.0 16 V296"/>
+<path class="dg-feedback" d="M702.0 16 V296"/>
+<text class="dg-label" x="8" y="34" style="font-size:13px">Solo TTL</text>
+<rect x="220.0" y="22" width="482.0" height="16" rx="4" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="220.0" y="55">siempre: cada lector ve el valor viejo hasta que vence</text>
+<text class="dg-label" x="8" y="88" style="font-size:13px">Borrar al escribir</text>
+<rect x="220.0" y="76" width="482.0" height="16" rx="4" style="fill:var(--fail-tint);stroke:var(--fail);stroke-dasharray:5 4"/>
+<rect x="220.0" y="76" width="42.0" height="16" rx="4" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="220.0" y="109">unos ms entre el UPDATE y el DEL; hasta el TTL si pierde la carrera</text>
+<text class="dg-label" x="8" y="142" style="font-size:13px">Doble borrado diferido</text>
+<rect x="220.0" y="130" width="237.5" height="16" rx="4" style="fill:var(--fail-tint);stroke:var(--fail);stroke-dasharray:5 4"/>
+<rect x="220.0" y="130" width="42.0" height="16" rx="4" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="220.0" y="163">el segundo DEL, 500 ms después, corta la carrera</text>
+<text class="dg-label" x="8" y="196" style="font-size:13px">CDC (eventos)</text>
+<rect x="220.0" y="184" width="482.0" height="16" rx="4" style="fill:var(--fail-tint);stroke:var(--fail);stroke-dasharray:5 4"/>
+<rect x="220.0" y="184" width="202.5" height="16" rx="4" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="220.0" y="217">el retraso del log; hasta el TTL si el consumidor se cae</text>
+<text class="dg-label" x="8" y="250" style="font-size:13px">Borrar con lease</text>
+<rect x="220.0" y="238" width="42.0" height="16" rx="4" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="220.0" y="271">el SET viejo se rechaza: la carrera se cierra</text>
+<text class="dg-num" x="220.0" y="312" text-anchor="middle">1 ms</text>
+<text class="dg-num" x="308.0" y="312" text-anchor="middle">10 ms</text>
+<text class="dg-num" x="396.0" y="312" text-anchor="middle">100 ms</text>
+<text class="dg-num" x="484.0" y="312" text-anchor="middle">1 s</text>
+<text class="dg-num" x="572.0" y="312" text-anchor="middle">10 s</text>
+<text class="dg-num" x="660.0" y="312" text-anchor="middle">100 s</text>
+<text class="dg-tiny" x="705.9866704153303" y="14" text-anchor="middle">TTL: 300 s</text>
+<text class="dg-tiny" x="220" y="332">tiempo desde el UPDATE en la base (escala logarítmica)</text>
+<rect x="220" y="351" width="22" height="12" rx="3" style="fill:var(--warn-tint);stroke:var(--warn);stroke-width:1.5"/>
+<text class="dg-tiny" x="248" y="362">siempre ocurre</text>
+<rect x="360" y="351" width="22" height="12" rx="3" style="fill:var(--fail-tint);stroke:var(--fail);stroke-dasharray:5 4"/>
+<text class="dg-tiny" x="388" y="362">solo si algo sale mal: una carrera, un DEL perdido, un consumidor caído</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 4.2.</b> La barra llena es la ventana de todos los días; la punteada, la del día en que algo falla. Fíjate en que la escala es logarítmica: de 3&#8239;ms a 300&#8239;s hay cinco órdenes de magnitud.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estrategia</th><th>Quién borra</th><th>Cómo falla</th><th>Qué cuesta</th></tr></thead>
+          <tbody>
+            <tr><td>Solo TTL</td><td>Nadie: la clave vence sola</td><td>No falla, pero cada lector ve el valor viejo hasta que vence</td><td>Nada; el TTL es el compromiso entre frescura y tasa de acierto</td></tr>
+            <tr><td>Borrar al escribir</td><td>La app que escribe</td><td>La carrera de la figura 4.1, o un <code>DEL</code> perdido si la app muere entre el <code>UPDATE</code> y el <code>DEL</code></td><td>Un <code>DEL</code> por escritura</td></tr>
+            <tr><td>Doble borrado diferido</td><td>La app, y una tarea con retraso</td><td>Un lector más lento que el retraso</td><td>Dos <code>DEL</code> y una cola con retraso</td></tr>
+            <tr><td>CDC</td><td>Un consumidor del log de la base</td><td>El consumidor se atrasa o se cae: su lag es la ventana</td><td>Debezium, Kafka y un servicio más que operar</td></tr>
+            <tr><td>Borrar con lease</td><td>La app; la caché rechaza los <code>SET</code> viejos</td><td>Solo si el lease no se verifica en la caché (<a href="#leases">4.4</a>)</td><td>La lógica del lease en el cliente</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Por eso los sistemas serios combinan: borrar al escribir para la ventana corta, CDC para atrapar las escrituras que no pasan por la app y un TTL como red de seguridad para todo lo demás.</p>
+
+      <h3 id="invalidacion-cdc">Invalidar desde el log de la base</h3>
+
+      <p>Con CDC, la aplicación ni siquiera borra: el aviso sale de la base.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 362" role="img" aria-labelledby="f4cdt f4cdd">
+<title id="f4cdt">Invalidar la caché desde el log de la base</title>
+<desc id="f4cdd">El servicio de catálogo y también otro servicio o un UPDATE manual escriben en PostgreSQL. Debezium lee el WAL por replicación lógica y publica cada cambio en un topic de Kafka particionado por id de producto. Un invalidador consume el topic en orden por clave, hace DEL de la clave en Redis y publica un mensaje de invalidación que hace que cada instancia borre su copia en memoria.</desc>
+<defs><marker id="f4cda" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f4cdq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="46" width="140" height="62" rx="6"/>
+<text class="dg-label" x="78.0" y="74.5" text-anchor="middle" style="font-size:13px">Servicio de catálogo</text>
+<text class="dg-tiny" x="78.0" y="90.5" text-anchor="middle">UPDATE products …</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="196" y="46" width="150" height="62" rx="6"/>
+<text class="dg-label" x="271.0" y="74.5" text-anchor="middle" style="font-size:13.5px">PostgreSQL</text>
+<text class="dg-tiny" x="271.0" y="90.5" text-anchor="middle">commit y WAL</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="394" y="46" width="140" height="62" rx="6"/>
+<text class="dg-label" x="464.0" y="67.0" text-anchor="middle" style="font-size:13px">Debezium</text>
+<text class="dg-tiny" x="464.0" y="83.0" text-anchor="middle">lee el WAL por</text>
+<text class="dg-tiny" x="464.0" y="97.0" text-anchor="middle">replicación lógica</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="582" y="46" width="180" height="62" rx="6"/>
+<text class="dg-label" x="672.0" y="67.0" text-anchor="middle" style="font-size:12.5px">Kafka: products.changes</text>
+<text class="dg-tiny" x="672.0" y="83.0" text-anchor="middle">partición por id</text>
+<text class="dg-tiny" x="672.0" y="97.0" text-anchor="middle">de producto</text>
+<path class="dg-edge" d="M148 77 H194" marker-end="url(#f4cda)"/>
+<path class="dg-edge" d="M346 77 H392" marker-end="url(#f4cda)"/>
+<path class="dg-edge" d="M534 77 H580" marker-end="url(#f4cda)"/>
+<rect class="dg-box" x="196" y="150" width="150" height="46" rx="6"/>
+<text class="dg-label" x="271.0" y="170.5" text-anchor="middle" style="font-size:12px">Otro servicio, un script</text>
+<text class="dg-tiny" x="271.0" y="186.5" text-anchor="middle">o un UPDATE manual</text>
+<path class="dg-edge" d="M271 150 V110" marker-end="url(#f4cda)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="582" y="236" width="180" height="62" rx="6"/>
+<text class="dg-label" x="672.0" y="257.0" text-anchor="middle" style="font-size:13px">Invalidador</text>
+<text class="dg-tiny" x="672.0" y="273.0" text-anchor="middle">consume en orden</text>
+<text class="dg-tiny" x="672.0" y="287.0" text-anchor="middle">por clave</text>
+<path class="dg-edge" d="M672 108 V234" marker-end="url(#f4cda)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="360" y="236" width="140" height="62" rx="6"/>
+<text class="dg-label" x="430.0" y="264.5" text-anchor="middle" style="font-size:13.5px">Redis</text>
+<text class="dg-tiny" x="430.0" y="280.5" text-anchor="middle">borra la clave</text>
+<path class="dg-edge" d="M582 267 H502" marker-end="url(#f4cdq)" style="stroke:var(--l-queue)"/>
+<text class="dg-tiny" x="541" y="258" text-anchor="middle">DEL prod:1</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="8" y="236" width="200" height="62" rx="6"/>
+<text class="dg-label" x="108.0" y="257.0" text-anchor="middle" style="font-size:12.5px">Caché en memoria (L1)</text>
+<text class="dg-tiny" x="108.0" y="273.0" text-anchor="middle">de cada instancia del</text>
+<text class="dg-tiny" x="108.0" y="287.0" text-anchor="middle">servicio de catálogo</text>
+<path class="dg-edge" d="M360 267 H210" marker-end="url(#f4cdq)" style="stroke:var(--l-queue);stroke-dasharray:6 4"/>
+<text class="dg-tiny" x="285" y="258" text-anchor="middle">PUBLISH inval prod:1</text>
+<path class="dg-feedback" d="M78 236 V112"/>
+<text class="dg-tiny" x="86" y="176">la misma app,</text>
+<text class="dg-tiny" x="86" y="190">en memoria</text>
+<path class="dg-frame" d="M8 318 H762"/>
+<text class="dg-tiny" x="8" y="336">Captura toda escritura que llega al log, venga de donde venga.</text>
+<text class="dg-tiny" x="8" y="352">Si el invalidador se atrasa, el lag del consumidor lo muestra; si se cae, el TTL acota el daño.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 4.3.</b> La invalidación sale del log de la base, no del código que escribe. Por eso también atrapa el <code>UPDATE</code> que alguien corrió a mano.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">El commit llega al log.</span>Toda escritura, venga de donde venga, queda en el WAL de PostgreSQL. Debezium lo lee como si fuera una réplica, con replicación lógica, y publica cada cambio de fila en Kafka. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Kafka ordena por clave.</span>El topic se particiona por id de producto, así que los cambios de un mismo producto llegan en orden (<a href="m07-mensajeria.html">M07</a>). Dos cambios del mismo producto nunca se invierten.</li>
+        <li><span class="step-title">El invalidador borra.</span>Por cada cambio hace <code>DEL</code> de las claves afectadas. <code>DEL</code> es idempotente: si el consumidor se reinicia y procesa dos veces el mismo cambio, no pasa nada.</li>
+        <li><span class="step-title">Las cachés en memoria se enteran.</span>El invalidador publica un mensaje para que cada instancia borre su copia local (abajo).</li>
+      </ol>
+
+      <p>Lo que ganas: ninguna escritura se escapa, incluidas las de otros servicios, las migraciones y el <code>UPDATE</code> que alguien corrió a mano en producción. Lo que pagas: la ventana pasa a ser el lag del consumidor, cientos de milisegundos en un día normal, y hay que vigilarla como una métrica más. Y si una clave de caché combina datos de varias tablas (la página de un producto con su vendedor y su stock), el invalidador tiene que saber qué claves dependen de cada fila.</p>
+
+      <h3 id="invalidacion-l1">Dos niveles: invalidar las cachés en memoria</h3>
+
+      <p>Con una caché L1 en cada instancia (<a href="#niveles">4.1</a>), un <code>DEL</code> en Redis no alcanza: cada una de las 50 instancias tiene su propia copia. Hay tres formas de avisarles, de la más simple a la más precisa:</p>
+      <ul>
+        <li><b>TTL corto en L1</b>, de 1 a 10 s: no hay que avisar a nadie, y el valor viejo dura como mucho eso. Es lo que usa el mapa de <a href="#patrones">4.2</a> para las claves calientes.</li>
+        <li><b>Un canal de invalidación:</b> el invalidador hace <code>PUBLISH inval prod:1</code> y cada instancia, suscrita al canal, borra su copia. El pub/sub de Redis no guarda mensajes: una instancia desconectada en ese momento se lo pierde, así que el TTL corto sigue haciendo falta. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Client-side caching de Redis</b> (<code>CLIENT TRACKING</code>, desde Redis 6): el servidor recuerda qué claves leyó cada cliente y le avisa cuando cambian. Si la conexión se corta, el cliente tiene que vaciar su caché local entera, porque pudo perderse avisos. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+
+      <h2 id="leases"><span class="sec-num">4.4</span>Leases</h2>
+
+      <p>Hasta aquí aparecieron dos problemas que parecen distintos: el <code>SET</code> viejo de la carrera (<a href="#invalidacion-carrera">4.3</a>) y las mil consultas idénticas cuando vence una clave caliente (<a href="#stampede">4.5</a>). Facebook resolvió los dos con el mismo mecanismo en su flota de memcache, y lo publicó en 2013 en "Scaling Memcache at Facebook". <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term"><dfn data-term="lease">Lease</dfn> de caché <span class="def-en">lease token</span></p>
+        <p class="def-one">Un permiso temporal y revocable para llenar una clave: la caché lo entrega junto con un miss, lo anula si la clave se borra y solo acepta el <code>SET</code> de quien lo tiene vigente.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt>
+          <dd>Un turno con número. La caché atiende un solo número por clave, y si el dato cambia mientras esperas, tu número deja de valer.</dd>
+          <dt>Ejemplo</dt>
+          <dd>El lector A recibe un miss con el token 7. Mientras A lee la base, un escritor borra la clave y el token 7 se anula. Cuando A intenta guardar lo que leyó con el token 7, la caché lo rechaza.</dd>
+          <dt>Por qué importa en producción</dt>
+          <dd>Un solo mecanismo cierra la carrera que deja valores viejos y convierte mil consultas idénticas en una. En Facebook bajó el pico de consultas a la base de 17&#8239;000 a 1&#8239;300 por segundo. <span class="badge badge--doc">Documentado</span></dd>
+        </dl>
+      </aside>
+
+      <h3 id="leases-reglas">Cómo funciona</h3>
+
+      <p>La caché guarda, por cada clave, como mucho un token vigente. Cinco reglas alcanzan:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Un miss trae un token.</span>Cuando un <code>GET</code> no encuentra la clave, la caché le devuelve al cliente un token de 64 bits ligado a esa clave: su permiso para llenarla. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Un token a la vez.</span>Si llega otro <code>GET</code> mientras hay un token vigente, no recibe uno nuevo: recibe un aviso de que alguien está recalculando, espera unos milisegundos y vuelve a leer. Memcache entrega como mucho un token cada 10 segundos por clave. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">El borrado anula el token.</span>Un <code>DEL</code> de la clave invalida el token vigente, porque quien lo tenía leyó la base antes del cambio.</li>
+        <li><span class="step-title">El SET exige el token.</span>La caché acepta el <code>SET</code> solo si trae el token vigente; si no, lo descarta. Así, el valor viejo de la carrera nunca entra.</li>
+        <li><span class="step-title">El token vence.</span>Si el dueño se cae o se congela, el token vence solo y el próximo miss recibe uno nuevo. Nadie espera para siempre.</li>
+      </ol>
+
+      <p>La animación recorre cuatro casos, mensaje por mensaje. Empieza por la carrera sin lease, que es la misma de la figura 4.1, y sigue en orden:</p>
+
+      <div data-sim="lease"></div>
+
+      <p>Las reglas 3 y 4 cierran la carrera; la 2 contiene la estampida, y la 5 evita que un cliente colgado bloquee la clave. Fíjate en el último caso: si el lease venciera pero la caché no verificara el token, A despertaría y pisaría el valor de B. Es el mismo problema de un lock vencido que se ve en M06, y se resuelve igual: la verificación vive en el recurso (la caché compara el token), no en el cliente. El token funciona como un <span data-term="fencing">fencing token</span> (<a href="m061-teoria-distribuida-a-fondo.html#leases">M06.1, 6.14</a>).</p>
+
+      <h3 id="leases-stale">Valores viejos a propósito</h3>
+
+      <p>Memcache agrega una opción más. Cuando una clave se borra, el valor no desaparece de inmediato: queda un rato en una estructura de ítems recién borrados. Un <code>GET</code> que llega mientras otro tiene el token puede recibir ese valor, marcado como viejo, y la aplicación decide: si el dato tolera unos segundos de atraso, como un contador de likes o una lista de amigos, lo usa y no espera a nadie. <span class="badge badge--doc">Documentado</span> Es la misma idea que stale-while-revalidate (<a href="#stampede">4.5</a>), aplicada justo después de una escritura.</p>
+
+      <h3 id="leases-redis">Un lease en Redis</h3>
+
+      <p>Redis no tiene tokens de lease, pero se construyen con dos claves y un script de Lua, que Redis ejecuta de forma atómica: ningún otro comando corre en medio. <span class="badge badge--doc">Documentado</span> Esta versión, en Python con <code>redis-py</code>, sigue las cinco reglas:</p>
+
+<pre data-lang="python"><code>import time, uuid
+import redis
+
+r = redis.Redis()
+
+# Guarda el valor solo si el lease sigue siendo nuestro, y lo consume, en un solo paso.
+FILL = r.register_script("""
+if redis.call('GET', KEYS[2]) == ARGV[1] then
+  redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+  redis.call('DEL', KEYS[2])
+  return 1
+end
+return 0
+""")
+
+def get_product(pid, load, ttl=300, lease_ms=150):
+    key, lease = f"{{prod:{pid}}}", f"{{prod:{pid}}}:lease"
+    for _ in range(50):                          # como mucho ~1 s esperando a otro
+        val = r.get(key)
+        if val is not None:
+            return val                           # hit
+        token = uuid.uuid4().hex
+        if r.set(lease, token, nx=True, px=lease_ms):   # reglas 1, 2 y 5
+            val = load(pid)                      # solo el dueño del lease va a la base
+            FILL(keys=[key, lease], args=[token, val, ttl])   # regla 4
+            return val
+        time.sleep(0.02)                         # otro recalcula: espera y relee
+    return load(pid)                             # el dueño tarda demasiado: degrada
+
+def update_price(db, pid, price):
+    db.execute("UPDATE products SET price = %s WHERE id = %s", (price, pid))
+    r.delete(f"{{prod:{pid}}}", f"{{prod:{pid}}}:lease")   # regla 3: borra y anula</code></pre>
+
+      <ul>
+        <li><b>Las llaves de <code>{prod:1}</code></b> son un hash tag: en Redis Cluster, la clave y su lease caen en el mismo slot (<a href="#redis">4.8</a>). Es obligatorio, porque un script solo puede tocar claves de un mismo slot.</li>
+        <li><b>El script compara y escribe en un solo paso.</b> Con un <code>GET</code> del lease y un <code>SET</code> por separado, el lease podría vencer o anularse entre los dos comandos, que es justo la carrera que se quería evitar.</li>
+        <li><b>El escritor borra las dos claves.</b> Borrar el lease es lo que anula el token del lector lento: su <code>FILL</code> encuentra otro token, o ninguno, y no escribe.</li>
+        <li><b>El que espera tiene un límite.</b> Si después de 1 s el valor no aparece, va a la base por su cuenta: es mejor una consulta extra que un usuario esperando para siempre.</li>
+      </ul>
+
+      <h3 id="leases-duracion">Cuánto debe durar un lease</h3>
+
+      <p>Con la duración de un lease pasa lo mismo que con un timeout:</p>
+      <ul>
+        <li><b>Demasiado corto</b>, menos de lo que tarda el recálculo: vence mientras el dueño todavía consulta la base, otro lector obtiene un lease nuevo y también va a la base. No entran datos viejos, porque el <code>SET</code> del primero se rechaza, pero vuelven las consultas duplicadas.</li>
+        <li><b>Demasiado largo:</b> si el dueño se cae, los demás esperan hasta que venza, o hasta su propio límite, sin que nadie recalcule.</li>
+      </ul>
+      <p>Una regla razonable es de 2 a 3 veces el p99 del recálculo. Si cargar el producto tarda 50&#8239;ms en el p99, un lease de 100 a 150&#8239;ms, como el del código. Si el recálculo tarda segundos, como un reporte, conviene un lease corto que el dueño renueva mientras trabaja, igual que un heartbeat.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p><b>Lease o lock.</b> Un lock sin vencimiento es más simple, pero si su dueño muere, la clave queda bloqueada hasta que alguien intervenga. Un lease vence solo y no necesita detectar la caída, a cambio de aceptar que, si el dueño solo estaba lento, puede haber dos recálculos a la vez. Por eso el token importa más que la exclusión: dos recálculos son un desperdicio; un <code>SET</code> viejo es un error.</p>
+      </aside>
+
+
+      <h2 id="stampede"><span class="sec-num">4.5</span>Cache stampede</h2>
 
       <aside class="callout callout--def">
         <p class="callout-label">Definición</p>
@@ -174,23 +430,20 @@
         </dl>
       </aside>
 
-      <p>El simulador reproduce ese ciclo con una base que se vuelve más lenta cuanto más consultas tiene en paralelo. Empieza por "Sin protección" y ve bajando por las estrategias:</p>
+      <p>Hay cuatro defensas, y cada una ataca una parte distinta del problema. <dfn data-term="single-flight">Single-flight</dfn> agrupa las requests de una misma instancia; un lease (<a href="#leases">4.4</a>) deja una sola consulta en todo el sistema; <dfn data-term="swr">stale-while-revalidate</dfn> sirve el valor viejo mientras una sola request recalcula, y la <dfn data-term="xfetch">expiración anticipada probabilística</dfn> (el algoritmo XFetch de Vattani y otros) renueva la clave antes de que venza.</p>
+
+      <p>El simulador las pone a prueba con la misma clave caliente. Elige una estrategia: su explicación aparece justo debajo de los botones, y la escena se reproduce en cámara lenta, diez veces más despacio que la realidad. Cada recuadro es una instancia de la app, y su número, los usuarios que esperan el valor; cada línea hacia la base son las consultas de esa instancia, más gruesa cuantas más sean. Empieza por "Sin protección".</p>
 
       <div data-sim="stampede"></div>
 
-      <ul>
-        <li><b><dfn data-term="single-flight">Single-flight</dfn></b> reduce las consultas a una por instancia. Con 20 instancias, 20 consultas: suele alcanzar.</li>
-        <li><b>Un lease distribuido</b> (<code>SET lock:clave NX PX 2000</code>) deja una sola consulta en todo el sistema; los demás esperan o reintentan la lectura.</li>
-        <li><b><dfn data-term="swr">Stale-while-revalidate</dfn></b>: si guardas el valor con un margen extra más allá de su vencimiento lógico, puedes servir el viejo mientras uno solo recalcula. Nadie espera.</li>
-        <li><b><dfn data-term="xfetch">Expiración anticipada probabilística</dfn></b> (el algoritmo XFetch de Vattani y otros): cada lectura cercana al vencimiento recalcula con una probabilidad que crece a medida que se acerca, ponderada por lo que cuesta recalcular. En la práctica, alguna request la renueva justo antes de vencer y la estampida no ocurre nunca.</li>
-      </ul>
+      <p>De menos a más protección: single-flight reduce las consultas a una por instancia; el lease, a una en total; stale-while-revalidate elimina además la espera, y la expiración anticipada evita que la clave llegue a vencer. Se combinan: un lease con stale-while-revalidate es la configuración típica de una clave muy caliente.</p>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
         <p>La estampida no solo pasa cuando vence una clave. También ocurre al reiniciar el clúster de caché (todo frío), al desplegar un cambio que modifica el formato de las claves (todas "nuevas" a la vez) y al purgar una CDN. Por eso los cambios de esquema de claves se despliegan de a poco, y las purgas masivas se hacen por partes.</p>
       </aside>
 
-      <h2 id="hot-keys"><span class="sec-num">4.5</span>Claves calientes y claves grandes</h2>
+      <h2 id="hot-keys"><span class="sec-num">4.6</span>Claves calientes y claves grandes</h2>
 
       <p>En una caché distribuida cada clave vive en un solo shard. Si una <dfn data-term="hot-key">clave caliente</dfn> recibe 300&#8239;000 lecturas por segundo, su shard se satura aunque los demás estén ociosos, y agregar shards no ayuda. Las soluciones reparten esa clave:</p>
       <ul>
@@ -200,7 +453,7 @@
       </ul>
       <p>Las claves grandes (un valor de 5 MB) son el problema simétrico: bloquean el hilo de Redis mientras se serializan y saturan la red. Se parten en varias claves o se guardan en almacenamiento de objetos con solo la referencia en caché.</p>
 
-      <h2 id="eviccion"><span class="sec-num">4.6</span>Evicción y tamaño</h2>
+      <h2 id="eviccion"><span class="sec-num">4.7</span>Evicción y tamaño</h2>
 
       <p>Una caché tiene memoria finita, y cuando se llena alguien tiene que salir. La <dfn data-term="eviction">política de evicción</dfn> decide quién:</p>
       <div class="table-wrap">
@@ -215,14 +468,14 @@
       </div>
       <p>Redis implementa LRU y LFU aproximados: en lugar de mantener una lista ordenada de todas las claves, toma una pequeña muestra al azar y expulsa la peor de la muestra. <span class="badge badge--doc">Documentado</span> Sobre el tamaño: la tasa de acierto crece rápido con la memoria al principio y cada vez más despacio después, porque la cola larga de claves raras casi nunca se repite. Mide la curva con tu tráfico antes de duplicar la memoria.</p>
 
-      <h2 id="redis"><span class="sec-num">4.7</span>Redis en clúster</h2>
+      <h2 id="redis"><span class="sec-num">4.8</span>Redis en clúster</h2>
       <ul>
         <li><b>Particionado:</b> 16&#8239;384 hash slots repartidos entre los shards; la clave se asigna por CRC16. Las operaciones de varias claves (<code>MGET</code>, transacciones) solo funcionan si todas caen en el mismo slot, lo que se fuerza con hash tags: <code>{user:77}:cart</code> y <code>{user:77}:prefs</code>.</li>
         <li><b>Replicación asíncrona:</b> cada primario tiene réplicas; si el primario cae, se promueve una réplica en segundos, y las escrituras que no alcanzaron a replicarse se pierden. Para una caché es aceptable; por eso Redis no debería ser la única copia de nada importante.</li>
         <li><b>Redirecciones:</b> si un cliente pregunta al shard equivocado, recibe <code>MOVED</code> con el correcto. Los clientes inteligentes guardan el mapa de slots y van directo.</li>
       </ul>
 
-      <h2 id="caida"><span class="sec-num">4.8</span>Cuando la caché entera cae</h2>
+      <h2 id="caida"><span class="sec-num">4.9</span>Cuando la caché entera cae</h2>
 
       <aside class="callout callout--fail">
         <p class="callout-label">Qué pasa si cae toda la caché</p>
@@ -282,5 +535,7 @@
 <script src="../assets/js/map/map-engine.js"></script>
 <script src="../assets/js/map/flow-sim.js"></script>
 <script src="../assets/js/widgets/sim-cache.js"></script>
+<script src="../assets/js/widgets/sim-cachepat.js"></script>
+<script src="../assets/js/widgets/sim-lease.js"></script>
 </body>
 </html>

@@ -1,199 +1,109 @@
 SD.defineQuiz('m06', {
-  title: 'Quiz: teoría distribuida',
+  title: 'Quiz: teoría distribuida, lo esencial',
   pass: 0.7,
   questions: [
     {
-      id: 'safety', type: 'multi',
-      prompt: '¿Cuáles de estas son propiedades de safety?',
+      id: 'e-paradigma', type: 'single',
+      prompt: 'En sistemas distribuidos, ¿qué distingue a un modelo síncrono de uno asíncrono?',
       options: [
-        'Nunca hay dos líderes que confirmen en el mismo término.',
-        'Toda escritura termina recibiendo una respuesta.',
-        'Una lectura nunca devuelve un valor que nadie escribió.',
-        'Si la red se estabiliza, se termina eligiendo un líder.',
-        'Nunca se emiten dos facturas para el mismo cliente y período.'
-      ],
-      answer: [0, 2, 4],
-      explain: 'Safety: nunca pasa nada malo, y su violación ocurre en un instante que se puede señalar. Liveness: algo bueno termina pasando. Los algoritmos reales garantizan safety siempre y liveness solo cuando la red se estabiliza. Repasa 6.1.'
-    },
-    {
-      id: 'swim', type: 'single',
-      prompt: 'En SWIM, el nodo A no recibe respuesta a su ping al nodo B. ¿Qué hace antes de sospechar de B?',
-      options: [
-        'Lo declara muerto de inmediato, para detectar rápido.',
-        'Les pide a k nodos que le manden un ping a B por él: si alguno recibe respuesta, el problema era el enlace entre A y B, no B.',
-        'Le manda 100 pings seguidos.',
-        'Espera a que B aparezca en el próximo mensaje de gossip.'
+        'Si el cliente se bloquea esperando la respuesta o recibe un callback.',
+        'Si existe un límite conocido para cuánto puede tardar un mensaje: con límite, un silencio largo prueba una falla; sin límite, no prueba nada.',
+        'Si las réplicas confirman antes o después de responder.',
+        'Si los mensajes viajan por TCP o por UDP.'
       ],
       answer: 1,
-      explain: 'La prueba indirecta separa dos fallas que un ping solo no distingue: un nodo caído y un enlace roto entre dos nodos sanos. Después, el nodo queda sospechado un tiempo antes de declararlo muerto, y puede desmentirlo. Repasa 6.2.'
+      explain: 'En programación, síncrono es bloquear. En teoría distribuida, es que haya una cota de tiempo conocida. El mundo real es parcialmente síncrono: caótico por momentos, pero en algún momento se calma. Repasa 6.2.'
     },
     {
-      id: 'cap', type: 'single',
-      prompt: 'Según CAP, ¿cuándo está obligado un sistema distribuido a elegir entre consistencia y disponibilidad?',
-      options: ['Siempre, en cada operación.', 'Solo cuando hay una partición de red.', 'Solo cuando se cae un nodo.', 'Nunca, si usa SSD.'],
-      answer: 1,
-      explain: 'CAP habla del caso de partición: si dos partes no se ven, o una rechaza operaciones (elige C) o ambas siguen aceptándolas y divergen (elige A). En funcionamiento normal, la elección es otra: la que describe PACELC. Repasa 6.3.'
-    },
-    {
-      id: 'pacelc', type: 'single',
-      prompt: 'Una base replica de forma síncrona a otra región para no perder nada. Sin ninguna partición, ¿qué paga cada escritura?',
-      options: ['Nada.', 'Latencia: esperar la ida y vuelta a la otra región. Es la "E, L/C" de PACELC.', 'Disponibilidad.', 'Durabilidad.'],
-      answer: 1,
-      explain: 'Else (sin partición) hay que elegir entre latencia y consistencia. La réplica síncrona elige consistencia, y lo paga en cada escritura, todos los días, no solo durante fallas. Repasa 6.4.'
-    },
-    {
-      id: 'linealizable', type: 'single',
-      prompt: 'La escritura x = 1 del cliente A termina a las 10:00:00.100. La lectura del cliente B empieza a las 10:00:00.200 y devuelve 0. ¿Es linealizable esta historia?',
+      id: 'e-timeout', type: 'single',
+      prompt: 'Un nodo deja de responder durante 10 segundos. ¿Qué puede concluir el resto del clúster?',
       options: [
-        'Sí, si la escritura y la lectura fueron a réplicas distintas.',
-        'No: la lectura empezó después de que la escritura terminó, así que tiene que ubicarse después y ver el 1. Sí sería secuencial, porque ese modelo no respeta el tiempo real entre clientes.',
-        'Sí: la linealizabilidad solo exige respetar el orden de cada cliente.',
-        'No se puede saber sin comparar los relojes de las réplicas.'
-      ],
-      answer: 1,
-      explain: 'Cada operación ocurre en un instante dentro de su intervalo, y una que terminó antes de que otra empezara va antes. Es la historia "Una réplica atrasada" del verificador. Repasa 6.5.'
-    },
-    {
-      id: 'modelos', type: 'multi',
-      prompt: '¿Para cuáles de estos casos alcanza la consistencia eventual?',
-      options: [
-        'El contador de "me gusta" de un post.',
-        'El saldo de una cuenta bancaria al autorizar un retiro.',
-        'Los resultados de búsqueda de productos.',
-        'La elección de qué nodo es el líder de un clúster.',
-        'El número de vistas de un video.'
-      ],
-      answer: [0, 2, 4],
-      explain: 'Si un valor desactualizado unos segundos no rompe ninguna regla, lo eventual es más barato y disponible. El saldo al autorizar y la elección de líder exigen linealizabilidad: dos respuestas distintas causan dinero duplicado o split brain. Repasa 6.5.'
-    },
-    {
-      id: 'quorum', type: 'single',
-      prompt: 'Con N = 3, W = 2 y R = 2, una escritura de x = 1 sigue en curso y solo llegó a una réplica. El lector A ve el 1 y termina; después, el lector B ve el 0. ¿Qué pasó?',
-      options: [
-        'Es un bug de la base: W + R > N garantiza linealizabilidad.',
-        'W + R > N solo garantiza ver la última escritura confirmada. Con una escritura en curso, dos lecturas pueden caer en quórums distintos y retroceder. ABD lo evita: el lector escribe en un quórum el valor más nuevo antes de responder.',
-        'Un reloj desfasado en la réplica de B.',
-        'B leyó de una caché.'
-      ],
-      answer: 1,
-      explain: 'La intersección de quórums protege lo confirmado, no lo que está en curso. ABD paga una ida y vuelta más por lectura para que, una vez que alguien vio un valor, todo quórum lo tenga. Repasa 6.6 y la figura 6.5.'
-    },
-    {
-      id: 'mayoria', type: 'single',
-      prompt: 'Un clúster Raft de 5 nodos pierde 2. ¿Puede seguir aceptando y confirmando escrituras?',
-      options: ['No: necesita los 5.', 'Sí: 3 de 5 es mayoría.', 'Solo lecturas.', 'Solo si el líder fue uno de los que sobrevivió.'],
-      answer: 1,
-      explain: 'Raft confirma con mayoría. Con 5 nodos tolera 2 caídas; con 3, solo 1. Por eso los clústeres de consenso tienen tamaño impar: 4 nodos toleran lo mismo que 3 (una falla) con un nodo más. Repasa 6.6.'
-    },
-    {
-      id: 'vector', type: 'single', fixed: true,
-      prompt: 'Dos eventos tienen los relojes vectoriales [3, 0, 0] y [2, 3, 2]. ¿Qué relación tienen?',
-      options: [
-        'El primero ocurrió antes que el segundo.',
-        'El segundo ocurrió antes que el primero.',
-        'Son concurrentes: ninguno es menor o igual que el otro en todas las posiciones.',
-        'Son el mismo evento visto desde dos procesos.'
+        'Que el nodo murió, con certeza.',
+        'Que el nodo está vivo pero lento, con certeza.',
+        'Nada con certeza: puede estar muerto, lento, en una pausa de GC o aislado por la red. El timeout es una apuesta.',
+        'Que la red está partida.'
       ],
       answer: 2,
-      explain: '[3, 0, 0] es mayor en la primera posición y menor en las otras dos, así que ninguno pudo enterarse del otro. Un reloj de Lamport les daría números distintos y un orden, pero no permitiría detectar la concurrencia. Repasa 6.7 y la figura 6.6.'
+      explain: 'Sin una cota de tiempo en la que confiar, un silencio no distingue entre caído y lento. Por eso la safety nunca depende de un timeout. Repasa 6.1 y 6.2.'
     },
     {
-      id: 'relojes', type: 'single',
-      prompt: 'Dos servidores escriben la misma clave y la resolución es "gana el timestamp más alto" usando la hora del sistema. ¿Qué riesgo hay?',
+      id: 'e-cap', type: 'single',
+      prompt: 'Durante una partición, una réplica aislada recibe una lectura. Según CAP, ¿qué opciones tiene?',
       options: [
-        'Ninguno con NTP.',
-        'Si el reloj de un servidor va adelantado, sus escrituras "ganan" aunque hayan ocurrido antes, y se pierden escrituras más nuevas en silencio.',
-        'Que la base se cuelgue.',
-        'Que los timestamps se repitan siempre.'
+        'Responder con el valor más reciente del clúster, que siempre conoce.',
+        'Responder con lo que tiene, que puede estar viejo (elige A), o no responder (elige C).',
+        'Ninguna: CAP dice que los sistemas distribuidos no pueden leer durante una partición.',
+        'Elegir CA y evitar la partición.'
       ],
       answer: 1,
-      explain: 'Los relojes físicos se desfasan (milisegundos o más, y a veces saltan). Last-write-wins con relojes físicos pierde datos sin ningún error. Para detectar escrituras concurrentes se usan relojes vectoriales, y para combinarlas sin perder nada, CRDTs. Repasa 6.7 y 6.12.'
+      explain: 'La réplica aislada no puede enterarse de lo que se escribió del otro lado. La P no se elige, así que no existe "CA": se elige entre C y A, y la elección puede ser distinta para cada operación. Repasa 6.3.'
     },
     {
-      id: 'minoria', type: 'single',
-      prompt: 'Una partición deja al líder de Raft con un solo seguidor (2 de 5). ¿Qué pasa con las escrituras que recibe?',
+      id: 'e-quorumlat', type: 'single',
+      prompt: 'Un primario en Virginia replica a Ohio (~11 ms) y a Irlanda (~75 ms). Cada escritura espera a 2 de 3, contando al primario. Irlanda se congela 2 segundos. ¿Qué pasa con las escrituras?',
       options: [
-        'Se confirman normalmente.',
-        'Las acepta en su log pero nunca puede confirmarlas; mientras tanto, los otros 3 eligen un líder nuevo. Al repararse la red, esas entradas se descartan.',
-        'Se pierden los datos confirmados antes.',
-        'El clúster queda con dos líderes que confirman escrituras distintas.'
+        'Tardan unos 2 segundos.',
+        'Siguen tardando unos 11 ms: el quórum espera a la segunda respuesta más rápida, la de Ohio.',
+        'Fallan hasta que Irlanda vuelva.',
+        'Tardan unos 75 ms.'
       ],
       answer: 1,
-      explain: 'Sin mayoría no hay confirmación: el líder viejo no puede dañar nada. Lo que un cliente de ese líder debe entender es que "aceptada" no es "confirmada": solo la confirmación es una promesa. Repasa 6.8.'
+      explain: 'Un quórum espera a la W-ésima respuesta más rápida, no a la más lenta. Solo esperar a todas las réplicas ataría cada escritura a la peor. Repasa 6.4.'
     },
     {
-      id: 'commit', type: 'single',
-      prompt: 'El líder de Raft del término 4 acaba de copiar a una mayoría una entrada del término 2. ¿Puede darla por confirmada?',
+      id: 'e-el', type: 'single',
+      prompt: 'Un sistema EL (latencia sobre consistencia) responde las escrituras en cuanto las confirma el nodo que las recibió. ¿Qué gana y qué arriesga?',
       options: [
-        'Sí: está en una mayoría.',
-        'No contando copias: un líder solo confirma así las entradas de su propio término. La del término 2 queda confirmada cuando se confirme una entrada posterior del término 4.',
-        'Solo si el líder anterior ya la había confirmado.',
-        'No: las entradas de términos anteriores siempre se descartan.'
+        'Gana latencia baja, porque no espera a ninguna réplica; arriesga que otra réplica lea el valor viejo y perder escrituras si el nodo cae antes de replicar.',
+        'Gana consistencia fuerte; arriesga latencia alta.',
+        'Gana tolerancia a particiones; no arriesga nada.',
+        'Gana latencia baja sin arriesgar nada, porque replica después.'
+      ],
+      answer: 0,
+      explain: 'Responder con lo que sabe el nodo al que le preguntaste evita cargar con la latencia de las réplicas lejanas, pero lo confirmado todavía no está en ninguna otra parte. Repasa 6.4.'
+    },
+    {
+      id: 'e-escalera', type: 'order',
+      prompt: 'Ordena de más fuerte a más débil:',
+      items: ['Linealizable', 'Secuencial', 'Causal', 'De sesión', 'Eventual'],
+      explain: 'Cada escalón conserva menos de la ilusión de "una sola copia" y necesita menos coordinación. Repasa 6.5.'
+    },
+    {
+      id: 'e-sesion', type: 'single',
+      prompt: 'Un usuario cambia su foto de perfil, recarga y ve la foto vieja, porque la lectura fue a una réplica atrasada. ¿Qué garantía mínima falta?',
+      options: [
+        'Linealizabilidad.',
+        'Read-your-writes, una garantía de sesión: cada cliente ve sus propias escrituras.',
+        'Serializabilidad.',
+        'Ninguna: es el comportamiento esperado de cualquier sistema.'
       ],
       answer: 1,
-      explain: 'Un nodo cuya última entrada es de un término mayor podría ganar una elección y sobrescribirla, aunque esté en una mayoría. Por eso un líder nuevo agrega enseguida una entrada vacía de su término. Repasa 6.8 y la figura 6.7.'
+      explain: 'No hace falta que todo el sistema sea linealizable; basta con que cada usuario vea lo suyo, con un token de versión o leyendo del líder un rato después de escribir. Repasa 6.5.'
     },
     {
-      id: 'readindex', type: 'order',
-      prompt: 'Ordena los pasos de una lectura linealizable con ReadIndex:',
-      items: [
-        'El cliente le pide leer x al líder',
-        'El líder anota su índice de commit actual como readIndex',
-        'El líder manda heartbeats y una mayoría responde',
-        'El líder espera a aplicar su log hasta readIndex',
-        'El líder responde con el valor de x'
-      ],
-      explain: 'El heartbeat confirmado demuestra que nadie depuso al líder antes de la lectura, y esperar a aplicar hasta readIndex garantiza que la respuesta incluye todo lo confirmado hasta ese momento. Responder desde la memoria, sin el heartbeat, no es linealizable. Repasa 6.8 y la figura 6.8.'
-    },
-    {
-      id: 'flp', type: 'single',
-      prompt: 'Si FLP dice que el consenso es imposible en un sistema asíncrono con una sola falla, ¿cómo funcionan Raft y Paxos en la práctica?',
+      id: 'e-palomar', type: 'single',
+      prompt: 'Con N = 5 réplicas, ¿qué combinación garantiza que una lectura vea la última escritura confirmada?',
       options: [
-        'No funcionan: pierden datos a veces.',
-        'Siempre son seguros (nunca deciden dos valores distintos), pero solo garantizan avanzar cuando la red se comporta de forma razonablemente sincrónica; usan timeouts y aleatoriedad.',
-        'Porque usan relojes atómicos.',
-        'Porque FLP solo aplica a fallas bizantinas.'
-      ],
-      answer: 1,
-      explain: 'Separan seguridad de progreso: nunca se equivocan, y si la red se porta mal pueden quedarse sin líder un rato. Es el modelo de sincronía parcial: en la práctica, los períodos de estabilidad alcanzan para avanzar. Repasa 6.10.'
-    },
-    {
-      id: 'dosfases', type: 'single',
-      prompt: 'En two-phase commit, los dos participantes votaron sí y el coordinador cae antes de comunicar la decisión. ¿Qué hacen los participantes?',
-      options: [
-        'Abortan después de un timeout.',
-        'Confirman después de un timeout.',
-        'Esperan con los locks tomados: no saben qué decidió el coordinador, y abortar podría contradecir un commit que otro ya aplicó.',
-        'Eligen entre ellos un coordinador nuevo, que decide abortar.'
+        'W = 2, R = 2.',
+        'W = 2, R = 3.',
+        'W = 3, R = 3.',
+        'W = 1, R = 1.'
       ],
       answer: 2,
-      explain: 'Es la debilidad conocida de 2PC. Se resuelve haciendo que el coordinador no pueda desaparecer: replicándolo con consenso, como Spanner y CockroachDB, que corren 2PC sobre grupos de Paxos o de Raft. Repasa 6.11.'
+      fixed: true,
+      explain: '3 + 3 = 6 visitas no caben en 5 nodos sin repetir alguno: al menos un nodo está en los dos grupos y lleva el valor nuevo. Con 2 + 3 = 5, los grupos pueden quedar disjuntos. Repasa 6.6.'
     },
     {
-      id: 'crdt', type: 'multi',
-      prompt: '¿Qué propiedades necesita el merge de un CRDT basado en estado para que las réplicas converjan sin importar el orden ni las repeticiones?',
-      options: ['Conmutativa', 'Asociativa', 'Idempotente', 'Invertible', 'Ordenada por la hora del sistema'],
-      answer: [0, 1, 2],
-      explain: 'Conmutativa y asociativa: el orden de los merges no cambia el resultado. Idempotente: recibir el mismo estado dos veces no cambia nada. El máximo por casillero de un G-Counter cumple las tres. Repasa 6.12.'
-    },
-    {
-      id: 'byz', type: 'single', fixed: true,
-      prompt: '¿Cuántos nodos necesita un algoritmo de consenso para tolerar 1 nodo bizantino (que miente)?',
-      options: ['2', '3', '4', '5'],
-      answer: 2,
-      explain: '3f + 1 con f = 1: cuatro. Con tres, un leal que recibe versiones contradictorias no puede saber quién miente. Para fallas por caída (nodos que se detienen pero no mienten), basta 2f + 1. Repasa 6.13.'
-    },
-    {
-      id: 'fencing', type: 'single',
-      prompt: 'Un worker obtiene un lock con lease de 10 s, sufre una pausa de GC de 15 s y, al despertar, escribe en el almacenamiento creyendo que sigue teniendo el lock. ¿Qué lo evita?',
+      id: 'e-2pc', type: 'single',
+      prompt: 'En two-phase commit, el coordinador cae justo después de que todos los participantes votaron que sí. ¿Qué pasa?',
       options: [
-        'Un lease más largo.',
-        'Un fencing token: el lock entrega un número creciente, cada escritura lo incluye y el almacenamiento rechaza números menores al último visto.',
-        'Chequear el reloj antes de escribir.',
-        'Nada: es imposible.'
+        'Los participantes confirman solos, porque todos votaron que sí.',
+        'Los participantes abortan solos después de un timeout.',
+        'Los participantes quedan bloqueados con los locks tomados: no saben qué decidió el coordinador y no pueden decidir por su cuenta.',
+        'Nada: 2PC tolera la caída del coordinador.'
       ],
-      answer: 1,
-      explain: 'Chequear antes de escribir no alcanza: la pausa puede ocurrir justo entre el chequeo y la escritura. La protección tiene que estar en el recurso: rechazar al que trae un token viejo. Repasa 6.14.'
+      answer: 2,
+      explain: 'Ningún participante sabe si los demás votaron que sí, ni si el coordinador ya decidió. Por eso se replica al coordinador con consenso o se usan sagas. Repasa 6.8.'
     }
   ]
 });

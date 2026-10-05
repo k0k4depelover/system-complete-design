@@ -1,0 +1,2657 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A08. Un solo líder</title>
+<meta name="description" content="Un servicio de recordatorios con tres réplicas en k3s, donde solo una despacha: elección de líder con un Lease de Kubernetes y el LeaderElector de fabric8, relevo ordenado y caída, un líder congelado con kill -STOP que despierta creyéndose líder, fencing tokens que comprueba el proveedor, claves de idempotencia y ShedLock como alternativa, con su límite.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/projects.css">
+</head>
+<body data-root="../" data-project="a08" class="page-guide">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la lista de proyectos"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html" aria-current="page">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Proyectos">
+    <nav data-project-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Un solo líder</h1>
+        <p class="lead">Un recordatorio tiene que salir una vez: ni cero, ni dos. Con tres réplicas, alguien tiene que decidir quién lo manda. Vas a elegir un líder con un Lease de Kubernetes, matarlo, congelarlo y contar lo que manda cuando despierta tarde, y a ver qué lo frena de verdad: el Lease, la clave de idempotencia o el fencing token.</p>
+        <dl class="tb-grid">
+          <div><dt>Proyecto</dt><dd>A08</dd></div>
+          <div><dt>Plan</dt><dd>Bloque 3</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>5 a 7 h</dd></div>
+          <div><dt>Módulos</dt><dd>M06, M07</dd></div>
+          <div><dt>Estado</dt><dd data-project-status="a08">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir un líder entre tres réplicas con un Lease de Kubernetes y el <code>LeaderElector</code> de fabric8, con los permisos justos para ese Lease.</li>
+          <li>Predecir con los tres plazos del Lease cuánto dura un relevo ordenado y cuánto una caída, y comprobarlo segundo a segundo.</li>
+          <li>Congelar al líder con <code>kill -STOP</code> y contar lo que manda al despertar: duplicados y recordatorios que la persona ya había cancelado.</li>
+          <li>Frenar al líder viejo con un fencing token que comprueba el proveedor, y absorber las entregas repetidas con una clave de idempotencia.</li>
+          <li>Comparar con ShedLock y explicar qué protege cada defensa y qué no protege ninguna.</li>
+        </ul>
+      </section>
+
+      <h2 id="excusa">La excusa</h2>
+
+      <p>Una app de recordatorios: "avísame mañana a las 9 que tengo dentista". Cada recordatorio sale como un SMS por un proveedor externo que cobra por mensaje. Si sale dos veces, pagas dos veces y la persona se molesta. Si no sale, pierde el turno. Y si lo canceló, no puede salir.</p>
+
+      <p>La API corre en tres réplicas para no caerse con una. Pero si las tres despachan los vencidos, cada recordatorio sale hasta tres veces. Hace falta que despache una sola a la vez y que otra tome el turno en segundos si esa se cae: es la elección de líder. Lo difícil no es elegir. Es que un líder puede dejar de serlo sin enterarse: una pausa larga del recolector de basura, una máquina virtual congelada o una red que se corta. Cuando vuelve, sigue con lo que estaba haciendo.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 310" role="img" aria-labelledby="fa08t fa08d">
+<title id="fa08t">Tres réplicas, un Lease y un proveedor con valla</title>
+<desc id="fa08d">curl llama al puerto 8080, donde Traefik manda las rutas /api al Service recordatorios, que reparte entre las tres réplicas del Deployment: todas atienden la API. Las tres compiten por el Lease recordatorios-lider en el API de Kubernetes: la dueña lo renueva cada 2 segundos y las otras preguntan si venció. Solo la dueña despacha los recordatorios vencidos al proveedor de mentira, con su token en la cabecera Fencing-Token y una Idempotency-Key por recordatorio. El proveedor rechaza un token más bajo que el último que vio. Las réplicas y el proveedor guardan sus tablas en PostgreSQL, a través de PgBouncer. El script zombi.sh congela a la réplica líder.</desc>
+<defs><marker id="fa08a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="10" width="150" height="48" rx="6"/>
+<text class="dg-label" x="95" y="30" text-anchor="middle">curl</text>
+<text class="dg-tiny" x="95" y="48" text-anchor="middle">localhost:8080/api</text>
+<path class="dg-edge" d="M172 34 H196" marker-end="url(#fa08a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="200" y="10" width="150" height="48" rx="6"/>
+<text class="dg-label" x="275" y="30" text-anchor="middle">Traefik</text>
+<text class="dg-tiny" x="275" y="48" text-anchor="middle">Ingress, ruta /api</text>
+<path class="dg-edge" d="M352 34 H386" marker-end="url(#fa08a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="390" y="10" width="150" height="48" rx="6"/>
+<text class="dg-label" x="465" y="30" text-anchor="middle">Service</text>
+<text class="dg-tiny" x="465" y="48" text-anchor="middle">las tres réplicas</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="590" y="10" width="160" height="48" rx="6"/>
+<text class="dg-label" x="670" y="30" text-anchor="middle">Lease</text>
+<text class="dg-tiny" x="670" y="48" text-anchor="middle">en el API de Kubernetes</text>
+<path class="dg-edge" d="M465 60 V96" marker-end="url(#fa08a)"/>
+<path class="dg-feedback" d="M670 100 V62" marker-end="url(#fa08a)"/>
+<text class="dg-tiny" x="660" y="83" text-anchor="end">renovar o preguntar, cada 2 s</text>
+<rect class="dg-frame" x="200" y="100" width="550" height="100" rx="8"/>
+<text class="dg-group" x="214" y="118">Deployment: todas atienden la API, una sola despacha</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="214" y="130" width="164" height="56" rx="6"/>
+<text class="dg-label" x="296" y="152" text-anchor="middle">réplica líder</text>
+<text class="dg-tiny" x="296" y="172" text-anchor="middle">despacha con su token</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="393" y="130" width="164" height="56" rx="6"/>
+<text class="dg-label" x="475" y="152" text-anchor="middle">réplica</text>
+<text class="dg-tiny" x="475" y="172" text-anchor="middle">candidata</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="572" y="130" width="164" height="56" rx="6"/>
+<text class="dg-label" x="654" y="152" text-anchor="middle">réplica</text>
+<text class="dg-tiny" x="654" y="172" text-anchor="middle">candidata</text>
+<rect class="dg-box" x="20" y="130" width="150" height="56" rx="6"/>
+<text class="dg-label" x="95" y="152" text-anchor="middle">zombi.sh</text>
+<text class="dg-tiny" x="95" y="172" text-anchor="middle">congela a la líder</text>
+<path class="dg-feedback" d="M172 158 H210" marker-end="url(#fa08a)"/>
+<path class="dg-edge" d="M296 188 V236" marker-end="url(#fa08a)"/>
+<text class="dg-tiny" x="306" y="222">Fencing-Token, Idempotency-Key</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="200" y="240" width="200" height="52" rx="6"/>
+<text class="dg-label" x="300" y="262" text-anchor="middle">proveedor de mentira</text>
+<text class="dg-tiny" x="300" y="281" text-anchor="middle">rechaza los tokens viejos</text>
+<path class="dg-edge" d="M520 202 V236" marker-end="url(#fa08a)"/>
+<path class="dg-edge" d="M402 266 H436" marker-end="url(#fa08a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="440" y="240" width="140" height="52" rx="6"/>
+<text class="dg-label" x="510" y="262" text-anchor="middle">Pooler</text>
+<text class="dg-tiny" x="510" y="281" text-anchor="middle">PgBouncer</text>
+<path class="dg-edge" d="M582 266 H606" marker-end="url(#fa08a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="610" y="240" width="140" height="52" rx="6"/>
+<text class="dg-label" x="680" y="262" text-anchor="middle">PostgreSQL 18</text>
+<text class="dg-tiny" x="680" y="281" text-anchor="middle">con CloudNativePG</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A08.1.</b> Las tres réplicas atienden la API, pero solo la dueña del Lease despacha. Lo que frena a un líder viejo no es el Lease, que él no mira mientras duerme: es el proveedor, que compara cada token con el más alto que ya vio.</figcaption>
+      </figure>
+
+      <h2 id="endpoints">Los endpoints</h2>
+
+      <div class="table-wrap">
+        <table class="t pj-ep">
+          <thead><tr><th>Método y ruta</th><th>Qué hace</th><th>Respuestas</th></tr></thead>
+          <tbody>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/reminders</code></td><td>Crea un recordatorio que vence en <code>inSeconds</code> segundos.</td><td>201, 400</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/api/reminders/batch</code></td><td>Para los experimentos: muchos recordatorios con el mismo texto, repartidos en el tiempo.</td><td>201, 400</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/api/reminders/{id}</code></td><td>Un recordatorio, con cuándo salió o cuándo se canceló.</td><td>200, 404</td></tr>
+            <tr><td><span class="ep-method" data-m="DELETE">DELETE</span><code>/api/reminders/{id}</code></td><td>Cancela un recordatorio que todavía no salió.</td><td>204, 404, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="POST">POST</span><code>/v1/messages</code></td><td>El proveedor de mentira: recibe un mensaje. Solo lo llaman los pods del clúster.</td><td>201, 200, 400, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="PUT">PUT</span><code>/v1/fence</code></td><td>El proveedor: el líder nuevo sube la valla al empezar su turno.</td><td>204, 409</td></tr>
+            <tr><td><span class="ep-method" data-m="GET">GET</span><code>/actuator/health/liveness</code>, <code>/readiness</code></td><td>Para Kubernetes, en las dos aplicaciones.</td><td>200, 503</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/reminders</code>
+        </div>
+        <p class="ep-desc">Guarda el recordatorio con su vencimiento calculado por PostgreSQL: <code>now()</code> más <code>inSeconds</code>. Cualquier réplica lo atiende; el que despacha es otro asunto.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/reminders HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{"text": "Dentista a las 9", "inSeconds": 60}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="http"><code>HTTP/1.1 201 Created
+Location: /api/reminders/1
+
+{"id": 1, "text": "Dentista a las 9", "dueAt": "…", "deliveredAt": null, "cancelledAt": null, "createdAt": "…"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Creado.</span></li>
+            <li><span class="st st--4xx">400</span><span>Texto vacío o <code>inSeconds</code> negativo.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/reminders/batch</code>
+        </div>
+        <p class="ep-desc">Crea <code>count</code> recordatorios con el mismo texto, en una sola sentencia, con vencimientos repartidos de forma pareja en <code>spreadSeconds</code> a partir de <code>inSeconds</code>. Devuelve el primer y el último id, que son seguidos.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="json"><code>{"text": "relevo", "count": 60, "inSeconds": 0, "spreadSeconds": 30}</code></pre>
+          <p class="ep-sec">Respuesta 201, en una base recién creada</p>
+<pre data-lang="json"><code>{"from": 1, "to": 60}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Creados.</span></li>
+            <li><span class="st st--4xx">400</span><span>Texto vacío, <code>count</code> fuera de 1 a 10&#8239;000, o un plazo negativo.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="DELETE">DELETE</span>
+          <code class="ep-path">/api/reminders/{id}</code>
+        </div>
+        <p class="ep-desc">Cancela solo si el recordatorio no salió: el <code>UPDATE</code> exige <code>delivered_at IS NULL</code>. Cancelar dos veces no es un error. Lo que ya salió no se puede deshacer, y la API lo dice.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">204</span><span>Quedó cancelado, ahora o antes.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe.</span></li>
+            <li><span class="st st--4xx">409</span><span>Ya salió. Un ProblemDetail con <code>detail</code> "El recordatorio 1 ya salió: no se puede cancelar".</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/v1/messages</code>
+        </div>
+        <p class="ep-desc">El proveedor de mentira hace de la empresa que manda los SMS. Tarda 200&#8239;ms en aceptar cada mensaje y anota en la tabla <code>messages</code> todo lo que recibe, con quién lo mandó. Tiene dos defensas, y las activa quien llama: la clave de idempotencia y el fencing token.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/messages HTTP/1.1
+Host: proveedor:8080
+Content-Type: application/json
+X-Sender: recordatorios-7d9f8c6b5-x2kqp_5e1f0a3b
+Idempotency-Key: reminder-1
+Fencing-Token: 3
+
+{"reminderId": 1, "text": "Dentista a las 9", "dueAt": "…"}</code></pre>
+          <p class="ep-sec">Respuesta 201, un mensaje nuevo; 200 con <code>"repeated": true</code> si la clave ya había llegado</p>
+<pre data-lang="json"><code>{"id": 1, "repeated": false}</code></pre>
+          <p class="ep-sec">Respuesta 409, en <code>application/problem+json</code>, si el token es más bajo que la valla</p>
+<pre data-lang="json"><code>{"type": "https://proveedor.example/problemas/token-vencido", "title": "Token vencido", "status": 409,
+ "detail": "El token 2 es más bajo que el último que recibí: hay un líder más nuevo", "instance": "/v1/messages"}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Mensaje nuevo: sale.</span></li>
+            <li><span class="st st--2xx">200</span><span>La clave ya estaba: no sale otra vez, solo se cuenta el intento en <code>repeats</code>.</span></li>
+            <li><span class="st st--4xx">409</span><span>Token vencido: el proveedor ya vio uno más alto.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="PUT">PUT</span>
+          <code class="ep-path">/v1/fence</code>
+        </div>
+        <p class="ep-desc">Sube la valla del proveedor a este token. Desde ahí rechaza cualquier token más bajo. Un token igual pasa; bajarla no se puede.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="json"><code>{"token": 3}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">204</span><span>La valla quedó en ese token.</span></li>
+            <li><span class="st st--4xx">409</span><span>Ya estaba más alta: el mismo ProblemDetail de <code>/v1/messages</code>.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <h2 id="dependencias">Dependencias</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dependencia</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-validation</code></td><td>La API de recordatorios y la del proveedor, con <code>@NotBlank</code> y <code>@Min</code> en el cuerpo y los errores con ProblemDetail.</td></tr>
+            <tr><td><code>spring-boot-starter-actuator</code></td><td>Las probes de Kubernetes.</td></tr>
+            <tr><td><code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code></td><td><code>JdbcClient</code> con Hikari, y las tres migraciones al arrancar.</td></tr>
+            <tr><td><code>io.fabric8:kubernetes-client</code> 7.9.0, con <code>kubernetes-httpclient-jdk</code> en lugar del de Vert.x</td><td>El <code>LeaderElector</code> con un <code>LeaseLock</code>, y leer el Lease para sacar el token.</td></tr>
+            <tr><td><code>shedlock-spring</code>, <code>shedlock-provider-jdbc-template</code> 7.10.1</td><td>La alternativa: un candado con vencimiento en una tabla de PostgreSQL.</td></tr>
+            <tr><td><code>spring-boot-starter-webmvc-test</code>, <code>spring-boot-testcontainers</code>, <code>testcontainers-postgresql</code> (test)</td><td>Once pruebas contra un PostgreSQL 18 de verdad.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>fabric8 7.9.0 trae por defecto un cliente HTTP sobre Vert.x 4.5.31, que está construido sobre Netty 4.1.136. Spring Boot 4.1.1 fija Netty en 4.2.17.Final, así que Maven le pondría a Vert.x 4.5 una versión de Netty que no se probó con él. <span class="badge badge--doc">Documentado</span> fabric8 deja cambiar de cliente HTTP con una exclusión y otra dependencia <span class="badge badge--doc">Documentado</span>: el de <code>kubernetes-httpclient-jdk</code> usa el <code>HttpClient</code> de Java y no trae Netty. Para un Lease que se renueva cada 2&#8239;s, alcanza de sobra.</p>
+        <p>La 8.0.0 salió el 24 de septiembre de 2026, con Jackson 3, Vert.x 5 y cambios incompatibles. <span class="badge badge--doc">Documentado</span> Esta guía usa la 7.9.0, la última de la línea 7, que usa Jackson 2.21. Spring Boot 4.1.1 sigue gestionando Jackson 2 al lado de Jackson 3, y los dos conviven porque están en paquetes distintos. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el pom.xml completo</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;recordatorios&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;!-- Spring Boot no gestiona estas dos: la versión va fija aquí. --&gt;
+    &lt;fabric8.version&gt;7.9.0&lt;/fabric8.version&gt;
+    &lt;shedlock.version&gt;7.10.1&lt;/shedlock.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;!-- El cliente de Kubernetes, para el Lease. Por defecto trae Vert.x como cliente HTTP; se cambia por el del JDK. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.fabric8&lt;/groupId&gt;
+      &lt;artifactId&gt;kubernetes-client&lt;/artifactId&gt;
+      &lt;version&gt;${fabric8.version}&lt;/version&gt;
+      &lt;exclusions&gt;
+        &lt;exclusion&gt;
+          &lt;groupId&gt;io.fabric8&lt;/groupId&gt;
+          &lt;artifactId&gt;kubernetes-httpclient-vertx&lt;/artifactId&gt;
+        &lt;/exclusion&gt;
+      &lt;/exclusions&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.fabric8&lt;/groupId&gt;
+      &lt;artifactId&gt;kubernetes-httpclient-jdk&lt;/artifactId&gt;
+      &lt;version&gt;${fabric8.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+
+    &lt;!-- La alternativa simple: un candado con vencimiento en una tabla de PostgreSQL. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;net.javacrumbs.shedlock&lt;/groupId&gt;
+      &lt;artifactId&gt;shedlock-spring&lt;/artifactId&gt;
+      &lt;version&gt;${shedlock.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;net.javacrumbs.shedlock&lt;/groupId&gt;
+      &lt;artifactId&gt;shedlock-provider-jdbc-template&lt;/artifactId&gt;
+      &lt;version&gt;${shedlock.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h2 id="infraestructura">La infraestructura</h2>
+
+      <p>Además de Java, Maven y Docker, necesitas <code>kubectl</code>, como en A07. Funciona con el servidor si las versiones no se separan en más de una versión menor <span class="badge badge--doc">Documentado</span>: con k3s 1.36, usa un <code>kubectl</code> 1.35, 1.36 o 1.37.</p>
+
+<pre data-lang="bash"><code>winget install -e --id Kubernetes.kubectl     # Windows
+brew install kubectl                         # macOS
+kubectl version --client</code></pre>
+
+      <p>Los scripts son de bash: en Windows, córrelos en Git Bash. Así queda el proyecto:</p>
+
+<pre data-lang="bash"><code>a08-lider/
+├── pom.xml, Dockerfile, src/…
+├── cluster/        compose.yaml, registries.yaml
+├── k8s/            namespace.yaml, db.yaml, rbac.yaml, proveedor.yaml, app.yaml, ingress.yaml
+└── scripts/        psql.sh, consultas.sql, informe.sh, lider.sh, zombi.sh</code></pre>
+
+<pre data-lang="yaml" data-file="cluster/compose.yaml"><code># Un clúster k3s de un solo nodo dentro de un contenedor, con un registro de imágenes al lado.
+# Para elegir un líder no hacen falta más nodos: las tres réplicas compiten igual en uno.
+services:
+  server:
+    image: rancher/k3s:v1.36.5-k3s1
+    hostname: k3s-server
+    privileged: true
+    command: ["server", "--tls-san=127.0.0.1"]
+    tmpfs:
+      - /run
+      - /var/run
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+    environment:
+      K3S_TOKEN: un-secreto-solo-para-el-lab
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+      - ./kube:/output
+    ports:
+      - "6443:6443"   # API de Kubernetes
+      - "8080:80"     # Traefik: la entrada del Ingress
+
+  # docker push localhost:5000/recordatorios:1 desde tu máquina; el nodo la baja de registry:5000 (ver registries.yaml).
+  registry:
+    image: registry:3
+    ports:
+      - "5000:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Un solo nodo</dt><dd>En A07 hacían falta tres nodos para drenar uno. Para elegir un líder no: compiten procesos, no máquinas, y las tres réplicas compiten igual en un nodo. El contenedor corre el mismo binario de k3s que instalarías en una máquina: el control plane y los pods, juntos.</dd></div>
+        <div><dt>Privilegiado</dt><dd>k3s arranca su propio containerd y maneja cgroups y redes dentro del contenedor, así que necesita <code>privileged</code>. Es un laboratorio: no lo hagas con contenedores que no controlas.</dd></div>
+        <div><dt>El kubeconfig y los puertos</dt><dd><code>K3S_KUBECONFIG_OUTPUT</code> lo escribe en <code>cluster/kube/kubeconfig.yaml</code>, apuntando a <code>https://127.0.0.1:6443</code>, la dirección que <code>--tls-san</code> mete en el certificado. El 8080 de tu máquina es el 80 de Traefik, y el 5000 es el registro de imágenes.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="cluster/registries.yaml"><code>mirrors:
+  "localhost:5000":
+    endpoint:
+      - "http://registry:5000"</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Un nombre, dos lugares</dt><dd>Desde tu máquina empujas a <code>localhost:5000/recordatorios:1</code>. Dentro del nodo, <code>localhost</code> es el propio nodo, así que el mirror le dice a containerd que esa imagen se baja de <code>http://registry:5000</code>, el nombre del registro en la red del compose. Es el mismo archivo de A07.</dd></div>
+      </dl>
+
+<pre data-lang="yaml" data-file="src/main/resources/application.yaml"><code>spring:
+  application:
+    name: recordatorios
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/app}
+    username: ${DB_USER:app}
+    password: ${DB_PASSWORD:app}
+    # En milisegundos: sin conexión en 5 s, el request falla en lugar de colgarse medio minuto.
+    hikari:
+      connection-timeout: 5000
+  mvc:
+    problemdetails:
+      enabled: true
+  # Al recibir SIGTERM, Spring apaga por fases y espera hasta 20 s en cada una: primero el lote en curso,
+  # después el Lease y al final las requests HTTP que estén en vuelo.
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  # Lo escribe ApplicationPidFileWriter al arrancar: los experimentos congelan la JVM con kill -STOP y este PID.
+  pid:
+    file: /tmp/app.pid
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  leader:
+    # Quién despacha los recordatorios vencidos:
+    #   none: nadie (las pruebas llaman al Dispatcher a mano)
+    #   all: todas las réplicas, sin coordinarse
+    #   lease: solo la dueña del Lease de Kubernetes
+    #   shedlock: la réplica que tome el candado de la tabla shedlock en cada vuelta
+    mode: none
+    lease: recordatorios-lider
+    namespace: ${POD_NAMESPACE:recordatorios}
+    # Los valores por defecto de kube-controller-manager: el Lease vence a los 15 s sin renovar,
+    # el líder se rinde si no logró renovar en 10 s, y los candidatos preguntan cada 2 s más un poco al azar.
+    lease-duration: 15s
+    renew-deadline: 10s
+    retry-period: 2s
+  dispatch:
+    every-ms: 1000
+    batch-size: 50
+  delivery:
+    # Manda Idempotency-Key: reminder-&lt;id&gt;, y el proveedor descarta lo que ya recibió.
+    idempotent: false
+    # Manda el token del turno en Fencing-Token, y sube la valla del proveedor al empezar cada turno.
+    fencing: false
+  provider:
+    url: http://localhost:8080
+    timeout: 5s
+    # Lo que tarda el proveedor de mentira en aceptar un mensaje.
+    delay: 200ms
+  shedlock:
+    # Lo lee @SchedulerLock: si el dueño del candado no lo suelta en este plazo, otra réplica lo toma.
+    lock-at-most-for: 20s</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>Una imagen, dos papeles</dt><dd>El perfil decide qué es cada proceso. Con <code>recordatorios</code> es la API y el despachador; con <code>proveedor</code>, el proveedor de mentira. Las clases de cada uno llevan <code>@Profile</code>, y las pruebas activan los dos en el mismo proceso.</dd></div>
+        <div><dt>Cuatro modos</dt><dd><code>app.leader.mode</code> decide quién despacha: nadie, todas las réplicas, la dueña del Lease o la que tome el candado de ShedLock. Cada modo es una clase con <code>@ConditionalOnProperty</code>, así que cambiar de modo es cambiar una variable del Deployment.</dd></div>
+        <div><dt>Los tres plazos</dt><dd>Son los valores por defecto de <code>kube-controller-manager</code>: el Lease dura 15&#8239;s, el líder se rinde si no logra renovar en 10&#8239;s, y se intenta cada 2&#8239;s. <span class="badge badge--doc">Documentado</span> fabric8 exige que <code>leaseDuration</code> sea mayor que <code>renewDeadline</code>, y este mayor que el reintento con su margen al azar.</dd></div>
+        <div><dt>El PID en un archivo</dt><dd><code>spring.pid.file</code> lo escribe <code>ApplicationPidFileWriter</code> al arrancar. Los experimentos lo leen para congelar y matar a la JVM.</dd></div>
+        <div><dt>Apagado por fases</dt><dd>Al recibir SIGTERM, Spring detiene sus componentes por fases y espera hasta 20&#8239;s en cada una: primero el despachador, después el Lease y al final las requests HTTP. El orden se ve en el paso 5.</dd></div>
+      </dl>
+
+<pre data-lang="dockerfile" data-file="Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/recordatorios-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM recibe el SIGTERM de Kubernetes directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver el código de la aplicación: RecordatoriosApplication, Instance, AppProps y los recordatorios</summary>
+        <div class="solution-body">
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V1__recordatorios.sql"><code>CREATE TABLE reminders (
+    id           bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    text         text        NOT NULL,
+    due_at       timestamptz NOT NULL,
+    delivered_at timestamptz,
+    cancelled_at timestamptz,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Solo los pendientes: el despachador busca aquí cada segundo, y los entregados no pesan.
+CREATE INDEX reminders_pending ON reminders (due_at, id)
+    WHERE delivered_at IS NULL AND cancelled_at IS NULL;</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/RecordatoriosApplication.java"><code>package lab.recordatorios;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.ApplicationPidFileWriter;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class RecordatoriosApplication {
+
+    public static void main(String[] args) {
+        SpringApplication app = new SpringApplication(RecordatoriosApplication.class);
+        // Escribe el PID de la JVM en spring.pid.file: los experimentos la congelan con kill -STOP y ese número.
+        app.addListeners(new ApplicationPidFileWriter());
+        app.run(args);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/Instance.java"><code>package lab.recordatorios;
+
+import java.util.UUID;
+
+/** La identidad de este proceso ante el Lease, ShedLock y el proveedor. */
+public final class Instance {
+
+    // El nombre del pod más un sufijo al azar. Sin el sufijo, dos procesos con el mismo nombre
+    // (dos copias locales, o un contenedor que se reinició dentro del mismo pod) se creerían líderes
+    // los dos con el mismo token, y la valla del proveedor no los podría distinguir.
+    public static final String ID =
+            System.getenv().getOrDefault("POD_NAME", "local") + "_" + UUID.randomUUID().toString().substring(0, 8);
+
+    private Instance() {
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/AppProps.java"><code>package lab.recordatorios;
+
+import java.time.Duration;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+@ConfigurationProperties("app")
+public record AppProps(Leader leader, Dispatch dispatch, Delivery delivery, Provider provider) {
+
+    public record Leader(String mode, String lease, String namespace,
+                         Duration leaseDuration, Duration renewDeadline, Duration retryPeriod) {
+    }
+
+    public record Dispatch(long everyMs, int batchSize) {
+    }
+
+    public record Delivery(boolean idempotent, boolean fencing) {
+    }
+
+    public record Provider(String url, Duration timeout, Duration delay) {
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/reminders/Reminder.java"><code>package lab.recordatorios.reminders;
+
+import java.time.OffsetDateTime;
+
+public record Reminder(long id, String text, OffsetDateTime dueAt,
+                       OffsetDateTime deliveredAt, OffsetDateTime cancelledAt, OffsetDateTime createdAt) {
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/reminders/ReminderRepository.java"><code>package lab.recordatorios.reminders;
+
+import java.util.List;
+import java.util.Optional;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+
+@Repository
+@Profile("recordatorios")
+public class ReminderRepository {
+
+    public record Range(long from, long to) {
+    }
+
+    private static final String COLUMNS = "id, text, due_at, delivered_at, cancelled_at, created_at";
+
+    private final JdbcClient jdbc;
+
+    public ReminderRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public Reminder insert(String text, long inSeconds) {
+        return jdbc.sql("""
+                INSERT INTO reminders (text, due_at)
+                VALUES (:text, now() + make_interval(secs =&gt; :inSeconds))
+                RETURNING %s
+                """.formatted(COLUMNS))
+                .param("text", text)
+                .param("inSeconds", inSeconds)
+                .query(Reminder.class)
+                .single();
+    }
+
+    /** Crea count recordatorios con el mismo texto, repartidos en spreadSeconds a partir de inSeconds. */
+    public Range insertBatch(String text, int count, long inSeconds, double spreadSeconds) {
+        return jdbc.sql("""
+                WITH created AS (
+                    INSERT INTO reminders (text, due_at)
+                    SELECT :text, now() + make_interval(secs =&gt; :inSeconds + :spreadSeconds * (g - 1) / :count)
+                      FROM generate_series(1, :count) AS g
+                     ORDER BY g
+                    RETURNING id
+                )
+                SELECT min(id), max(id) FROM created
+                """)
+                .param("text", text)
+                .param("count", count)
+                .param("inSeconds", inSeconds)
+                .param("spreadSeconds", spreadSeconds)
+                .query((rs, n) -&gt; new Range(rs.getLong(1), rs.getLong(2)))
+                .single();
+    }
+
+    public Optional&lt;Reminder&gt; find(long id) {
+        return jdbc.sql("SELECT " + COLUMNS + " FROM reminders WHERE id = :id")
+                .param("id", id)
+                .query(Reminder.class)
+                .optional();
+    }
+
+    /** true si lo canceló ahora; false si no existe, ya salió o ya estaba cancelado. */
+    public boolean cancel(long id) {
+        return jdbc.sql("""
+                UPDATE reminders SET cancelled_at = now()
+                 WHERE id = :id AND delivered_at IS NULL AND cancelled_at IS NULL
+                """)
+                .param("id", id)
+                .update() == 1;
+    }
+
+    /** Los vencidos que faltan entregar, del más viejo al más nuevo. Usa el índice parcial reminders_pending. */
+    public List&lt;Reminder&gt; due(int limit) {
+        return jdbc.sql("""
+                SELECT %s FROM reminders
+                 WHERE due_at &lt;= now() AND delivered_at IS NULL AND cancelled_at IS NULL
+                 ORDER BY due_at, id
+                 LIMIT :limit
+                """.formatted(COLUMNS))
+                .param("limit", limit)
+                .query(Reminder.class)
+                .list();
+    }
+
+    /**
+     * Anota la entrega solo si nadie la anotó antes y nadie lo canceló: un compare-and-set.
+     * false quiere decir que esta entrega sobró.
+     */
+    public boolean markDelivered(long id) {
+        return jdbc.sql("""
+                UPDATE reminders SET delivered_at = now()
+                 WHERE id = :id AND delivered_at IS NULL AND cancelled_at IS NULL
+                """)
+                .param("id", id)
+                .update() == 1;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/reminders/ReminderController.java"><code>package lab.recordatorios.reminders;
+
+import java.net.URI;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.PositiveOrZero;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponseException;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@Profile("recordatorios")
+@RequestMapping("/api/reminders")
+public class ReminderController {
+
+    public record NewReminder(@NotBlank String text, @PositiveOrZero long inSeconds) {
+    }
+
+    public record NewBatch(@NotBlank String text, @Min(1) @Max(10_000) int count,
+                           @PositiveOrZero long inSeconds, @PositiveOrZero double spreadSeconds) {
+    }
+
+    private final ReminderRepository reminders;
+
+    public ReminderController(ReminderRepository reminders) {
+        this.reminders = reminders;
+    }
+
+    @PostMapping
+    public ResponseEntity&lt;Reminder&gt; create(@Valid @RequestBody NewReminder body) {
+        Reminder reminder = reminders.insert(body.text(), body.inSeconds());
+        return ResponseEntity.created(URI.create("/api/reminders/" + reminder.id())).body(reminder);
+    }
+
+    /** Para los experimentos: muchos recordatorios de una vez, con el mismo texto. */
+    @PostMapping("/batch")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ReminderRepository.Range createBatch(@Valid @RequestBody NewBatch body) {
+        return reminders.insertBatch(body.text(), body.count(), body.inSeconds(), body.spreadSeconds());
+    }
+
+    @GetMapping("/{id}")
+    public Reminder get(@PathVariable long id) {
+        return reminders.find(id).orElseThrow(() -&gt; new ErrorResponseException(HttpStatus.NOT_FOUND));
+    }
+
+    /** 204 si quedó cancelado (ahora o antes); 409 si ya salió: eso ya no se puede deshacer. */
+    @DeleteMapping("/{id}")
+    public ResponseEntity&lt;Void&gt; cancel(@PathVariable long id) {
+        if (reminders.cancel(id)) {
+            return ResponseEntity.noContent().build();
+        }
+        Reminder reminder = reminders.find(id).orElseThrow(() -&gt; new ErrorResponseException(HttpStatus.NOT_FOUND));
+        if (reminder.deliveredAt() != null) {
+            ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                    "El recordatorio " + id + " ya salió: no se puede cancelar");
+            throw new ErrorResponseException(HttpStatus.CONFLICT, problem, null);
+        }
+        return ResponseEntity.noContent().build();
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h2 id="paso-a-paso">Paso a paso</h2>
+
+      <h3 id="paso-cluster">Paso 1. El clúster</h3>
+
+<pre data-lang="bash"><code>cd cluster
+mkdir -p kube
+docker compose up -d
+# En Git Bash, kubectl.exe necesita la ruta de Windows: pwd -W la da, y en Linux o macOS se usa pwd.
+export KUBECONFIG="$(pwd -W 2&gt;/dev/null || pwd)/kube/kubeconfig.yaml"
+until [ -f kube/kubeconfig.yaml ] &amp;&amp; kubectl get nodes --no-headers 2&gt;/dev/null | grep -q ' Ready'; do sleep 2; done
+kubectl get nodes
+cd ..
+until kubectl -n kube-system get deploy traefik &gt; /dev/null 2&gt;&amp;1; do sleep 2; done
+kubectl -n kube-system rollout status deploy/traefik --timeout=300s</code></pre>
+
+      <p>Tiene que aparecer un nodo, <code>k3s-server</code>, en <code>Ready</code> y con la versión <code>v1.36.5+k3s1</code>. Traefik tarda más que el nodo: lo instala un Job de Helm, y el <code>until</code> espera a que exista su Deployment antes de preguntar por él.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>El mismo k3s en Docker Compose de A07, con un nodo. El Lease es un objeto del API de Kubernetes, y k3s lo trae como cualquier clúster. Para la entrada alcanza un <code>Ingress</code>: es una sola ruta, sin pesos ni versiones.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Correr las tres réplicas fuera de Kubernetes, con un compose: tendrías que poner un etcd o un ZooKeeper solo para el Lease, y perderías lo que el Deployment hace solo, como reemplazar un pod borrado. También descartas la Gateway API de A07: funciona igual, pero pide el <code>HelmChartConfig</code> de Traefik, y aquí no aporta nada.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el 8080, el 6443 o el 5000 ya estén ocupados, por ejemplo por el clúster de A07: <code>docker compose up</code> falla con "port is already allocated". Apaga el otro con <code>docker compose down</code> en su carpeta. Y que exportes <code>KUBECONFIG</code> en una terminal y corras <code>kubectl</code> en otra: cada terminal nueva lo necesita, también la de <code>lider.sh</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-base">Paso 2. La base</h3>
+
+<pre data-lang="yaml" data-file="k8s/namespace.yaml"><code>apiVersion: v1
+kind: Namespace
+metadata:
+  name: recordatorios</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/db.yaml"><code># PostgreSQL con CloudNativePG: una sola instancia alcanza, porque este proyecto no prueba el failover de la base.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: recordatorios-db
+  namespace: recordatorios
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.6-system-trixie
+  storage:
+    size: 1Gi
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+---
+# PgBouncer delante del primario: los pods se conectan aquí, no a PostgreSQL.
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: recordatorios-db-pooler-rw
+  namespace: recordatorios
+spec:
+  cluster:
+    name: recordatorios-db
+  instances: 1
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "20"</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply --server-side -f \
+  https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.30/releases/cnpg-1.30.1.yaml
+kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=180s
+kubectl apply -f k8s/namespace.yaml &amp;&amp; kubectl apply -f k8s/db.yaml
+kubectl -n recordatorios wait cluster/recordatorios-db --for=condition=Ready --timeout=300s
+until kubectl -n recordatorios get deploy recordatorios-db-pooler-rw &gt; /dev/null 2&gt;&amp;1; do sleep 2; done
+kubectl -n recordatorios rollout status deploy/recordatorios-db-pooler-rw --timeout=180s
+kubectl -n recordatorios get pods</code></pre>
+
+      <p>Al final tienen que quedar dos pods en <code>Running</code>: <code>recordatorios-db-1</code>, el PostgreSQL, y uno de <code>recordatorios-db-pooler-rw</code>, el PgBouncer.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>CloudNativePG 1.30.1 con una sola instancia, detrás de un Pooler en modo transaction. La base es la fuente de verdad de lo único que importa aquí: si un recordatorio salió. El operador crea el usuario <code>app</code> con su Secret <code>recordatorios-db-app</code>, que los Deployments leen, y el Service <code>recordatorios-db-rw</code>, por el que entra Flyway. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>La réplica y el failover de A07: este proyecto no rompe la base, rompe al líder. Y guardar el estado de los recordatorios en la memoria del líder: el que toma el turno tiene que saber qué salió y qué no.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el operador no termine de arrancar y el <code>Cluster</code> se quede sin pods: <code>kubectl -n cnpg-system logs deploy/cnpg-controller-manager</code> dice por qué. Y que cambies el nombre del <code>Cluster</code>: cambian también el Secret y los Services, y los Deployments dejan de encontrarlos.</dd></div>
+      </dl>
+
+      <h3 id="paso-proveedor">Paso 3. El proveedor de mentira</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V2__proveedor.sql"><code>-- Las tablas del proveedor de mentira. En la vida real son de otra empresa y viven en otra base;
+-- aquí comparten la base para tener menos piezas, y solo las toca el perfil "proveedor".
+
+-- Cada mensaje que el proveedor aceptó, con lo que mandó el remitente.
+CREATE TABLE messages (
+    id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    reminder_id     bigint      NOT NULL,
+    text            text        NOT NULL,
+    due_at          timestamptz NOT NULL,
+    -- NULL si el remitente no manda clave: dos NULL no chocan en un índice único.
+    idempotency_key text        UNIQUE,
+    fencing_token   bigint,
+    sender          text,
+    received_at     timestamptz NOT NULL DEFAULT now(),
+    -- Cuántas veces llegó otra vez la misma clave y se descartó.
+    repeats         int         NOT NULL DEFAULT 0
+);
+
+-- La valla: el token más alto que el proveedor ya vio. Uno más bajo es de un líder viejo, y se rechaza.
+CREATE TABLE fence (
+    resource text   PRIMARY KEY,
+    token    bigint NOT NULL
+);
+INSERT INTO fence (resource, token) VALUES ('messages', 0);</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/provider/ProviderController.java"><code>package lab.recordatorios.provider;
+
+import java.time.Duration;
+import java.time.OffsetDateTime;
+
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+import lab.recordatorios.AppProps;
+
+/**
+ * El proveedor de mentira: hace de la empresa que manda los SMS. Acepta lo que le llega y lo anota,
+ * con dos defensas opcionales que activa quien lo llama: la clave de idempotencia y el fencing token.
+ */
+@RestController
+@Profile("proveedor")
+@RequestMapping("/v1")
+public class ProviderController {
+
+    public record Message(long reminderId, @NotBlank String text, @NotNull OffsetDateTime dueAt) {
+    }
+
+    public record Fence(long token) {
+    }
+
+    public record Accepted(long id, boolean repeated) {
+    }
+
+    private final ProviderRepository messages;
+    private final Duration delay;
+
+    public ProviderController(ProviderRepository messages, AppProps props) {
+        this.messages = messages;
+        this.delay = props.provider().delay();
+    }
+
+    /** 201 si es un mensaje nuevo; 200 si la clave ya estaba y no se mandó otra vez; 409 si el token es viejo. */
+    @PostMapping("/messages")
+    public ResponseEntity&lt;Accepted&gt; receive(
+            @RequestHeader(name = "Idempotency-Key", required = false) String key,
+            @RequestHeader(name = "Fencing-Token", required = false) Long token,
+            @RequestHeader(name = "X-Sender", required = false) String sender,
+            @Valid @RequestBody Message message) throws InterruptedException {
+        // Lo que tarda un proveedor de verdad. Va antes de la transacción, para no tener la valla bloqueada mientras.
+        Thread.sleep(delay);
+        Accepted accepted = messages.register(token, key, sender, message);
+        return ResponseEntity.status(accepted.repeated() ? HttpStatus.OK : HttpStatus.CREATED).body(accepted);
+    }
+
+    /** El líder nuevo la sube al empezar su turno: desde ahí, los tokens más bajos se rechazan. */
+    @PutMapping("/fence")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void raiseFence(@RequestBody Fence fence) {
+        messages.raiseFence(fence.token());
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/provider/ProviderRepository.java"><code>package lab.recordatorios.provider;
+
+import java.util.Optional;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+
+import lab.recordatorios.provider.ProviderController.Accepted;
+import lab.recordatorios.provider.ProviderController.Message;
+
+@Repository
+@Profile("proveedor")
+public class ProviderRepository {
+
+    private final JdbcClient jdbc;
+
+    public ProviderRepository(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /**
+     * Anota un mensaje. La valla y el mensaje van en la misma transacción: el UPDATE de la valla
+     * deja la fila bloqueada hasta el commit, y ningún token más bajo puede colarse en medio.
+     */
+    @Transactional
+    public Accepted register(Long token, String key, String sender, Message message) {
+        if (token != null) {
+            raiseFence(token);
+        }
+        // Sin clave, idempotency_key queda en NULL y nunca choca: cada pedido es un mensaje nuevo.
+        Optional&lt;Long&gt; id = jdbc.sql("""
+                INSERT INTO messages (reminder_id, text, due_at, idempotency_key, fencing_token, sender)
+                VALUES (:reminderId, :text, :dueAt, :key, :token, :sender)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING id
+                """)
+                .param("reminderId", message.reminderId())
+                .param("text", message.text())
+                .param("dueAt", message.dueAt())
+                .param("key", key)
+                .param("token", token)
+                .param("sender", sender)
+                .query(Long.class)
+                .optional();
+        if (id.isPresent()) {
+            return new Accepted(id.get(), false);
+        }
+        // La clave ya estaba: el mensaje no sale otra vez. Solo se cuenta el intento.
+        long existing = jdbc.sql("UPDATE messages SET repeats = repeats + 1 WHERE idempotency_key = :key RETURNING id")
+                .param("key", key)
+                .query(Long.class)
+                .single();
+        return new Accepted(existing, true);
+    }
+
+    /** Sube la valla a este token, o lanza StaleFencingToken si ya vio uno más alto. Un token igual pasa. */
+    public void raiseFence(long token) {
+        int updated = jdbc.sql("UPDATE fence SET token = :token WHERE resource = 'messages' AND token &lt;= :token")
+                .param("token", token)
+                .update();
+        if (updated == 0) {
+            throw new StaleFencingToken(token);
+        }
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/provider/StaleFencingToken.java"><code>package lab.recordatorios.provider;
+
+import java.net.URI;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.ErrorResponseException;
+
+/** 409: el token es más bajo que el último que vio el proveedor, así que viene de un líder viejo. */
+public class StaleFencingToken extends ErrorResponseException {
+
+    public StaleFencingToken(long token) {
+        super(HttpStatus.CONFLICT, problem(token), null);
+    }
+
+    private static ProblemDetail problem(long token) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                "El token " + token + " es más bajo que el último que recibí: hay un líder más nuevo");
+        problem.setTitle("Token vencido");
+        problem.setType(URI.create("https://proveedor.example/problemas/token-vencido"));
+        return problem;
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un proveedor propio, para ver todo lo que llega: cada mensaje queda en <code>messages</code> con su remitente, su clave y su token. La clave de idempotencia funciona como la de Stripe en M27: la segunda vez que llega <code>reminder-1</code>, el proveedor responde 200 y no lo manda de nuevo. La valla guarda el token más alto que vio. El <code>UPDATE</code> de la valla y el <code>INSERT</code> del mensaje van en la misma transacción, y el <code>UPDATE</code> deja la fila de la valla bloqueada hasta el commit: entre comparar el token y anotar el mensaje no se puede colar otro remitente. Los 200&#8239;ms de espera van antes de la transacción, para no tener la valla bloqueada mientras tanto.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Comprobar el token en el despachador, antes de llamar. Es comprobar y después actuar: el líder viejo pasa la comprobación, se congela, y cuando despierta manda igual. La valla tiene que estar donde ocurre el efecto, en el que recibe la escritura. También descartas simular el proveedor solo en las pruebas: aquí quieres verlo con los tiempos del clúster.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que creas que un proveedor real hace esto. Muchos aceptan una clave de idempotencia, pero casi ninguno acepta un fencing token: la valla solo puede vivir en algo que controlas, como tu propia base o un servicio tuyo delante del proveedor. Un pedido sin <code>Fencing-Token</code> se salta la valla, así que solo protege si todos los que escriben mandan token. Y la fila de la valla ordena todas las entregas en fila: a 5 por segundo no se nota, a miles por segundo sí, y harían falta una valla por recurso o por partición.</dd></div>
+      </dl>
+
+      <h3 id="paso-despachador">Paso 4. El despachador</h3>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/Dispatcher.java"><code>package lab.recordatorios.dispatch;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.SmartLifecycle;
+import org.springframework.web.client.RestClientException;
+
+import lab.recordatorios.reminders.Reminder;
+import lab.recordatorios.reminders.ReminderRepository;
+
+/**
+ * Entrega al proveedor los recordatorios vencidos, en lotes. No decide quién despacha ni cuándo:
+ * eso lo hacen los schedulers de cada modo, que le pasan el token del turno si lo hay.
+ */
+public class Dispatcher implements SmartLifecycle {
+
+    private static final Logger log = LoggerFactory.getLogger(Dispatcher.class);
+
+    // El experimento de la caída: si existe este archivo, el proceso muere justo después de entregar
+    // un recordatorio y antes de anotarlo, como si se cortara la luz en el peor momento.
+    private static final Path CRASH_FLAG = Path.of(System.getProperty("java.io.tmpdir"), "detener-tras-entrega");
+    private static final int MAX_FAILURES_IN_A_ROW = 3;
+
+    private final ReminderRepository reminders;
+    private final ProviderClient provider;
+    private final int batchSize;
+    private final boolean fencing;
+
+    private final ReentrantLock batch = new ReentrantLock();
+    private volatile boolean stopping;
+    private long raised = -1;   // el último token con el que se subió la valla; solo se toca con el candado del lote
+
+    public Dispatcher(ReminderRepository reminders, ProviderClient provider, int batchSize, boolean fencing) {
+        this.reminders = reminders;
+        this.provider = provider;
+        this.batchSize = batchSize;
+        this.fencing = fencing;
+    }
+
+    /** Entrega un lote y devuelve cuántos recordatorios quedaron anotados como entregados. */
+    public int dispatchBatch(OptionalLong token) {
+        if (stopping) {
+            return 0;
+        }
+        OptionalLong sent = fencing ? token : OptionalLong.empty();
+        batch.lock();
+        try {
+            // La valla sube al empezar el turno, no con la primera entrega: así frena al líder viejo
+            // aunque el nuevo todavía no tenga nada que mandar.
+            if (sent.isPresent() &amp;&amp; sent.getAsLong() != raised) {
+                try {
+                    provider.raiseFence(sent.getAsLong());
+                } catch (FencedOut e) {
+                    log.warn("El proveedor rechazó el token {}: hay un líder más nuevo. No entrego nada.", e.token());
+                    return 0;
+                } catch (RestClientException e) {
+                    log.warn("No se pudo subir la valla al token {} ({}); pruebo en la próxima vuelta",
+                            sent.getAsLong(), e.getMessage());
+                    return 0;
+                }
+                raised = sent.getAsLong();
+                log.info("Valla subida al token {}", raised);
+            }
+
+            List&lt;Reminder&gt; due = reminders.due(batchSize);
+            int marked = 0;
+            int failures = 0;
+            for (Reminder reminder : due) {
+                if (stopping) {
+                    break;
+                }
+                try {
+                    provider.deliver(reminder, sent);
+                } catch (FencedOut e) {
+                    log.warn("El proveedor rechazó el token {}: hay un líder más nuevo. Dejo el lote.", e.token());
+                    break;
+                } catch (RestClientException e) {
+                    log.warn("No se pudo entregar el recordatorio {} ({}); queda para el próximo lote",
+                            reminder.id(), e.getMessage());
+                    if (++failures == MAX_FAILURES_IN_A_ROW) {
+                        break;
+                    }
+                    continue;
+                }
+                failures = 0;
+                crashIfAsked(reminder);
+                if (reminders.markDelivered(reminder.id())) {
+                    marked++;
+                } else {
+                    log.warn("El recordatorio {} ya estaba entregado o cancelado: esta entrega sobró", reminder.id());
+                }
+            }
+            if (!due.isEmpty()) {
+                log.info("Lote: {} de {} anotados, token {}", marked, due.size(),
+                        sent.isPresent() ? sent.getAsLong() : "ninguno");
+            }
+            return marked;
+        } finally {
+            batch.unlock();
+        }
+    }
+
+    private void crashIfAsked(Reminder reminder) {
+        try {
+            if (Files.deleteIfExists(CRASH_FLAG)) {
+                log.error("Encontré {}: me detengo después de entregar el recordatorio {} y antes de anotarlo",
+                        CRASH_FLAG, reminder.id());
+                Runtime.getRuntime().halt(1);
+            }
+        } catch (IOException e) {
+            log.warn("No pude revisar {}: {}", CRASH_FLAG, e.getMessage());
+        }
+    }
+
+    @Override
+    public void start() {
+        stopping = false;
+    }
+
+    // Spring lo llama al apagar, antes que a LeaseLeader: el lote en curso termina la entrega que tiene
+    // en vuelo, la anota y no empieza otra. Recién después se suelta el Lease.
+    @Override
+    public void stop() {
+        stopping = true;
+        try {
+            if (batch.tryLock(15, TimeUnit.SECONDS)) {
+                batch.unlock();
+            } else {
+                log.warn("El lote no terminó en 15 s; sigo apagando");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return !stopping;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/ProviderClient.java"><code>package lab.recordatorios.dispatch;
+
+import java.net.http.HttpClient;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.OptionalLong;
+
+import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.web.client.RestClient;
+
+import lab.recordatorios.reminders.Reminder;
+
+/** El cliente HTTP del proveedor de mensajes. Un 409 quiere decir que la valla rechazó el token. */
+public class ProviderClient {
+
+    public record Message(long reminderId, String text, OffsetDateTime dueAt) {
+    }
+
+    public record Fence(long token) {
+    }
+
+    private final RestClient http;
+    private final String sender;
+    private final boolean idempotent;
+
+    public ProviderClient(String baseUrl, Duration timeout, String sender, boolean idempotent) {
+        // HTTP/1.1 fijo: el proveedor habla HTTP/1.1, y así el cliente no intenta negociar HTTP/2.
+        // El mismo plazo para conectar y para esperar la respuesta: pasado ese tiempo, la entrega cuenta como fallida.
+        HttpClient client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(timeout)
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(client);
+        factory.setReadTimeout(timeout);
+        this.http = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
+        this.sender = sender;
+        this.idempotent = idempotent;
+    }
+
+    /** Manda un recordatorio. Con clave, el proveedor descarta lo repetido; con token, lo compara con su valla. */
+    public void deliver(Reminder reminder, OptionalLong token) {
+        http.post()
+                .uri("/v1/messages")
+                .headers(headers -&gt; {
+                    headers.set("X-Sender", sender);
+                    if (idempotent) {
+                        headers.set("Idempotency-Key", "reminder-" + reminder.id());
+                    }
+                    token.ifPresent(t -&gt; headers.set("Fencing-Token", Long.toString(t)));
+                })
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new Message(reminder.id(), reminder.text(), reminder.dueAt()))
+                .retrieve()
+                .onStatus(status -&gt; status.value() == 409, (request, response) -&gt; {
+                    throw new FencedOut(token.orElse(-1));
+                })
+                .toBodilessEntity();
+    }
+
+    /** Sube la valla del proveedor a este token: desde ahí rechaza cualquier token más bajo. */
+    public void raiseFence(long token) {
+        http.put()
+                .uri("/v1/fence")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new Fence(token))
+                .retrieve()
+                .onStatus(status -&gt; status.value() == 409, (request, response) -&gt; {
+                    throw new FencedOut(token);
+                })
+                .toBodilessEntity();
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/FencedOut.java"><code>package lab.recordatorios.dispatch;
+
+/** El proveedor rechazó el token: ya vio uno más alto, así que hay un líder más nuevo que este proceso. */
+public class FencedOut extends RuntimeException {
+
+    private final long token;
+
+    public FencedOut(long token) {
+        super("El proveedor rechazó el token " + token);
+        this.token = token;
+    }
+
+    public long token() {
+        return token;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/DispatchConfig.java"><code>package lab.recordatorios.dispatch;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+
+import lab.recordatorios.AppProps;
+import lab.recordatorios.Instance;
+import lab.recordatorios.reminders.ReminderRepository;
+
+@Configuration(proxyBeanMethods = false)
+@Profile("recordatorios")
+public class DispatchConfig {
+
+    @Bean
+    ProviderClient providerClient(AppProps props) {
+        return new ProviderClient(props.provider().url(), props.provider().timeout(), Instance.ID,
+                props.delivery().idempotent());
+    }
+
+    @Bean
+    Dispatcher dispatcher(ReminderRepository reminders, ProviderClient provider, AppProps props) {
+        return new Dispatcher(reminders, provider, props.dispatch().batchSize(), props.delivery().fencing());
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/AllScheduler.java"><code>package lab.recordatorios.dispatch;
+
+import java.util.OptionalLong;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/** Modo all: cada réplica despacha por su cuenta, sin coordinarse. Es el punto de partida, y está mal a propósito. */
+@Component
+@Profile("recordatorios")
+@ConditionalOnProperty(name = "app.leader.mode", havingValue = "all")
+public class AllScheduler {
+
+    private final Dispatcher dispatcher;
+
+    public AllScheduler(Dispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
+
+    @Scheduled(fixedDelayString = "${app.dispatch.every-ms}")
+    public void tick() {
+        dispatcher.dispatchBatch(OptionalLong.empty());
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>El <code>Dispatcher</code> solo sabe entregar un lote: hasta 50 vencidos, del más viejo al más nuevo, con el índice parcial <code>reminders_pending</code>. Quién lo llama y con qué token lo decide el scheduler de cada modo. Cada entrega es mandar y después anotar, y anotar es un compare-and-set: <code>markDelivered</code> solo escribe si nadie anotó antes y nadie canceló. Mandar primero es entregar al menos una vez: si el proceso muere entre las dos cosas, el próximo líder lo manda otra vez, y la clave lo absorbe. La valla sube cuando cambia el token, al empezar el turno, no con la primera entrega: así frena al líder viejo aunque el nuevo no tenga nada que mandar.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Anotar primero y mandar después, que es entregar como mucho una vez: si muere en medio, el recordatorio se pierde sin que nadie lo note, y para un turno con el dentista es peor que un duplicado. Una transacción alrededor de mandar y anotar: el SMS no se deshace con un rollback, y la transacción tendría una conexión tomada 200&#8239;ms por recordatorio. Y, por ahora, <code>SELECT … FOR UPDATE SKIP LOCKED</code>, que deja despachar a las tres réplicas a la vez, cada una con filas distintas, sin líder: es una alternativa de verdad, y está en las decisiones guiadas.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>El lote se lee una vez y se manda desde la memoria. Un recordatorio que la persona cancela después de la lectura sale igual, aunque el <code>DELETE</code> haya respondido 204: lo vas a provocar en el congelamiento corto. Y <code>CRASH_FLAG</code> es una puerta trasera para los experimentos: un archivo que hace morir al proceso. En un servicio real, sácala.</dd></div>
+      </dl>
+
+      <p>El método <code>stop()</code> es lo que hace el despachador cuando el pod se apaga: deja de empezar entregas, espera hasta 15&#8239;s a que termine la que está en vuelo y la anota. Como implementa <code>SmartLifecycle</code> con la fase por defecto, Spring lo detiene antes que al <code>LeaseLeader</code> del paso 5, que usa una fase menor. <span class="badge badge--doc">Documentado</span> Recién después de eso se suelta el Lease, y el servidor web, que se apaga en una fase todavía menor, termina las requests que quedan.</p>
+
+      <h3 id="paso-lider">Paso 5. El líder</h3>
+
+<pre data-lang="yaml" data-file="k8s/rbac.yaml"><code># La identidad de los pods de recordatorios ante el API de Kubernetes, y lo único que pueden hacer con ella:
+# crear el Lease la primera vez, y leer y renovar ese Lease, ningún otro.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recordatorios
+  namespace: recordatorios
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recordatorios-lider
+  namespace: recordatorios
+rules:
+  # "create" no se puede limitar por nombre: cuando se pide, el objeto todavía no existe.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["recordatorios-lider"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recordatorios-lider
+  namespace: recordatorios
+subjects:
+  - kind: ServiceAccount
+    name: recordatorios
+    namespace: recordatorios
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recordatorios-lider</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/leader/LeaderConfig.java"><code>package lab.recordatorios.leader;
+
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientBuilder;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+
+import lab.recordatorios.AppProps;
+
+@Configuration(proxyBeanMethods = false)
+@Profile("recordatorios")
+@ConditionalOnProperty(name = "app.leader.mode", havingValue = "lease")
+public class LeaderConfig {
+
+    // Dentro del pod se configura solo: toma la dirección del API, el token del ServiceAccount
+    // y el certificado de los archivos y variables que Kubernetes monta en cada contenedor.
+    @Bean(destroyMethod = "close")
+    KubernetesClient kubernetesClient() {
+        return new KubernetesClientBuilder().build();
+    }
+
+    @Bean
+    LeaseLeader leaseLeader(KubernetesClient kubernetes, AppProps props) {
+        return new LeaseLeader(kubernetes, props.leader());
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/leader/LeaseLeader.java"><code>package lab.recordatorios.leader;
+
+import java.util.OptionalLong;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+
+import io.fabric8.kubernetes.api.model.coordination.v1.Lease;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.extended.leaderelection.LeaderCallbacks;
+import io.fabric8.kubernetes.client.extended.leaderelection.LeaderElectionConfig;
+import io.fabric8.kubernetes.client.extended.leaderelection.resourcelock.LeaseLock;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.SmartLifecycle;
+
+import lab.recordatorios.AppProps;
+import lab.recordatorios.Instance;
+
+/**
+ * Compite por el Lease y sabe si este proceso es el líder. El token del turno es el contador
+ * leaseTransitions del Lease: sube cada vez que el Lease cambia de dueño, y nunca baja.
+ */
+public class LeaseLeader implements SmartLifecycle {
+
+    private static final Logger log = LoggerFactory.getLogger(LeaseLeader.class);
+
+    private final KubernetesClient kubernetes;
+    private final AppProps.Leader props;
+
+    private volatile boolean running;
+    private volatile boolean leader;
+    private CompletableFuture&lt;?&gt; election;
+
+    public LeaseLeader(KubernetesClient kubernetes, AppProps.Leader props) {
+        this.kubernetes = kubernetes;
+        this.props = props;
+    }
+
+    public boolean isLeader() {
+        return leader;
+    }
+
+    /**
+     * El token de este turno, leído del Lease. Vacío si este proceso no es el dueño según el API,
+     * aunque crea serlo: es la última comprobación antes de despachar un lote.
+     */
+    public OptionalLong token() {
+        if (!leader) {
+            return OptionalLong.empty();
+        }
+        try {
+            Lease lease = kubernetes.leases().inNamespace(props.namespace()).withName(props.lease()).get();
+            if (lease == null || lease.getSpec() == null
+                    || !Instance.ID.equals(lease.getSpec().getHolderIdentity())) {
+                return OptionalLong.empty();
+            }
+            Integer transitions = lease.getSpec().getLeaseTransitions();
+            return OptionalLong.of(transitions == null ? 0 : transitions);
+        } catch (KubernetesClientException e) {
+            log.warn("No pude leer el Lease {}: {}", props.lease(), e.getMessage());
+            return OptionalLong.empty();
+        }
+    }
+
+    @Override
+    public synchronized void start() {
+        running = true;
+        compete();
+    }
+
+    // Un LeaderElector sirve para una sola elección. Cuando termina (este proceso perdió el Lease,
+    // o no pudo renovarlo a tiempo), se arma otro y se vuelve a competir.
+    private synchronized void compete() {
+        if (!running) {
+            return;
+        }
+        LeaderElectionConfig config = new LeaderElectionConfig(
+                new LeaseLock(props.namespace(), props.lease(), Instance.ID),
+                props.leaseDuration(), props.renewDeadline(), props.retryPeriod(),
+                new LeaderCallbacks(this::onStartLeading, this::onStopLeading,
+                        holder -&gt; log.info("El Lease ahora es de {}",
+                                holder == null || holder.isEmpty() ? "nadie" : holder)),
+                true,   // releaseOnCancel: al apagarse, suelta el Lease en lugar de esperar a que venza
+                "recordatorios");
+        election = kubernetes.leaderElector().withConfig(config).build().start();
+        election.whenComplete((ignored, error) -&gt; {
+            if (error != null &amp;&amp; !(error instanceof CancellationException)) {
+                log.warn("La elección terminó con un error: {}", error.toString());
+            }
+            compete();
+        });
+    }
+
+    // Los dos callbacks corren en el hilo del LeaderElector, dentro de su sección sincronizada:
+    // tienen que volver enseguida. Por eso solo cambian una bandera.
+    private void onStartLeading() {
+        leader = true;
+        log.info("Soy el líder: {}", Instance.ID);
+    }
+
+    private void onStopLeading() {
+        leader = false;
+        log.info("Dejé de ser el líder: {}", Instance.ID);
+    }
+
+    @Override
+    public void stop() {
+        CompletableFuture&lt;?&gt; current;
+        synchronized (this) {
+            running = false;
+            current = election;
+        }
+        // Cancelar la elección suelta el Lease en este mismo hilo: deja leaseDurationSeconds en 1,
+        // y el próximo líder entra en segundos en lugar de esperar los 15 del vencimiento.
+        if (current != null) {
+            current.cancel(true);
+        }
+        leader = false;
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    // Después del Dispatcher, que usa la fase por defecto: primero termina el lote, después suelta el Lease.
+    @Override
+    public int getPhase() {
+        return SmartLifecycle.DEFAULT_PHASE - 1;
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/LeaseScheduler.java"><code>package lab.recordatorios.dispatch;
+
+import java.util.OptionalLong;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import lab.recordatorios.leader.LeaseLeader;
+
+/** Modo lease: todas las réplicas tienen el reloj andando, pero solo despacha la dueña del Lease. */
+@Component
+@Profile("recordatorios")
+@ConditionalOnProperty(name = "app.leader.mode", havingValue = "lease")
+public class LeaseScheduler {
+
+    private final LeaseLeader leader;
+    private final Dispatcher dispatcher;
+
+    public LeaseScheduler(LeaseLeader leader, Dispatcher dispatcher) {
+        this.leader = leader;
+        this.dispatcher = dispatcher;
+    }
+
+    @Scheduled(fixedDelayString = "${app.dispatch.every-ms}")
+    public void tick() {
+        if (!leader.isLeader()) {
+            return;
+        }
+        // El token se lee del Lease en cada vuelta, sin guardarlo: si este proceso perdió el Lease
+        // y lo volvió a ganar, el número ya es otro.
+        OptionalLong token = leader.token();
+        if (token.isEmpty()) {
+            return;
+        }
+        dispatcher.dispatchBatch(token);
+    }
+}</code></pre>
+
+      <p>Así decide fabric8 7.9.0 en cada vuelta, leído en su código:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Candidata</span>Cada 2&#8239;s, más hasta un 120&#8239;% al azar, es decir, entre 2 y 4.4&#8239;s, lee el Lease. Si no existe, lo crea con <code>leaseTransitions</code> en 0. Si tiene dueño, solo lo toma cuando venció: cuando su propio reloj pasó <code>renewTime</code> más <code>leaseDurationSeconds</code>. Al tomarlo, <code>leaseTransitions</code> sube en 1. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Líder</span>Cada 2&#8239;s escribe un <code>renewTime</code> nuevo. Si pasan 10&#8239;s, medidos con su reloj, sin una renovación buena, se rinde: deja de ser líder aunque nadie más haya tomado el Lease. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Escritura con versión</span>Cada escritura lleva el <code>resourceVersion</code> que leyó: si otra réplica escribió en medio, el API responde 409 y la escritura no pasa. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Al apagarse</span>Con <code>releaseOnCancel</code>, si sigue siendo la dueña, deja <code>leaseDurationSeconds</code> en 1: el Lease vence un segundo después, en vez de 15. <span class="badge badge--doc">Documentado</span></li>
+      </ol>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un Lease de <code>coordination.k8s.io/v1</code>, el mismo objeto con el que eligen líder <code>kube-controller-manager</code> y <code>kube-scheduler</code>. <span class="badge badge--doc">Documentado</span> El token es <code>leaseTransitions</code>: sube cada vez que el Lease cambia de dueño y nunca baja. <code>LeaseScheduler</code> lo vuelve a leer del API en cada vuelta, y si el API dice que el dueño es otro, no despacha aunque la bandera diga que sí. La identidad es el nombre del pod más un sufijo al azar: un contenedor que se reinicia dentro del mismo pod es otra candidata, y no se confunde con la anterior. Soltar el Lease al apagarse puede hacerlo también <code>kube-controller-manager</code>, con una feature gate alfa y apagada por defecto, <code>ControllerManagerReleaseLeaderElectionLockOnExit</code>. <span class="badge badge--doc">Documentado</span> El Role da lo mínimo: crear Leases, porque <code>create</code> no se puede limitar por nombre, y leer y modificar solo <code>recordatorios-lider</code>. <span class="badge badge--doc">Documentado</span></dd></div>
+        <div><dt>Lo que descartas</dt><dd>La elección de líder de Spring Cloud Kubernetes y el <code>LockRegistryLeaderInitiator</code> de Spring Integration. Avisan con eventos cuando ganas o pierdes, y esconden el Lease; para el token tendrías que leerlo igual. También descartas un candado en Redis con <code>SET NX PX</code>, el de A03: no da token, y M06 cuenta el debate de Redlock. Y un Deployment aparte con una réplica que despacha sola: durante un rollout con <code>maxSurge</code> hay dos, y un nodo que deja de responder puede seguir corriendo su pod mientras el reemplazo arranca en otro.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>El vencimiento se mide con el reloj de cada candidata. Aquí todos los pods comparten el reloj de tu máquina; en un clúster con relojes desfasados, una candidata adelantada toma el Lease antes de tiempo, mientras el líder todavía cree tenerlo. Un líder que se detiene no se entera de que lo perdió hasta que despierta: la propia biblioteca de Go de Kubernetes advierte que su elección de líder no garantiza que un solo cliente actúe como líder, "a.k.a. fencing". <span class="badge badge--doc">Documentado</span> Es lo que mide el experimento del zombi. Y si borras el Lease, <code>leaseTransitions</code> vuelve a 0: la valla del proveedor se queda en el token viejo y rechaza a cada líder nuevo. Si lo borras, baja también la valla con <code>scripts/psql.sh -c "UPDATE fence SET token = 0"</code>.</dd></div>
+      </dl>
+
+      <h3 id="paso-shedlock">Paso 6. La otra forma: ShedLock</h3>
+
+<pre data-lang="sql" data-file="src/main/resources/db/migration/V3__shedlock.sql"><code>-- La tabla que pide ShedLock para PostgreSQL, tal cual la da su documentación.
+CREATE TABLE shedlock (
+    name       VARCHAR(64)  NOT NULL,
+    lock_until TIMESTAMP    NOT NULL,
+    locked_at  TIMESTAMP    NOT NULL,
+    locked_by  VARCHAR(255) NOT NULL,
+    PRIMARY KEY (name)
+);</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/ShedLockConfig.java"><code>package lab.recordatorios.dispatch;
+
+import javax.sql.DataSource;
+
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
+import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import lab.recordatorios.Instance;
+
+@Configuration(proxyBeanMethods = false)
+@Profile("recordatorios")
+@ConditionalOnProperty(name = "app.leader.mode", havingValue = "shedlock")
+@EnableSchedulerLock(defaultLockAtMostFor = "20s")
+public class ShedLockConfig {
+
+    @Bean
+    LockProvider lockProvider(DataSource dataSource) {
+        return new JdbcTemplateLockProvider(JdbcTemplateLockProvider.Configuration.builder()
+                .withJdbcTemplate(new JdbcTemplate(dataSource))
+                // La hora la pone PostgreSQL, no cada réplica: un reloj adelantado no roba el candado.
+                .usingDbTime()
+                // En locked_by queda la misma identidad que en el Lease: el pod más el sufijo.
+                .withLockedByValue(Instance.ID)
+                .build());
+    }
+}</code></pre>
+
+<pre data-lang="java" data-file="src/main/java/lab/recordatorios/dispatch/ShedLockScheduler.java"><code>package lab.recordatorios.dispatch;
+
+import java.util.OptionalLong;
+
+import net.javacrumbs.shedlock.core.LockAssert;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+/**
+ * Modo shedlock: en cada vuelta, la réplica que toma el candado de la tabla shedlock despacha un lote
+ * y lo suelta. Las demás se saltan la vuelta. No hay token: ShedLock no da ninguno.
+ */
+@Component
+@Profile("recordatorios")
+@ConditionalOnProperty(name = "app.leader.mode", havingValue = "shedlock")
+public class ShedLockScheduler {
+
+    private final Dispatcher dispatcher;
+
+    public ShedLockScheduler(Dispatcher dispatcher) {
+        this.dispatcher = dispatcher;
+    }
+
+    // lockAtMostFor: si el dueño no lo suelta en ese plazo (murió, o está congelado), otra réplica lo toma.
+    // lockAtLeastFor en 0: el candado se suelta apenas termina el lote.
+    // El método tiene que ser público y no final: ShedLock lo envuelve con un proxy.
+    @Scheduled(fixedDelayString = "${app.dispatch.every-ms}")
+    @SchedulerLock(name = "recordatorios", lockAtMostFor = "${app.shedlock.lock-at-most-for}", lockAtLeastFor = "0s")
+    public void tick() {
+        LockAssert.assertLocked();
+        dispatcher.dispatchBatch(OptionalLong.empty());
+    }
+}</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>ShedLock no elige un líder. En cada vuelta, la réplica que toma la fila <code>recordatorios</code> de la tabla <code>shedlock</code> despacha un lote y la suelta. Tomarla es un <code>UPDATE</code> que exige <code>lock_until</code> vencido, y soltarla exige <code>locked_by</code> igual a uno mismo. Con <code>usingDbTime()</code>, la hora la pone PostgreSQL, no cada réplica. <span class="badge badge--doc">Documentado</span> Una réplica que no lo consigue se salta la vuelta, no espera. <code>lockAtMostFor</code> tiene que ser bastante más largo que lo que dura la tarea. <span class="badge badge--doc">Documentado</span> Un lote de 50 tarda 50 × 200&#8239;ms = 10&#8239;s, y 20&#8239;s es el doble.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>KeepAliveLockProvider</code>, que extiende el candado mientras la tarea corre. <span class="badge badge--doc">Documentado</span> Permite un <code>lockAtMostFor</code> corto sin cortar un lote largo, pero un proceso congelado no extiende nada, y al despertar sigue igual: no arregla al zombi. Y un token: ShedLock no da ninguno, así que no hay valla que subir.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un <code>lockAtMostFor</code> más corto que el lote: el candado vence en medio, otra réplica lo toma y las dos mandan lo mismo, sin que nadie esté congelado. Que el dueño viejo no pueda soltar el candado de otro está bien, pero no le impide seguir entregando.</dd></div>
+      </dl>
+
+      <h3 id="paso-imagen">Paso 7. La imagen, en el registro local</h3>
+
+<pre data-lang="bash"><code>./mvnw -DskipTests package
+docker build -t localhost:5000/recordatorios:1 .
+docker push localhost:5000/recordatorios:1</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Una sola imagen, con la versión en la etiqueta, para los dos papeles. La JVM es el proceso que arranca el contenedor (<code>ENTRYPOINT</code> en forma de lista), así que le llega el SIGTERM de Kubernetes directamente.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un proyecto aparte para el proveedor: son más pasos para algo de mentira, y así comparten el <code>pom.xml</code> y las pruebas.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Cambiar el código y volver a empujar la misma etiqueta <code>:1</code>. Con una etiqueta que no es <code>latest</code>, Kubernetes usa <code>imagePullPolicy: IfNotPresent</code> <span class="badge badge--doc">Documentado</span>: el nodo ya tiene una <code>:1</code> y no baja la nueva. Usa <code>:2</code> y cámbiala en los manifiestos.</dd></div>
+      </dl>
+
+      <h3 id="paso-desplegar">Paso 8. Desplegar</h3>
+
+<pre data-lang="yaml" data-file="k8s/proveedor.yaml"><code># El proveedor de mensajes de mentira: la misma imagen con el perfil "proveedor".
+# Hace de la empresa externa que manda los recordatorios por SMS o correo, y anota todo lo que recibe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proveedor
+  namespace: recordatorios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proveedor
+  template:
+    metadata:
+      labels:
+        app: proveedor
+    spec:
+      # No habla con el API de Kubernetes: no necesita credenciales.
+      automountServiceAccountToken: false
+      containers:
+        - name: app
+          image: localhost:5000/recordatorios:1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: proveedor
+            - name: DB_URL
+              value: jdbc:postgresql://recordatorios-db-pooler-rw:5432/app
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: username }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: password }
+            - name: SPRING_FLYWAY_URL
+              value: jdbc:postgresql://recordatorios-db-rw:5432/app
+            - name: SPRING_FLYWAY_USER
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: username }
+            - name: SPRING_FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: password }
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 512Mi
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proveedor
+  namespace: recordatorios
+spec:
+  selector:
+    app: proveedor
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/app.yaml"><code>apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recordatorios
+  namespace: recordatorios
+spec:
+  # Tres réplicas: todas atienden la API, y compiten por el Lease para despachar.
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: recordatorios
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: recordatorios
+    spec:
+      serviceAccountName: recordatorios
+      # Con el espacio de procesos compartido, la JVM no es el proceso 1 del pod, y kill -STOP la puede congelar.
+      shareProcessNamespace: true
+      # 5 s de preStop, hasta 15 s para terminar el lote y soltar el Lease, y hasta 20 s de apagado ordenado.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: app
+          image: localhost:5000/recordatorios:1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: recordatorios
+            # none, all, lease o shedlock: quién despacha (ver application.yaml).
+            - name: APP_LEADER_MODE
+              value: lease
+            - name: APP_DELIVERY_IDEMPOTENT
+              value: "false"
+            - name: APP_DELIVERY_FENCING
+              value: "false"
+            - name: APP_PROVIDER_URL
+              value: http://proveedor:8080
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DB_URL
+              value: jdbc:postgresql://recordatorios-db-pooler-rw:5432/app
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: username }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: password }
+            # Flyway va directo al primario, sin PgBouncer, como en A00.
+            - name: SPRING_FLYWAY_URL
+              value: jdbc:postgresql://recordatorios-db-rw:5432/app
+            - name: SPRING_FLYWAY_USER
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: username }
+            - name: SPRING_FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: recordatorios-db-app, key: password }
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 512Mi
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Reinicia el contenedor tras 60 s sin respuesta: un congelamiento de 30 s no alcanza para reiniciarlo.
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recordatorios
+  namespace: recordatorios
+spec:
+  selector:
+    app: recordatorios
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+<pre data-lang="yaml" data-file="k8s/ingress.yaml"><code># La entrada: Traefik, el controlador de Ingress que trae k3s, manda /api al Service recordatorios.
+# El proveedor no tiene ruta de afuera: solo lo llaman los pods del clúster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recordatorios
+  namespace: recordatorios
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: recordatorios
+                port:
+                  name: http</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/rbac.yaml -f k8s/proveedor.yaml -f k8s/app.yaml -f k8s/ingress.yaml
+kubectl -n recordatorios rollout status deploy/proveedor --timeout=300s
+kubectl -n recordatorios rollout status deploy/recordatorios --timeout=300s
+kubectl -n recordatorios get pods -l app=recordatorios
+kubectl -n recordatorios get lease recordatorios-lider
+for p in $(kubectl -n recordatorios get pods -l app=recordatorios -o name); do
+  echo "== $p"; kubectl -n recordatorios logs $p | grep -E "Soy el líder|El Lease ahora es de"
+done</code></pre>
+
+      <p>Las tres réplicas tienen que quedar en <code>Running</code> con <code>1/1</code> en <code>READY</code>. La columna <code>HOLDER</code> del Lease es la identidad de una de ellas: el nombre de su pod, un guion bajo y ocho caracteres al azar. En los logs, esa réplica dice "Soy el líder" con su identidad, y las otras dos dicen "El Lease ahora es de" con la misma. Si nadie dice "Soy el líder" y los logs repiten el aviso de fabric8 "Exception occurred while acquiring lock" con un código 403, a las réplicas les falta permiso sobre el Lease: revisa el <code>rbac.yaml</code> y el <code>serviceAccountName</code>.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Tres réplicas que atienden la API y compiten por el Lease. Empiezan sin defensas, con <code>APP_DELIVERY_IDEMPOTENT</code> y <code>APP_DELIVERY_FENCING</code> en <code>false</code>: los experimentos las encienden de a una. <code>shareProcessNamespace</code> pone a los contenedores del pod en el mismo espacio de procesos, y el proceso 1 pasa a ser el del sandbox del pod, no la JVM. <span class="badge badge--doc">Documentado</span> Importa porque el kernel no deja que otro proceso del mismo espacio le mande <code>SIGSTOP</code> ni <code>SIGKILL</code> al proceso 1. <span class="badge badge--doc">Documentado</span> Los 45&#8239;s de gracia cubren los 5 del <code>preStop</code>, los 15 del lote, soltar el Lease y los 20 del apagado ordenado.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una liveness corta. Con 6 fallas cada 10&#8239;s, Kubernetes reinicia un contenedor que no responde en 60&#8239;s, y un congelamiento de 30&#8239;s no llega: el experimento necesita que el zombi despierte, no que lo reinicien. La readiness sí lo saca del Service a los pocos segundos, sin reiniciarlo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el proveedor y las réplicas arranquen a la vez y corran Flyway contra la misma base: Flyway toma un candado antes de migrar, y el que llega segundo espera. <span class="badge badge--doc">Documentado</span> Y que una réplica quede en <code>CrashLoopBackOff</code> por memoria: cada pod pide 384&#8239;MiB, y son cuatro, más PostgreSQL, PgBouncer, Traefik y k3s.</dd></div>
+      </dl>
+
+      <h3 id="paso-mirar">Paso 9. Mirar al líder</h3>
+
+<pre data-lang="bash" data-file="scripts/psql.sh"><code>#!/usr/bin/env bash
+# psql dentro del primario de CloudNativePG, en la base app: lo mismo que hace kubectl cnpg psql.
+# Uso: scripts/psql.sh -c "SELECT count(*) FROM messages"
+#      scripts/psql.sh -v texto=relevo &lt; scripts/consultas.sql
+PRIMARIO=$(kubectl -n recordatorios get cluster recordatorios-db -o jsonpath='{.status.currentPrimary}')
+exec kubectl -n recordatorios exec -i "$PRIMARIO" -c postgres -- psql -d app -X -v ON_ERROR_STOP=1 "$@"</code></pre>
+
+<pre data-lang="sql" data-file="scripts/consultas.sql"><code>-- El informe de un experimento. Lo corre scripts/informe.sh con -v texto=&lt;texto&gt;.
+\pset footer off
+
+-- Quién mandó qué: cada remitente es un proceso, el nombre del pod más su sufijo. Horas en UTC.
+SELECT sender,
+       count(*) AS messages,
+       (min(received_at) AT TIME ZONE 'UTC')::time(0) AS first,
+       (max(received_at) AT TIME ZONE 'UTC')::time(0) AS last
+  FROM messages
+ WHERE text = :'texto'
+ GROUP BY sender
+ ORDER BY first;
+
+-- Lo que pidió la persona contra lo que recibió.
+--   duplicates: mensajes de más, el mismo recordatorio anotado dos o más veces por el proveedor.
+--   absorbed: los repetidos que la clave de idempotencia frenó (no salieron).
+--   cancelled_but_sent: los que llegaron después de cancelados.
+SELECT (SELECT count(*) FROM reminders WHERE text = :'texto')                                AS reminders,
+       (SELECT count(*) FROM reminders WHERE text = :'texto' AND cancelled_at IS NOT NULL)   AS cancelled,
+       (SELECT count(*) FROM reminders
+         WHERE text = :'texto' AND delivered_at IS NULL AND cancelled_at IS NULL)            AS pending,
+       count(m.id)                                                                           AS messages,
+       count(m.id) - count(DISTINCT m.reminder_id)                                           AS duplicates,
+       coalesce(sum(m.repeats), 0)                                                           AS absorbed,
+       count(*) FILTER (WHERE r.cancelled_at &lt; m.received_at)                                AS cancelled_but_sent
+  FROM messages m
+  JOIN reminders r ON r.id = m.reminder_id
+ WHERE m.text = :'texto';
+
+-- Cuánto tarde llegaron, en segundos desde que vencían.
+SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - due_at)::float8)::numeric, 2)  AS p50_s,
+       round(percentile_cont(0.99) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - due_at)::float8)::numeric, 2) AS p99_s,
+       round(max(extract(epoch FROM received_at - due_at))::numeric, 2)                                                  AS max_s
+  FROM messages
+ WHERE text = :'texto';</code></pre>
+
+<pre data-lang="bash" data-file="scripts/informe.sh"><code>#!/usr/bin/env bash
+# Qué le llegó al proveedor en un experimento, comparado con lo que pidió la persona.
+# Uso: scripts/informe.sh &lt;texto de los recordatorios&gt;
+set -euo pipefail
+cd "$(dirname "$0")"
+./psql.sh -q -v texto="${1:?Uso: scripts/informe.sh &lt;texto&gt;}" &lt; consultas.sql</code></pre>
+
+<pre data-lang="bash" data-file="scripts/lider.sh"><code>#!/usr/bin/env bash
+# Muestra el Lease una vez por segundo: quién lo tiene, cuántas veces cambió de dueño (el token),
+# cuántos segundos dura y cuándo se renovó por última vez, en UTC. Ctrl+C para salir.
+while true; do
+  printf '%s  ' "$(date -u +%T)"
+  kubectl -n recordatorios get lease recordatorios-lider --no-headers \
+    -o custom-columns='HOLDER:.spec.holderIdentity,TRANSITIONS:.spec.leaseTransitions,DURATION:.spec.leaseDurationSeconds,RENEW:.spec.renewTime' \
+    2&gt;/dev/null || echo "(todavía no hay Lease)"
+  sleep 1
+done</code></pre>
+
+      <p>Abre una segunda terminal, exporta el mismo <code>KUBECONFIG</code> y deja corriendo <code>lider.sh</code>. En la primera, crea un recordatorio que vence en 5&#8239;s:</p>
+
+<pre data-lang="bash"><code>chmod +x scripts/*.sh
+scripts/lider.sh                                  # en la segunda terminal
+
+curl -s -X POST localhost:8080/api/reminders -H 'Content-Type: application/json' \
+     -d '{"text": "primero", "inSeconds": 5}'
+sleep 8
+scripts/informe.sh primero</code></pre>
+
+      <p><code>lider.sh</code> imprime una línea por segundo con la hora en UTC, el dueño, <code>leaseTransitions</code>, <code>leaseDurationSeconds</code> y la última renovación. El nombre, el sufijo y las horas son los de tu clúster:</p>
+
+<pre data-lang="bash"><code>14:03:07  recordatorios-7d9f8c6b5-x2kqp_5e1f0a3b   0     15    2026-10-03T14:03:06.512345Z</code></pre>
+
+      <p>La renovación avanza unos 2&#8239;s cada dos líneas. El informe tiene tres partes: los mensajes por remitente, lo pedido contra lo recibido, y la demora entre el vencimiento y la llegada al proveedor. Para "primero" tiene que dar 1 recordatorio, 1 mensaje y 0 en todo lo demás. La demora sale de una cuenta: el despachador mira cada 1&#8239;s, con <code>fixedDelay</code>, y el proveedor tarda 0.2&#8239;s, así que un recordatorio llega entre 0.2 y 1.2&#8239;s después de vencer, más lo que tarde leer el Lease y la base. Anota tu número: es la referencia de los experimentos.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Mirar el Lease segundo a segundo, porque los relevos duran pocos segundos y <code>kubectl get</code> a mano no los alcanza. Y medir lo que llegó en el proveedor, no lo que el despachador cree que mandó: <code>messages</code> es la verdad de la persona que recibe los SMS.</dd></div>
+        <div><dt>Lo que descartas</dt><dd><code>kubectl get lease -w</code>: muestra cada cambio, pero no la hora de cada uno, y las renovaciones llenan la pantalla. Y el plugin <code>kubectl cnpg psql</code>, que hace lo mismo que <code>psql.sh</code> con un <code>kubectl exec</code> <span class="badge badge--doc">Documentado</span>, pero es otra cosa que instalar.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>En Git Bash, un argumento que empieza con <code>/</code> se convierte en una ruta de Windows antes de llegar a <code>kubectl.exe</code>. Por eso los comandos dentro de los pods van como <code>sh -c '…'</code>. Si escribes uno a mano con una ruta suelta, anteponle <code>MSYS_NO_PATHCONV=1</code>.</dd></div>
+      </dl>
+
+      <h2 id="decisiones">Decisiones guiadas</h2>
+
+      <div data-exercise="a08-lider"></div>
+
+      <h2 id="comprueba">Cómo comprobar que funciona</h2>
+
+      <h3 id="comprueba-pruebas">Las pruebas</h3>
+
+      <p><code>./mvnw verify</code> levanta un PostgreSQL 18 con Testcontainers y corre once pruebas, con los dos perfiles en el mismo proceso y el proveedor sin espera. Nadie despacha solo: cada prueba llama al <code>Dispatcher</code> a mano. Al final, Surefire tiene que decir <code>Tests run: 11, Failures: 0, Errors: 0, Skipped: 0</code>.</p>
+
+      <ul>
+        <li><code>ReminderApiTest</code>, cuatro pruebas: crear y leer un recordatorio, y el 404 de uno que no existe; cancelar dos veces da 204 las dos veces; lo que ya salió da 409; y el lote devuelve ids seguidos, con los vencimientos repartidos.</li>
+        <li><code>ProviderTest</code>, tres pruebas: la misma clave se anota una sola vez, con 201 y después 200; sin clave, cada pedido es un mensaje nuevo; y un token más bajo que la valla da 409 "Token vencido", uno igual o más alto pasa, y la valla no baja.</li>
+        <li><code>DispatcherTest</code>, cuatro pruebas: entrega los vencidos una vez y los anota; un cancelado no sale; la valla frena al líder viejo en medio de su turno; y la clave absorbe la entrega repetida después de una caída.</li>
+      </ul>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver las pruebas: IntegrationTest, ReminderApiTest, ProviderTest, DispatcherTest y TestcontainersConfig</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="src/test/java/lab/recordatorios/IntegrationTest.java"><code>package lab.recordatorios;
+
+import org.junit.jupiter.api.BeforeEach;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.ActiveProfiles;
+
+/**
+ * La base de las tres clases de prueba. Con la misma configuración, Spring arma un solo contexto
+ * y un solo PostgreSQL para todas. Los dos perfiles van juntos: el despachador y el proveedor
+ * corren en el mismo proceso, y nadie despacha solo (modo none): cada prueba llama al Dispatcher.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"app.leader.mode=none", "app.provider.delay=0ms"})
+@ActiveProfiles({"recordatorios", "proveedor"})
+@AutoConfigureMockMvc
+@Import(TestcontainersConfig.class)
+public abstract class IntegrationTest {
+
+    @Autowired
+    protected JdbcClient jdbc;
+
+    @BeforeEach
+    protected void emptyTables() {
+        jdbc.sql("TRUNCATE reminders, messages").update();
+        jdbc.sql("UPDATE fence SET token = 0").update();
+    }
+
+    protected long count(String sql) {
+        return jdbc.sql(sql).query(Long.class).single();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/recordatorios/reminders/ReminderApiTest.java"><code>package lab.recordatorios.reminders;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.jayway.jsonpath.JsonPath;
+import lab.recordatorios.IntegrationTest;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+class ReminderApiTest extends IntegrationTest {
+
+    @Autowired
+    MockMvcTester mvc;
+
+    @Test
+    void crearYLeerUnRecordatorio() {
+        MvcTestResult created = post("/api/reminders", "{\"text\": \"Llamar a Ana\", \"inSeconds\": 600}");
+        assertThat(created).hasStatus(HttpStatus.CREATED);
+        String location = created.getResponse().getHeader("Location");
+        assertThat(location).startsWith("/api/reminders/");
+
+        assertThat(mvc.get().uri(location))
+                .hasStatusOk().bodyJson().extractingPath("$.text").isEqualTo("Llamar a Ana");
+        assertThat(mvc.get().uri("/api/reminders/999999")).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void cancelarDosVecesNoEsUnError() {
+        String location = post("/api/reminders", "{\"text\": \"Pagar la luz\", \"inSeconds\": 600}")
+                .getResponse().getHeader("Location");
+
+        assertThat(mvc.delete().uri(location)).hasStatus(HttpStatus.NO_CONTENT);
+        assertThat(mvc.delete().uri(location)).hasStatus(HttpStatus.NO_CONTENT);
+        assertThat(mvc.get().uri(location)).hasStatusOk().bodyJson().extractingPath("$.cancelledAt").isNotNull();
+    }
+
+    @Test
+    void loQueYaSalioNoSePuedeCancelar() throws Exception {
+        MvcTestResult created = post("/api/reminders", "{\"text\": \"Regar las plantas\", \"inSeconds\": 0}");
+        long id = ((Number) JsonPath.read(created.getResponse().getContentAsString(), "$.id")).longValue();
+        jdbc.sql("UPDATE reminders SET delivered_at = now() WHERE id = :id").param("id", id).update();
+
+        assertThat(mvc.delete().uri("/api/reminders/" + id)).hasStatus(HttpStatus.CONFLICT);
+        assertThat(mvc.delete().uri("/api/reminders/999999")).hasStatus(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void elLoteDevuelveElRangoDeIds() throws Exception {
+        MvcTestResult batch = post("/api/reminders/batch",
+                "{\"text\": \"lote\", \"count\": 3, \"inSeconds\": 60, \"spreadSeconds\": 30}");
+        assertThat(batch).hasStatus(HttpStatus.CREATED);
+        String body = batch.getResponse().getContentAsString();
+        long from = ((Number) JsonPath.read(body, "$.from")).longValue();
+        long to = ((Number) JsonPath.read(body, "$.to")).longValue();
+
+        assertThat(to - from).isEqualTo(2);
+        // Repartidos en 30 s: 0, 10 y 20 s después del primero.
+        assertThat(count("""
+                SELECT extract(epoch FROM max(due_at) - min(due_at))::bigint FROM reminders WHERE text = 'lote'
+                """)).isEqualTo(20);
+    }
+
+    MvcTestResult post(String uri, String json) {
+        return mvc.post().uri(uri).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/recordatorios/provider/ProviderTest.java"><code>package lab.recordatorios.provider;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import lab.recordatorios.IntegrationTest;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+class ProviderTest extends IntegrationTest {
+
+    static final String MESSAGE = """
+            {"reminderId": 1, "text": "Llamar a Ana", "dueAt": "2026-10-03T12:00:00Z"}""";
+
+    @Autowired
+    MockMvcTester mvc;
+
+    @Test
+    void laMismaClaveSeAnotaUnaSolaVez() {
+        assertThat(send("Idempotency-Key", "reminder-1")).hasStatus(HttpStatus.CREATED);
+        assertThat(send("Idempotency-Key", "reminder-1"))
+                .hasStatusOk().bodyJson().extractingPath("$.repeated").isEqualTo(true);
+
+        assertThat(count("SELECT count(*) FROM messages")).isEqualTo(1);
+        assertThat(count("SELECT repeats FROM messages")).isEqualTo(1);
+    }
+
+    @Test
+    void sinClaveCadaPedidoEsUnMensajeNuevo() {
+        assertThat(send(null, null)).hasStatus(HttpStatus.CREATED);
+        assertThat(send(null, null)).hasStatus(HttpStatus.CREATED);
+
+        assertThat(count("SELECT count(*) FROM messages")).isEqualTo(2);
+    }
+
+    @Test
+    void unTokenMasBajoQueLaVallaSeRechaza() {
+        assertThat(mvc.put().uri("/v1/fence").contentType(MediaType.APPLICATION_JSON).content("{\"token\": 5}"))
+                .hasStatus(HttpStatus.NO_CONTENT);
+
+        assertThat(send("Fencing-Token", "4"))
+                .hasStatus(HttpStatus.CONFLICT).bodyJson().extractingPath("$.title").isEqualTo("Token vencido");
+        assertThat(send("Fencing-Token", "5")).hasStatus(HttpStatus.CREATED);
+        assertThat(send("Fencing-Token", "6")).hasStatus(HttpStatus.CREATED);
+
+        // El 6 subió la valla: ahora el 5 tampoco pasa, y bajarla no se puede.
+        assertThat(send("Fencing-Token", "5")).hasStatus(HttpStatus.CONFLICT);
+        assertThat(mvc.put().uri("/v1/fence").contentType(MediaType.APPLICATION_JSON).content("{\"token\": 3}"))
+                .hasStatus(HttpStatus.CONFLICT);
+        assertThat(count("SELECT token FROM fence")).isEqualTo(6);
+        assertThat(count("SELECT count(*) FROM messages")).isEqualTo(2);
+    }
+
+    MvcTestResult send(String header, String value) {
+        var request = mvc.post().uri("/v1/messages").contentType(MediaType.APPLICATION_JSON).content(MESSAGE);
+        if (header != null) {
+            request.header(header, value);
+        }
+        return request.exchange();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/recordatorios/dispatch/DispatcherTest.java"><code>package lab.recordatorios.dispatch;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Duration;
+import java.util.OptionalLong;
+
+import lab.recordatorios.IntegrationTest;
+import lab.recordatorios.reminders.Reminder;
+import lab.recordatorios.reminders.ReminderRepository;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.web.server.LocalServerPort;
+
+class DispatcherTest extends IntegrationTest {
+
+    @LocalServerPort
+    int port;
+    @Autowired
+    ReminderRepository reminders;
+
+    @Test
+    void entregaLosVencidosUnaVezYLosAnota() {
+        reminders.insert("vencido", 0);
+        reminders.insert("vencido", 0);
+        reminders.insert("para dentro de una hora", 3600);
+        Dispatcher dispatcher = dispatcher("prueba", false, false);
+
+        assertThat(dispatcher.dispatchBatch(OptionalLong.empty())).isEqualTo(2);
+        assertThat(dispatcher.dispatchBatch(OptionalLong.empty())).isZero();
+
+        assertThat(count("SELECT count(*) FROM messages")).isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM reminders WHERE delivered_at IS NOT NULL")).isEqualTo(2);
+    }
+
+    @Test
+    void unCanceladoNoSale() {
+        Reminder reminder = reminders.insert("cancelado", 0);
+        assertThat(reminders.cancel(reminder.id())).isTrue();
+
+        assertThat(dispatcher("prueba", false, false).dispatchBatch(OptionalLong.empty())).isZero();
+        assertThat(count("SELECT count(*) FROM messages")).isZero();
+    }
+
+    @Test
+    void laVallaFrenaAlLiderViejoEnMedioDeSuTurno() {
+        Dispatcher viejo = dispatcher("viejo", false, true);
+        Dispatcher nuevo = dispatcher("nuevo", false, true);
+
+        reminders.insert("primero", 0);
+        assertThat(viejo.dispatchBatch(OptionalLong.of(1))).isEqualTo(1);
+        // El nuevo líder sube la valla al empezar su turno, aunque no tenga nada que mandar.
+        assertThat(nuevo.dispatchBatch(OptionalLong.of(2))).isZero();
+
+        // El viejo sigue creyendo que su turno es el 1: su próxima entrega rebota y deja el lote.
+        reminders.insert("segundo", 0);
+        assertThat(viejo.dispatchBatch(OptionalLong.of(1))).isZero();
+        assertThat(count("SELECT count(*) FROM messages WHERE sender = 'viejo'")).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM reminders WHERE delivered_at IS NULL")).isEqualTo(1);
+
+        // El recordatorio que el viejo no pudo mandar lo entrega el nuevo.
+        assertThat(nuevo.dispatchBatch(OptionalLong.of(2))).isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM messages WHERE sender = 'nuevo' AND fencing_token = 2")).isEqualTo(1);
+    }
+
+    @Test
+    void laClaveAbsorbeLaEntregaRepetidaDespuesDeUnaCaida() {
+        // La caída: el recordatorio llegó al proveedor, pero el proceso murió antes de anotarlo.
+        Reminder reminder = reminders.insert("caída", 0);
+        client("antes", true).deliver(reminder, OptionalLong.empty());
+
+        // El que sigue lo ve pendiente y lo manda otra vez, con la misma clave.
+        assertThat(dispatcher("despues", true, false).dispatchBatch(OptionalLong.empty())).isEqualTo(1);
+
+        assertThat(count("SELECT count(*) FROM messages")).isEqualTo(1);
+        assertThat(count("SELECT repeats FROM messages")).isEqualTo(1);
+    }
+
+    ProviderClient client(String sender, boolean idempotent) {
+        return new ProviderClient("http://localhost:" + port, Duration.ofSeconds(5), sender, idempotent);
+    }
+
+    Dispatcher dispatcher(String sender, boolean idempotent, boolean fencing) {
+        return new Dispatcher(reminders, client(sender, idempotent), 50, fencing);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="src/test/java/lab/recordatorios/TestcontainersConfig.java"><code>package lab.recordatorios;
+
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+
+@TestConfiguration(proxyBeanMethods = false)
+public class TestcontainersConfig {
+
+    @Bean
+    @ServiceConnection
+    PostgreSQLContainer postgres() {
+        return new PostgreSQLContainer("postgres:18");
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <h3 id="comprueba-relevo">Un relevo ordenado</h3>
+
+      <p>Borrar el pod del líder es lo que pasa en cada despliegue y en cada drain. Con <code>lider.sh</code> corriendo en la otra terminal, crea 60 recordatorios repartidos en 30&#8239;s, deja que el líder trabaje 10&#8239;s y bórralo, guardando su log antes de que desaparezca:</p>
+
+<pre data-lang="bash"><code>mkdir -p target
+curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "relevo", "count": 60, "inSeconds": 0, "spreadSeconds": 30}'
+sleep 10
+LIDER=$(kubectl -n recordatorios get lease recordatorios-lider -o jsonpath='{.spec.holderIdentity}')
+kubectl -n recordatorios logs -f ${LIDER%_*} &gt; target/relevo.log &amp;
+date -u +"borro a $LIDER a las %T"
+kubectl -n recordatorios delete pod ${LIDER%_*}
+sleep 30
+scripts/informe.sh relevo
+grep -E "Lote|líder|Lease" target/relevo.log | tail -5</code></pre>
+
+      <p>Lo que tienes que ver, en orden. Durante los 5&#8239;s del <code>preStop</code>, el líder sigue despachando: todavía no recibió el SIGTERM. Después, en <code>lider.sh</code>, <code>DURATION</code> baja de 15 a 1: el líder soltó el Lease. Al final de su log aparecen su último "Lote", "El Lease ahora es de nadie" y "Dejé de ser el líder". Unos segundos después, <code>HOLDER</code> cambia a otra réplica y <code>TRANSITIONS</code> sube en 1.</p>
+
+      <p>La peor demora tiene una cota que se calcula. Desde que el Lease se suelta, vence en 1&#8239;s; una candidata lo nota en su próxima pregunta, como mucho 4.4&#8239;s después; despacha en su siguiente vuelta, hasta 1&#8239;s más; y el proveedor tarda 0.2&#8239;s. Son unos 1 + 4.4 + 1 + 0.2 = 6.6&#8239;s en el peor caso. Compara el <code>max_s</code> del informe con eso, y con la demora de "primero". <code>duplicates</code> tiene que dar 0: el despachador terminó y anotó la entrega que tenía en vuelo antes de soltar el Lease.</p>
+
+      <h3 id="comprueba-sin-lider">Falla: sin líder</h3>
+
+      <p>El punto de partida que este proyecto evita: las tres réplicas despachan por su cuenta. Cambia el modo, espera el rollout y crea 30 recordatorios que vencen ya:</p>
+
+<pre data-lang="bash"><code>kubectl -n recordatorios set env deploy/recordatorios APP_LEADER_MODE=all
+kubectl -n recordatorios rollout status deploy/recordatorios
+curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "sin-lider", "count": 30, "inSeconds": 0, "spreadSeconds": 0}'
+sleep 15
+scripts/informe.sh sin-lider</code></pre>
+
+      <p>La cuenta antes de mirar. Cada réplica lee los vencidos en su próxima vuelta, y las tres vueltas caen dentro de 1&#8239;s. Entonces cada una manda todo lo que leyó, desde la memoria. La primera lee los 30. Una que lee hasta 1&#8239;s más tarde se encuentra con que la primera ya anotó como mucho 5, a 0.2&#8239;s cada uno, y manda al menos 25. En total salen entre 30 + 25 + 25 = 80 y 90 mensajes para 30 recordatorios: <code>duplicates</code> entre 50 y 60. Cada recordatorio queda anotado una sola vez, porque <code>markDelivered</code> es un compare-and-set, y eso es justo lo engañoso: la base dice que todo salió bien.</p>
+
+      <p>Repite con la clave encendida:</p>
+
+<pre data-lang="bash"><code>kubectl -n recordatorios set env deploy/recordatorios APP_DELIVERY_IDEMPOTENT=true
+kubectl -n recordatorios rollout status deploy/recordatorios
+curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "sin-lider-clave", "count": 30, "inSeconds": 0, "spreadSeconds": 0}'
+sleep 15
+scripts/informe.sh sin-lider-clave
+kubectl -n recordatorios set env deploy/recordatorios APP_LEADER_MODE=lease APP_DELIVERY_IDEMPOTENT=false
+kubectl -n recordatorios rollout status deploy/recordatorios</code></pre>
+
+      <p>Ahora <code>messages</code> tiene que dar 30 y <code>duplicates</code> 0, con <code>absorbed</code> entre 50 y 60: la persona recibe un SMS por recordatorio, pero el proveedor atendió el triple de pedidos. Con un proveedor que no acepta claves, esos pedidos serían SMS, y los pagarías.</p>
+
+      <h3 id="comprueba-caida">Falla: el líder se cae</h3>
+
+      <p>Ahora sin aviso: <code>kill -KILL</code> a la JVM del líder, que no alcanza a soltar el Lease ni a terminar el lote. El contenedor se reinicia dentro del mismo pod, con otra identidad.</p>
+
+<pre data-lang="bash"><code>curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "caida", "count": 60, "inSeconds": 0, "spreadSeconds": 30}'
+sleep 10
+LIDER=$(kubectl -n recordatorios get lease recordatorios-lider -o jsonpath='{.spec.holderIdentity}')
+date -u +"mato a $LIDER a las %T"
+kubectl -n recordatorios exec ${LIDER%_*} -c app -- sh -c 'kill -KILL $(cat /tmp/app.pid)'
+sleep 40
+scripts/informe.sh caida
+kubectl -n recordatorios get pod ${LIDER%_*}</code></pre>
+
+      <p>En <code>lider.sh</code>, <code>RENEW</code> se congela en la última renovación y <code>HOLDER</code> sigue con la identidad muerta. La cuenta: esa renovación fue entre 0 y 2&#8239;s antes del kill, y el Lease vence 15&#8239;s después de ella, o sea entre 13 y 15&#8239;s después del kill. Una candidata lo nota en su próxima pregunta, hasta 4.4&#8239;s más tarde. El relevo tiene que llegar entre 13 y 19.4&#8239;s después del kill, y el <code>max_s</code> del informe, ser esa espera más hasta 1.2&#8239;s. Compáralo con el del relevo ordenado: la diferencia es lo que vale soltar el Lease al apagarse. El pod tiene que mostrar 1 en <code>RESTARTS</code>.</p>
+
+      <p><code>duplicates</code> da 0 o 1: 1 si el kill llegó mientras una entrega esperaba la respuesta del proveedor, que la anotó igual, y el líder nuevo la mandó otra vez. Para provocarlo siempre, usa la bandera del despachador: el líder muere justo después de que el proveedor acepta un recordatorio, y antes de anotarlo.</p>
+
+<pre data-lang="bash"><code>LIDER=$(kubectl -n recordatorios get lease recordatorios-lider -o jsonpath='{.spec.holderIdentity}')
+kubectl -n recordatorios exec ${LIDER%_*} -c app -- sh -c 'touch /tmp/detener-tras-entrega'
+curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "bandera", "count": 20, "inSeconds": 0, "spreadSeconds": 0}'
+sleep 40
+scripts/informe.sh bandera
+kubectl -n recordatorios logs ${LIDER%_*} -c app --previous | grep "Encontré"</code></pre>
+
+      <p>Tiene que dar exactamente 1 en <code>duplicates</code>, y el log del contenedor anterior dice qué recordatorio fue. Repítelo con la clave encendida, y apágala al terminar, porque el zombi empieza sin defensas:</p>
+
+<pre data-lang="bash"><code>kubectl -n recordatorios set env deploy/recordatorios APP_DELIVERY_IDEMPOTENT=true
+kubectl -n recordatorios rollout status deploy/recordatorios
+LIDER=$(kubectl -n recordatorios get lease recordatorios-lider -o jsonpath='{.spec.holderIdentity}')
+kubectl -n recordatorios exec ${LIDER%_*} -c app -- sh -c 'touch /tmp/detener-tras-entrega'
+curl -s -X POST localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+     -d '{"text": "bandera-clave", "count": 20, "inSeconds": 0, "spreadSeconds": 0}'
+sleep 40
+scripts/informe.sh bandera-clave
+kubectl -n recordatorios set env deploy/recordatorios APP_DELIVERY_IDEMPOTENT=false
+kubectl -n recordatorios rollout status deploy/recordatorios</code></pre>
+
+      <p>Ahora el recordatorio repetido pasa a <code>absorbed</code>, con 1, y <code>duplicates</code> queda en 0. Es la entrega al menos una vez de M07, con la clave haciendo de deduplicación en el que recibe.</p>
+
+      <h3 id="comprueba-zombi">Falla: el líder congelado</h3>
+
+      <p>El caso que el Lease no resuelve. <code>zombi.sh</code> crea 100 recordatorios que vencen ya, espera 3&#8239;s a que el líder esté a mitad de su primer lote de 50, lo congela con <code>kill -STOP</code>, cancela del 26 al 50 a los 2&#8239;s, y lo despierta a los 30&#8239;s, cuando otra réplica ya tomó el turno:</p>
+
+<pre data-lang="bash" data-file="scripts/zombi.sh"><code>#!/usr/bin/env bash
+# El líder congelado. Crea 100 recordatorios que vencen ya, congela a la réplica que los está entregando,
+# cancela del 26 al 50 mientras duerme y la despierta. Al final, el informe.
+# Uso: scripts/zombi.sh &lt;texto, una palabra&gt; [lease|shedlock] [segundos congelado, 30 por defecto]
+# Las horas van en UTC, como las de PostgreSQL y las del Lease.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+TEXTO=${1:?Uso: scripts/zombi.sh &lt;texto&gt; [lease|shedlock] [segundos]}
+MODO=${2:-lease}
+CONGELADO=${3:-30}
+NS=recordatorios
+[ "$CONGELADO" -gt 2 ] || { echo "El congelamiento tiene que durar más de 2 s"; exit 1; }
+val() { ./psql.sh -qtA -c "$1" | tr -d '\r'; }
+# Espera hasta que pasen N segundos desde el congelamiento: cada llamada a kubectl también tarda.
+hasta() { while [ "$SECONDS" -lt "$1" ]; do sleep 0.2; done; }
+
+# 1. Cien recordatorios que vencen ya, con ids seguidos.
+RANGO=$(curl -s -X POST http://localhost:8080/api/reminders/batch -H 'Content-Type: application/json' \
+  -d "{\"text\": \"$TEXTO\", \"count\": 100, \"inSeconds\": 0, \"spreadSeconds\": 0}")
+DESDE=$(echo "$RANGO" | sed -E 's/.*"from": *([0-9]+).*/\1/')
+echo "$(date -u +%T) Creados: $RANGO"
+
+# 2. Tres segundos para que el despachador empiece el lote; después, quién lo tiene.
+sleep 3
+if [ "$MODO" = shedlock ]; then
+  DUENO=$(val "SELECT locked_by FROM shedlock WHERE name = 'recordatorios' AND lock_until &gt; timezone('utc', now())")
+else
+  DUENO=$(kubectl -n $NS get lease recordatorios-lider -o jsonpath='{.spec.holderIdentity}')
+fi
+POD=${DUENO%_*}
+[ -n "$POD" ] || { echo "Nadie tiene el turno: ¿las réplicas corren en modo $MODO?"; exit 1; }
+
+# 3. Congelarlo: la JVM no ejecuta nada más hasta el SIGCONT, pero sus conexiones siguen abiertas.
+kubectl -n $NS exec "$POD" -c app -- sh -c 'kill -STOP $(cat /tmp/app.pid)'
+SECONDS=0
+ANOTADOS=$(val "SELECT count(*) FROM reminders WHERE text = '$TEXTO' AND delivered_at IS NOT NULL")
+echo "$(date -u +%T) Congelé a $DUENO; alcanzó a anotar $ANOTADOS"
+
+# 4. A los 2 s, la persona cancela del 26 al 50. Por SQL, con el mismo UPDATE que el DELETE de la API:
+#    el pod congelado sigue en el Service hasta que falle su readiness, y una request que le toque se quedaría esperando.
+hasta 2
+val "UPDATE reminders SET cancelled_at = now()
+      WHERE id BETWEEN $((DESDE + 25)) AND $((DESDE + 49)) AND delivered_at IS NULL AND cancelled_at IS NULL" &gt; /dev/null
+echo "$(date -u +%T) Cancelé del $((DESDE + 25)) al $((DESDE + 49))"
+
+# 5. Despertarlo cuando termine el congelamiento.
+hasta "$CONGELADO"
+kubectl -n $NS exec "$POD" -c app -- sh -c 'kill -CONT $(cat /tmp/app.pid)'
+echo "$(date -u +%T) Desperté a $DUENO después de unos $SECONDS s"
+
+# 6. Esperar a que termine lo que tenía en vuelo, y el informe.
+sleep 20
+./informe.sh "$TEXTO"</code></pre>
+
+      <p>Hazlo tres veces, encendiendo una defensa por vez. Cada cambio de variable es un rollout: espéralo antes de seguir.</p>
+
+<pre data-lang="bash"><code>scripts/zombi.sh zombi1
+
+kubectl -n recordatorios set env deploy/recordatorios APP_DELIVERY_IDEMPOTENT=true
+kubectl -n recordatorios rollout status deploy/recordatorios
+scripts/zombi.sh zombi2
+
+kubectl -n recordatorios set env deploy/recordatorios APP_DELIVERY_FENCING=true
+kubectl -n recordatorios rollout status deploy/recordatorios
+scripts/zombi.sh zombi3</code></pre>
+
+      <p>Cada corrida empieza así; los nombres, las horas, los ids y el número que anotó son los tuyos:</p>
+
+<pre data-lang="bash"><code>14:20:00 Creados: {"from":101,"to":200}
+14:20:04 Congelé a recordatorios-7d9f8c6b5-x2kqp_5e1f0a3b; alcanzó a anotar 12
+14:20:06 Cancelé del 126 al 150
+14:20:34 Desperté a recordatorios-7d9f8c6b5-x2kqp_5e1f0a3b después de unos 30 s</code></pre>
+
+      <p>Llama <em>k</em> a lo que alcanzó a anotar. El resultado se calcula con <em>k</em>, y vale la pena hacerlo antes de mirar el informe. El líder congelado, A, tenía en memoria los ids del 1 al 50 del rango. Una réplica B toma el Lease entre 13 y 19.4&#8239;s después del congelamiento y manda lo que encuentra pendiente: del <em>k</em> + 1 al 25 y del 51 al 100, que son 75 − <em>k</em>. Los del 26 al 50 ya estaban cancelados. Cuando A despierta, no mira el Lease antes de seguir: sigue con su lote desde la memoria.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Corrida</th><th class="r">messages</th><th class="r">duplicates</th><th class="r">absorbed</th><th class="r">cancelled_but_sent</th></tr></thead>
+          <tbody>
+            <tr><td>Sin defensas: A manda sus 50</td><td class="r">125 − <em>k</em></td><td class="r">25 − <em>k</em></td><td class="r">0</td><td class="r">25</td></tr>
+            <tr><td>Con clave: lo repetido no sale</td><td class="r">100</td><td class="r">0</td><td class="r">25 − <em>k</em></td><td class="r">25</td></tr>
+            <tr><td>Con clave y valla: A rebota en su primer envío</td><td class="r">75</td><td class="r">0</td><td class="r">0 o 1</td><td class="r">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En la primera corrida, A manda sus 50 y B sus 75 − <em>k</em>: se repiten los que estaban en los dos lotes, del <em>k</em> + 1 al 25, y salen los 25 cancelados. La clave convierte los repetidos en <code>absorbed</code>, pero no frena los cancelados: para el proveedor son claves nuevas. La valla sí: B la subió a su token al empezar el turno, y la primera entrega de A al despertar rebota con 409. En su log aparece "El proveedor rechazó el token … Dejo el lote". <code>absorbed</code> da 1 si A estaba esperando la respuesta de una entrega cuando lo congelaron: el proveedor la anotó, y B la mandó otra vez con la misma clave. Compara tu tabla con la cuenta, y la tabla por remitente con los 50 y los 75 − <em>k</em>.</p>
+
+      <h3 id="comprueba-corto">Falla: un congelamiento corto</h3>
+
+      <p>Con la clave y la valla encendidas, congela 5&#8239;s en vez de 30:</p>
+
+<pre data-lang="bash"><code>scripts/zombi.sh corto lease 5</code></pre>
+
+      <p>La cuenta, antes de mirar. La última renovación fue como mucho 2&#8239;s antes del congelamiento, así que al despertar, unos 5 o 6&#8239;s después, pasaron como mucho unos 8&#8239;s: menos que los 10&#8239;s de <code>renewDeadline</code>, y A renueva. Las candidatas necesitan 15&#8239;s sin renovación, así que nadie toma el turno. En <code>lider.sh</code>, <code>RENEW</code> se detiene unos segundos y vuelve, con el mismo <code>HOLDER</code> y el mismo <code>TRANSITIONS</code>. Nadie subió la valla, y A, que sigue siendo el líder legítimo, manda su lote desde la memoria: tiene que dar <code>messages</code> 100, <code>duplicates</code> 0 y <code>cancelled_but_sent</code> 25. Si aun así <code>HOLDER</code> cambia, cada <code>kubectl exec</code> tarda más en tu máquina y el congelamiento real se alargó: repite con <code>scripts/zombi.sh corto2 lease 3</code>.</p>
+
+      <p>La valla frena a un líder viejo, no a un líder lento. Aquí el problema no es de liderazgo: el lote se leyó antes de la cancelación y se mandó después. Para arreglarlo, la carrera tiene que decidirse en la base, donde una fila solo puede estar en un estado. El despachador reclama cada recordatorio justo antes de mandarlo, y la cancelación solo gana si llega antes del reclamo:</p>
+
+<pre data-lang="sql"><code>-- V4: el reclamo
+ALTER TABLE reminders ADD COLUMN claimed_at timestamptz;
+
+-- El despachador, antes de cada entrega: si no actualiza una fila, el recordatorio no sale.
+UPDATE reminders SET claimed_at = now()
+ WHERE id = :id AND delivered_at IS NULL AND cancelled_at IS NULL
+   AND (claimed_at IS NULL OR claimed_at &lt; now() - interval '1 minute');
+
+-- La cancelación, en vez de exigir delivered_at IS NULL: si ya está reclamado, 409.
+UPDATE reminders SET cancelled_at = now()
+ WHERE id = :id AND claimed_at IS NULL AND delivered_at IS NULL AND cancelled_at IS NULL;</code></pre>
+
+      <p>El reclamo vence al minuto para que un despachador que muere después de reclamar no deje el recordatorio trabado: lo retoma el siguiente, y si el primero alcanzó a mandarlo, la clave absorbe el repetido. A la persona que cancela tarde le cuesta un 409 en lugar de un 204, pero ese 409 dice la verdad. Implementarlo es un cambio en <code>ReminderRepository</code> y una línea en el bucle del <code>Dispatcher</code>; hazlo al terminar los experimentos, porque cambia sus cuentas.</p>
+
+      <h3 id="comprueba-shedlock">Falla: ShedLock con el líder congelado</h3>
+
+<pre data-lang="bash"><code>kubectl -n recordatorios set env deploy/recordatorios APP_LEADER_MODE=shedlock
+kubectl -n recordatorios rollout status deploy/recordatorios
+scripts/zombi.sh shed shedlock
+scripts/psql.sh -c "SELECT name, locked_by, locked_at, lock_until FROM shedlock"</code></pre>
+
+      <p>Con la clave encendida y sin token, ShedLock tiene que dar lo mismo que la segunda corrida del zombi: <code>messages</code> 100, <code>duplicates</code> 0, <code>absorbed</code> 25 − <em>k</em> y <code>cancelled_but_sent</code> 25. La valla no hace nada, porque el despachador no tiene token que mandar. El turno cambia cuando vence el candado, 20&#8239;s después de que A lo tomó: unos 17&#8239;s después del congelamiento, más la vuelta de la que lo toma. Al despertar, A sigue entregando, y al terminar intenta soltar el candado, pero el <code>UPDATE</code> exige su propio <code>locked_by</code> y no toca el de otra réplica. Para volver al modo de la guía:</p>
+
+<pre data-lang="bash"><code>kubectl -n recordatorios set env deploy/recordatorios APP_LEADER_MODE=lease
+kubectl -n recordatorios rollout status deploy/recordatorios</code></pre>
+
+      <h2 id="repositorio">Tu repositorio</h2>
+
+      <div class="pj-repo" data-repo="a08">
+        <p class="pj-repo-head">Sube el proyecto a un repositorio propio, por ejemplo <code>a08-lider</code>, y pega aquí el enlace.</p>
+        <ul class="pj-checks">
+          <li data-check="verify">Las once pruebas pasan con <code>./mvnw verify</code>.</li>
+          <li data-check="relevo">Borraste al líder y viste el Lease pasar a otra réplica en segundos, sin duplicados.</li>
+          <li data-check="sin-lider">Despachaste con las tres réplicas a la vez y contaste los duplicados, con y sin clave.</li>
+          <li data-check="caida">Mataste al líder con <code>kill -KILL</code>, mediste el relevo y provocaste el duplicado con la bandera.</li>
+          <li data-check="zombi">Congelaste al líder 30&#8239;s y comparaste las tres corridas con la cuenta de <em>k</em>.</li>
+          <li data-check="valla">Con la valla encendida, ningún recordatorio cancelado llegó al proveedor.</li>
+          <li data-check="corto">Con un congelamiento corto, viste que la valla no frena a un líder que sigue siéndolo.</li>
+          <li data-check="shedlock">Repetiste el zombi con ShedLock y explicaste por qué no hay valla posible.</li>
+        </ul>
+      </div>
+
+      <h2 id="conectar">Cómo conectar</h2>
+
+      <p>Este proyecto funciona solo. Si quieres juntarlo con uno anterior:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Con A00, el laboratorio</p>
+          <p>Es la misma división que en A00: la app pasa por PgBouncer en modo transaction y Flyway va directo al primario. ShedLock convive bien con ese modo, porque toma y suelta el candado con sentencias sueltas, sin estado de sesión. Un advisory lock de sesión, la otra forma clásica de elegir líder en PostgreSQL, es justo lo que A00 mostró que se rompe detrás de PgBouncer.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A01, detrás de Nginx</p>
+          <p>El balanceador reparte la API entre las tres réplicas y no sabe quién es el líder, ni tiene por qué: el liderazgo es para el trabajo de fondo, no para el tráfico. Si alguna vez una ruta tiene que llegar solo al líder, es una señal de que esa ruta es trabajo de fondo.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A02, una API que no se rompe</p>
+          <p>El 409 de la cancelación es un ProblemDetail como los de A02, y la clave de idempotencia es la misma idea que el <code>If-Match</code>: una escritura que dice con qué estado cuenta, y que el servidor rechaza si el estado cambió.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A03, caché que aguanta un pico</p>
+          <p>El candado <code>SET NX</code> de A03 contra el cache stampede es un líder de corta duración: uno recalcula y los demás esperan. Si el que recalcula se congela, otro lo hace cuando vence la clave, y el viejo escribe un valor viejo al despertar. Ahí no hay valla, pero el daño dura un TTL; aquí, un SMS no se borra.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A04, primario y réplicas</p>
+          <p>La lectura de los vencidos y la valla tienen que ir al primario. Si el despachador leyera los pendientes de una réplica con lag, volvería a mandar recordatorios que el primario ya tiene anotados: el compare-and-set salvaría la marca, pero el SMS ya habría salido.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A05, dos primarios</p>
+          <p>Dos sucursales que despachan cada una sus recordatorios son dos líderes a propósito, y funcionan por la misma regla de A05: cada fila tiene una sucursal dueña, y solo la dueña la despacha. Sin esa regla, cada recordatorio replicado sale dos veces.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A06, repartir los datos</p>
+          <p>Con muchos recordatorios, un solo líder no alcanza. Un Lease por shard, <code>recordatorios-lider-0</code>, <code>-1</code> y así, deja que cada réplica lidere algunos, con un token y una valla por shard. Y la migración de A06, que hoy vive en la memoria de una réplica, es trabajo para un líder: una sola réplica tiene que llevarla.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Con A07, Kubernetes</p>
+          <p>Es el mismo clúster con un nodo en lugar de tres. Con los tres nodos de A07, drena el nodo del líder: el drain borra el pod, y el relevo es el ordenado, con el Lease soltado. El PodDisruptionBudget de A07 no protege al líder en particular: protege a la cantidad de réplicas.</p>
+        </li>
+      </ul>
+
+      <p>La teoría está en el curso:</p>
+
+      <ul class="pj-connect">
+        <li>
+          <p class="pj-connect-title">Leases y fencing tokens</p>
+          <p>Por qué un lease no alcanza y qué hace el token: <a href="../modules/m061-teoria-distribuida-a-fondo.html#leases">M06.1. Leases, split brain y fencing tokens</a>, y <a href="../modules/m061-teoria-distribuida-a-fondo.html#redlock">el debate de Redlock</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Relojes</p>
+          <p>Por qué el vencimiento de un Lease depende de relojes que pueden estar desfasados: <a href="../modules/m061-teoria-distribuida-a-fondo.html#relojes-fisicos">M06.1. Qué tan mal puede estar un reloj</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Consenso</p>
+          <p>Lo que hay debajo del API de Kubernetes cuando dos réplicas escriben el mismo Lease: <a href="../modules/m061-teoria-distribuida-a-fondo.html#consenso">M06.1. Consenso con Raft</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Semánticas de entrega</p>
+          <p>Al menos una vez, como mucho una vez, y por qué "exactamente una vez" es al menos una vez más deduplicación: <a href="../modules/m07-mensajeria.html#semanticas">M07. Semánticas de entrega</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">Idempotencia</p>
+          <p>Cómo se diseña una clave y cuánto tiempo se guarda: <a href="../modules/m02-apis.html#idempotencia">M02. Idempotencia en la API</a> y <a href="../modules/m27-pagos-stripe.html#idempotencia">M27. Idempotency keys de principio a fin</a>. Y por qué reintentar sin clave multiplica el daño: <a href="../modules/m08-resiliencia.html#reintentos">M08. Reintentos sin tormentas</a>.</p>
+        </li>
+        <li>
+          <p class="pj-connect-title">En el glosario</p>
+          <p><a href="../glosario.html#t-lease">Lease</a>, <a href="../glosario.html#t-fencing">fencing token</a>, <a href="../glosario.html#t-split-brain">split brain</a>, <a href="../glosario.html#t-stonith">STONITH</a>, <a href="../glosario.html#t-redlock">Redlock</a>, <a href="../glosario.html#t-idempotency-key">idempotency key</a>, <a href="../glosario.html#t-idempotencia">idempotencia</a>, <a href="../glosario.html#t-at-least-once">al menos una vez</a>, <a href="../glosario.html#t-consenso">consenso</a> y <a href="../glosario.html#t-raft">Raft</a>.</p>
+        </li>
+      </ul>
+
+    </article>
+
+    <nav class="pager content" data-project-pager aria-label="Proyecto anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/projects.data.js"></script>
+<script src="../assets/js/data/projects/a08.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/pages/project-state.js"></script>
+<script src="../assets/js/pages/project-guide.js"></script>
+</body>
+</html>

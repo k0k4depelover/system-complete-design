@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M03. Balanceadores, gateways y proxies</title>
-<meta name="description" content="L4 vs L7, algoritmos de balanceo con simulador, health checks, API gateway, BFF, service mesh y los fallos típicos de la capa de entrada.">
+<meta name="description" content="L4 y L7 como flotas separadas, algoritmos de balanceo con simulador, health checks y slow start animado, API gateway, WAF y sus políticas, BFF, sticky sessions y el SPOF de Redis, service mesh con mTLS paso a paso y la amplificación de reintentos.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -42,7 +42,7 @@
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M03</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Duración</dt><dd>120 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M01</dd></div>
           <div><dt>Estado</dt><dd data-status="m03">Sin empezar</dd></div>
         </dl>
@@ -50,11 +50,14 @@
 <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
-          <li>Distinguir proxy, balanceador L4, balanceador L7, API gateway y sidecar, y ubicarlos en una arquitectura.</li>
+          <li>Distinguir proxy, balanceador L4, balanceador L7, API gateway y sidecar, y explicar por qué el L4 y el L7 suelen ser flotas separadas.</li>
           <li>Elegir un algoritmo de balanceo según el tipo de carga y explicar por qué.</li>
-          <li>Diseñar health checks que no conviertan una falla parcial en una caída total.</li>
-          <li>Definir qué va en un API gateway, qué va en un BFF y qué no va en ninguno.</li>
-          <li>Decidir cuándo vale la pena un service mesh.</li>
+          <li>Diseñar health checks que no conviertan una falla parcial en una caída total, y configurar el slow start en el balanceador.</li>
+          <li>Escribir una política de WAF y ponerla en producción sin bloquear a usuarios legítimos.</li>
+          <li>Definir qué va en un API gateway, qué va en un BFF y qué no va en ninguno, y cómo sabe un BFF qué cliente tiene enfrente.</li>
+          <li>Decidir dónde vive la sesión y qué pasa cuando el almacén central se cae.</li>
+          <li>Seguir una llamada a través de un service mesh, de iptables a la política de autorización, y decidir cuándo vale la pena.</li>
+          <li>Calcular la amplificación de reintentos y elegir en qué capa reintentar.</li>
         </ul>
       </section>
 
@@ -137,6 +140,110 @@
         <p><b>Mitigación:</b> un balanceador L7 que entienda HTTP/2 y reparta cada stream, balanceo del lado del cliente (el cliente conoce todas las instancias) o conexiones con duración máxima que obliguen a reconectar.</p>
       </aside>
 
+
+      <h3 id="l4-l7-capas">Dos flotas separadas, una detrás de otra</h3>
+
+      <p>En una arquitectura grande, el balanceador L4 y el L7 son piezas distintas: máquinas distintas, cada una con su propia flota, y no un mismo equipo con dos modos. Se ven así:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 384" role="img" aria-labelledby="f3lbt f3lbd">
+<title id="f3lbt">Una flota L4 delante de una flota L7</title>
+<desc id="f3lbd">Los clientes llegan a un router de borde que reparte los flujos con ECMP entre tres nodos L4. Cada nodo L4 elige un proxy L7 con un hash de la conexión y le reenvía los paquetes sin terminar TCP. Los cuatro proxies L7 terminan TLS, leen HTTP y enrutan a los servicios. La respuesta vuelve del L7 al cliente sin pasar por el L4 (direct server return).</desc>
+<defs><marker id="f3lba" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3lbr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<text class="dg-group" x="8" y="26">Clientes</text>
+<text class="dg-group" x="128" y="26">Borde</text>
+<text class="dg-group" x="258" y="26">Flota L4</text>
+<text class="dg-group" x="420" y="26">Flota L7</text>
+<text class="dg-group" x="606" y="26">Servicios</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="70" width="92" height="40" rx="6"/>
+<text class="dg-label" x="54.0" y="95.0" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-edge" d="M100 90 L126 166" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="160" width="92" height="40" rx="6"/>
+<text class="dg-label" x="54.0" y="185.0" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-edge" d="M100 180 L126 180" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="250" width="92" height="40" rx="6"/>
+<text class="dg-label" x="54.0" y="275.0" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-edge" d="M100 270 L126 194" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="128" y="128" width="100" height="104" rx="6"/>
+<text class="dg-label" x="178.0" y="162.5" text-anchor="middle" style="font-size:13.5px">Router</text>
+<text class="dg-tiny" x="178.0" y="178.5" text-anchor="middle">ECMP:</text>
+<text class="dg-tiny" x="178.0" y="192.5" text-anchor="middle">hash de la</text>
+<text class="dg-tiny" x="178.0" y="206.5" text-anchor="middle">conexión</text>
+<rect class="dg-frame" x="258" y="40" width="128" height="290" rx="10"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="270" y="66" width="104" height="48" rx="6"/>
+<text class="dg-label" x="322.0" y="87.5" text-anchor="middle" style="font-size:13.5px">L4 nodo 1</text>
+<text class="dg-tiny" x="322.0" y="103.5" text-anchor="middle">Maglev, Katran</text>
+<path class="dg-edge" d="M228 160 L268 90" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="270" y="146" width="104" height="48" rx="6"/>
+<text class="dg-label" x="322.0" y="167.5" text-anchor="middle" style="font-size:13.5px">L4 nodo 2</text>
+<text class="dg-tiny" x="322.0" y="183.5" text-anchor="middle">NLB, IPVS</text>
+<path class="dg-edge" d="M228 180 L268 170" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="270" y="226" width="104" height="48" rx="6"/>
+<text class="dg-label" x="322.0" y="247.5" text-anchor="middle" style="font-size:13.5px">L4 nodo 3</text>
+<text class="dg-tiny" x="322.0" y="263.5" text-anchor="middle">sin estado</text>
+<path class="dg-edge" d="M228 200 L268 250" marker-end="url(#f3lba)"/>
+<text class="dg-tiny" x="322" y="300" text-anchor="middle">no termina TCP:</text>
+<text class="dg-tiny" x="322" y="316" text-anchor="middle">reenvía paquetes</text>
+<rect class="dg-frame" x="420" y="40" width="150" height="290" rx="10"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="432" y="58" width="126" height="42" rx="6"/>
+<text class="dg-label" x="495.0" y="84.0" text-anchor="middle" style="font-size:13.5px">Envoy 1</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="432" y="118" width="126" height="42" rx="6"/>
+<text class="dg-label" x="495.0" y="144.0" text-anchor="middle" style="font-size:13.5px">Envoy 2</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="432" y="178" width="126" height="42" rx="6"/>
+<text class="dg-label" x="495.0" y="204.0" text-anchor="middle" style="font-size:13.5px">Envoy 3</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="432" y="238" width="126" height="42" rx="6"/>
+<text class="dg-label" x="495.0" y="264.0" text-anchor="middle" style="font-size:13.5px">Envoy 4</text>
+<path class="dg-edge" d="M374 90 L430 79" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 90 L430 139" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 90 L430 199" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 90 L430 259" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 170 L430 79" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 170 L430 139" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 170 L430 199" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 170 L430 259" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 250 L430 79" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 250 L430 139" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 250 L430 199" style="opacity:.45" marker-end="url(#f3lba)"/>
+<path class="dg-edge" d="M374 250 L430 259" style="opacity:.45" marker-end="url(#f3lba)"/>
+<text class="dg-tiny" x="495" y="300" text-anchor="middle">termina TLS y TCP,</text>
+<text class="dg-tiny" x="495" y="316" text-anchor="middle">lee HTTP y enruta</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="606" y="70" width="150" height="46" rx="6"/>
+<text class="dg-label" x="681.0" y="90.5" text-anchor="middle" style="font-size:13.5px">usuarios</text>
+<text class="dg-tiny" x="681.0" y="106.5" text-anchor="middle">/users/*</text>
+<path class="dg-edge" d="M570 93 H604" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="606" y="160" width="150" height="46" rx="6"/>
+<text class="dg-label" x="681.0" y="180.5" text-anchor="middle" style="font-size:13.5px">pedidos</text>
+<text class="dg-tiny" x="681.0" y="196.5" text-anchor="middle">/orders/*</text>
+<path class="dg-edge" d="M570 183 H604" marker-end="url(#f3lba)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="606" y="250" width="150" height="46" rx="6"/>
+<text class="dg-label" x="681.0" y="270.5" text-anchor="middle" style="font-size:13.5px">búsqueda</text>
+<text class="dg-tiny" x="681.0" y="286.5" text-anchor="middle">/search</text>
+<path class="dg-edge" d="M570 273 H604" marker-end="url(#f3lba)"/>
+<path class="dg-edge dg-res" d="M495 330 V350 H54 V292" marker-end="url(#f3lbr)" style="stroke-dasharray:6 4"/>
+<text class="dg-small" x="274" y="372" text-anchor="middle">respuesta con DSR: del L7 al cliente, sin volver a pasar por el L4</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.2.</b> El L4 solo mira la conexión y reenvía paquetes; el L7 hace el trabajo caro. La respuesta, que suele pesar mucho más que la request, vuelve directo del L7 al cliente.</figcaption>
+      </figure>
+
+      <p>Lo que hace cada capa, de izquierda a derecha:</p>
+      <ol class="steps">
+        <li><span class="step-title">El router reparte flujos.</span>Todos los nodos L4 anuncian la misma IP virtual (VIP) al router del borde, y el router usa <dfn data-term="ecmp">ECMP</dfn>: calcula un hash de la conexión (IPs y puertos de origen y destino, y protocolo) y manda todos sus paquetes por el mismo camino. Agregar un nodo L4 es anunciar la VIP una vez más.</li>
+        <li><span class="step-title">El L4 elige un proxy L7 y reenvía.</span>No termina TCP ni descifra nada: mira la cabecera del paquete, elige un proxy L7 con hashing consistente y le reenvía el paquete encapsulado. Guarda además una tabla de conexiones, para que un cambio en la flota L7 no rompa las conexiones abiertas. Maglev, de Google, corre en servidores comunes con su propia tabla de hashing; Katran, de Facebook, corre dentro del kernel con XDP y eBPF. <span class="badge badge--doc">Documentado</span> Como el trabajo por paquete es mínimo, un nodo L4 mueve millones de paquetes por segundo.</li>
+        <li><span class="step-title">El L7 hace el trabajo caro.</span>Termina TCP y TLS, parsea HTTP, aplica el WAF, autentica, enruta por host y path, y reintenta. Cada request le cuesta CPU de verdad, y por eso es la flota que más crece.</li>
+        <li><span class="step-title">La respuesta vuelve directo.</span>Con <dfn data-term="dsr">direct server return</dfn> (DSR), el proxy L7 responde al cliente usando la VIP como origen, sin pasar otra vez por el L4. La subida (las requests) es chica y la bajada (páginas, imágenes, video) es enorme: el L4 solo carga con la parte chica.</li>
+      </ol>
+
+      <p>¿Por qué no un solo balanceador que haga todo? Porque las dos capas escalan y fallan de forma distinta:</p>
+      <ul>
+        <li><b>El L4 es barato por paquete y casi no tiene estado.</b> Una flota chica absorbe un tráfico enorme, incluso un SYN flood, sin gastar CPU en TLS. Si un nodo L4 cae, el router deja de mandarle flujos, y otro nodo, con el mismo hashing consistente, manda cada conexión al mismo proxy L7 que antes.</li>
+        <li><b>El L7 es caro por request.</b> Necesita muchas máquinas, que se agregan, se actualizan y se reinician seguido. El L4 de adelante reparte entre ellas y las saca de rotación sin que el cliente vea una IP distinta.</li>
+        <li><b>Cada capa se despliega por separado.</b> Cambiar una regla de enrutamiento HTTP no toca la capa que sostiene las conexiones.</li>
+      </ul>
+
+      <p>Así lo hacen los grandes: Google pone Maglev delante de sus Google Front Ends, los proxies L7 que terminan TLS, y Facebook pone Katran delante de sus proxies L7. <span class="badge badge--doc">Documentado</span> En AWS, el mismo patrón se arma con dos servicios: un NLB (L4, con una IP fija por zona) cuyo destino es un ALB (L7). <span class="badge badge--doc">Documentado</span> Si usas solo un ALB, la capa L4 igual existe, pero es parte del servicio administrado y no la ves. Cloudflare hace lo contrario: su balanceador L4, Unimog, corre en cada servidor del PoP, sin una flota aparte (<a href="m28-cloudflare.html#unimog">M28</a>).</p>
+
       <h2 id="algoritmos"><span class="sec-num">3.3</span>Algoritmos de balanceo</h2>
 
       <div class="table-wrap">
@@ -153,7 +260,13 @@
         </table>
       </div>
 
-      <p>La diferencia entre estos algoritmos casi no se nota cuando todo está sano. Se nota el día que un servidor se pone lento sin caerse (una pausa larga de GC, un disco degradado, un vecino ruidoso en la misma máquina), que es precisamente la falla más común. Pruébalo: pon el servidor 1 seis veces más lento y compara.</p>
+      <p>La diferencia entre estos algoritmos casi no se nota cuando todo está sano. Se nota el día que un servidor se pone lento sin caerse, que es precisamente la falla más común. Sigue respondiendo a los health checks, así que el balanceador no lo saca, pero cada request tarda varias veces más. Las tres causas típicas:</p>
+      <ul>
+        <li><b>Una <dfn data-term="gc-pause">pausa de GC</dfn>.</b> GC es el <em>garbage collector</em>, el recolector de basura: la parte del runtime (la JVM en Java, el de Go, el de .NET o el de Node.js) que busca los objetos que el programa ya no usa y libera su memoria. Algunas de sus fases detienen todos los hilos de la aplicación mientras trabajan (pausas <em>stop-the-world</em>). Con un heap de decenas de GB y un recolector mal elegido, una recolección completa puede congelar el proceso varios segundos: las requests que llegan se acumulan, aunque el servidor esté "vivo". El recolector G1 de la JVM, por ejemplo, apunta por defecto a pausas de 200&#8239;ms como máximo (<code>-XX:MaxGCPauseMillis=200</code>), y ZGC a pausas de menos de un milisegundo. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Un disco degradado.</b> Un disco que empieza a fallar reintenta lecturas, un RAID que se está reconstruyendo reparte su capacidad, o un volumen de red se queda sin créditos de ráfaga (los volúmenes <code>gp2</code> de AWS bajan a su rendimiento base cuando los agotan). <span class="badge badge--doc">Documentado</span> Cada operación de disco pasa de milisegundos a decenas o cientos.</li>
+        <li><b>Un vecino ruidoso.</b> Otra máquina virtual o contenedor en el mismo servidor físico consume CPU, caché del procesador o ancho de banda de disco. Tu proceso recibe menos CPU de la que cree tener; en Linux se ve como <em>steal time</em>, la columna <code>st</code> de <code>top</code>.</li>
+      </ul>
+      <p>Pruébalo: pon el servidor 1 seis veces más lento y compara.</p>
 
       <div data-sim="lb"></div>
 
@@ -182,7 +295,50 @@
         </table>
       </div>
 
-      <p>Dos mecanismos completan el ciclo de vida de una instancia. Al retirarla (un deploy, un escalado hacia abajo), el <dfn data-term="draining">connection draining</dfn> deja de mandarle requests nuevas y espera a que terminen las que tiene. Al agregarla, el <em>slow start</em> le sube el tráfico gradualmente durante 30 a 60 s, para que no reciba todo de golpe con cachés frías.</p>
+      <p>Dos mecanismos completan el ciclo de vida de una instancia. Al retirarla (un deploy, un escalado hacia abajo), el <dfn data-term="draining">connection draining</dfn> deja de mandarle requests nuevas y espera a que terminen las que tiene; en un ALB, la espera por defecto es de 300 s. <span class="badge badge--doc">Documentado</span> Al agregarla, el slow start le sube el tráfico de a poco. Este segundo mecanismo merece su propia sección.</p>
+
+      <h3 id="slow-start">Slow start: quién limita y cómo</h3>
+
+      <p>Una instancia recién arrancada pasa el readiness check, pero todavía no rinde como las demás:</p>
+      <ul>
+        <li><b>El código no está optimizado.</b> La JVM o el runtime de .NET empiezan interpretando o con una compilación rápida, y solo optimizan los métodos que se ejecutan mucho (compilación JIT). Las primeras miles de requests corren varias veces más lento.</li>
+        <li><b>Las cachés están vacías.</b> La caché local, la de sentencias preparadas y la del sistema de archivos se llenan con tráfico; mientras tanto, cada request va hasta la base.</li>
+        <li><b>Los pools de conexiones están vacíos.</b> Cada conexión nueva a la base o a otro servicio cuesta un handshake TCP y otro de TLS; si llegan cien requests a la vez, se abren cien conexiones a la vez.</li>
+      </ul>
+      <p>Si el balanceador le da su parte completa desde el primer segundo, la instancia fría acumula cola, su latencia se dispara y, al llegar a su límite, empieza a fallar. Con <em>menos conexiones</em> es peor: la instancia nueva tiene cero requests en curso, parece la más libre y recibe casi todo hasta llenarse. Es una pequeña estampida (<em>thundering herd</em>) dirigida a la instancia más débil.</p>
+
+      <p>El <dfn data-term="lb-slow-start">slow start del balanceador</dfn> evita eso, y lo aplica <b>el balanceador, no la instancia</b>, porque es el único que decide adónde va cada request. La instancia no puede pedir "mándame menos"; solo puede rechazar lo que le sobra o declararse no lista. El balanceador le asigna un peso reducido que crece con el tiempo:</p>
+      <ul>
+        <li><b>Envoy</b> (y con él, Istio): <code>slow_start_config</code>, en round robin y least request. El peso efectivo es <code>peso × max(min_weight_percent, (t / ventana)<sup>1/aggression</sup>)</code>, con un mínimo del 10&#8239;% por defecto; con <code>aggression</code> igual a 1, la subida es lineal. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>AWS ALB:</b> el atributo <code>slow_start.duration_seconds</code> del target group, de 30 a 900 s, sube en línea recta la cantidad de requests que le manda. Solo funciona con round robin, no con least outstanding requests ni con weighted random. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>HAProxy y NGINX Plus:</b> el parámetro <code>slowstart</code> de cada <code>server</code> en HAProxy y <code>slow_start=30s</code> en el <code>upstream</code> de NGINX Plus hacen lo mismo. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <p>En Envoy se configura en el cluster (el grupo de instancias de un servicio):</p>
+<pre data-lang="json"><code>{
+  "name": "payments",
+  "lb_policy": "ROUND_ROBIN",
+  "round_robin_lb_config": {
+    "slow_start_config": {
+      "slow_start_window": "60s",
+      "aggression": { "default_value": 1.0, "runtime_key": "payments.slow_start.aggression" },
+      "min_weight_percent": { "value": 10 }
+    }
+  }
+}</code></pre>
+
+      <p>Prueba la diferencia en el simulador. Empieza sin slow start y después cambia a una ventana de 30 s:</p>
+
+      <div data-sim="slowstart"></div>
+
+      <p>Sin slow start, la instancia 4 recibe 75 rps cuando solo puede atender 24: la cola crece unas 51 requests por segundo y en 2 s llega al límite de 100. Desde ahí responde 503 a lo que no entra, durante los 21 s que tarda en poder atender 75. Con una ventana de 30 s, el peso empieza en el 10&#8239;% (unos 10 rps) y sube más despacio que la capacidad: nunca se forma cola.</p>
+
+      <p>La instancia no limita lo que le llega, pero sí se defiende:</p>
+      <ul>
+        <li><b>Precalentar antes de declararse lista.</b> Cargar las cachés, abrir los pools y ejecutar algunas requests sintéticas antes de responder OK en <code>/readyz</code>. Así entra a la flota ya tibia.</li>
+        <li><b>Un límite de concurrencia.</b> Si tiene más requests en curso de las que puede atender, responde 503 de inmediato, que es mejor que encolar y responder tarde. La detección de outliers del balanceador ve esos errores y le baja el tráfico.</li>
+        <li><b>Cuidado con el arranque masivo.</b> El slow start protege a una instancia nueva comparándola con las viejas. Si toda la flota arranca a la vez, no hay viejas: en un ALB, los targets que se registran juntos en un target group vacío no entran en slow start. <span class="badge badge--doc">Documentado</span> Los deploys graduales, de a una fracción de la flota, existen también por esto.</li>
+      </ul>
 
       <h2 id="gateway"><span class="sec-num">3.5</span>API gateway y BFF</h2>
 
@@ -239,7 +395,7 @@
 <text class="dg-small" x="14" y="216">en todas las etapas: request_id, logs de acceso, métricas por ruta y cliente, trace (M11)</text>
 </svg>
         </div>
-        <figcaption><b>Figura 3.2.</b> El orden importa: autenticar antes de aplicar la cuota permite limitar por cliente y no por IP, y el WAF va antes que todo para no gastar CPU en tráfico malicioso.</figcaption>
+        <figcaption><b>Figura 3.3.</b> El orden importa: autenticar antes de aplicar la cuota permite limitar por cliente y no por IP, y el WAF va antes que todo para no gastar CPU en tráfico malicioso.</figcaption>
       </figure>
 
       <aside class="callout callout--tradeoff">
@@ -251,22 +407,653 @@
         <p class="to-verdict"><b>Regla práctica:</b> el gateway resuelve solo lo transversal (identidad, cuotas, rutas, observabilidad). La agregación de datos para una pantalla va en un BFF; la lógica de negocio, en los servicios.</p>
       </aside>
 
-      <p>El <dfn data-term="bff">BFF</dfn> (backend for frontend) resuelve otro problema: la app de iOS, la web y la TV necesitan los mismos datos con formas distintas. En lugar de que cada cliente haga cinco llamadas y combine resultados (con cinco idas y vueltas por redes móviles, M01), un BFF por tipo de cliente hace esas llamadas dentro del datacenter, en paralelo, y devuelve una respuesta a la medida de la pantalla. Lo mantiene el equipo del frontend.</p>
 
-      <h3 id="sticky">El estado en la instancia</h3>
-      <p>Las <dfn data-term="sticky-session">sticky sessions</dfn> parecen resolver el problema de guardar la sesión en memoria del servidor: el balanceador manda siempre al mismo usuario a la misma instancia. En realidad lo esconden. Si esa instancia se cae, sus usuarios pierden la sesión; si un usuario pesado cae en una instancia, no hay forma de redistribuirlo; y los deploys obligan a esperar a que las sesiones expiren. La solución es la de siempre: el estado vive afuera (Redis, la base o un token firmado) y cualquier instancia atiende cualquier request.</p>
+      <h3 id="waf">WAF: cómo decide cuándo bloquear</h3>
+
+      <p>Un <dfn data-term="waf">WAF</dfn> no "se activa" de vez en cuando: evalúa <b>todas</b> las requests contra una lista de reglas. Lo que varía es si alguna regla coincide y qué acción tiene. Para mirar el contenido necesita ver la request en claro, y por eso vive donde se termina TLS: en el CDN, en el balanceador L7 o en el gateway.</p>
+
+      <p>El conjunto de reglas es la política, que AWS y Azure llaman <dfn data-term="web-acl">web ACL</dfn>. Cada regla tiene tres partes:</p>
+      <ul>
+        <li><b>Una condición:</b> la IP está en una lista, el path empieza con <code>/login</code>, un parámetro parece SQL, el cuerpo pesa más de 8&#8239;KB, la request viene de cierto país, o hubo "más de N requests en 5 minutos desde esta IP" (una regla de tasa).</li>
+        <li><b>Una acción:</b> Allow, Block (un 403), Count (solo registrar), o pedir un CAPTCHA o un challenge de JavaScript.</li>
+        <li><b>Una prioridad:</b> las reglas se evalúan en orden, y la primera que termina con Allow o Block corta la evaluación. Count no corta: registra y sigue. Si ninguna regla termina, se aplica la acción por defecto.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 452" role="img" aria-labelledby="f3wft f3wfd">
+<title id="f3wft">Cómo decide un WAF</title>
+<desc id="f3wfd">Una request con una inyección SQL en el parámetro id y el User-Agent de sqlmap entra al web ACL. Las reglas se evalúan en orden de prioridad: la lista de IPs bloqueadas y el límite por IP no coinciden; el grupo administrado OWASP CRS suma 5 puntos por la regla 942100 de inyección SQL y 5 por la 913100 de escáneres, total 10 o más, que supera el umbral de 5 y bloquea con 403. La regla propia de /admin ya no se evalúa. A la derecha, la otra señal: un puntaje de machine learning de 1 a 99, donde 1 a 20 es ataque.</desc>
+<defs><marker id="f3wfa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3wff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<text class="dg-group" x="8" y="22">La request</text>
+<rect class="dg-box" x="8" y="32" width="330" height="66" rx="6"/>
+<text class="dg-tiny" x="20" y="52" style="font-family:var(--f-mono);white-space:pre">GET /items?id=1&#x27;+OR+&#x27;1&#x27;=&#x27;1</text>
+<text class="dg-tiny" x="20" y="68" style="font-family:var(--f-mono);white-space:pre">Host: tienda.ejemplo.com</text>
+<text class="dg-tiny" x="20" y="84" style="font-family:var(--f-mono);white-space:pre">User-Agent: sqlmap/1.7</text>
+<path class="dg-edge" d="M120 98 V124" marker-end="url(#f3wfa)"/>
+<rect class="dg-frame" x="8" y="126" width="470" height="314" rx="10"/>
+<text class="dg-group" x="20" y="146">Web ACL: reglas en orden de prioridad</text>
+<rect class="dg-box" x="20" y="158" width="446" height="50" rx="6"/>
+<text class="dg-num" x="32" y="179">1</text>
+<text class="dg-label" x="52" y="179" style="font-size:13.5px">IPs bloqueadas</text>
+<text class="dg-tiny" x="52" y="196">¿la IP está en la lista?</text>
+<text class="dg-tiny" x="454" y="187" text-anchor="end">no coincide</text>
+<rect class="dg-box" x="20" y="218" width="446" height="50" rx="6"/>
+<text class="dg-num" x="32" y="239">2</text>
+<text class="dg-label" x="52" y="239" style="font-size:13.5px">Límite por IP</text>
+<text class="dg-tiny" x="52" y="256">¿más de 2 000 requests en 5 min?</text>
+<text class="dg-tiny" x="454" y="247" text-anchor="end">no coincide</text>
+<rect class="dg-box--em dg-box" x="20" y="278" width="446" height="50" rx="6"/>
+<text class="dg-num" x="32" y="299">3</text>
+<text class="dg-label" x="52" y="299" style="font-size:13.5px">OWASP CRS (administrado)</text>
+<text class="dg-tiny" x="52" y="316">suma puntos por regla que coincide</text>
+<rect class="dg-bad" x="356" y="291" width="98" height="24" rx="12"/>
+<text class="dg-tiny dg-fail-text" x="405" y="307" text-anchor="middle" style="font-weight:600">Block: 403</text>
+<rect class="dg-box" x="20" y="338" width="446" height="50" rx="6"/>
+<text class="dg-num" x="32" y="359">4</text>
+<text class="dg-label" x="52" y="359" style="font-size:13.5px">Propia: /admin solo por VPN</text>
+<text class="dg-tiny" x="52" y="376">no se llega a evaluar</text>
+<text class="dg-tiny" x="454" y="367" text-anchor="end" style="fill:var(--label-3)">no se evalúa</text>
+<text class="dg-tiny" x="32" y="412">Si ninguna regla termina la evaluación: acción por defecto (Allow).</text>
+<path class="dg-feedback" d="M466 296 L498 214" marker-end="url(#f3wfa)"/>
+<text class="dg-group" x="500" y="22">Dentro del grupo CRS (3.3, nivel 1)</text>
+<rect class="dg-box" x="500" y="32" width="262" height="200" rx="8"/>
+<text class="dg-tiny" x="512" y="54">Coinciden, entre otras:</text>
+<text class="dg-tiny" x="512" y="76" style="font-family:var(--f-mono);white-space:pre">942100  SQLi (libinjection)</text>
+<text class="dg-num" x="750" y="76" text-anchor="end">+5</text>
+<text class="dg-tiny" x="512" y="96" style="font-family:var(--f-mono);white-space:pre">913100  UA de escáner</text>
+<text class="dg-num" x="750" y="96" text-anchor="end">+5</text>
+<path class="dg-frame" d="M512 108 H750"/>
+<text class="dg-tiny" x="512" y="128">Puntaje de anomalía</text>
+<text class="dg-num" x="750" y="128" text-anchor="end">≥ 10</text>
+<text class="dg-tiny" x="512" y="148">Umbral de entrada</text>
+<text class="dg-num" x="750" y="148" text-anchor="end">5</text>
+<text class="dg-tiny" x="512" y="176">crítica 5 · error 4 · aviso 3 · nota 2</text>
+<text class="dg-tiny" x="512" y="196">Bloquea si la suma llega al umbral:</text>
+<text class="dg-tiny" x="512" y="212">una sola regla crítica alcanza.</text>
+<text class="dg-group" x="500" y="262">Otra señal: puntaje de ML (Cloudflare)</text>
+<rect class="dg-box" x="500" y="272" width="262" height="168" rx="8"/>
+<text class="dg-tiny" x="512" y="294">Un modelo puntúa cada request de 1 a 99:</text>
+<rect class="dg-bad" x="512" y="306" width="58" height="26" rx="4"/>
+<text class="dg-tiny" x="541" y="323" text-anchor="middle" style="font-weight:600">1–20</text>
+<text class="dg-tiny" x="541" y="348" text-anchor="middle">ataque</text>
+<rect class="dg-warnbox" x="572" y="306" width="58" height="26" rx="4"/>
+<text class="dg-tiny" x="601" y="323" text-anchor="middle" style="font-weight:600">21–50</text>
+<text class="dg-tiny" x="601" y="348" text-anchor="middle">probable</text>
+<rect class="dg-box" x="632" y="306" width="58" height="26" rx="4"/>
+<text class="dg-tiny" x="661" y="323" text-anchor="middle" style="font-weight:600">51–80</text>
+<text class="dg-tiny" x="661" y="348" text-anchor="middle">prob. limpio</text>
+<rect class="dg-ok" x="692" y="306" width="58" height="26" rx="4"/>
+<text class="dg-tiny" x="721" y="323" text-anchor="middle" style="font-weight:600">81–99</text>
+<text class="dg-tiny" x="721" y="348" text-anchor="middle">limpio</text>
+<text class="dg-tiny" x="512" y="378">Tú escribes la regla que lo usa:</text>
+<text class="dg-tiny" x="512" y="398" style="font-family:var(--f-mono);white-space:pre">cf.waf.score le 20  → block</text>
+<text class="dg-tiny" x="512" y="418" style="font-family:var(--f-mono);white-space:pre">cf.waf.score le 50  → challenge</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.4.</b> La regla 3 es un grupo administrado que no decide por una sola coincidencia sino por la suma de puntos. A la derecha, una señal que no depende de firmas.</figcaption>
+      </figure>
+
+      <p>Las condiciones que detectan ataques vienen de dos familias:</p>
+      <ul>
+        <li><b>Firmas, con puntaje de anomalía.</b> El <dfn data-term="owasp-crs">OWASP Core Rule Set</dfn> (CRS), el conjunto de reglas abierto que usan ModSecurity, Coraza y muchos WAF administrados, tiene cientos de reglas de patrones: inyección SQL, XSS, path traversal, escáneres conocidos. Cada regla que coincide no bloquea sola, sino que suma puntos según su severidad: crítica 5, error 4, aviso 3, nota 2. Al terminar de revisar la request, si la suma llega al umbral de entrada, que por defecto es 5, se bloquea. Una sola coincidencia crítica alcanza; dos notas sueltas, no. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Niveles de paranoia.</b> El CRS reparte sus reglas en cuatro niveles. El 1 es la base para cualquier sitio, con pocos falsos positivos; cada nivel más alto agrega reglas más agresivas, que detectan más ataques y también bloquean más usuarios legítimos. El 3 y el 4 son para sitios como un banco, dispuestos a ajustar mucho. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Modelos de machine learning.</b> Las firmas solo ven ataques parecidos a los conocidos. Cloudflare, por ejemplo, entrena un modelo que le da a cada request un puntaje de 1 a 99: de 1 a 20 es casi seguro un ataque, y de 81 a 99, una request limpia. <span class="badge badge--doc">Documentado</span> El modelo no bloquea por su cuenta: tú escribes la regla que usa el puntaje, como "bloquear si es 20 o menos y pedir un challenge si es 50 o menos".</li>
+      </ul>
+
+      <p>Una política de AWS WAF, tal como la muestra el editor JSON de la consola, con un límite por IP para el login y el grupo administrado de reglas comunes, con una de sus reglas pasada a Count:</p>
+<pre data-lang="json"><code>{
+  "Name": "tienda",
+  "DefaultAction": { "Allow": {} },
+  "Rules": [
+    {
+      "Name": "login-por-ip",
+      "Priority": 1,
+      "Statement": {
+        "RateBasedStatement": {
+          "Limit": 100,
+          "EvaluationWindowSec": 300,
+          "AggregateKeyType": "IP",
+          "ScopeDownStatement": {
+            "ByteMatchStatement": {
+              "FieldToMatch": { "UriPath": {} },
+              "PositionalConstraint": "STARTS_WITH",
+              "SearchString": "/login",
+              "TextTransformations": [{ "Priority": 0, "Type": "NONE" }]
+            }
+          }
+        }
+      },
+      "Action": { "Block": {} },
+      "VisibilityConfig": { "SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "login-por-ip" }
+    },
+    {
+      "Name": "comunes-aws",
+      "Priority": 2,
+      "Statement": {
+        "ManagedRuleGroupStatement": {
+          "VendorName": "AWS",
+          "Name": "AWSManagedRulesCommonRuleSet",
+          "RuleActionOverrides": [
+            { "Name": "SizeRestrictions_BODY", "ActionToUse": { "Count": {} } }
+          ]
+        }
+      },
+      "OverrideAction": { "None": {} },
+      "VisibilityConfig": { "SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "comunes-aws" }
+    }
+  ],
+  "VisibilityConfig": { "SampledRequestsEnabled": true, "CloudWatchMetricsEnabled": true, "MetricName": "tienda" }
+}</code></pre>
+      <p>La primera regla bloquea a una IP que hace más de 100 requests a <code>/login</code> en 5 minutos. La segunda activa unas veinte reglas que mantiene AWS, pero una de ellas, <code>SizeRestrictions_BODY</code>, bloquea los cuerpos de más de 8&#8239;KB, y esta tienda recibe fotos: por eso esa regla queda en Count. Es la forma típica de ajustar un grupo administrado sin desactivarlo entero.</p>
+
+      <p>Cómo se pone un WAF en producción sin bloquear a tus usuarios:</p>
+      <ol class="steps">
+        <li><span class="step-title">Modo detección.</span>Todas las reglas nuevas en Count (en ModSecurity, <code>DetectionOnly</code>) durante una o dos semanas, con un log de cada coincidencia.</li>
+        <li><span class="step-title">Buscar falsos positivos.</span>Revisar qué requests legítimas habrían sido bloqueadas: un campo de comentarios donde alguien escribió "select * from", un JSON grande, un token largo en un header.</li>
+        <li><span class="step-title">Excepciones angostas.</span>Desactivar la regla culpable solo para ese path y ese campo, nunca para todo el sitio.</li>
+        <li><span class="step-title">Bloquear y medir.</span>Pasar a Block y tratar la tasa de 403 por regla como una métrica más, con alertas si salta: un deploy del frontend puede empezar a disparar una regla.</li>
+        <li><span class="step-title">Subir el nivel de a poco.</span>En el CRS, el <em>executing paranoia level</em> ejecuta las reglas de un nivel más alto sin que cuenten para bloquear, para afinar antes de subir. <span class="badge badge--doc">Documentado</span></li>
+      </ol>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Lo que un WAF no ve</p>
+        <ul>
+          <li><b>Lo que pasa del límite de inspección.</b> AWS WAF revisa solo los primeros 8&#8239;KB del cuerpo detrás de un ALB, y de 16 a 64&#8239;KB en CloudFront o API Gateway; lo que sobra se trata según la política de tamaño excedido que configures. Tampoco inspecciona el cuerpo de las requests gRPC. <span class="badge badge--doc">Documentado</span> Un atacante puede esconder la carga después de 8&#8239;KB de relleno.</li>
+          <li><b>Los errores de lógica.</b> Pedir <code>/orders/1235</code> en lugar de <code>/orders/1234</code> es una request perfectamente normal; solo tu código sabe que esa orden no es tuya.</li>
+          <li><b>No reemplaza al código correcto.</b> El WAF sirve como parche virtual mientras arreglas una vulnerabilidad y como filtro de ruido, pero las consultas parametrizadas siguen siendo la defensa contra la inyección SQL.</li>
+        </ul>
+      </aside>
+
+      <h3 id="bff">BFF: un backend por experiencia</h3>
+
+      <p>El <dfn data-term="bff">BFF</dfn> (backend for frontend) aparece cuando una API de propósito general empieza a quedarles mal a todos sus clientes. La app de iOS, la web y la TV muestran lo mismo (un catálogo, un perfil, recomendaciones), pero con formas muy distintas: la TV quiere una imagen de 1920 × 1080 y seis filas; el teléfono, tarjetas chicas, tres filas y la menor cantidad de bytes posible. Con una sola API, cada cliente hace cinco llamadas, descarta la mitad de los campos y combina los resultados en el dispositivo, con cinco idas y vueltas por una red móvil (M01). Y cada cambio de pantalla obliga al equipo del frontend a pedirle un endpoint nuevo al equipo del backend.</p>
+
+      <p>El nombre lo popularizó Sam Newman a partir de cómo trabajaba SoundCloud, donde cada aplicación tenía su propio backend, mantenido por el mismo equipo que hacía la interfaz. Netflix había llegado a algo parecido en 2012: los equipos de cada dispositivo escribían "adaptadores" que corrían en el servidor de la API y armaban la respuesta exacta para su pantalla. <span class="badge badge--doc">Documentado</span> En una arquitectura se ve así:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 404" role="img" aria-labelledby="f3bft f3bfd">
+<title id="f3bft">Un BFF por tipo de cliente</title>
+<desc id="f3bfd">Tres clientes, una app de iOS, una web y un televisor, llaman cada uno a su propia ruta: /ios/home, /web/home y /tv/home. El API gateway autentica, aplica cuotas y enruta cada ruta a su BFF. Cada BFF lo mantiene el equipo de ese cliente y llama en paralelo a los servicios de perfil, catálogo, recomendaciones y facturación que necesita su pantalla.</desc>
+<defs><marker id="f3bfa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="8" y="26">Clientes</text>
+<text class="dg-group" x="230" y="26">Entrada</text>
+<text class="dg-group" x="350" y="26">Un BFF por experiencia</text>
+<text class="dg-group" x="600" y="26">Servicios de dominio</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="59" width="110" height="50" rx="6"/>
+<text class="dg-label" x="63.0" y="81.5" text-anchor="middle" style="font-size:13.5px">App iOS</text>
+<text class="dg-tiny" x="63.0" y="97.5" text-anchor="middle">pantalla chica</text>
+<path class="dg-edge" d="M118 84 H228" marker-end="url(#f3bfa)"/>
+<text class="dg-tiny" x="173" y="77" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">GET /ios/home</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="169" width="110" height="50" rx="6"/>
+<text class="dg-label" x="63.0" y="191.5" text-anchor="middle" style="font-size:13.5px">Web</text>
+<text class="dg-tiny" x="63.0" y="207.5" text-anchor="middle">escritorio</text>
+<path class="dg-edge" d="M118 194 H228" marker-end="url(#f3bfa)"/>
+<text class="dg-tiny" x="173" y="187" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">GET /web/home</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="279" width="110" height="50" rx="6"/>
+<text class="dg-label" x="63.0" y="301.5" text-anchor="middle" style="font-size:13.5px">Smart TV</text>
+<text class="dg-tiny" x="63.0" y="317.5" text-anchor="middle">control remoto</text>
+<path class="dg-edge" d="M118 304 H228" marker-end="url(#f3bfa)"/>
+<text class="dg-tiny" x="173" y="297" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">GET /tv/home</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="230" y="40" width="96" height="310" rx="6"/>
+<text class="dg-label" x="278.0" y="170.0" text-anchor="middle" style="font-size:13px">API gateway</text>
+<text class="dg-tiny" x="278.0" y="186.0" text-anchor="middle">auth</text>
+<text class="dg-tiny" x="278.0" y="200.0" text-anchor="middle">y cuotas;</text>
+<text class="dg-tiny" x="278.0" y="214.0" text-anchor="middle">enruta por</text>
+<text class="dg-tiny" x="278.0" y="228.0" text-anchor="middle">path o host</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="350" y="52" width="130" height="64" rx="6"/>
+<text class="dg-label" x="415.0" y="81.5" text-anchor="middle" style="font-size:13.5px">BFF iOS</text>
+<text class="dg-tiny" x="415.0" y="97.5" text-anchor="middle">equipo de iOS</text>
+<path class="dg-edge" d="M326 84 H348" marker-end="url(#f3bfa)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="350" y="162" width="130" height="64" rx="6"/>
+<text class="dg-label" x="415.0" y="191.5" text-anchor="middle" style="font-size:13.5px">BFF web</text>
+<text class="dg-tiny" x="415.0" y="207.5" text-anchor="middle">equipo web</text>
+<path class="dg-edge" d="M326 194 H348" marker-end="url(#f3bfa)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="350" y="272" width="130" height="64" rx="6"/>
+<text class="dg-label" x="415.0" y="301.5" text-anchor="middle" style="font-size:13.5px">BFF TV</text>
+<text class="dg-tiny" x="415.0" y="317.5" text-anchor="middle">equipo de TV</text>
+<path class="dg-edge" d="M326 304 H348" marker-end="url(#f3bfa)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="50" width="160" height="44" rx="6"/>
+<text class="dg-label" x="680.0" y="77.0" text-anchor="middle" style="font-size:13.5px">Perfil</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="130" width="160" height="44" rx="6"/>
+<text class="dg-label" x="680.0" y="157.0" text-anchor="middle" style="font-size:13.5px">Catálogo</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="210" width="160" height="44" rx="6"/>
+<text class="dg-label" x="680.0" y="237.0" text-anchor="middle" style="font-size:13.5px">Recomendaciones</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="290" width="160" height="44" rx="6"/>
+<text class="dg-label" x="680.0" y="317.0" text-anchor="middle" style="font-size:13.5px">Facturación</text>
+<path class="dg-edge" d="M480 84 L598 72" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 84 L598 152" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 84 L598 232" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 194 L598 72" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 194 L598 152" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 194 L598 232" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 194 L598 312" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 304 L598 72" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 304 L598 152" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-edge" d="M480 304 L598 232" style="opacity:.5" marker-end="url(#f3bfa)"/>
+<path class="dg-frame" d="M8 366 H762"/>
+<text class="dg-small" x="8" y="384">El backend sabe qué cliente tiene enfrente porque cada cliente llama a su propio BFF (ruta o host propio),</text>
+<text class="dg-small" x="8" y="400">no porque adivine el dispositivo con el User-Agent.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.5.</b> El gateway sigue siendo uno y resuelve lo transversal; detrás hay un BFF por experiencia, y cada uno llama solo a los servicios que su pantalla necesita.</figcaption>
+      </figure>
+
+      <p><b>¿Cómo sabe el backend qué dispositivo tiene enfrente?</b> No lo adivina: el cliente lo dice de forma explícita, en dos niveles, y hay una fuente que conviene no usar.</p>
+      <ul>
+        <li><b>Por dónde entra.</b> Cada app se compila con la URL de su BFF: <code>api.ejemplo.com/tv/…</code> o <code>tv-api.ejemplo.com</code>. El gateway enruta por ese prefijo o ese host, y la request de la TV llega al BFF de TV. Es la decisión principal, y no depende de ningún dato que el cliente pueda mandar mal.</li>
+        <li><b>Headers que la app manda a propósito.</b> Dentro de un BFF, las variaciones (versión de la app, clase de pantalla, códecs que soporta) viajan en headers propios. Así el BFF le sigue devolviendo el formato viejo a la versión 7 de la app mientras la 8 recibe el nuevo.</li>
+        <li><b>No el User-Agent.</b> Es texto libre que cualquiera falsifica, cambia con cada versión del navegador, y Chrome lo viene recortando a propósito para dificultar el fingerprinting; en la web, los Client Hints como <code>Sec-CH-UA-Mobile</code> ocupan su lugar. <span class="badge badge--doc">Documentado</span> Sirve para estadísticas, no para decidir la forma de una respuesta.</li>
+      </ul>
+<pre data-lang="http"><code>GET /tv/home HTTP/1.1
+Host: api.ejemplo.com
+Authorization: Bearer eyJhbGciOi…
+X-App-Version: 8.4.1
+X-Device-Class: tv-4k
+Accept-Language: es-MX</code></pre>
+
+      <p><b>¿Qué hace con los datos?</b> No hay herencia ni un parseo genérico: hay <b>composición</b>. El BFF es un servicio delgado que llama a otros, elige campos y arma una respuesta nueva para una pantalla concreta:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f3bst f3bsd">
+<title id="f3bst">Lo que hace un BFF con los datos</title>
+<desc id="f3bsd">A la izquierda, tres respuestas internas: el catálogo con 38 campos y 24 tamaños de imagen, las recomendaciones como una lista de ids con puntaje y el perfil. En el centro, el BFF las pide en paralelo, elige 5 campos, elige el tamaño de imagen de cada pantalla, traduce y formatea textos, y si recomendaciones falla usa una fila de populares. A la derecha, dos respuestas distintas: la de TV con una imagen de 1920 por 1080 y seis filas, y la de iOS con tarjetas de 750 píxeles y tres filas.</desc>
+<defs><marker id="f3bsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="8" y="22">Respuestas internas</text>
+<text class="dg-group" x="272" y="22">BFF: composición, no herencia</text>
+<text class="dg-group" x="528" y="22">Respuestas a la medida</text>
+<rect class="dg-box" x="8" y="34" width="236" height="75" rx="6"/>
+<text class="dg-label" x="18" y="52" style="font-size:13px">Catálogo</text>
+<text class="dg-tiny" x="18" y="70" style="font-family:var(--f-mono);white-space:pre">{&quot;id&quot;: 81, &quot;title&quot;: {...},</text>
+<text class="dg-tiny" x="18" y="85" style="font-family:var(--f-mono);white-space:pre"> &quot;images&quot;: [24 tamaños],</text>
+<text class="dg-tiny" x="18" y="100" style="font-family:var(--f-mono);white-space:pre"> &quot;cast&quot;: [...], ... 38 campos}</text>
+<path class="dg-edge" d="M244 71.5 L270 170" marker-end="url(#f3bsa)"/>
+<rect class="dg-box" x="8" y="123" width="236" height="60" rx="6"/>
+<text class="dg-label" x="18" y="141" style="font-size:13px">Recomendaciones</text>
+<text class="dg-tiny" x="18" y="159" style="font-family:var(--f-mono);white-space:pre">{&quot;rows&quot;: [{&quot;id&quot;: 81,</text>
+<text class="dg-tiny" x="18" y="174" style="font-family:var(--f-mono);white-space:pre"> &quot;score&quot;: 0.93}, ...]}</text>
+<path class="dg-edge" d="M244 153.0 L270 170" marker-end="url(#f3bsa)"/>
+<rect class="dg-box" x="8" y="197" width="236" height="60" rx="6"/>
+<text class="dg-label" x="18" y="215" style="font-size:13px">Perfil</text>
+<text class="dg-tiny" x="18" y="233" style="font-family:var(--f-mono);white-space:pre">{&quot;name&quot;: &quot;Ana&quot;, &quot;lang&quot;: &quot;es&quot;,</text>
+<text class="dg-tiny" x="18" y="248" style="font-family:var(--f-mono);white-space:pre"> &quot;kids&quot;: false}</text>
+<path class="dg-edge" d="M244 227.0 L270 170" marker-end="url(#f3bsa)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="272" y="60" width="236" height="220" rx="8"/>
+<text class="dg-label" x="286" y="84" style="font-size:14px">BFF TV</text>
+<text class="dg-tiny" x="286" y="110">1. Pide los 3 servicios en paralelo</text>
+<text class="dg-tiny" x="286" y="136">2. Toma 5 de los 38 campos</text>
+<text class="dg-tiny" x="286" y="162">3. Elige la imagen para esa pantalla</text>
+<text class="dg-tiny" x="286" y="188">4. Traduce y formatea los textos</text>
+<text class="dg-tiny" x="286" y="214">5. Si Recos falla, usa &quot;Populares&quot;</text>
+<text class="dg-tiny" x="286" y="240">6. Arma una sola respuesta</text>
+<path class="dg-edge" d="M508 120 L526 96" marker-end="url(#f3bsa)"/>
+<path class="dg-edge" d="M508 220 L526 244" marker-end="url(#f3bsa)"/>
+<rect class="dg-box--em dg-box" x="528" y="40" width="234" height="75" rx="6"/>
+<text class="dg-label" x="538" y="58" style="font-size:13px">Para TV (1 request)</text>
+<text class="dg-tiny" x="538" y="76" style="font-family:var(--f-mono);white-space:pre">{&quot;hero&quot;: {&quot;img&quot;: &quot;1920x1080&quot;,</text>
+<text class="dg-tiny" x="538" y="91" style="font-family:var(--f-mono);white-space:pre"> &quot;title&quot;: &quot;Dark&quot;},</text>
+<text class="dg-tiny" x="538" y="106" style="font-family:var(--f-mono);white-space:pre"> &quot;rows&quot;: 6, &quot;cols&quot;: 5}</text>
+<rect class="dg-box--em dg-box" x="528" y="190" width="234" height="75" rx="6"/>
+<text class="dg-label" x="538" y="208" style="font-size:13px">Para iOS (otro BFF)</text>
+<text class="dg-tiny" x="538" y="226" style="font-family:var(--f-mono);white-space:pre">{&quot;cards&quot;: [{&quot;img&quot;: &quot;750w&quot;,</text>
+<text class="dg-tiny" x="538" y="241" style="font-family:var(--f-mono);white-space:pre"> &quot;title&quot;: &quot;Dark&quot;}],</text>
+<text class="dg-tiny" x="538" y="256" style="font-family:var(--f-mono);white-space:pre"> &quot;rows&quot;: 3}</text>
+<path class="dg-frame" d="M8 312 H762"/>
+<text class="dg-small" x="8" y="332">El cliente hace 1 request por pantalla en lugar de 3 a 5, y recibe solo los bytes que va a mostrar.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.6.</b> Tres respuestas internas pensadas para todos se convierten en una respuesta pensada para una pantalla. El trabajo pesado (llamar, filtrar, degradar) pasa del dispositivo al datacenter, donde la red es rápida.</figcaption>
+      </figure>
+
+<pre data-lang="python"><code>async def home_tv(user_id: str, lang: str) -&gt; dict:
+    # 1. Las llamadas salen juntas: el total es la más lenta, no la suma
+    filas, populares = await asyncio.gather(
+        recos_api.rows(user_id, limit=6, timeout=0.15),
+        catalogo_api.populares(limit=5),
+        return_exceptions=True,
+    )
+    # 2. Degradar en lugar de fallar: sin recomendaciones, una fila de populares
+    if isinstance(filas, Exception):
+        filas = [Fila(nombre="Populares", ids=populares)]
+    # 3. Pedir solo los campos que esta pantalla muestra
+    ids = {i for f in filas for i in f.ids[:5]}
+    titulos = await catalogo_api.batch(ids, fields=["id", "title", "images"], lang=lang)
+
+    def tarjeta(i, tam):
+        t = titulos[i]
+        return {"id": t["id"], "title": t["title"], "img": t["images"][tam]}
+
+    # 4. La forma exacta que espera la TV
+    return {
+        "hero": tarjeta(filas[0].ids[0], "1920x1080"),
+        "rows": [{"name": f.nombre, "items": [tarjeta(i, "341x192") for i in f.ids[:5]]}
+                 for f in filas],
+    }</code></pre>
+
+      <p>Lo que se comparte entre los BFF (los clientes HTTP de cada servicio, el formato de una tarjeta) va en librerías, no en una clase base de la que heredan todos: si los BFF quedan acoplados entre sí, vuelves a tener una API general, con más pasos.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Tarea</th><th>Dónde va</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>Validar el token y aplicar la cuota</td><td>Gateway</td><td>Es igual para todos los clientes</td></tr>
+            <tr><td>Enrutar <code>/tv/*</code> al BFF de TV</td><td>Gateway</td><td>Es una regla de entrada, no de pantalla</td></tr>
+            <tr><td>Llamar en paralelo a cuatro servicios y degradar si uno falla</td><td>BFF</td><td>Depende de qué muestra cada pantalla</td></tr>
+            <tr><td>Elegir campos, tamaños de imagen y textos</td><td>BFF</td><td>Cambia con cada versión de la interfaz</td></tr>
+            <tr><td>Calcular un precio, aplicar un descuento, validar stock</td><td>Servicio</td><td>Tiene que dar lo mismo en la web y en la app</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué sale mal con los BFF</p>
+        <ul>
+          <li><b>Lógica de negocio que se filtra.</b> Un BFF calcula el precio con descuento y otro no, y la web y la app muestran precios distintos. Si dos BFF necesitan la misma regla, esa regla va en un servicio.</li>
+          <li><b>Un BFF por cada dispositivo.</b> Newman propone uno por experiencia de usuario, no por modelo de aparato: iOS y Android suelen compartir un BFF móvil si sus pantallas son parecidas.</li>
+          <li><b>La latencia del fan-out.</b> La respuesta tarda lo que tarda la llamada más lenta. Hacen falta timeouts por llamada, respuestas parciales y caché para lo que cambia poco.</li>
+          <li><b>GraphQL como alternativa.</b> Un solo grafo donde cada cliente pide la forma que necesita (<a href="m02-apis.html#graphql">M02</a>). Muchas empresas reemplazaron sus BFF por un servidor GraphQL, o usan GraphQL dentro de cada BFF.</li>
+        </ul>
+      </aside>
+
+      <h3 id="sticky">El estado en la instancia: sticky sessions</h3>
+
+      <p>Muchas aplicaciones guardan la sesión del usuario (quién es, qué tiene en el carrito, en qué paso del formulario va) en la memoria del proceso o en el disco de su servidor. Es lo que hacen por defecto las sesiones de un servlet en Tomcat, que viven en memoria, o el manejador de sesiones de PHP, que escribe un archivo por sesión. <span class="badge badge--doc">Documentado</span> Ese servidor es <em>stateful</em>: solo él conoce esa sesión. Si la siguiente request del usuario cae en otra instancia, esta no la encuentra y el usuario aparece deslogueado.</p>
+
+      <p>Las <dfn data-term="sticky-session">sticky sessions</dfn> resuelven eso desde el balanceador, que manda siempre al mismo usuario a la misma instancia. Hay dos formas de hacerlo:</p>
+      <ul>
+        <li><b>Por cookie.</b> En la primera respuesta, el balanceador agrega una cookie que dice qué instancia le tocó. Un ALB, por ejemplo, genera la cookie <code>AWSALB</code>, cifrada, y en cada request la lee para elegir el mismo destino; si ese destino ya no está sano, elige otro y reescribe la cookie. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Por hash de la IP.</b> Sin cookies, el balanceador elige con un hash de la IP de origen. Falla con usuarios detrás del mismo <dfn data-term="nat">NAT</dfn> (una oficina entera cae en la misma instancia) y con teléfonos que cambian de IP al pasar del wifi a los datos.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 384" role="img" aria-labelledby="f3stt f3std">
+<title id="f3stt">Tres lugares para la sesión</title>
+<desc id="f3std">Tres paneles. En el primero, el balanceador lee la cookie AWSALB y manda al usuario siempre al servidor 2, que guarda la sesión en su memoria; si el servidor 2 se cae, esos usuarios pierden la sesión. En el segundo, cualquier servidor atiende y la sesión vive en un Redis central, que pasa a ser un punto único de falla. En el tercero, la sesión viaja firmada en el token y cada servidor la verifica con una clave, sin almacén central.</desc>
+<defs><marker id="f3sta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3stf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-frame" x="6" y="6" width="246" height="372" rx="10"/>
+<text class="dg-label" x="129.0" y="28" text-anchor="middle" style="font-size:14px">Sticky y sesión en memoria</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="29" y="40" width="200" height="44" rx="6"/>
+<text class="dg-label" x="129.0" y="67.0" text-anchor="middle" style="font-size:13px">Cliente</text>
+<text class="dg-tiny" x="129.0" y="100" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">Cookie: AWSALB=…(srv 2)</text>
+<path class="dg-edge" d="M129.0 106 V122" marker-end="url(#f3sta)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="54" y="124" width="150" height="34" rx="6"/>
+<text class="dg-label" x="129.0" y="146.0" text-anchor="middle" style="font-size:13px">Balanceador</text>
+<path class="dg-edge" d="M129.0 158 L53 190" style="opacity:0.3" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="20" y="192" width="66" height="70" rx="5"/>
+<text class="dg-tiny" x="53" y="210" text-anchor="middle" style="font-weight:600">srv 1</text>
+<rect class="dg-layer" x="30" y="218" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="30" y="230" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="30" y="242" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<path class="dg-edge" d="M129.0 158 L129 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-bad" x="96" y="192" width="66" height="70" rx="5"/>
+<text class="dg-tiny" x="129" y="210" text-anchor="middle" style="font-weight:600">srv 2</text>
+<rect class="dg-layer" x="106" y="218" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="106" y="230" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="106" y="242" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<path class="dg-edge" d="M129.0 158 L205 190" style="opacity:0.3" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="172" y="192" width="66" height="70" rx="5"/>
+<text class="dg-tiny" x="205" y="210" text-anchor="middle" style="font-weight:600">srv 3</text>
+<rect class="dg-layer" x="182" y="218" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="182" y="230" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<rect class="dg-layer" x="182" y="242" width="46" height="8" rx="2" style="--c: var(--l-cache)"/>
+<text class="dg-tiny dg-fail-text" x="129" y="278" text-anchor="middle">srv 2 se cae: sus sesiones</text>
+<text class="dg-tiny dg-fail-text" x="129" y="292" text-anchor="middle">desaparecen con él</text>
+<text class="dg-tiny" x="20" y="312">+ simple y rápido (memoria local)</text>
+<text class="dg-tiny" x="20" y="328">− una caída borra sesiones</text>
+<text class="dg-tiny" x="20" y="344">− carga despareja; escalar no</text>
+<text class="dg-tiny" x="20" y="360">  mueve a los usuarios ya pegados</text>
+<rect class="dg-frame" x="262" y="6" width="246" height="372" rx="10"/>
+<text class="dg-label" x="385.0" y="28" text-anchor="middle" style="font-size:14px">Sesión central en Redis</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="285" y="40" width="200" height="44" rx="6"/>
+<text class="dg-label" x="385.0" y="67.0" text-anchor="middle" style="font-size:13px">Cliente</text>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">Cookie: sid=9f3a…</text>
+<path class="dg-edge" d="M385.0 106 V122" marker-end="url(#f3sta)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="310" y="124" width="150" height="34" rx="6"/>
+<text class="dg-label" x="385.0" y="146.0" text-anchor="middle" style="font-size:13px">Balanceador</text>
+<path class="dg-edge" d="M385.0 158 L309 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="276" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="309" y="210" text-anchor="middle" style="font-weight:600">srv 1</text>
+<text class="dg-tiny" x="309" y="226" text-anchor="middle">sin estado</text>
+<path class="dg-edge" d="M385.0 158 L385 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="352" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="385" y="210" text-anchor="middle" style="font-weight:600">srv 2</text>
+<text class="dg-tiny" x="385" y="226" text-anchor="middle">sin estado</text>
+<path class="dg-edge" d="M385.0 158 L461 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="428" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="461" y="210" text-anchor="middle" style="font-weight:600">srv 3</text>
+<text class="dg-tiny" x="461" y="226" text-anchor="middle">sin estado</text>
+<path class="dg-edge" d="M309 236 L385.0 254" marker-end="url(#f3sta)"/>
+<path class="dg-edge" d="M385 236 L385.0 254" marker-end="url(#f3sta)"/>
+<path class="dg-edge" d="M461 236 L385.0 254" marker-end="url(#f3sta)"/>
+<rect class="dg-bad" x="325" y="256" width="120" height="34" rx="6"/>
+<text class="dg-tiny dg-fail-text" x="385.0" y="278" text-anchor="middle" style="font-weight:600">Redis: SPOF</text>
+<text class="dg-tiny" x="276" y="312">+ cualquier instancia atiende</text>
+<text class="dg-tiny" x="276" y="328">− si Redis cae, se cae el login</text>
+<text class="dg-tiny" x="276" y="344">− un salto de red por request</text>
+<text class="dg-tiny" x="276" y="360">mitiga: réplica, Sentinel, Cluster</text>
+<rect class="dg-frame" x="518" y="6" width="246" height="372" rx="10"/>
+<text class="dg-label" x="641.0" y="28" text-anchor="middle" style="font-size:14px">Token firmado</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="541" y="40" width="200" height="44" rx="6"/>
+<text class="dg-label" x="641.0" y="67.0" text-anchor="middle" style="font-size:13px">Cliente</text>
+<text class="dg-tiny" x="641.0" y="100" text-anchor="middle" style="font-family:var(--f-mono);white-space:pre">Authorization: Bearer eyJ…</text>
+<path class="dg-edge" d="M641.0 106 V122" marker-end="url(#f3sta)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="566" y="124" width="150" height="34" rx="6"/>
+<text class="dg-label" x="641.0" y="146.0" text-anchor="middle" style="font-size:13px">Balanceador</text>
+<path class="dg-edge" d="M641.0 158 L565 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="532" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="565" y="210" text-anchor="middle" style="font-weight:600">srv 1</text>
+<text class="dg-tiny" x="565" y="226" text-anchor="middle">verifica</text>
+<path class="dg-edge" d="M641.0 158 L641 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="608" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="641" y="210" text-anchor="middle" style="font-weight:600">srv 2</text>
+<text class="dg-tiny" x="641" y="226" text-anchor="middle">verifica</text>
+<path class="dg-edge" d="M641.0 158 L717 190" style="opacity:1" marker-end="url(#f3sta)"/>
+<rect class="dg-box" x="684" y="192" width="66" height="44" rx="5"/>
+<text class="dg-tiny" x="717" y="210" text-anchor="middle" style="font-weight:600">srv 3</text>
+<text class="dg-tiny" x="717" y="226" text-anchor="middle">verifica</text>
+<text class="dg-tiny" x="641.0" y="258" text-anchor="middle">clave pública o HMAC</text>
+<text class="dg-tiny" x="641.0" y="274" text-anchor="middle">en cada servidor; nada central</text>
+<text class="dg-tiny" x="532" y="312">+ sin almacén ni salto extra</text>
+<text class="dg-tiny" x="532" y="328">− revocar antes de que expire</text>
+<text class="dg-tiny" x="532" y="344">  exige una lista de bloqueo</text>
+<text class="dg-tiny" x="532" y="360">− el token viaja en cada request</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.7.</b> Tres lugares para la sesión. Sacarla de la instancia no elimina el riesgo: lo concentra en un almacén que ahora tiene que ser tan confiable como la base de datos.</figcaption>
+      </figure>
+
+      <p>El primer panel muestra lo que las sticky sessions esconden:</p>
+      <ul>
+        <li><b>Si la instancia cae, sus sesiones caen con ella.</b> El balanceador manda al usuario a otra instancia, que no tiene su sesión.</li>
+        <li><b>La carga queda despareja.</b> Un usuario pesado no se puede mover, y las instancias que agrega el autoescalado solo reciben usuarios nuevos mientras las viejas siguen llenas. AWS documenta este problema y propone forzar la expiración de la cookie para rebalancear. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Los deploys se complican:</b> retirar una instancia obliga a esperar a que expiren sus sesiones, o a perderlas.</li>
+      </ul>
+
+      <p><b>Sacar el estado: Redis y su punto único de falla.</b> La solución habitual es la del segundo panel: las instancias quedan sin estado y la sesión vive en un almacén compartido, casi siempre Redis. Cualquier instancia atiende cualquier request. Pero el problema no desaparece, se mueve: ahora <b>cada request depende de Redis</b>, y un solo Redis es un <dfn data-term="spof">SPOF</dfn>. Si se cae, nadie puede iniciar sesión ni seguir con la que tenía, en todas las instancias a la vez. Antes, una caída afectaba a los usuarios de una instancia; ahora afecta a todos.</p>
+
+      <p>Por eso un almacén de sesiones en producción se trata como una base de datos:</p>
+      <ul>
+        <li><b>Réplicas con failover automático.</b> Redis Sentinel vigila al primario y promueve una réplica si cae; Redis Cluster reparte las claves entre varios primarios, cada uno con sus réplicas; los servicios administrados como ElastiCache lo hacen entre zonas de disponibilidad. <span class="badge badge--doc">Documentado</span> El failover tarda segundos, y como la replicación de Redis es asíncrona, las últimas escrituras del primario pueden perderse: algunos usuarios tendrán que volver a iniciar sesión.</li>
+        <li><b>Timeouts cortos y degradación.</b> Si leer la sesión tarda más de unos pocos milisegundos, conviene tratarla como ausente (pedir el login otra vez, o mostrar la página sin personalizar) en lugar de colgar todas las requests esperando a Redis.</li>
+        <li><b>Contar el salto extra.</b> Cada request suma una ida y vuelta de red a Redis: menos de un milisegundo dentro de la misma zona, pero se nota en el p99 cuando Redis se satura.</li>
+      </ul>
+
+      <p>La tercera opción elimina el almacén: la sesión viaja en un token firmado (un <dfn data-term="jwt">JWT</dfn>, <a href="m10-seguridad.html#tokens">M10</a>) y cada instancia la verifica con una clave, sin consultar a nadie. A cambio, revocar un token antes de que expire exige una lista de bloqueo, que vuelve a ser un almacén compartido, aunque mucho más chico y consultado con menos frecuencia. Lo común es combinarlas: un token de acceso de vida corta, como 15 minutos, que no necesita almacén, y un refresh token que sí se consulta, una vez cada 15 minutos.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: afinidad como optimización o como requisito</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>Como optimización</h4><p><b>Ganas:</b> aciertos en una caché local por usuario, o menos reconexiones. Los WebSockets ya son conexiones pegadas a una instancia.</p><p><b>Si se pierde:</b> la siguiente request es más lenta, pero correcta.</p></div>
+          <div class="to-col"><h4>Como requisito</h4><p><b>Ganas:</b> no tener que sacar el estado del servidor.</p><p><b>Si se pierde:</b> el usuario pierde su sesión o su carrito, y cada caída, deploy o rebalanceo es un incidente.</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> la afinidad puede hacer las cosas más rápidas, pero si perderla rompe algo, el estado está en el lugar equivocado.</p>
+      </aside>
 
       <h2 id="mesh"><span class="sec-num">3.6</span>Service mesh y sidecars</h2>
 
-      <p>El gateway protege la entrada, pero la mayor parte del tráfico de un sistema grande va de servicio a servicio (tráfico este-oeste). Un <dfn data-term="service-mesh">service mesh</dfn> lleva las funciones del gateway a cada salto interno, con un <dfn data-term="sidecar">sidecar</dfn> (normalmente Envoy) junto a cada instancia que intercepta su tráfico:</p>
+      <p>El gateway protege la entrada, pero la mayor parte del tráfico de un sistema grande va de servicio a servicio (tráfico este-oeste). Con decenas de servicios escritos en varios lenguajes, cada uno tendría que implementar lo mismo: cifrar sus llamadas, probar quién es, reintentar, medir. Un <dfn data-term="service-mesh">service mesh</dfn> lo saca del código y lo pone en la red: un <dfn data-term="sidecar">sidecar</dfn> (normalmente Envoy) corre junto a cada instancia e intercepta todo su tráfico.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 396" role="img" aria-labelledby="f3mst f3msd">
+<title id="f3mst">Dos servicios hablando a través del mesh</title>
+<desc id="f3msd">Arriba, el plano de control, istiod, firma un certificado para cada sidecar con su identidad SPIFFE y les envía la configuración por xDS. Abajo, el pod de orders y el pod de payments. La app de orders llama en texto plano a http://payments; iptables desvía esa conexión al sidecar en el puerto 15001. El sidecar de orders abre un túnel mTLS con el sidecar de payments, donde los dos presentan certificado. El sidecar de payments recibe en el puerto 15006, aplica la política de autorización y entrega la request en texto plano a la app por localhost.</desc>
+<defs><marker id="f3msa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3msq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker><marker id="f3msr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="220" y="8" width="330" height="82" rx="6"/>
+<text class="dg-label" x="385.0" y="39.0" text-anchor="middle" style="font-size:14px">Plano de control (istiod)</text>
+<text class="dg-tiny" x="385.0" y="55.0" text-anchor="middle">CA: firma un certificado por identidad (24 h)</text>
+<text class="dg-tiny" x="385.0" y="69.0" text-anchor="middle">xDS: endpoints, rutas, reintentos, políticas</text>
+<path class="dg-edge" d="M300 90 L268 182" marker-end="url(#f3msq)" style="stroke:var(--l-queue);stroke-dasharray:6 4"/>
+<path class="dg-edge" d="M470 90 L502 182" marker-end="url(#f3msq)" style="stroke:var(--l-queue);stroke-dasharray:6 4"/>
+<text class="dg-tiny" x="276" y="128" text-anchor="end">certificado + config</text>
+<text class="dg-tiny" x="494" y="128">certificado + config</text>
+<rect class="dg-frame" x="8" y="150" width="330" height="172" rx="12"/>
+<text class="dg-group" x="20" y="170">Pod de orders</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="186" width="120" height="68" rx="6"/>
+<text class="dg-label" x="80.0" y="210.0" text-anchor="middle" style="font-size:13px">app orders</text>
+<text class="dg-tiny" x="80.0" y="226.0" text-anchor="middle">llama a</text>
+<text class="dg-tiny" x="80.0" y="240.0" text-anchor="middle">http://payments</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="206" y="186" width="120" height="68" rx="6"/>
+<text class="dg-label" x="266.0" y="210.0" text-anchor="middle" style="font-size:13px">sidecar</text>
+<text class="dg-tiny" x="266.0" y="226.0" text-anchor="middle">Envoy</text>
+<text class="dg-tiny" x="266.0" y="240.0" text-anchor="middle">escucha :15001</text>
+<path class="dg-edge" d="M140 220 H204" marker-end="url(#f3msa)"/>
+<text class="dg-tiny" x="172" y="210" text-anchor="middle">iptables</text>
+<text class="dg-tiny" x="172" y="272" text-anchor="middle">texto plano,</text>
+<text class="dg-tiny" x="172" y="286" text-anchor="middle">sin salir del pod</text>
+<text class="dg-tiny" x="20" y="312" style="font-family:var(--f-mono);white-space:pre;font-size:10.8px">spiffe://cluster.local/ns/shop/sa/orders</text>
+<rect class="dg-frame" x="432" y="150" width="330" height="172" rx="12"/>
+<text class="dg-group" x="444" y="170">Pod de payments</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="444" y="186" width="120" height="68" rx="6"/>
+<text class="dg-label" x="504.0" y="210.0" text-anchor="middle" style="font-size:13px">sidecar</text>
+<text class="dg-tiny" x="504.0" y="226.0" text-anchor="middle">Envoy</text>
+<text class="dg-tiny" x="504.0" y="240.0" text-anchor="middle">escucha :15006</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="630" y="186" width="120" height="68" rx="6"/>
+<text class="dg-label" x="690.0" y="217.5" text-anchor="middle" style="font-size:13px">app payments</text>
+<text class="dg-tiny" x="690.0" y="233.5" text-anchor="middle">localhost:8080</text>
+<path class="dg-edge" d="M564 220 H628" marker-end="url(#f3msa)"/>
+<text class="dg-tiny" x="596" y="272" text-anchor="middle">autoriza y</text>
+<text class="dg-tiny" x="596" y="286" text-anchor="middle">entrega</text>
+<text class="dg-tiny" x="444" y="312" style="font-family:var(--f-mono);white-space:pre;font-size:10.8px">spiffe://cluster.local/ns/shop/sa/payments</text>
+<rect x="326" y="206" width="118" height="28" rx="14" fill="color-mix(in srgb, var(--ok) 18%, var(--bg))" stroke="var(--ok)" stroke-width="1.4"/>
+<text class="dg-tiny" x="385" y="224" text-anchor="middle" style="font-weight:600">mTLS</text>
+<text class="dg-tiny" x="385" y="252" text-anchor="middle">cada lado</text>
+<text class="dg-tiny" x="385" y="266" text-anchor="middle">presenta su</text>
+<text class="dg-tiny" x="385" y="280" text-anchor="middle">certificado</text>
+<path class="dg-frame" d="M8 344 H762"/>
+<text class="dg-small" x="8" y="364">La app no sabe nada de TLS ni de certificados: el cifrado, la identidad, los reintentos y las métricas</text>
+<text class="dg-small" x="8" y="382">viven en los sidecars, y el plano de control los configura a todos igual.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.8.</b> Dos pods, cada uno con su app y su sidecar. Entre sidecars, todo va por mTLS; entre la app y su sidecar, en texto plano por localhost. El plano de control nunca toca una request: solo reparte certificados y configuración.</figcaption>
+      </figure>
+
       <ul>
-        <li><b>Plano de datos:</b> los sidecars. Hacen mTLS entre servicios, reintentos, timeouts, balanceo, circuit breaking y emiten métricas y traces uniformes.</li>
-        <li><b>Plano de control:</b> distribuye configuración y certificados a todos los sidecars (Istio, Linkerd, Consul).</li>
+        <li><b>Plano de datos:</b> los sidecars. Hacen mTLS entre servicios, reintentos, timeouts, balanceo y circuit breaking, y emiten métricas y traces uniformes.</li>
+        <li><b>Plano de control:</b> firma los certificados de cada carga de trabajo y le reparte a cada sidecar la configuración por <dfn data-term="xds">xDS</dfn>, la API con la que Envoy recibe endpoints, rutas y políticas sin reiniciarse (Istio, Linkerd, Consul).</li>
       </ul>
+
+      <h3 id="mesh-llamada">El viaje de una llamada</h3>
+
+      <p>Así se ve, paso a paso, una llamada de orders a payments en Istio con sidecars:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 512" role="img" aria-labelledby="f3mqt f3mqd">
+<title id="f3mqt">Una llamada de orders a payments dentro del mesh</title>
+<desc id="f3mqd">Diagrama de secuencia con cuatro actores. La app de orders hace GET a http://payments en texto plano; iptables desvía la conexión al sidecar de orders. El sidecar elige un endpoint con la configuración de xDS y abre TLS con el sidecar de payments presentando el certificado de orders; el de payments responde con el suyo. El sidecar de payments verifica que el certificado lo firmó la CA del mesh, aplica la AuthorizationPolicy, y entrega la request a la app por localhost. La respuesta vuelve cifrada por el mismo túnel.</desc>
+<defs><marker id="f3mq-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3mq-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f3mq-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f3mq-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">app orders</text>
+<path class="dg-frame" d="M70.0 40 V502"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">sidecar orders</text>
+<path class="dg-frame" d="M280.0 40 V502"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">sidecar payments</text>
+<path class="dg-frame" d="M490.0 40 V502"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">app payments</text>
+<path class="dg-frame" d="M700.0 40 V502"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f3mq-a)"/>
+<rect x="33.70000000000002" y="55" width="282.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">POST http://payments/charge (texto plano)</text>
+<rect x="80.0" y="92" width="321" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="108">iptables desvía la conexión al puerto 15001</text>
+<path class="dg-edge" d="M280.0 132 h40 v14 h-38" marker-end="url(#f3mq-a)"/>
+<text class="dg-tiny" x="326.0" y="143">elige un endpoint (xDS); pone timeout</text>
+<path class="dg-edge" d="M283.0 174 L485.0 174" marker-end="url(#f3mq-a)"/>
+<rect x="263.5" y="157" width="243.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="168" text-anchor="middle">ClientHello + certificado de orders</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 208 L285.0 208" marker-end="url(#f3mq-r)"/>
+<rect x="303.1" y="191" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">certificado de payments</text>
+<rect x="180.0" y="228" width="300" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="190.0" y="244">¿firmado por la CA del mesh? ¿identidad?</text>
+<path class="dg-edge" d="M490.0 268 h40 v14 h-38" marker-end="url(#f3mq-a)"/>
+<text class="dg-tiny" x="536.0" y="279">AuthorizationPolicy: orders puede POST</text>
+<path class="dg-edge" d="M283.0 310 L485.0 310" marker-end="url(#f3mq-a)"/>
+<rect x="260.2" y="293" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="304" text-anchor="middle">la request, cifrada (llega a :15006)</text>
+<path class="dg-edge" d="M493.0 344 L695.0 344" marker-end="url(#f3mq-a)"/>
+<rect x="503.2" y="327" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="338" text-anchor="middle">POST localhost:8080/charge</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 378 L495.0 378" marker-end="url(#f3mq-r)"/>
+<rect x="579.1" y="361" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="372" text-anchor="middle">200</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 412 L285.0 412" marker-end="url(#f3mq-r)"/>
+<rect x="266.8" y="395" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="406" text-anchor="middle">200 cifrado; ambos emiten métricas</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 446 L75.0 446" marker-end="url(#f3mq-r)"/>
+<rect x="159.1" y="429" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="440" text-anchor="middle">200</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.9.</b> La app de orders cree que habla con payments en texto plano. En el medio hay dos proxies, un handshake con dos certificados y una decisión de autorización.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">La app llama en texto plano.</span>orders hace <code>POST http://payments/charge</code> como si no hubiera mesh. Al crear el pod, Istio instaló reglas de iptables (con un contenedor de inicio o con su plugin de CNI) que desvían toda conexión saliente al sidecar, en el puerto 15001, y toda conexión entrante al puerto 15006. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">El sidecar de origen decide.</span>Con la configuración que recibió por xDS, sabe qué instancias de payments existen, cuál elegir, qué timeout aplicar y cuántos reintentos hacer.</li>
+        <li><span class="step-title">Handshake mTLS.</span>Los dos sidecars abren TLS y <b>los dos</b> presentan certificado. En TLS común solo el servidor prueba quién es; en <dfn data-term="mtls">mTLS</dfn>, el cliente también.</li>
+        <li><span class="step-title">El destino verifica y autoriza.</span>El sidecar de payments comprueba que el certificado lo firmó la CA del mesh, lee de él la identidad del cliente y aplica la política: ¿orders puede hacer POST a <code>/charge</code>?</li>
+        <li><span class="step-title">Entrega local.</span>Si pasa, entrega la request a la app por localhost, en texto plano y sin salir del pod. La respuesta vuelve cifrada por el mismo túnel, y los dos sidecars registran métricas y spans del trace.</li>
+      </ol>
+
+      <h3 id="mesh-identidad">Identidad: quién es quién sin mirar IPs</h3>
+
+      <p>En un clúster, las IPs cambian cada vez que un pod se reinicia, así que no sirven para decidir quién puede llamar a quién. El mesh le da a cada carga de trabajo una identidad criptográfica con el formato de <dfn data-term="spiffe">SPIFFE</dfn>: una URI como <code>spiffe://cluster.local/ns/shop/sa/orders</code>, que sale del namespace y de la cuenta de servicio de Kubernetes, y que va dentro del certificado X.509. <span class="badge badge--doc">Documentado</span></p>
+      <ul>
+        <li><b>Emisión y rotación.</b> El agente de Istio en cada pod genera una clave privada, que nunca sale del pod, le pide a istiod que firme un certificado y lo renueva antes de que venza. Los certificados de carga de trabajo duran 24 horas por defecto: si uno se filtra, sirve poco tiempo, y nadie tiene que rotarlos a mano. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Modo estricto.</b> Con una <code>PeerAuthentication</code> en modo <code>STRICT</code>, el sidecar rechaza toda conexión que no venga por mTLS. Durante una migración se usa <code>PERMISSIVE</code>, que acepta las dos, hasta que todos los clientes tienen sidecar.</li>
+        <li><b>Políticas por identidad.</b> La autorización se escribe en términos de identidades, no de IPs. Esta política deja que solo orders llame a <code>POST /charge</code>:</li>
+      </ul>
+<pre><code>apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: payments-solo-orders
+  namespace: shop
+spec:
+  selector:
+    matchLabels:
+      app: payments
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/shop/sa/orders"]
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/charge"]</code></pre>
+      <p>Con esta política, una llamada a <code>/charge</code> desde cualquier otro servicio, aunque esté en el mismo namespace, recibe un 403 del sidecar de payments sin llegar a la app.</p>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>Un mesh cuesta: cada llamada atraviesa dos proxies más (uno en cada extremo), cada instancia carga un proceso extra con su memoria, y el plano de control se vuelve infraestructura crítica. Por eso existen variantes sin sidecar (proxies por nodo, o balanceo dentro del cliente con librerías como gRPC xDS). La pregunta que decide es organizacional: con muchos equipos y lenguajes, uniformar seguridad y observabilidad sin tocar código vale el costo; con pocos servicios, una buena librería cliente suele alcanzar.</p>
+        <p>Un mesh cuesta: cada llamada atraviesa dos proxies más (uno en cada extremo), cada pod carga un proceso extra con su memoria, y el plano de control se vuelve infraestructura crítica. Por eso existen variantes sin sidecar. El modo ambient de Istio pone un proxy por nodo, ztunnel, que hace el mTLS y la identidad en L4, y solo agrega proxies L7 (waypoints) para los servicios que necesitan reglas HTTP. <span class="badge badge--doc">Documentado</span> Otra opción es el balanceo dentro del cliente, con librerías como gRPC xDS. La pregunta que decide es organizacional: con muchos equipos y lenguajes, uniformar la seguridad y la observabilidad sin tocar código vale el costo; con pocos servicios, una buena librería cliente suele alcanzar.</p>
       </aside>
 
       <h2 id="fallos"><span class="sec-num">3.7</span>Fallos típicos de la capa de entrada</h2>
@@ -276,14 +1063,116 @@
           <thead><tr><th>Falla</th><th>Mecanismo</th><th>Defensa</th></tr></thead>
           <tbody>
             <tr><td>El balanceador es un SPOF</td><td>Una sola máquina en la entrada</td><td>Balanceadores distribuidos (anycast, ECMP, servicios administrados multi-zona)</td></tr>
-            <tr><td>Amplificación de reintentos</td><td>Cada capa reintenta: 3 × 3 × 3 = 27 requests por request</td><td>Reintentar en una sola capa, con presupuesto de reintentos (M08)</td></tr>
+            <tr><td>Amplificación de reintentos</td><td>Cada capa reintenta: 3 × 3 × 3 = 27 requests por request</td><td>Reintentar en una sola capa, con presupuesto de reintentos (<a href="#reintentos">abajo</a> y M08)</td></tr>
             <tr><td>Health check en cascada</td><td>El readiness depende de la base; la base se pone lenta; todas las instancias salen de rotación</td><td>Readiness solo de la instancia; límite de cuántas instancias se pueden expulsar (panic threshold)</td></tr>
-            <tr><td>Estampida hacia la instancia nueva</td><td>Menos conexiones ve una instancia vacía y le manda todo</td><td>Slow start</td></tr>
+            <tr><td>Estampida hacia la instancia nueva</td><td>Menos conexiones ve una instancia vacía y le manda todo</td><td><a href="#slow-start">Slow start</a> en el balanceador</td></tr>
             <tr><td>Timeouts desalineados</td><td>El balanceador corta a los 30 s pero el backend sigue trabajando 60 s</td><td>Deadlines propagados; timeouts decrecientes hacia adentro</td></tr>
             <tr><td>Conexiones largas desbalanceadas</td><td>L4 con HTTP/2 o WebSockets</td><td>L7, duración máxima de conexión, balanceo en el cliente</td></tr>
           </tbody>
         </table>
       </div>
+
+
+      <h3 id="reintentos">Amplificación de reintentos: por qué 3 × 3 × 3</h3>
+
+      <p>La segunda fila de la tabla merece la cuenta completa. Supón cuatro saltos (gateway, servicio A, servicio B y base de datos) y que cada capa, por su cuenta, hace hasta 3 intentos por cada llamada que falla. Es una configuración muy común: cada equipo pone "3 intentos" porque le parece prudente, sin saber lo que hacen las otras capas.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 318" role="img" aria-labelledby="f3rtt f3rtd">
+<title id="f3rtt">Por qué 3 reintentos por capa se vuelven 27</title>
+<desc id="f3rtd">Cuatro saltos: el usuario llama al gateway, el gateway al servicio A, A al servicio B y B a la base de datos. Cada capa hace hasta 3 intentos por cada llamada que recibe. Si la base no responde, el gateway hace 3 intentos a A, cada uno de esos genera 3 intentos de A a B, que suman 9, y cada uno de esos genera 3 intentos de B a la base, que suman 27.</desc>
+<defs><marker id="f3rta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f3rtf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="8" y="22" width="106" height="40" rx="6"/>
+<text class="dg-label" x="61.0" y="47.0" text-anchor="middle" style="font-size:13px">Usuario</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="170" y="22" width="106" height="40" rx="6"/>
+<text class="dg-label" x="223.0" y="47.0" text-anchor="middle" style="font-size:13px">Gateway</text>
+<path class="dg-edge" d="M114 42 H168" marker-end="url(#f3rta)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="332" y="22" width="106" height="40" rx="6"/>
+<text class="dg-label" x="385.0" y="47.0" text-anchor="middle" style="font-size:13px">Servicio A</text>
+<path class="dg-edge" d="M276 42 H330" marker-end="url(#f3rta)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="494" y="22" width="106" height="40" rx="6"/>
+<text class="dg-label" x="547.0" y="47.0" text-anchor="middle" style="font-size:13px">Servicio B</text>
+<path class="dg-edge" d="M438 42 H492" marker-end="url(#f3rta)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="656" y="22" width="106" height="40" rx="6"/>
+<text class="dg-label" x="709.0" y="47.0" text-anchor="middle" style="font-size:13px">Base de datos</text>
+<path class="dg-edge" d="M600 42 H654" marker-end="url(#f3rta)"/>
+<text class="dg-num" x="142.0" y="36" text-anchor="middle">1</text>
+<text class="dg-num" x="304.0" y="36" text-anchor="middle">3</text>
+<text class="dg-num" x="466.0" y="36" text-anchor="middle">9</text>
+<text class="dg-num" x="628.0" y="36" text-anchor="middle">27</text>
+<circle class="dg-box" cx="196" cy="86" r="7"/>
+<text class="dg-small" x="223" y="118" text-anchor="middle">recibe 1</text>
+<circle class="dg-warnbox" cx="358" cy="86" r="7"/>
+<circle class="dg-warnbox" cx="384" cy="86" r="7"/>
+<circle class="dg-warnbox" cx="410" cy="86" r="7"/>
+<text class="dg-small" x="385" y="118" text-anchor="middle">recibe 3</text>
+<circle class="dg-warnbox" cx="520" cy="86" r="7"/>
+<circle class="dg-warnbox" cx="546" cy="86" r="7"/>
+<circle class="dg-warnbox" cx="572" cy="86" r="7"/>
+<circle class="dg-warnbox" cx="520" cy="106" r="7"/>
+<circle class="dg-warnbox" cx="546" cy="106" r="7"/>
+<circle class="dg-warnbox" cx="572" cy="106" r="7"/>
+<circle class="dg-warnbox" cx="520" cy="126" r="7"/>
+<circle class="dg-warnbox" cx="546" cy="126" r="7"/>
+<circle class="dg-warnbox" cx="572" cy="126" r="7"/>
+<text class="dg-small" x="547" y="158" text-anchor="middle">recibe 9</text>
+<circle class="dg-bad" cx="682" cy="86" r="7"/>
+<circle class="dg-bad" cx="708" cy="86" r="7"/>
+<circle class="dg-bad" cx="734" cy="86" r="7"/>
+<circle class="dg-bad" cx="682" cy="106" r="7"/>
+<circle class="dg-bad" cx="708" cy="106" r="7"/>
+<circle class="dg-bad" cx="734" cy="106" r="7"/>
+<circle class="dg-bad" cx="682" cy="126" r="7"/>
+<circle class="dg-bad" cx="708" cy="126" r="7"/>
+<circle class="dg-bad" cx="734" cy="126" r="7"/>
+<circle class="dg-bad" cx="682" cy="146" r="7"/>
+<circle class="dg-bad" cx="708" cy="146" r="7"/>
+<circle class="dg-bad" cx="734" cy="146" r="7"/>
+<circle class="dg-bad" cx="682" cy="166" r="7"/>
+<circle class="dg-bad" cx="708" cy="166" r="7"/>
+<circle class="dg-bad" cx="734" cy="166" r="7"/>
+<circle class="dg-bad" cx="682" cy="186" r="7"/>
+<circle class="dg-bad" cx="708" cy="186" r="7"/>
+<circle class="dg-bad" cx="734" cy="186" r="7"/>
+<circle class="dg-bad" cx="682" cy="206" r="7"/>
+<circle class="dg-bad" cx="708" cy="206" r="7"/>
+<circle class="dg-bad" cx="734" cy="206" r="7"/>
+<circle class="dg-bad" cx="682" cy="226" r="7"/>
+<circle class="dg-bad" cx="708" cy="226" r="7"/>
+<circle class="dg-bad" cx="734" cy="226" r="7"/>
+<circle class="dg-bad" cx="682" cy="246" r="7"/>
+<circle class="dg-bad" cx="708" cy="246" r="7"/>
+<circle class="dg-bad" cx="734" cy="246" r="7"/>
+<text class="dg-small" x="709" y="278" text-anchor="middle">recibe 27</text>
+<text class="dg-tiny" x="8" y="100">Si la base no responde,</text>
+<text class="dg-tiny" x="8" y="116">cada capa reintenta</text>
+<text class="dg-tiny" x="8" y="132">cada llamada que recibe:</text>
+<text class="dg-tiny" x="8" y="148">los intentos se multiplican.</text>
+<text class="dg-label" x="8" y="178" style="font-size:15px">3 × 3 × 3 = 3³ = 27</text>
+<path class="dg-frame" d="M8 284 H762"/>
+<text class="dg-small" x="8" y="306">Con 1 000 usuarios por segundo, la base, que ya estaba saturada, pasa a recibir hasta 27 000 llamadas por segundo.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 3.10.</b> Cada capa multiplica por 3 lo que recibe. La base, que es la que está fallando, recibe la peor parte.</figcaption>
+      </figure>
+
+      <p>Cuando la base está sana, nadie reintenta y cada request del usuario produce una sola llamada a la base. El problema aparece cuando la base se satura y empieza a responder con timeouts:</p>
+      <ol class="steps">
+        <li><span class="step-title">B reintenta.</span>B llama a la base, la llamada expira y B reintenta: <b>3</b> llamadas a la base. Las tres fallan, y B le devuelve un error a A.</li>
+        <li><span class="step-title">A reintenta.</span>A ve el error y reintenta su llamada a B. Cada uno de sus 3 intentos vuelve a producir los 3 de B: <b>3 × 3 = 9</b> llamadas a la base.</li>
+        <li><span class="step-title">El gateway reintenta.</span>El gateway ve el error de A y reintenta: <b>3 × 3 × 3 = 27</b> llamadas a la base por una sola request del usuario.</li>
+      </ol>
+      <p>En general, con <var>n</var> capas que hacen hasta <var>r</var> intentos cada una, la capa más profunda recibe hasta r<sup>n</sup> llamadas por request: 3 capas con 3 intentos dan 27, y 4 capas, 81. Y la multiplicación llega en el peor momento: los reintentos se disparan porque la base está sobrecargada, y multiplican su carga justo entonces. Es una realimentación positiva que puede mantener caído al sistema aunque la causa original desaparezca, una <dfn data-term="metastable">falla metaestable</dfn> (<a href="m08-resiliencia.html#reintentos">M08</a>). Los usuarios también reintentan: apretar "recargar" es una capa más.</p>
+
+      <p>Las defensas atacan cada factor de la multiplicación:</p>
+      <ul>
+        <li><b>Reintentar en una sola capa.</b> Normalmente la más cercana a la falla (B, que sabe si el error es transitorio) o la más externa; las demás propagan el error. Así, la base recibe 3 llamadas, no 27.</li>
+        <li><b>Un presupuesto de reintentos.</b> Los reintentos no pueden superar un porcentaje de las requests, por ejemplo el 10&#8239;%. Con ese presupuesto en las tres capas, la base recibe como máximo 1.1 × 1.1 × 1.1 ≈ 1.33 veces la carga normal, no 27. Envoy lo implementa como <code>retry_budget</code> y gRPC como <em>retry throttling</em>. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Backoff exponencial con jitter.</b> Esperar 100, 200 y 400&#8239;ms entre intentos, más un componente al azar, para que miles de clientes no reintenten en el mismo instante.</li>
+        <li><b>Deadlines propagados.</b> Si al usuario le quedan 200&#8239;ms de su deadline, B no empieza un reintento que no puede terminar a tiempo.</li>
+        <li><b>No reintentar lo que no es transitorio.</b> Un 400 o un 403 no cambian al repetirlos, y un 503 con <code>Retry-After</code> es una instancia pidiendo menos carga, no más.</li>
+      </ul>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 
@@ -324,5 +1213,6 @@
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
 <script src="../assets/js/widgets/sim-lb.js"></script>
+<script src="../assets/js/widgets/sim-slowstart.js"></script>
 </body>
 </html>

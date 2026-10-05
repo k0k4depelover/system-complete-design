@@ -267,7 +267,7 @@ w' = q × escala                  # lo que el modelo usa al calcular; el error e
 
       <aside class="callout callout--fail">
         <p class="callout-label">Qué pasa si falla</p>
-        <p>Un modelo cuantizado sin medir puede pasar todas las pruebas de humo y fallar en un 5&#8239;% de los casos de un cliente: respuestas que se cortan, JSON mal formado, código que no compila. La defensa es la misma que para cualquier cambio de modelo: una batería de evals de tus propias tareas antes de desplegar, y después shadow traffic o canary comparando contra la versión en BF16 (M22).</p>
+        <p>Un modelo cuantizado sin medir puede pasar todas las pruebas de humo y fallar en un 5&#8239;% de los casos de un cliente: respuestas que se cortan, JSON mal formado, código que no compila. La defensa es la misma que para cualquier cambio de modelo: una batería de evals de tus propias tareas antes de desplegar, y después shadow traffic o canary comparando contra la versión en BF16 (<a href="m22-operar-modelos.html#shadow">M22</a>).</p>
       </aside>
 
       <h2 id="impacto"><span class="sec-num">14.6</span>Impacto en memoria, latencia y costo</h2>
@@ -331,7 +331,7 @@ w' = q × escala                  # lo que el modelo usa al calcular; el error e
             <li><b>Formato:</b> FP8 (W8A8) en pesos y KV cache, con réplicas de 2 H100. Es el cambio de menor riesgo: FP8 casi no pierde en un 70B y acelera también el prefill, que con 16 000 tokens de contexto pesa. INT4 queda como segunda opción si FP8 no alcanza el objetivo.</li>
             <li><b>Calibración:</b> con muestras reales del tráfico, código y contextos largos incluidos, no con un dataset genérico de chat.</li>
             <li><b>Evals antes de desplegar:</b> tests de generación de código que se ejecutan (tasa de compilación y de tests que pasan), JSON y tool calls válidos, y tareas con contexto de 16 000 tokens, comparando BF16 contra FP8 con los mismos prompts y temperatura 0.</li>
-            <li><b>Despliegue:</b> primero shadow traffic (la versión FP8 recibe copias de requests reales y se comparan las respuestas sin mostrarlas), después canary al 1, 5 y 25&#8239;% vigilando tasa de errores, respuestas cortadas y señales de los usuarios (regenerar, pulgar abajo), con rollback automático (M11 y M22).</li>
+            <li><b>Despliegue:</b> primero shadow traffic (la versión FP8 recibe copias de requests reales y se comparan las respuestas sin mostrarlas), después canary al 1, 5 y 25&#8239;% vigilando tasa de errores, respuestas cortadas y señales de los usuarios (regenerar, pulgar abajo), con rollback automático (<a href="m11-observabilidad.html#despliegues">M11</a> y <a href="m22-operar-modelos.html#canary">M22</a>).</li>
             <li><b>Resultado esperado:</b> la mitad de GPUs por réplica, un TPOT parecido al de BF16 y un TTFT menor gracias al cómputo en FP8.</li>
           </ul>
         </details>

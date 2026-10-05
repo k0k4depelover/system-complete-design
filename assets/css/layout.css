@@ -166,6 +166,8 @@ body.side-hidden .sidebar { visibility: hidden; padding: 0; border: 0; overflow:
 }
 .stop[data-kind="checkpoint"]::before { border-radius: 2px; transform: rotate(45deg) scale(0.9); }
 .stop[data-kind="map"]::before { border-radius: 3px; }
+.stop[data-kind="deep"]::before { width: 8px; height: 8px; margin-top: -4px; left: 12px; }
+.stop[data-kind="deep"] .stop-link { padding-left: 44px; }
 .stop.is-done::before { background: var(--line); }
 .stop.is-soon::before { border-color: color-mix(in srgb, var(--line) 40%, var(--bg-2)); }
 

@@ -1,6 +1,6 @@
 /* Guías de proyectos (proyectos/aNN-*.html). Necesita sd.js, projects.data.js y project-state.js.
    - Ruta de proyectos en el sidebar y anterior/siguiente entre proyectos.
-   - Resaltado de java, yaml, xml, bash, nginx, ini y dockerfile (sd.js ya cubre json, http, sse, sql y python).
+   - Resaltado de java, javascript, yaml, xml, bash, nginx, ini y dockerfile (sd.js ya cubre json, http, sse, sql y python).
    - <pre data-file="ruta"> recibe una cabecera con la ruta del archivo y un botón para copiar.
    - La caja "Tu repositorio" ([data-repo]): enlace al repositorio y lista de comprobación, que marcan
      el proyecto como terminado. */
@@ -43,6 +43,13 @@
       if (kw) return span('c-m', w);
       return decl ? span('c-k', w) : SD.escape(w);
     }]);
+  }
+
+  /* JavaScript, para los scripts de k6: cadenas (también las de backticks), comentarios, números y palabras clave. */
+  var JS_KW = /^(async|await|break|case|catch|class|const|continue|default|delete|do|else|export|extends|finally|for|from|function|if|import|in|instanceof|let|new|of|return|switch|this|throw|try|typeof|var|void|while|true|false|null|undefined)$/;
+  function hlJs(src) {
+    var re = /(`(?:\\.|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(\b\d[\d_]*(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/g;
+    return tokens(src, re, ['c-s', 'c-c', 'c-n', function (w) { return JS_KW.test(w) ? span('c-m', w) : SD.escape(w); }]);
   }
 
   /* YAML línea por línea: comentario, clave, y en el valor cadenas, ${variables}, números y booleanos. */
@@ -92,7 +99,7 @@
     return tokens(src, re, ['c-c', 'c-m', 'c-s', 'c-h']);
   }
 
-  var HL = { java: hlJava, yaml: hlYaml, xml: hlXml, bash: hlBash, nginx: hlNginx, ini: hlIni, dockerfile: hlDocker };
+  var HL = { java: hlJava, javascript: hlJs, yaml: hlYaml, xml: hlXml, bash: hlBash, nginx: hlNginx, ini: hlIni, dockerfile: hlDocker };
 
   function highlight(root) {
     root.querySelectorAll('pre[data-lang]').forEach(function (pre) {

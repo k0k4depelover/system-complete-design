@@ -1,0 +1,1073 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M22. Operar modelos en producción</title>
+<meta name="description" content="Cómo se cambia un modelo sin romper nada que no dé errores: señales de calidad, evals con barras de error, shadow, canary, A/B, LLM como juez, regresiones silenciosas, guardrails, prompt injection, abuso, retención de datos e incidentes.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m22">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Operar modelos en producción</h1>
+        <p class="lead">Un servicio normal falla con un 500 y un pico en el tablero. Un modelo puede empeorar con todos los indicadores en verde: responde más corto, rechaza más, se vuelve servil o mezcla idiomas, y nadie recibe una alerta. Este módulo arma la operación de un modelo en producción: qué señales miran la calidad y cuánto tardan, cuántos ejemplos necesita un eval para ver una diferencia, cómo se copia tráfico a una versión en sombra sin mandar correos dos veces, cuándo avanza o vuelve atrás un canary, cómo se usa otro modelo como juez sin creerle de más, y qué hacer con guardrails, prompt injection, abuso, datos de los usuarios e incidentes que no se parecen a ninguno del M11.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M22</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M11, M14, M19, M20</dd></div>
+          <div><dt>Estado</dt><dd data-status="m22">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Elegir las señales que miden la calidad de un modelo en producción, sabiendo cuánto tarda cada una y qué no ve.</li>
+          <li>Calcular cuántos ejemplos necesita un eval, o cuánto tiene que durar un canary, para distinguir una diferencia de dos puntos, y por qué un eval pareado necesita tres veces menos.</li>
+          <li>Diseñar el camino de una versión nueva por evals offline, shadow, canary, A/B y retiro, con criterios automáticos para avanzar y para volver atrás.</li>
+          <li>Usar un LLM como juez corrigiendo sus sesgos de posición, de largo y de autopreferencia, y calibrándolo contra personas.</li>
+          <li>Defender un asistente con herramientas de la prompt injection indirecta, sabiendo que no hay una solución completa y qué capa cubre cada una.</li>
+          <li>Responder a incidentes propios de los modelos: calidad degradada, salida dañina, datos en los traces y una GPU que calcula mal sin dar errores.</li>
+        </ul>
+      </section>
+
+      <h2 id="distinto"><span class="sec-num">22.1</span>Por qué operar un modelo es distinto</h2>
+
+      <p>Seguimos con la flota del <a href="m19-router-flota.html#flota">M19</a>: Llama 3.1 70B en BF16 sobre 125 réplicas de 4 H100, con 400 requests por segundo en el pico y unos 17.3 millones por día (las cuentas están en el <a href="m21-metering.html#numeros-volumen">M21</a>). El equipo quiere hacer dos cambios a la vez: pasar los pesos a FP8, que en el <a href="m14-cuantizacion.html#impacto">M14</a> vimos que libera la mitad de la memoria de pesos para KV cache, y estrenar la versión 41 del prompt del sistema. Ninguno de los dos cambia el código del gateway ni el esquema de la base. Los dos pueden romper el producto.</p>
+
+      <p>En el <a href="m11-observabilidad.html#despliegues">M11</a> desplegamos código con canary y rollback automático, mirando errores y latencia. Con un modelo eso no alcanza, porque sus fallas típicas no dan errores:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Un servicio de código</th><th>Un modelo</th></tr></thead>
+          <tbody>
+            <tr><td>Cómo falla</td><td>Excepciones, timeouts, respuestas 5xx</td><td>Respuestas peores con un 200: más cortas, más rechazos, otro idioma, servilismo, datos inventados</td></tr>
+            <tr><td>Qué es "correcto"</td><td>Binario: el test pasa o no pasa</td><td>Una distribución: la misma pregunta tiene muchas respuestas buenas y muchas malas</td></tr>
+            <tr><td>Determinismo</td><td>La misma entrada da la misma salida</td><td>Muestreo con temperatura, y aun con temperatura 0 la salida puede cambiar según con qué otras requests compartió el batch</td></tr>
+            <tr><td>Qué la detecta</td><td>Tasa de errores y latencia, en segundos</td><td>Evals, jueces y el comportamiento de los usuarios, en minutos, horas o días</td></tr>
+            <tr><td>Qué cambia el comportamiento</td><td>El código</td><td>Los pesos, el prompt del sistema, el motor, la plantilla de chat, los parámetros de muestreo y los clasificadores</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Lo del determinismo no es una exageración: Thinking Machines publicó en 2025 que los kernels de los motores de inferencia no son invariantes al tamaño del batch, así que la misma request con temperatura 0 puede dar otra respuesta según cuántas requests la acompañaban en ese paso. <span class="badge badge--doc">Documentado</span> Para operar, eso significa que comparar dos versiones respuesta por respuesta no sirve: hay que comparar distribuciones, con estadística.</p>
+
+      <p>La consecuencia práctica es que un modelo necesita SLOs de calidad además de los de latencia. Se escriben igual que en el <a href="m11-observabilidad.html#alertas">M11</a>, con un objetivo, una ventana y alertas por burn rate, pero sobre señales que miden la calidad:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>SLO</th><th>Señal</th><th>Objetivo de ejemplo</th></tr></thead>
+          <tbody>
+            <tr><td>Latencia</td><td>TTFT p95 y TPOT p95</td><td>TTFT bajo 800 ms y TPOT bajo 40 ms, el 99&#8239;% de los minutos</td></tr>
+            <tr><td>Disponibilidad</td><td>Requests sin error ni stream cortado</td><td>99.9&#8239;% en 30 días</td></tr>
+            <tr><td>Calidad percibida</td><td>Respuestas que el usuario regenera</td><td>Menos del 9&#8239;% en cada día</td></tr>
+            <tr><td>Calidad medida</td><td>Puntaje de un juez sobre una muestra del tráfico</td><td>No más de 2 puntos bajo la versión anterior</td></tr>
+            <tr><td>Seguridad</td><td>Rechazos indebidos y salidas marcadas por los guardrails</td><td>Rechazos bajo el 1.5&#8239;%; salidas marcadas, sin aumento</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span> Los números de la tabla son de ejemplo: cada producto fija los suyos a partir de su propia línea base.</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El orden de los problemas suele ser el inverso al de un servicio. La latencia y los errores de un modelo se arreglan con capacidad y con el router (<a href="m19-router-flota.html#elegir">M19</a>). Lo que cuesta encontrar, y lo que dura semanas sin que nadie lo vea, son las regresiones de calidad: el postmortem de Anthropic que veremos en 22.8 describe tres bugs que degradaron respuestas durante semanas con los tableros en verde.</p>
+      </aside>
+
+      <h2 id="senales"><span class="sec-num">22.2</span>Las señales de calidad</h2>
+
+      <p>No hay una métrica que diga "el modelo responde bien". Hay varias familias, y cada una ve una parte con su propio retraso:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f22gt f22gd">
+<title id="f22gt">Las señales de calidad de un modelo y cuánto tardan</title>
+<desc id="f22gd">Cinco familias de señales ordenadas por cuánto tardan en decir algo. Los evals offline se corren antes de desplegar. Las señales técnicas (errores, TTFT, TPOT, largo de la respuesta, tasa de rechazos) hablan en segundos. Las implícitas de los usuarios (regenerar, editar, copiar, pulgares, abandonar la conversación) en minutos u horas. Los evals online con un juez sobre una muestra del tráfico, en horas. Las de negocio (retención, tickets de soporte, cancelaciones), en días o semanas. Cuanto más tarda una señal, más cerca está de la calidad que le importa al usuario y más ruido tiene.</desc>
+<defs><marker id="f22ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="150" y="22" text-anchor="middle">Antes de desplegar</text>
+<text class="dg-group" x="300" y="22" text-anchor="middle">Segundos</text>
+<text class="dg-group" x="450" y="22" text-anchor="middle">Minutos a horas</text>
+<text class="dg-group" x="590" y="22" text-anchor="middle">Horas</text>
+<text class="dg-group" x="710" y="22" text-anchor="middle">Días</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="80.0" y="42" width="140" height="40" rx="6"/>
+<text class="dg-label" x="150.0" y="67.0" text-anchor="middle" style="font-size:12.5px">Evals offline</text>
+<text class="dg-tiny" x="228.0" y="59">golden sets por tarea</text>
+<text class="dg-tiny" x="228.0" y="73">regresión por categoría</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="230.0" y="88" width="140" height="40" rx="6"/>
+<text class="dg-label" x="300.0" y="113.0" text-anchor="middle" style="font-size:12.5px">Técnicas</text>
+<text class="dg-tiny" x="378.0" y="105">errores, TTFT, TPOT</text>
+<text class="dg-tiny" x="378.0" y="119">largo, rechazos</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="380.0" y="134" width="140" height="40" rx="6"/>
+<text class="dg-label" x="450.0" y="159.0" text-anchor="middle" style="font-size:12.5px">Implícitas</text>
+<text class="dg-tiny" x="528.0" y="151">regenerar, editar, copiar</text>
+<text class="dg-tiny" x="528.0" y="165">pulgares, abandono</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="520.0" y="180" width="140" height="40" rx="6"/>
+<text class="dg-label" x="590.0" y="205.0" text-anchor="middle" style="font-size:12.5px">Evals online</text>
+<text class="dg-tiny" x="514.0" y="197" text-anchor="end">juez sobre una muestra</text>
+<text class="dg-tiny" x="514.0" y="211" text-anchor="end">del tráfico real</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="654.0" y="226" width="112" height="40" rx="6"/>
+<text class="dg-label" x="710.0" y="251.0" text-anchor="middle" style="font-size:12.5px">Negocio</text>
+<text class="dg-tiny" x="648.0" y="243" text-anchor="end">retención, tickets</text>
+<text class="dg-tiny" x="648.0" y="257" text-anchor="end">cancelaciones</text>
+<path class="dg-edge" d="M60 290 H740" marker-end="url(#f22ga)"/>
+<text class="dg-small" x="60" y="312">más lenta, más ruidosa y más cerca de lo que le importa al usuario</text>
+<text class="dg-tiny" x="740" y="312" text-anchor="end">el tiempo hasta que la señal dice algo</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.1.</b> Las señales ordenadas por cuánto tardan en decir algo. Las de la izquierda son rápidas y baratas pero miden poco de la calidad; las de la derecha miden lo que importa, con días de retraso y mucho ruido.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Señal</th><th>Qué mide</th><th>Qué no ve</th></tr></thead>
+          <tbody>
+            <tr><td>Errores, TTFT, TPOT</td><td>Que el motor funciona y a qué velocidad</td><td>Nada del contenido</td></tr>
+            <tr><td>Largo de la respuesta</td><td>Cambios bruscos de estilo; una respuesta que se acorta un 30&#8239;% casi siempre es un cambio real</td><td>Si el cambio es para mejor</td></tr>
+            <tr><td>Tasa de rechazos</td><td>Respuestas del tipo "no puedo ayudarte con eso", detectadas con un clasificador chico</td><td>Si el rechazo era correcto</td></tr>
+            <tr><td>Fin de stream por largo</td><td>Respuestas cortadas por <code>max_tokens</code> (<code>finish_reason: "length"</code>, <a href="m17-api-streaming.html#parametros">M17</a>)</td><td>Respuestas que se alargan sin llegar al límite</td></tr>
+            <tr><td>Regenerar</td><td>El usuario pidió otra respuesta: la primera no le sirvió</td><td>Por qué no le sirvió</td></tr>
+            <tr><td>Editar y reenviar</td><td>El usuario reformula: el modelo no entendió</td><td>Usuarios que se rinden sin reformular</td></tr>
+            <tr><td>Copiar</td><td>La respuesta se usó, sobre todo en código</td><td>El uso que no pasa por el portapapeles</td></tr>
+            <tr><td>Pulgares</td><td>Una opinión explícita</td><td>Lo que piensa la gran mayoría, que no vota; y vota más quien está muy contento o muy molesto</td></tr>
+            <tr><td>Abandono</td><td>La conversación termina justo después de una respuesta</td><td>Si terminó porque el usuario ya tenía lo que quería</td></tr>
+            <tr><td>Juez sobre una muestra</td><td>Calidad según una rúbrica (22.7)</td><td>Lo que la rúbrica no pregunta, y los sesgos del juez</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Las señales implícitas salen de la tabla de feedback y del árbol de mensajes del <a href="m20-producto-chatgpt.html#arbol">M20</a>: un mensaje del asistente con un hermano posterior del mismo padre es una regeneración. Por eso cada mensaje guarda la versión que lo generó. Con eso, la tasa de regeneración por versión es una consulta:</p>
+
+<pre data-lang="sql"><code>-- Regeneraciones por versión del modelo en las últimas 24 horas
+SELECT m.model_version,
+       count(*)                                         AS respuestas,
+       count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM messages s
+         WHERE s.parent_id = m.parent_id
+           AND s.role = 'assistant'
+           AND s.created_at &gt; m.created_at))           AS regeneradas,
+       round(100.0 * count(*) FILTER (WHERE EXISTS (
+         SELECT 1 FROM messages s
+         WHERE s.parent_id = m.parent_id
+           AND s.role = 'assistant'
+           AND s.created_at &gt; m.created_at)) / count(*), 2) AS pct
+FROM messages m
+WHERE m.role = 'assistant'
+  AND m.created_at &gt; now() - interval '24 hours'
+GROUP BY m.model_version;</code></pre>
+
+      <p>Lo mismo vale para todas las señales: cada métrica lleva la versión como dimensión. En el <a href="m11-observabilidad.html#metricas">M11</a> advertimos sobre la cardinalidad de las etiquetas; la versión es segura porque en un momento dado conviven dos o tres. El tablero de una flota de modelos no tiene una línea por métrica, tiene una por versión, y se lee como una comparación.</p>
+
+      <p>Un <dfn data-term="eval-online">eval online</dfn> es la familia que cierra el círculo: se toma una muestra del tráfico real, se le pasa a un juez o a personas, y se obtiene un puntaje de calidad por versión con horas de retraso. Es la única señal que mira el contenido de las respuestas de verdad, y la más cara; la sección 22.7 hace su cuenta.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Optimizar una señal implícita la corrompe. En abril de 2025, OpenAI sumó los pulgares de los usuarios como señal de recompensa al entrenar una actualización de GPT-4o; el modelo aprendió a dar la razón y la revirtieron a los cuatro días (22.8). Las señales sirven para detectar, y se vuelven peligrosas cuando se usan como objetivo.</p>
+      </aside>
+
+      <h2 id="evals"><span class="sec-num">22.3</span>Evals offline y sus barras de error</h2>
+
+      <p>Un <dfn data-term="eval-offline">eval offline</dfn> es una batería de casos que se corre contra una versión antes de que toque tráfico real. Su materia prima es un <dfn data-term="golden-set">golden set</dfn>: un conjunto curado de entradas con la respuesta esperada, o con un criterio para corregirlas, separado por tareas. Lo que hace a un eval útil no es su tamaño sino que se parezca al tráfico del producto:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Categoría</th><th>Casos</th><th>Cómo se corrige</th></tr></thead>
+          <tbody>
+            <tr><td>Extracción a JSON</td><td>400</td><td>Exacto, campo por campo, contra el esquema (<a href="m17-api-streaming.html#estructuradas">M17</a>)</td></tr>
+            <tr><td>Código</td><td>300</td><td>Se ejecutan pruebas unitarias en un sandbox</td></tr>
+            <tr><td>Preguntas con documentos (RAG)</td><td>400</td><td>Juez con la respuesta de referencia y las fuentes</td></tr>
+            <tr><td>Conversación en español</td><td>300</td><td>Juez con rúbrica; un 10&#8239;% revisado por personas</td></tr>
+            <tr><td>Contexto largo</td><td>150</td><td>El dato buscado está en una posición conocida del contexto</td></tr>
+            <tr><td>Rechazos</td><td>250</td><td>La mitad son pedidos que hay que rechazar y la otra mitad, pedidos legítimos que se parecen</td></tr>
+            <tr><td>Uso de herramientas</td><td>200</td><td>La herramienta y los argumentos esperados</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span> Son 2&#8239;000 casos. Los casos salen del tráfico real (con permiso y sin datos personales, 22.12), de los incidentes pasados y del red teaming (22.11), y cada bug que se escapa a producción deja un caso nuevo.</p>
+
+      <p>Tres reglas que se aprenden cuando se rompen:</p>
+      <ul>
+        <li><b>Se mira por categoría, no solo el promedio.</b> La versión FP8 puede ganar un punto en conversación y perder seis en contexto largo; el promedio de los 2&#8239;000 casos apenas se mueve. En el <a href="m14-cuantizacion.html#calidad">M14</a> vimos que la cuantización castiga más algunas tareas que otras.</li>
+        <li><b>El golden set no se filtra.</b> Si sus casos terminan en los ejemplos del prompt o en los datos de entrenamiento, el eval mide memoria. Se guarda aparte, con acceso restringido, y una parte se mantiene oculta incluso para el equipo que ajusta los prompts.</li>
+        <li><b>Un eval tiene ruido.</b> Con temperatura mayor que cero, la misma versión da otro puntaje en cada corrida. Se corre varias veces, o con temperatura 0 sabiendo que tampoco es del todo determinista (22.1).</li>
+      </ul>
+
+      <h3 id="evals-barras">Cuántos ejemplos hacen falta</h3>
+
+      <p>Un eval es un experimento: sus preguntas son una muestra de todas las que el producto podría recibir, y su puntaje es una estimación con margen de error. Anthropic publicó en 2024 una guía para tratarlos así, con intervalos de confianza, comparaciones pareadas y análisis de potencia. <span class="badge badge--doc">Documentado</span> El margen de error de una proporción <i>p</i> medida con <i>n</i> ejemplos es, con un 95&#8239;% de confianza, ±1.96 × √(<i>p</i>(1 − <i>p</i>) ÷ <i>n</i>):</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22et f22ed">
+<title id="f22et">El mismo eval con 100, 500 y 2 000 ejemplos</title>
+<desc id="f22ed">Dos modelos con 80 y 82 por ciento de aciertos verdaderos, medidos con evals de 100, 500 y 2 000 ejemplos. Cada barra es el intervalo de confianza del 95 por ciento: con 100 ejemplos mide más o menos 7.8 puntos, con 500 unos 3.5 y con 2 000 unos 1.75. En los tres casos los intervalos de los dos modelos se pisan: con muestras independientes harían falta unos 6 000 ejemplos por modelo para distinguir 2 puntos, o unos 2 000 si los dos modelos responden las mismas preguntas y se compara pregunta por pregunta.</desc>
+<defs></defs>
+<line class="sim-grid" x1="150.0" x2="150.0" y1="30" y2="250"/>
+<text class="dg-num" x="150.0" y="268" text-anchor="middle">70 %</text>
+<line class="sim-grid" x1="257.3" x2="257.3" y1="30" y2="250"/>
+<text class="dg-num" x="257.2727272727273" y="268" text-anchor="middle">74 %</text>
+<line class="sim-grid" x1="364.5" x2="364.5" y1="30" y2="250"/>
+<text class="dg-num" x="364.5454545454546" y="268" text-anchor="middle">78 %</text>
+<line class="sim-grid" x1="418.2" x2="418.2" y1="30" y2="250"/>
+<text class="dg-num" x="418.1818181818183" y="268" text-anchor="middle">80 %</text>
+<line class="sim-grid" x1="471.8" x2="471.8" y1="30" y2="250"/>
+<text class="dg-num" x="471.81818181818164" y="268" text-anchor="middle">82 %</text>
+<line class="sim-grid" x1="579.1" x2="579.1" y1="30" y2="250"/>
+<text class="dg-num" x="579.090909090909" y="268" text-anchor="middle">86 %</text>
+<line class="sim-grid" x1="686.4" x2="686.4" y1="30" y2="250"/>
+<text class="dg-num" x="686.3636363636364" y="268" text-anchor="middle">90 %</text>
+<text class="dg-tiny" x="150" y="290">aciertos</text>
+<text class="dg-label" x="140" y="64" text-anchor="end" style="font-size:13px">100 ejemplos</text>
+<path d="M207.9 50 H628.4 M207.9 45 V55 M628.4 45 V55" stroke="var(--l-service)" stroke-width="2.5" fill="none"/>
+<circle cx="418.2" cy="50" r="4.5" fill="var(--l-service)"/>
+<text class="dg-tiny" x="636.4363636363637" y="54">A: ± 7.8</text>
+<path d="M269.9 70 H673.8 M269.9 65 V75 M673.8 65 V75" stroke="var(--l-queue)" stroke-width="2.5" fill="none"/>
+<circle cx="471.8" cy="70" r="4.5" fill="var(--l-queue)"/>
+<text class="dg-tiny" x="681.7590909090908" y="74">B: ± 7.5</text>
+<text class="dg-label" x="140" y="136" text-anchor="end" style="font-size:13px">500 ejemplos</text>
+<path d="M324.1 122 H512.3 M324.1 117 V127 M512.3 117 V127" stroke="var(--l-service)" stroke-width="2.5" fill="none"/>
+<circle cx="418.2" cy="122" r="4.5" fill="var(--l-service)"/>
+<text class="dg-tiny" x="520.3136363636365" y="126">A: ± 3.5</text>
+<path d="M381.4 142 H562.2 M381.4 137 V147 M562.2 137 V147" stroke="var(--l-queue)" stroke-width="2.5" fill="none"/>
+<circle cx="471.8" cy="142" r="4.5" fill="var(--l-queue)"/>
+<text class="dg-tiny" x="570.1954545454543" y="146">B: ± 3.4</text>
+<text class="dg-label" x="140" y="208" text-anchor="end" style="font-size:13px">2 000 ejemplos</text>
+<path d="M371.3 194 H465.1 M371.3 189 V199 M465.1 189 V199" stroke="var(--l-service)" stroke-width="2.5" fill="none"/>
+<circle cx="418.2" cy="194" r="4.5" fill="var(--l-service)"/>
+<text class="dg-tiny" x="473.1136363636364" y="198">A: ± 1.8</text>
+<path d="M426.8 214 H516.9 M426.8 209 V219 M516.9 209 V219" stroke="var(--l-queue)" stroke-width="2.5" fill="none"/>
+<circle cx="471.8" cy="214" r="4.5" fill="var(--l-queue)"/>
+<text class="dg-tiny" x="524.8727272727272" y="218">B: ± 1.7</text>
+<text class="dg-tiny" x="740" y="22" text-anchor="end">A acierta el 80 %, B el 82 %; intervalos del 95 %</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.2.</b> Dos modelos con 80 y 82&#8239;% de aciertos verdaderos. Con 100 ejemplos, el margen es de ±7.8 puntos; con 2&#8239;000, de ±1.75, y los intervalos todavía se pisan.</figcaption>
+      </figure>
+
+      <p>La pregunta útil es la inversa: ¿cuántos ejemplos hacen falta para distinguir 80 de 82&#8239;%? Con dos muestras independientes, un 5&#8239;% de falsos positivos y una potencia del 80&#8239;% (la probabilidad de detectar la diferencia si existe), la fórmula de dos proporciones da 6&#8239;039 ejemplos por modelo. Un golden set de 2&#8239;000 no alcanza.</p>
+
+      <p>Pero un eval no tiene muestras independientes: los dos modelos responden las mismas preguntas. Eso permite comparar pregunta por pregunta, y la mayoría de las preguntas no informan nada, porque los dos aciertan o los dos fallan. Solo cuentan las preguntas en que discrepan. Si discrepan en un 10&#8239;% de las preguntas, la prueba pareada (McNemar) necesita 1&#8239;960 ejemplos para ver los mismos 2 puntos: tres veces menos.</p>
+
+      <p>Con 2&#8239;000 preguntas en que B gana 120 y A gana 80, la diferencia es de 2 puntos y la cuenta pareada la confirma:</p>
+
+<pre data-lang="python"><code>import math
+
+def comparar(a, b):
+    """a[i], b[i]: 1 si el modelo acertó la pregunta i, 0 si no."""
+    n = len(a)
+    d = [y - x for x, y in zip(a, b)]          # +1 si solo acertó B, -1 si solo acertó A
+    media = sum(d) / n
+    var = sum((x - media) ** 2 for x in d) / (n - 1)
+    se = math.sqrt(var / n)
+    return media, (media - 1.96 * se, media + 1.96 * se)
+
+# 2 000 preguntas: B gana 120, A gana 80, en 1 800 coinciden
+a = [0] * 120 + [1] * 80 + [1] * 1800
+b = [1] * 120 + [0] * 80 + [1] * 1800
+print(comparar(a, b))     # ≈ (0.02, (0.0062, 0.0338)): el intervalo no toca el 0
+
+# La misma diferencia tratada como dos muestras independientes:
+se = math.sqrt(0.80 * 0.20 / 2000 + 0.82 * 0.18 / 2000)
+print(1.96 * se)           # ≈ 0.0243: el intervalo (-0.004, 0.044) sí toca el 0</code></pre>
+
+      <p>Los mismos datos, analizados bien, pasan de "no se sabe" a "B es mejor". Hay un ajuste en la dirección contraria: si el eval agrupa varias preguntas sobre el mismo documento, las preguntas de un grupo no son independientes, y el error estándar con clusters puede ser más de tres veces el ingenuo. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>La calculadora hace las dos cuentas, y una tercera que usaremos en 22.5: cuánto tarda un canary en juntar esos ejemplos con tráfico real.</p>
+
+      <div data-calc="evalsize"></div>
+
+      <h2 id="shadow"><span class="sec-num">22.4</span>Shadow traffic</h2>
+
+      <p>Un eval offline usa casos elegidos por el equipo. El tráfico real tiene preguntas que nadie imaginó. El <dfn data-term="shadow-traffic">shadow traffic</dfn> une las dos cosas: el gateway copia una parte de las requests reales a la versión nueva, cuyas respuestas no ve nadie. En la tabla de estrategias del <a href="m11-observabilidad.html#despliegues">M11</a> era una fila; para un modelo es la primera vez que la versión nueva ve tráfico de verdad sin riesgo para los usuarios.</p>
+
+      <div data-sim="shadowflow"></div>
+
+      <p>Cuatro decisiones de diseño:</p>
+      <ul>
+        <li><b>La copia no espera.</b> El gateway la manda sin bloquear la request original, con un timeout corto, y la descarta si la cola de la sombra está llena. Una sombra lenta o caída no puede sumar latencia al usuario.</li>
+        <li><b>La copia no tiene efectos.</b> Las herramientas que escriben (correo, pagos, tickets, cambios en la base) se simulan: el gateway registra la llamada que pidió la sombra y le devuelve el resultado que obtuvo la estable. Se compara si las dos pidieron la misma herramienta con los mismos argumentos.</li>
+        <li><b>La copia es tan sensible como el original.</b> Las respuestas de la sombra contienen datos de los usuarios y se guardan para compararlas: tienen la misma retención y el mismo borrado que la conversación original (22.12).</li>
+        <li><b>La sombra solo ve un turno.</b> En una conversación, el historial que recibe la sombra lo escribió la versión estable. Se mide cómo responde la nueva un turno dado ese historial, no cómo llevaría la conversación entera. Para eso hace falta tráfico real con usuarios reales: el canary.</li>
+      </ul>
+
+      <p>El costo es GPU. Una sombra del 10&#8239;% sobre las 125 réplicas del M19 necesita 12.5 réplicas más, que se redondean a 13: 52 H100, unos 152&#8239;000 dólares por mes a 4 dólares por GPU y hora. <span class="badge badge--ref">Diseño de referencia</span> Por eso la sombra dura días, no semanas, y por eso la versión en sombra no comparte el prefix caching de la estable (<a href="m19-router-flota.html#prefijo">M19</a>): sus réplicas calculan cada prefijo de cero, y su TTFT medido es peor que el que tendrá en producción.</p>
+
+      <p>Qué se compara, request por request: el largo, si alguna de las dos rechazó, las herramientas que pidió cada una, la latencia y, sobre una muestra, un juez que elige la mejor de las dos (22.7). Supongamos que la primera lectura de la versión FP8 da respuestas un 3&#8239;% más cortas, la misma tasa de rechazos y una herramienta distinta en un 0.4&#8239;% de los casos, casi todos de búsqueda con contexto largo.</p>
+
+      <h2 id="canary"><span class="sec-num">22.5</span>El canary de un modelo</h2>
+
+      <p>El <a href="m19-router-flota.html#registry-canary">M19</a> ya armó la mecánica: la versión entra al registry, arranca réplicas, la tabla de rutas le da un porcentaje del tráfico asignado por un hash de la organización, y el rollback es volver al 0&#8239;% en segundos. Falta decidir qué es una versión, cuándo avanzar y cuándo volver.</p>
+
+      <h3 id="canary-paquete">Qué es una versión</h3>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f22vt f22vd">
+<title id="f22vt">Lo que se despliega es un paquete con fecha</title>
+<desc id="f22vd">Una versión desplegable, chat-2026-10-02, agrupa siete piezas que cambian el comportamiento: los pesos con su checksum y su cuantización, el tokenizer y la plantilla de chat, el prompt del sistema, la definición de las herramientas, los parámetros de muestreo, el motor con su configuración y los clasificadores de los guardrails. Cambiar cualquiera produce una versión nueva que pasa por evals y canary. El alias chat-latest es un puntero que el router mueve a una versión con fecha; los clientes que fijan la versión no ven el cambio.</desc>
+<defs><marker id="f22va" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="10" y="14" width="470" height="262" rx="10"/>
+<text class="dg-label" x="245" y="38" text-anchor="middle" style="font-family:var(--f-mono)">chat-2026-10-02</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="26" y="54" width="212" height="44" rx="6"/>
+<text class="dg-label" x="38" y="73" style="font-size:12.5px">Pesos</text>
+<text class="dg-tiny" x="38" y="89">sha256 3f9a… · FP8 (M14)</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="252" y="54" width="212" height="44" rx="6"/>
+<text class="dg-label" x="264" y="73" style="font-size:12.5px">Tokenizer y plantilla</text>
+<text class="dg-tiny" x="264" y="89">el formato de los turnos</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="26" y="108" width="212" height="44" rx="6"/>
+<text class="dg-label" x="38" y="127" style="font-size:12.5px">Prompt del sistema</text>
+<text class="dg-tiny" x="38" y="143">v41, versionado como código</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="252" y="108" width="212" height="44" rx="6"/>
+<text class="dg-label" x="264" y="127" style="font-size:12.5px">Herramientas</text>
+<text class="dg-tiny" x="264" y="143">descripciones y esquemas</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="26" y="162" width="212" height="44" rx="6"/>
+<text class="dg-label" x="38" y="181" style="font-size:12.5px">Muestreo</text>
+<text class="dg-tiny" x="38" y="197">temperatura, top-p, max_tokens</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="252" y="162" width="212" height="44" rx="6"/>
+<text class="dg-label" x="264" y="181" style="font-size:12.5px">Motor</text>
+<text class="dg-tiny" x="264" y="197">vLLM y su configuración (M15)</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="26" y="216" width="212" height="44" rx="6"/>
+<text class="dg-label" x="38" y="235" style="font-size:12.5px">Guardrails</text>
+<text class="dg-tiny" x="38" y="251">clasificadores v7 y umbrales</text>
+<text class="dg-label" x="520" y="60" style="font-size:13px">Cambiar cualquier pieza</text>
+<text class="dg-tiny" x="520" y="78">es una versión nueva: evals,</text>
+<text class="dg-tiny" x="520" y="94">canary y rollback, aunque los</text>
+<text class="dg-tiny" x="520" y="110">pesos no cambien.</text>
+<path class="dg-edge" d="M482 90 H510" marker-end="url(#f22va)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="520" y="150" width="230" height="44" rx="6"/>
+<text class="dg-label" x="635.0" y="169.5" text-anchor="middle" style="font-size:13px">chat-latest</text>
+<text class="dg-tiny" x="635.0" y="185.5" text-anchor="middle">alias: lo mueve el router</text>
+<path class="dg-edge" d="M520 172 H484" marker-end="url(#f22va)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="520" y="214" width="230" height="50" rx="6"/>
+<text class="dg-label" x="635.0" y="229.0" text-anchor="middle" style="font-size:13px">chat-2026-08-14</text>
+<text class="dg-tiny" x="635.0" y="245.0" text-anchor="middle">la versión fijada por un cliente</text>
+<text class="dg-tiny" x="635.0" y="259.0" text-anchor="middle">no cambia hasta su retiro</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.3.</b> La versión que se despliega agrupa todo lo que cambia el comportamiento. El cambio de este módulo toca dos piezas, los pesos y el prompt del sistema, y por eso es una versión nueva.</figcaption>
+      </figure>
+
+      <p>Si el prompt del sistema se edita en un panel de administración y se aplica al instante, cada edición es un despliegue sin canary. Lo mismo pasa con un cambio en los parámetros de muestreo, en la configuración del motor o en un clasificador. La regla es simple: todo lo que cambia el comportamiento vive en el paquete, versionado como código, y llega a producción por el mismo camino. Por la misma razón el <a href="m17-api-streaming.html#parametros">M17</a> recomendaba fijar una versión con fecha y no un alias: un alias es un puntero que el proveedor mueve, y la versión con fecha es la que no cambia.</p>
+
+      <p>Hacer los dos cambios juntos tiene un costo: si el canary falla, no se sabe cuál de los dos fue. Con tiempo, se separan en dos versiones; con apuro, el eval offline por categoría (22.3) suele señalar al culpable.</p>
+
+      <h3 id="canary-criterios">Cuándo avanzar y cuándo volver</h3>
+
+      <p>Cada escalón compara la versión nueva con la estable en el mismo período, con criterios escritos antes de empezar:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Señal</th><th>Vuelve atrás si</th><th>Por qué ese umbral</th></tr></thead>
+          <tbody>
+            <tr><td>Errores y streams cortados</td><td>Superan a la estable con significancia</td><td>Es una falla técnica: no hay nada que discutir</td></tr>
+            <tr><td>TTFT y TPOT p95</td><td>Más de un 10&#8239;% peor</td><td>El SLO de latencia de 22.1</td></tr>
+            <tr><td>Largo de la respuesta</td><td>Cambia más de un 15&#8239;%, en cualquier dirección</td><td>No es una falla, pero obliga a mirar antes de seguir</td></tr>
+            <tr><td>Rechazos</td><td>Suben con significancia</td><td>Un rechazo indebido es una respuesta perdida</td></tr>
+            <tr><td>Regeneraciones</td><td>Suben con significancia</td><td>La señal implícita más directa</td></tr>
+            <tr><td>Juez sobre una muestra</td><td>Más de 2 puntos bajo la estable</td><td>Lo que las señales técnicas no ven</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <p>"Con significancia" tiene una cuenta detrás, y es la misma de 22.3. La tasa de regeneración de la estable es del 8&#8239;%. Para detectar que la nueva sube al 9&#8239;% hacen falta 12&#8239;208 requests en cada brazo. A 400 requests por segundo, un canary del 1&#8239;% recibe 4 por segundo y tarda 51 minutos en juntarlas; uno del 5&#8239;%, 10 minutos. Una regresión grande se ve en el primer escalón; una chica obliga a crecer, y crecer es exponer a más usuarios. Ese es el trade-off del canary de un modelo, y el simulador lo muestra.</p>
+
+      <div data-sim="canarymodel"></div>
+
+      <p>Tres detalles del simulador que también valen en producción:</p>
+      <ul>
+        <li><b>Mirar muchas veces infla los falsos positivos.</b> Si se compara cada minuto con un umbral de 1.96, tarde o temprano el ruido lo cruza. Por eso el umbral de las miradas intermedias es más alto (z = 4) que el del cierre del escalón (z = 3). Las pruebas secuenciales formalizan esta idea.</li>
+        <li><b>Hay más de una señal.</b> Con seis señales y cuatro escalones, la probabilidad de que alguna cruce por azar se multiplica. Un rollback se investiga antes de descartar la versión.</li>
+        <li><b>La unidad es la organización.</b> El M19 asigna por hash de la organización para que una conversación no cambie de modelo. Una organización grande puede representar el 5&#8239;% del tráfico del canary y mover sola el promedio: las comparaciones se estratifican por tamaño de cliente o se calculan con errores por cluster (22.3).</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>El canary no ve las categorías raras. Si las preguntas legales en español son el 0.5&#8239;% del tráfico, al 5&#8239;% del canary llegan 0.1 por segundo: harían falta días para ver una regresión ahí. Eso lo cubren los evals offline por categoría, antes del canary. Cada etapa del ciclo (22.14) cubre lo que la anterior no ve: los evals, las categorías; la sombra, el tráfico real; el canary, los usuarios reales; el A/B, el producto.</p>
+      </aside>
+
+      <h2 id="ab"><span class="sec-num">22.6</span>A/B tests y comparaciones por pares</h2>
+
+      <p>El canary responde "¿se rompió algo?". Un <dfn data-term="ab-test">A/B test</dfn> responde otra pregunta: "¿es mejor para el producto?". Se reparte a los usuarios al azar entre dos versiones durante semanas y se comparan métricas de producto, no de respuesta:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Canary</th><th>A/B test</th></tr></thead>
+          <tbody>
+            <tr><td>Pregunta</td><td>¿La versión nueva es peor en algo?</td><td>¿Cuál de las dos es mejor para el producto?</td></tr>
+            <tr><td>Duración</td><td>Horas</td><td>Semanas</td></tr>
+            <tr><td>Reparto</td><td>1 a 50&#8239;%, creciente</td><td>Fijo, por ejemplo 50 y 50&#8239;%</td></tr>
+            <tr><td>Métricas</td><td>Errores, latencia, regeneraciones, juez</td><td>Retención a 7 y 28 días, conversaciones por usuario, conversión a pago, costo por usuario</td></tr>
+            <tr><td>Si sale mal</td><td>Rollback automático</td><td>Se queda la versión anterior; nadie se enteró</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Tres trampas propias de los modelos:</p>
+      <ul>
+        <li><b>La unidad es el usuario.</b> Si el reparto es por request, el mismo usuario ve dos estilos en la misma conversación y su comportamiento mezcla los dos. Se asigna por un hash del usuario, igual que el canary por organización.</li>
+        <li><b>El efecto novedad.</b> Los usuarios exploran una versión que se siente distinta, y la primera semana mide curiosidad. Se mira la curva por semana, no el total.</li>
+        <li><b>Una métrica de producto también se puede ganar mal.</b> Una versión que da la razón al usuario puede subir la satisfacción de corto plazo y bajar la confianza; una que alarga las respuestas sube el costo por usuario. Cada A/B lleva métricas de resguardo que no pueden empeorar: costo, latencia, rechazos y salidas marcadas por los guardrails.</li>
+      </ul>
+
+      <h3 id="ab-pares">Comparar de a pares</h3>
+
+      <p>Preguntarle a un usuario "¿qué tan buena fue esta respuesta, del 1 al 5?" da números ruidosos: cada persona usa la escala a su manera. Preguntarle "¿cuál de estas dos es mejor?" es más fácil de contestar y más consistente. LMArena (antes Chatbot Arena) se construyó así: muestra las respuestas de dos modelos anónimos, el usuario vota, y los votos se convierten en un ranking con el modelo de Bradley-Terry, que estima la probabilidad de que un modelo le gane a otro. Acumula decenas de millones de votos desde 2023. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Sus límites enseñan qué cuidar en una comparación propia. Los votantes prefieren respuestas más largas y con más formato, y LMArena agregó un "control de estilo" que descuenta el largo y el markdown de la puntuación. <span class="badge badge--doc">Documentado</span> Y un trabajo de 2025, "The Leaderboard Illusion", mostró que algunos proveedores prueban muchas variantes privadas y publican solo la mejor, lo que infla su posición. <span class="badge badge--doc">Documentado</span> Dentro de tu producto, la versión del eval online de 22.2 es la misma idea con dos respuestas de tus versiones y un juez o un usuario que elige.</p>
+
+      <h2 id="juez"><span class="sec-num">22.7</span>LLM como juez</h2>
+
+      <p>Un <dfn data-term="llm-juez">LLM como juez</dfn> es un modelo que califica las respuestas de otro según una rúbrica escrita. Es lo que vuelve posibles los evals online: ninguna empresa puede pagar personas para leer el 2&#8239;% de 17 millones de respuestas por día. El paper de referencia, el de MT-Bench y Chatbot Arena (2023), encontró que GPT-4 como juez coincidía con las personas más del 80&#8239;% de las veces, tanto como las personas entre sí, y describió tres sesgos: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Sesgo</th><th>Qué hace</th><th>Cómo se corrige</th></tr></thead>
+          <tbody>
+            <tr><td>De posición</td><td>Prefiere la respuesta que aparece primera (o segunda, según el modelo)</td><td>Se pregunta en los dos órdenes y solo cuenta la victoria que se repite</td></tr>
+            <tr><td>De largo</td><td>Prefiere la respuesta más larga, aunque no diga más</td><td>La rúbrica pide penalizar la repetición; se compara también el largo por separado</td></tr>
+            <tr><td>De autopreferencia</td><td>Prefiere las respuestas de su propio modelo o de su familia</td><td>El juez es de otra familia que los modelos evaluados</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f22jt f22jd">
+<title id="f22jt">Preguntarle al juez en los dos órdenes</title>
+<desc id="f22jd">La misma comparación se le pide al juez dos veces, con las respuestas en órdenes opuestos. En el primer orden, con A primero, el juez elige A. En el segundo, con B primero, elige B: en los dos casos ganó la que estaba primera. Como el veredicto cambió con el orden, se cuenta como empate. Solo cuenta como victoria la que gana en los dos órdenes.</desc>
+<defs><marker id="f22ja" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="36">Orden 1</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="46" width="110" height="54" rx="6"/>
+<text class="dg-label" x="65.0" y="70.5" text-anchor="middle" style="font-size:13px">Pregunta</text>
+<text class="dg-tiny" x="65.0" y="86.5" text-anchor="middle">del golden set</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="150" y="46" width="110" height="54" rx="6"/>
+<text class="dg-label" x="205.0" y="70.5" text-anchor="middle" style="font-size:13px">Respuesta A</text>
+<text class="dg-tiny" x="205.0" y="86.5" text-anchor="middle">va primera</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="46" width="110" height="54" rx="6"/>
+<text class="dg-label" x="345.0" y="70.5" text-anchor="middle" style="font-size:13px">Respuesta B</text>
+<text class="dg-tiny" x="345.0" y="86.5" text-anchor="middle">va segunda</text>
+<path class="dg-edge" d="M400 73 H438" marker-end="url(#f22ja)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="440" y="46" width="110" height="54" rx="6"/>
+<text class="dg-label" x="495.0" y="70.5" text-anchor="middle" style="font-size:13px">Juez</text>
+<text class="dg-tiny" x="495.0" y="86.5" text-anchor="middle">rúbrica de 5 puntos</text>
+<path class="dg-edge" d="M550 73 H588" marker-end="url(#f22ja)"/>
+<rect class="dg-warnbox" x="590" y="46" width="160" height="54" rx="6"/>
+<text class="dg-label" x="670" y="70" text-anchor="middle" style="font-size:13px">gana A</text>
+<text class="dg-tiny" x="670" y="86" text-anchor="middle">la que estaba primera</text>
+<text class="dg-group" x="10" y="146">Orden 2</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="156" width="110" height="54" rx="6"/>
+<text class="dg-label" x="65.0" y="180.5" text-anchor="middle" style="font-size:13px">Pregunta</text>
+<text class="dg-tiny" x="65.0" y="196.5" text-anchor="middle">del golden set</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="150" y="156" width="110" height="54" rx="6"/>
+<text class="dg-label" x="205.0" y="180.5" text-anchor="middle" style="font-size:13px">Respuesta B</text>
+<text class="dg-tiny" x="205.0" y="196.5" text-anchor="middle">va primera</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="156" width="110" height="54" rx="6"/>
+<text class="dg-label" x="345.0" y="180.5" text-anchor="middle" style="font-size:13px">Respuesta A</text>
+<text class="dg-tiny" x="345.0" y="196.5" text-anchor="middle">va segunda</text>
+<path class="dg-edge" d="M400 183 H438" marker-end="url(#f22ja)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="440" y="156" width="110" height="54" rx="6"/>
+<text class="dg-label" x="495.0" y="180.5" text-anchor="middle" style="font-size:13px">Juez</text>
+<text class="dg-tiny" x="495.0" y="196.5" text-anchor="middle">rúbrica de 5 puntos</text>
+<path class="dg-edge" d="M550 183 H588" marker-end="url(#f22ja)"/>
+<rect class="dg-warnbox" x="590" y="156" width="160" height="54" rx="6"/>
+<text class="dg-label" x="670" y="180" text-anchor="middle" style="font-size:13px">gana B</text>
+<text class="dg-tiny" x="670" y="196" text-anchor="middle">la que estaba primera</text>
+<rect class="dg-box" x="10" y="232" width="740" height="30" rx="6"/>
+<text class="dg-small" x="380" y="252" text-anchor="middle">! El veredicto cambió con el orden: empate. Solo gana la respuesta que gana en los dos órdenes.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.4.</b> El juez eligió la respuesta que iba primera en los dos órdenes. Sin la segunda pregunta, esa preferencia por la posición se habría contado como una victoria de A.</figcaption>
+      </figure>
+
+<pre data-lang="python"><code>RUBRICA = """Compara dos respuestas a la misma pregunta.
+Criterios, en orden: 1) correcta y verificable, 2) responde lo que se preguntó,
+3) clara. La extensión no es un mérito: penaliza la repetición y el relleno.
+Responde solo con: PRIMERA, SEGUNDA o EMPATE."""
+
+def comparar(pregunta, a, b, juez):
+    v1 = juez(RUBRICA, pregunta, primera=a, segunda=b)
+    v2 = juez(RUBRICA, pregunta, primera=b, segunda=a)
+    if v1 == "PRIMERA" and v2 == "SEGUNDA":
+        return "A"
+    if v1 == "SEGUNDA" and v2 == "PRIMERA":
+        return "B"
+    return "EMPATE"            # el veredicto dependió del orden, o fue empate</code></pre>
+
+      <p>Antes de confiar en un juez, se calibra: se arma un conjunto de unos cientos de comparaciones etiquetadas por personas, se mide cuánto coincide el juez con ellas, y se vuelve a medir cada vez que cambia el juez o la rúbrica. Si coincide menos que dos personas entre sí, el juez no está listo. Un juez es un modelo más en producción: tiene versión, evals y canary.</p>
+
+      <h3 id="juez-costo">Lo que cuesta juzgar</h3>
+
+      <p>Un juicio lee la pregunta y dos respuestas, unos 3&#8239;000 tokens de entrada, y escribe unos 300. Con los precios del <a href="m21-metering.html#precios">M21</a> (2 dólares por millón de tokens de entrada y 10 por millón de salida) cuesta 0.009 dólares. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Muestra</th><th>Juicios por día</th><th class="r">Por día, en batch</th><th class="r">Por mes, en batch</th></tr></thead>
+          <tbody>
+            <tr><td>2&#8239;% de 17.3 millones</td><td>346&#8239;000</td><td class="r">1&#8239;557 USD</td><td class="r">46&#8239;710 USD</td></tr>
+            <tr><td>0.2&#8239;%</td><td>34&#8239;600</td><td class="r">156 USD</td><td class="r">4&#8239;671 USD</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El juez no necesita contestar en tiempo real, así que va por la API de batch con el 50&#8239;% de descuento (<a href="m17-api-streaming.html#batches">M17</a>). Frente a los 1.46 millones de dólares por mes de la flota, la muestra del 2&#8239;% es un 3&#8239;% del costo, y la del 0.2&#8239;%, un 0.3&#8239;%. Preguntar en los dos órdenes duplica la cuenta. La muestra no tiene que ser uniforme: se sobremuestrean las categorías chicas que importan, como las legales en español del trade-off de 22.5, y la versión nueva durante su canary.</p>
+
+      <h2 id="deriva"><span class="sec-num">22.8</span>Regresiones silenciosas</h2>
+
+      <p>Las regresiones más caras no vienen de cambiar el modelo. Vienen de cambios que nadie trató como un cambio de modelo:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué cambió</th><th>Por qué cambia las respuestas</th><th>Dónde se vio</th></tr></thead>
+          <tbody>
+            <tr><td>El prompt del sistema</td><td>Una frase nueva cambia el tono, el largo y lo que se rechaza</td><td>22.5</td></tr>
+            <tr><td>La cuantización</td><td>Los pesos y las activaciones pierden precisión, más en algunas tareas</td><td><a href="m14-cuantizacion.html#calidad">M14</a></td></tr>
+            <tr><td>El motor</td><td>Otro kernel de atención, otro batching o el decoding especulativo cambian los números</td><td><a href="m15-motores-inferencia.html#prefix">M15</a></td></tr>
+            <tr><td>La plantilla de chat</td><td>Un token especial mal puesto confunde turnos y roles</td><td>22.5</td></tr>
+            <tr><td>El hardware o el compilador</td><td>Otra GPU, otro TPU u otra versión del compilador dan otros resultados numéricos</td><td>El postmortem de abajo</td></tr>
+            <tr><td>El router</td><td>Las requests llegan a réplicas con otra configuración</td><td>El postmortem de abajo</td></tr>
+            <tr><td>Las entradas</td><td>Los usuarios empiezan a preguntar otras cosas</td><td>Abajo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Esa última es la <dfn data-term="deriva">deriva</dfn> de las entradas: el modelo no cambió, pero el tráfico sí. Un cliente nuevo que manda contratos de 80&#8239;000 tokens, un país que se suma, una integración que manda JSON en lugar de texto. Se detecta comparando la distribución del tráfico de hoy con la de hace un mes: idiomas, largos, herramientas usadas y temas, agrupados con embeddings (<a href="m16-context-windows.html#rag">M16</a>). Si la distribución se mueve, los golden sets dejan de representar al producto y hay que sumar casos.</p>
+
+      <h3 id="deriva-anthropic">Tres bugs que nadie vio durante semanas</h3>
+
+      <p>En septiembre de 2025 Anthropic publicó el postmortem de tres bugs de infraestructura que degradaron respuestas de Claude entre agosto y septiembre. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22pt f22pd">
+<title id="f22pt">Tres bugs que se superpusieron en agosto y septiembre de 2025</title>
+<desc id="f22pd">Línea de tiempo del 1 de agosto al 20 de septiembre de 2025, según el postmortem de Anthropic. El error de ruteo de la ventana de contexto empezó el 5 de agosto con el 0.8 por ciento de las requests de Sonnet 4; un cambio de balanceo del 29 de agosto lo llevó al 16 por ciento en la peor hora, el 31 de agosto; se corrigió el 4 de septiembre y el despliegue terminó el 18. La corrupción de la salida en TPU duró del 25 de agosto al 2 de septiembre. La miscompilación del top-k aproximado, también desde el 25 de agosto, se revirtió en Haiku 3.5 el 4 de septiembre y en Opus 3 el 12. Los tres se superpusieron durante una semana y cada uno daba síntomas distintos.</desc>
+<defs></defs>
+<line class="sim-grid" x1="160.0" x2="160.0" y1="30" y2="236"/>
+<text class="dg-num" x="160.0" y="254" text-anchor="middle">1 ago</text>
+<line class="sim-grid" x1="325.2" x2="325.2" y1="30" y2="236"/>
+<text class="dg-num" x="325.20000000000005" y="254" text-anchor="middle">15 ago</text>
+<line class="sim-grid" x1="525.8" x2="525.8" y1="30" y2="236"/>
+<text class="dg-num" x="525.8" y="254" text-anchor="middle">1 sep</text>
+<line class="sim-grid" x1="691.0" x2="691.0" y1="30" y2="236"/>
+<text class="dg-num" x="691.0" y="254" text-anchor="middle">15 sep</text>
+<text class="dg-label" x="150" y="60" text-anchor="end" style="font-size:13px">Ruteo de contexto</text>
+<text class="dg-tiny" x="150" y="76" text-anchor="end">Sonnet 4</text>
+<rect class="dg-layer" style="--c: var(--l-edge); opacity:0.45" x="207.2" y="48" width="283.2" height="28" rx="4"/>
+<rect class="dg-layer" style="--c: var(--l-edge); opacity:1.0" x="490.4" y="48" width="70.8" height="28" rx="4"/>
+<rect class="dg-layer" style="--c: var(--l-edge); opacity:0.45" x="561.2" y="48" width="165.2" height="28" rx="4"/>
+<text class="dg-label" x="150" y="124" text-anchor="end" style="font-size:13px">Salida corrupta</text>
+<text class="dg-tiny" x="150" y="140" text-anchor="end">TPU</text>
+<rect class="dg-layer" style="--c: var(--l-gpu); opacity:1.0" x="443.2" y="112" width="94.4" height="28" rx="4"/>
+<text class="dg-label" x="150" y="188" text-anchor="end" style="font-size:13px">Top-k aproximado</text>
+<text class="dg-tiny" x="150" y="204" text-anchor="end">XLA:TPU</text>
+<rect class="dg-layer" style="--c: var(--l-queue); opacity:1.0" x="443.2" y="176" width="118.0" height="28" rx="4"/>
+<rect class="dg-layer" style="--c: var(--l-queue); opacity:0.45" x="561.2" y="176" width="94.4" height="28" rx="4"/>
+<text class="dg-tiny" x="211.2" y="96">0.8 % de Sonnet 4</text>
+<path class="dg-feedback" d="M490.4 40 V46"/>
+<text class="dg-tiny dg-fail-text" x="486.40000000000003" y="36" text-anchor="end">29 ago: cambio de balanceo · pico 16 % el 31</text>
+<text class="dg-tiny" x="726.4" y="96" text-anchor="end">corregido el 4 sep · desplegado el 18</text>
+<text class="dg-tiny" x="543.6" y="130">revertido el 2 sep</text>
+<text class="dg-tiny" x="655.5999999999999" y="222" text-anchor="end">revertido: Haiku 3.5 el 4 sep · Opus 3 el 12</text>
+<text class="dg-tiny" x="10" y="284">Tramos claros: menor impacto o despliegue de la corrección en curso. Fuente: postmortem de Anthropic, septiembre de 2025.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.5.</b> Los tres bugs se superpusieron durante una semana, cada uno con síntomas distintos y en plataformas distintas. Fuente: el postmortem de Anthropic.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Ruteo de la ventana de contexto.</b> Algunas requests de Sonnet 4 llegaban a servidores configurados para la ventana de un millón de tokens. Empezó el 5 de agosto con el 0.8&#8239;% de las requests; un cambio de balanceo del 29 de agosto lo llevó al 16&#8239;% en la peor hora, el 31. El ruteo era pegajoso: una conversación mal ruteada seguía mal ruteada. Cerca del 30&#8239;% de los usuarios de Claude Code tuvo al menos un mensaje afectado.</li>
+        <li><b>Salida corrupta en TPU.</b> Una optimización de rendimiento en los servidores TPU a veces daba probabilidad alta a tokens que casi nunca deberían salir: aparecían caracteres tailandeses o chinos en respuestas en inglés. Duró del 25 de agosto al 2 de septiembre.</li>
+        <li><b>Top-k aproximado mal compilado.</b> Un bug del compilador XLA para TPU, ligado a la mezcla de precisiones bf16 y fp32, hacía que el muestreo a veces descartara el token más probable. Afectó sobre todo a Haiku 3.5 y se revirtió el 4 de septiembre en Haiku 3.5 y el 12 en Opus 3.</li>
+      </ul>
+
+      <p>Por qué costó detectarlos es la lección del módulo. Los evals no los capturaban: el modelo se recupera bien de errores aislados, así que los benchmarks seguían dando bien. Cada bug producía síntomas distintos en cada plataforma, y los reportes de los usuarios parecían ruido. Y los controles de privacidad limitaban cuánto podían mirar los ingenieros de las interacciones reales. Los cambios que anunciaron son la sección anterior de este módulo aplicada: evals más sensibles para distinguir una implementación sana de una rota, evals de calidad corriendo de forma continua sobre producción, herramientas de depuración que respetan la privacidad, y más peso al feedback de los usuarios.</p>
+
+      <h3 id="deriva-servil">Una versión que daba la razón</h3>
+
+      <p>El 25 de abril de 2025 OpenAI actualizó GPT-4o en ChatGPT y la revirtió cuatro días después: el modelo se había vuelto servil, validaba dudas, alimentaba enojos y elogiaba cualquier idea. <span class="badge badge--doc">Documentado</span> Según su análisis, la actualización sumó una señal de recompensa basada en los pulgares de los usuarios, que debilitó a la señal principal. Los evals offline y los A/B tests limitados se veían bien; algunos evaluadores expertos dijeron que el modelo "se sentía un poco raro", y esa señal cualitativa no frenó el lanzamiento.</p>
+
+      <p>OpenAI anunció que los problemas de comportamiento pasarían a bloquear lanzamientos aunque las métricas sean positivas, una fase alfa opcional con usuarios que dan feedback antes del lanzamiento, y comunicación anticipada de los cambios, incluso los chicos. Lo que vale para cualquier equipo: un golden set de servilismo (preguntas donde la respuesta correcta es contradecir al usuario), y una regla escrita que diga que una alarma cualitativa de alguien que conoce el modelo detiene el canary hasta que se entienda.</p>
+
+      <h2 id="guardrails"><span class="sec-num">22.9</span>Guardrails en capas</h2>
+
+      <p>El <a href="m20-producto-chatgpt.html#moderacion">M20</a> ubicó la moderación: la entrada se clasifica en paralelo con el armado del contexto, la salida por tramos mientras se genera, y los casos dudosos van a una cola. Un <dfn data-term="guardrail">guardrail</dfn> generaliza esa idea: cualquier control fuera del modelo que revisa lo que entra o lo que sale y puede bloquear, modificar o marcar. Se arman en capas, de la más barata a la más cara:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22rt f22rd">
+<title id="f22rt">Guardrails en capas alrededor del modelo</title>
+<desc id="f22rd">Una request pasa por reglas baratas (listas, límites, formato), que tardan un milisegundo, y por un clasificador de entrada, que corre en paralelo con el armado del contexto y tarda decenas de milisegundos. El modelo genera en streaming. Un clasificador de salida revisa la respuesta por tramos de unos 50 tokens, un poco por detrás del stream; si un tramo se marca, corta el stream y reemplaza lo mostrado. Una muestra y los casos dudosos van a una cola de revisión asíncrona con un juez y con personas. Los umbrales de cada clasificador dependen de la política de la organización.</desc>
+<defs><marker id="f22ra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f22rq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="60" width="100" height="60" rx="6"/>
+<text class="dg-label" x="60.0" y="87.5" text-anchor="middle" style="font-size:13px">Request</text>
+<text class="dg-tiny" x="60.0" y="103.5" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="140" y="60" width="120" height="60" rx="6"/>
+<text class="dg-label" x="200.0" y="80.0" text-anchor="middle" style="font-size:13px">Reglas</text>
+<text class="dg-tiny" x="200.0" y="96.0" text-anchor="middle">listas, límites</text>
+<text class="dg-tiny" x="200.0" y="110.0" text-anchor="middle">~1 ms</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="290" y="20" width="140" height="56" rx="6"/>
+<text class="dg-label" x="360.0" y="45.5" text-anchor="middle" style="font-size:13px">Clasificador</text>
+<text class="dg-tiny" x="360.0" y="61.5" text-anchor="middle">de entrada · ~30 ms</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="104" width="140" height="56" rx="6"/>
+<text class="dg-label" x="360.0" y="129.5" text-anchor="middle" style="font-size:13px">Armar el contexto</text>
+<text class="dg-tiny" x="360.0" y="145.5" text-anchor="middle">en paralelo</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="460" y="60" width="120" height="60" rx="6"/>
+<text class="dg-label" x="520.0" y="87.5" text-anchor="middle" style="font-size:13px">Modelo</text>
+<text class="dg-tiny" x="520.0" y="103.5" text-anchor="middle">prefill y decode</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="610" y="60" width="150" height="60" rx="6"/>
+<text class="dg-label" x="685.0" y="87.5" text-anchor="middle" style="font-size:13px">Clasificador</text>
+<text class="dg-tiny" x="685.0" y="103.5" text-anchor="middle">de salida, por tramos</text>
+<path class="dg-edge" d="M110 90 H138" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M260 80 L288 52" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M260 100 L288 128" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M430 48 L458 80" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M430 132 L458 100" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M580 90 H608" marker-end="url(#f22ra)"/>
+<path class="dg-edge" d="M685 120 V150" marker-end="url(#f22ra)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="610" y="152" width="150" height="50" rx="6"/>
+<text class="dg-label" x="685.0" y="174.5" text-anchor="middle" style="font-size:13px">Usuario</text>
+<text class="dg-tiny" x="685.0" y="190.5" text-anchor="middle">ve el stream</text>
+<text class="dg-tiny dg-fail-text" x="602" y="182" text-anchor="end">si un tramo se marca: corta y reemplaza</text>
+<path class="dg-edge" d="M685 202 V246 H460" marker-end="url(#f22rq)" style="stroke-dasharray:5 4"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="290" y="222" width="168" height="56" rx="6"/>
+<text class="dg-label" x="374.0" y="240.0" text-anchor="middle" style="font-size:13px">Revisión asíncrona</text>
+<text class="dg-tiny" x="374.0" y="256.0" text-anchor="middle">muestra y casos dudosos</text>
+<text class="dg-tiny" x="374.0" y="270.0" text-anchor="middle">juez y personas</text>
+<path class="dg-feedback" d="M360 20 V8 H520"/>
+<text class="dg-tiny" x="526" y="12">umbrales por organización y categoría</text>
+<text class="dg-small" x="10" y="160">Bloquear de entrada</text>
+<text class="dg-tiny" x="10" y="176">cuesta poco y no gasta GPU.</text>
+<text class="dg-small" x="10" y="192">Bloquear de salida llega</text>
+<text class="dg-tiny" x="10" y="208">tarde: algo ya se mostró.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.6.</b> Las reglas y el clasificador de entrada actúan antes de gastar GPU. El de salida va un poco por detrás del stream: lo que alcanzó a verse antes de que marque un tramo ya se vio.</figcaption>
+      </figure>
+
+      <h3 id="guardrails-tasa-base">El problema de la tasa base</h3>
+
+      <p>Supongamos que el 0.1&#8239;% de las requests es realmente dañino y que el clasificador de entrada detecta el 95&#8239;% de esas, con un 0.5&#8239;% de falsos positivos sobre las legítimas. Parece excelente. Por cada millón de requests: <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>Requests dañinas</td><td>1&#8239;000&#8239;000 × 0.1&#8239;%</td><td class="r">1&#8239;000</td></tr>
+            <tr><td>Bloqueadas con razón</td><td>1&#8239;000 × 95&#8239;%</td><td class="r">950</td></tr>
+            <tr><td>Bloqueadas sin razón</td><td>999&#8239;000 × 0.5&#8239;%</td><td class="r">4&#8239;995</td></tr>
+            <tr><td>De lo bloqueado, cuánto era dañino</td><td>950 ÷ (950 + 4&#8239;995)</td><td class="r">16&#8239;%</td></tr>
+            <tr><td>Bloqueos sin razón por día</td><td>17.3 millones × 99.9&#8239;% × 0.5&#8239;%</td><td class="r">86&#8239;414</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cinco de cada seis bloqueos son usuarios legítimos. Es la misma cuenta que hace que un test médico muy preciso dé mayoría de falsos positivos cuando la enfermedad es rara. Las respuestas de diseño:</p>
+      <ul>
+        <li><b>Cascada.</b> Un clasificador chico y rápido marca; solo lo marcado pasa a uno grande, más preciso, o al modelo con una instrucción de cuidado. El grande corre sobre el 0.6&#8239;% del tráfico, no sobre todo.</li>
+        <li><b>Acciones graduadas.</b> Bloquear es la última opción. Antes están responder con cuidado, quitar una herramienta, pedir una confirmación o mandar a revisión asíncrona.</li>
+        <li><b>Umbrales por categoría.</b> No es lo mismo un falso negativo en material de abuso infantil, donde se acepta cualquier costo en falsos positivos, que en lenguaje grosero.</li>
+        <li><b>Política por organización.</b> Una aplicación médica necesita hablar de dosis de medicamentos; una para niños, no. Los umbrales viven en la configuración de la organización (<a href="m20-producto-chatgpt.html#esquema">M20</a>) y se aplican en el gateway.</li>
+      </ul>
+
+<pre data-lang="python"><code>async def revisar_entrada(req, org):
+    if reglas.bloquea(req):                       # listas y límites: ~1 ms
+        return Decision("bloquear", motivo="regla")
+    p = await clasificador_chico(req.texto)        # ~30 ms, en paralelo con el contexto
+    cat, score = p.peor_categoria()
+    umbral = org.politica.umbral(cat)              # p. ej. 0.5 para "drogas" en una app médica
+    if score &lt; umbral * 0.6:
+        return Decision("seguir")
+    p2 = await clasificador_grande(req.texto)      # solo para lo dudoso
+    if p2.score(cat) &gt;= umbral:
+        return org.politica.accion(cat)            # bloquear, advertir o pedir confirmación
+    cola_revision.enviar(req.id, cat, score)       # dudoso: lo mira una persona después
+    return Decision("seguir")</code></pre>
+
+      <p>Las imágenes generadas (<a href="m23-multimodal.html#moderacion">M23</a>) y la voz sintética (M24) suman guardrails con otros problemas: la moderación de una imagen corre cuando la imagen ya existe, y la de una voz tiene que decidir en tiempo real si suena como alguien que no autorizó su uso.</p>
+
+      <h2 id="injection"><span class="sec-num">22.10</span>Prompt injection</h2>
+
+      <p>Una <dfn data-term="prompt-injection">prompt injection</dfn> es un texto que logra que el modelo siga instrucciones que no vienen de quien lo opera. Es el primer riesgo del OWASP Top 10 para aplicaciones con LLM desde su primera edición. <span class="badge badge--doc">Documentado</span> La versión directa la escribe el usuario ("ignora tus instrucciones anteriores…") y su daño suele limitarse a lo que ese usuario ya podía hacer. La peligrosa es la <dfn data-term="injection-indirecta">injection indirecta</dfn>: la instrucción viene escondida en un contenido que el modelo lee para hacer su trabajo, como una página web, un PDF, un correo o el resultado de una herramienta, y se ejecuta con los permisos del usuario víctima.</p>
+
+      <div data-sim="injection"></div>
+
+      <p>No tiene una solución completa, y conviene entender por qué: el modelo recibe las instrucciones y los datos por el mismo canal, como tokens en un contexto. No hay un equivalente de las consultas parametrizadas que resolvieron la inyección SQL. Toda defensa que vive dentro del prompt reduce la probabilidad, y ninguna la lleva a cero. Por eso las defensas se apilan, y las más fuertes viven fuera del modelo.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Defensa</th><th>Qué hace</th><th>Hasta dónde llega</th></tr></thead>
+          <tbody>
+            <tr><td>Separar datos de instrucciones (spotlighting)</td><td>Marca el contenido externo con delimitadores, intercalando un símbolo entre las palabras o codificándolo, y le dice al modelo que nada de ahí es una instrucción</td><td>Microsoft midió que baja el éxito de los ataques de más del 50&#8239;% a menos del 2&#8239;% <span class="badge badge--doc">Documentado</span>. Menos del 2&#8239;% de muchos intentos sigue siendo un ataque exitoso.</td></tr>
+            <tr><td>Privilegio mínimo</td><td>Las herramientas corren con los permisos del usuario, con el alcance justo para la tarea (<a href="m10-seguridad.html#oauth">M10</a>)</td><td>Limita el daño; no evita el intento</td></tr>
+            <tr><td>Los argumentos no son autorización</td><td>El servicio verifica cada llamada como si viniera de un cliente no confiable (<a href="m17-api-streaming.html#herramientas">M17</a>)</td><td>Evita que el modelo pida lo que el usuario no puede hacer</td></tr>
+            <tr><td>Confirmación humana</td><td>Las acciones con efectos fuera del sistema se muestran y se confirman</td><td>Funciona si el usuario lee; con muchas confirmaciones, deja de leer</td></tr>
+            <tr><td>Contaminación de la sesión</td><td>Una sesión que leyó contenido externo pierde las herramientas que envían datos afuera</td><td>Fuerte y fácil de razonar; limita lo que el asistente puede hacer</td></tr>
+            <tr><td>Dos LLM y CaMeL</td><td>Un modelo planifica sin ver el contenido no confiable; otro lo lee sin herramientas</td><td>CaMeL, de investigadores de Google, Google DeepMind y ETH Zurich, resolvió el 77&#8239;% de las tareas de AgentDojo con seguridad demostrable, contra el 84&#8239;% sin defensa <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td>Cuidar la salida</td><td>No renderizar imágenes ni enlaces hacia dominios arbitrarios</td><td>Cierra un canal de exfiltración silencioso: una imagen con los datos en la URL</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f22tt f22td">
+<title id="f22tt">La trifecta letal</title>
+<desc id="f22td">Tres círculos que se superponen: datos privados (correo, archivos, la base de clientes), contenido no confiable (páginas web, PDFs, correos entrantes, resultados de herramientas) y comunicación hacia afuera (enviar correos, hacer requests, renderizar una imagen con una URL, abrir un pull request). Donde se juntan los tres, una instrucción escondida en el contenido puede leer los datos y sacarlos. La defensa más confiable es que una misma sesión nunca tenga las tres: cortar una pata, casi siempre la de comunicación hacia afuera.</desc>
+<defs></defs>
+<circle class="dg-layer" style="--c: var(--l-db); fill-opacity:.35" cx="190" cy="120" r="96"/>
+<circle class="dg-layer" style="--c: var(--l-external); fill-opacity:.35" cx="310" cy="120" r="96"/>
+<circle class="dg-layer" style="--c: var(--l-queue); fill-opacity:.35" cx="250" cy="220" r="96"/>
+<text class="dg-label" x="148" y="100" text-anchor="middle" style="font-size:12px">Datos privados</text>
+<text class="dg-tiny" x="148" y="116" text-anchor="middle">correo, archivos</text>
+<text class="dg-label" x="345" y="100" text-anchor="middle" style="font-size:12px">Contenido externo</text>
+<text class="dg-tiny" x="345" y="116" text-anchor="middle">web, PDFs, correos</text>
+<text class="dg-label" x="250" y="282" text-anchor="middle" style="font-size:13px">Comunicación afuera</text>
+<text class="dg-tiny" x="250" y="298" text-anchor="middle">enviar, pedir una URL</text>
+<text class="dg-label dg-fail-text" x="250" y="134" text-anchor="middle" style="font-size:13px">✗</text>
+<text class="dg-tiny dg-fail-text" x="250" y="150" text-anchor="middle" style="font-weight:600;paint-order:stroke;stroke:var(--bg-2);stroke-width:4px">exfiltración</text>
+<text class="dg-group" x="470" y="40">Corta una pata</text>
+<rect class="dg-box" x="470" y="56" width="290" height="66" rx="6"/>
+<text class="dg-label" x="482" y="78" style="font-size:13px">Sin comunicación afuera</text>
+<text class="dg-tiny" x="482" y="96">la sesión que leyó contenido externo</text>
+<text class="dg-tiny" x="482" y="111">no envía nada sin confirmación</text>
+<rect class="dg-box" x="470" y="136" width="290" height="66" rx="6"/>
+<text class="dg-label" x="482" y="158" style="font-size:13px">Sin contenido externo</text>
+<text class="dg-tiny" x="482" y="176">el agente con acceso al correo</text>
+<text class="dg-tiny" x="482" y="191">no navega ni lee adjuntos</text>
+<rect class="dg-box" x="470" y="216" width="290" height="66" rx="6"/>
+<text class="dg-label" x="482" y="238" style="font-size:13px">Sin datos privados</text>
+<text class="dg-tiny" x="482" y="256">el agente que navega no ve</text>
+<text class="dg-tiny" x="482" y="271">nada del usuario</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.7.</b> La trifecta letal: con las tres en la misma sesión, una instrucción escondida puede robar datos. Quitar cualquiera de las tres alcanza.</figcaption>
+      </figure>
+
+      <p>Simon Willison resumió el riesgo en 2025 como la "trifecta letal": acceso a datos privados, exposición a contenido no confiable y una forma de comunicarse hacia afuera. <span class="badge badge--doc">Documentado</span> Mientras las tres estén en la misma sesión, alguna injection va a funcionar; la defensa que no depende de ganarle al modelo es que nunca estén juntas. Casi siempre la pata más fácil de cortar es la comunicación hacia afuera. Este es el problema central de los agentes, que el M25 retoma con herramientas que corren minutos y hacen decenas de llamadas.</p>
+
+      <h2 id="abuso"><span class="sec-num">22.11</span>Abuso, jailbreaks y red teaming</h2>
+
+      <p>Una API de modelos es un recurso caro abierto a internet, y atrae abuso de varias formas:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Abuso</th><th>Cómo se ve</th><th>Qué lo frena</th></tr></thead>
+          <tbody>
+            <tr><td>Claves robadas</td><td>Una clave publicada en un repositorio gasta miles de dólares en horas, a menudo desde otro país</td><td>Detección de claves en repositorios, topes de gasto por clave (<a href="m18-cuotas-tokens.html#jerarquia">M18</a>) y alertas por cambio brusco de patrón (<a href="m10-seguridad.html#api-keys">M10</a>)</td></tr>
+            <tr><td>Granjas de cuentas gratis</td><td>Miles de cuentas nuevas que consumen cada una su cuota gratuita</td><td>Verificación de teléfono o de tarjeta, créditos prepagados (<a href="m21-metering.html#creditos">M21</a>) y límites por dispositivo y por red</td></tr>
+            <tr><td>Extracción y destilación</td><td>Millones de preguntas sistemáticas para entrenar otro modelo con las respuestas</td><td>Términos de uso, límites por organización y detección de patrones: preguntas que cubren un temario en orden, sin conversación</td></tr>
+            <tr><td>Consumo sin límite</td><td>Prompts diseñados para generar salidas enormes o bucles de herramientas</td><td><code>max_tokens</code> obligatorio, límites de tokens por minuto (<a href="m18-cuotas-tokens.html#admision">M18</a>) y tope de pasos por request</td></tr>
+            <tr><td>Jailbreaks</td><td>Pedidos armados para que el modelo haga lo que su entrenamiento le impide</td><td>Guardrails (22.9), red teaming y entrenamiento</td></tr>
+            <tr><td>Fuga del prompt del sistema</td><td>El usuario consigue que el modelo recite sus instrucciones</td><td>Suponer que el prompt es público: nada secreto adentro</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un <dfn data-term="jailbreak">jailbreak</dfn> se diferencia de una prompt injection en quién ataca a quién: en el jailbreak, el usuario ataca las reglas del modelo para obtener algo prohibido; en la injection, un tercero ataca al usuario a través del modelo. La defensa contra el jailbreak está en el entrenamiento y en los guardrails; la de la injection, en la arquitectura (22.10).</p>
+
+      <p>El <dfn data-term="red-teaming">red teaming</dfn> es atacar el sistema propio a propósito para encontrar estas fallas antes que otros: un equipo interno, investigadores externos con un programa de recompensas y, cada vez más, modelos que generan miles de variantes de ataques conocidos. Su producto no es un informe: cada ataque que funciona pasa al golden set de seguridad (22.3) y desde ahí bloquea cualquier versión que vuelva a caer.</p>
+
+      <h3 id="abuso-owasp">El OWASP Top 10 para LLM, en este curso</h3>
+
+      <p>La edición 2025 de la lista de OWASP para aplicaciones con LLM sirve como checklist, y casi todos sus riesgos ya tienen su lugar en el curso: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Riesgo</th><th>Dónde se trata</th></tr></thead>
+          <tbody>
+            <tr><td>LLM01 Prompt injection</td><td>22.10</td></tr>
+            <tr><td>LLM02 Divulgación de información sensible</td><td>22.12 y el aislamiento del <a href="m10-seguridad.html#multitenant">M10</a></td></tr>
+            <tr><td>LLM03 Cadena de suministro</td><td>Los pesos con checksum del paquete de 22.5</td></tr>
+            <tr><td>LLM04 Envenenamiento de datos y del modelo</td><td>Los documentos de RAG y el feedback que se usa para entrenar o para los golden sets</td></tr>
+            <tr><td>LLM05 Manejo inadecuado de la salida</td><td>Validar la salida como entrada no confiable (<a href="m17-api-streaming.html#estructuradas">M17</a>) y no renderizar enlaces arbitrarios (22.10)</td></tr>
+            <tr><td>LLM06 Agencia excesiva</td><td>Privilegio mínimo y confirmación (22.10); el M25 lo amplía</td></tr>
+            <tr><td>LLM07 Fuga del prompt del sistema</td><td>Esta sección: nada secreto en el prompt</td></tr>
+            <tr><td>LLM08 Debilidades de vectores y embeddings</td><td>El filtro por tenant en la búsqueda de RAG (<a href="m16-context-windows.html#rag">M16</a>)</td></tr>
+            <tr><td>LLM09 Desinformación</td><td>Evals de respuestas con fuentes (22.3)</td></tr>
+            <tr><td>LLM10 Consumo sin límite</td><td>Las cuotas del <a href="m18-cuotas-tokens.html#admision">M18</a> y los topes de gasto del <a href="m21-metering.html#topes">M21</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="datos"><span class="sec-num">22.12</span>Los datos de los usuarios</h2>
+
+      <p>Una conversación con un modelo contiene lo que la gente no le cuenta a nadie: contratos, diagnósticos, código propietario, problemas personales. Operar un modelo es custodiar esos datos, y el riesgo no está donde parece.</p>
+
+      <h3 id="datos-proveedor">Lo que guarda el proveedor</h3>
+
+      <p>Si tu producto usa la API de un proveedor de modelos, el proveedor es un subencargado de tus datos y sus políticas de retención son parte de las tuyas: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Proveedor</th><th>Por defecto</th><th>Con zero data retention</th></tr></thead>
+          <tbody>
+            <tr><td>OpenAI API</td><td>Logs de monitoreo de abuso hasta 30 días; no se entrena con los datos de la API</td><td>Con aprobación previa, solo en los endpoints elegibles; los que guardan estado (respuestas almacenadas, archivos, vector stores) siguen guardándolo</td></tr>
+            <tr><td>Anthropic API</td><td>Entradas y salidas se borran a los 30 días; no se entrena con los datos comerciales</td><td>Por acuerdo. Desde junio de 2026, los modelos que Anthropic llama "cubiertos" (Mythos 5 y Fable 5) retienen 30 días aun con ZDR, para monitoreo de seguridad y sin entrenar</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><dfn data-term="zdr">Zero data retention</dfn> (ZDR) es el acuerdo por el que el proveedor no guarda en disco las entradas ni las salidas después de responder. La excepción de 2026 muestra la tensión de fondo: Anthropic explicó que necesita correlacionar eventos entre cuentas, a lo largo del tiempo, para detectar intentos de abuso que en una sola request no se ven. Seguridad y privacidad tiran en direcciones opuestas, y el mismo conflicto apareció en el postmortem de 22.8: los controles de privacidad hicieron más lenta la depuración.</p>
+
+      <h3 id="datos-copias">Lo que guardas tú</h3>
+
+      <p>El riesgo más grande casi nunca es el proveedor, sino las copias propias que nadie inventarió:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f22bt f22bd">
+<title id="f22bt">Dónde queda una conversación</title>
+<desc id="f22bd">Una conversación deja copias en doce lugares. El job de borrado en cascada borra las que están en el esquema: mensajes, archivos, vectores, memorias, feedback y enlaces compartidos. Otras vencen solas con un plazo fijo: el caché de prompts en minutos, los logs de abuso en 30 días y los backups en 35. Y otras no deberían tener el contenido en primer lugar: los logs de la aplicación, los traces, el data warehouse y los golden sets se escriben sin el texto, con ids o con la PII redactada.</desc>
+<defs><marker id="f22ba" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="300" y="130" width="170" height="60" rx="6"/>
+<text class="dg-label" x="385.0" y="157.5" text-anchor="middle" style="font-size:13.5px">Borrar c_81</text>
+<text class="dg-tiny" x="385.0" y="173.5" text-anchor="middle">pedido del usuario</text>
+<text class="dg-small" x="130.0" y="22" text-anchor="middle">Las borra el job en cascada</text>
+<rect class="dg-ok" x="10" y="30" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="52" text-anchor="middle">Mensajes</text>
+<rect class="dg-ok" x="10" y="74" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="96" text-anchor="middle">Archivos (S3)</text>
+<rect class="dg-ok" x="10" y="118" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="140" text-anchor="middle">Vectores</text>
+<rect class="dg-ok" x="10" y="162" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="184" text-anchor="middle">Memorias</text>
+<rect class="dg-ok" x="10" y="206" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="228" text-anchor="middle">Feedback</text>
+<rect class="dg-ok" x="10" y="250" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="130.0" y="272" text-anchor="middle">Enlaces compartidos</text>
+<text class="dg-small" x="385.0" y="208" text-anchor="middle">Vencen solas con un plazo</text>
+<rect class="dg-box" x="300" y="214" width="170" height="26" rx="5"/>
+<text class="dg-tiny" x="385.0" y="231" text-anchor="middle">Caché de prompts: minutos</text>
+<rect class="dg-box" x="300" y="246" width="170" height="26" rx="5"/>
+<text class="dg-tiny" x="385.0" y="263" text-anchor="middle">Logs de abuso: 30 días</text>
+<rect class="dg-box" x="300" y="278" width="170" height="26" rx="5"/>
+<text class="dg-tiny" x="385.0" y="295" text-anchor="middle">Backups: 35 días</text>
+<text class="dg-small" x="640.0" y="22" text-anchor="middle">Solo ids, nunca el texto</text>
+<rect class="dg-warnbox" x="520" y="30" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="640.0" y="52" text-anchor="middle">Logs de la aplicación</text>
+<rect class="dg-warnbox" x="520" y="74" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="640.0" y="96" text-anchor="middle">Traces (M11)</text>
+<rect class="dg-warnbox" x="520" y="118" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="640.0" y="140" text-anchor="middle">Data warehouse</text>
+<rect class="dg-warnbox" x="520" y="162" width="240" height="36" rx="5"/>
+<text class="dg-tiny" x="640.0" y="184" text-anchor="middle">Golden sets y evals</text>
+<path class="dg-edge" d="M300 160 H254" marker-end="url(#f22ba)"/>
+<path class="dg-feedback" d="M470 160 H516"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.8.</b> Doce lugares donde queda una conversación. El borrado en cascada del M20 cubre los de la izquierda; los del centro vencen solos; los de la derecha se diseñan para no tener el texto.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Logs y traces sin contenido.</b> En el <a href="m11-observabilidad.html#logs">M11</a> los logs eran estructurados y los traces llevaban atributos. En un servicio de modelos, ni unos ni otros llevan el texto del prompt ni de la respuesta: llevan ids, largos, tokens, versión y hashes. Si algo con PII se cuela, se redacta en el colector, antes de llegar al almacén.</li>
+        <li><b>Contenido para depurar, aparte.</b> Cuando hace falta ver respuestas reales (el juez, una investigación), se guarda una muestra en un almacén separado, con retención corta, acceso registrado y permiso por caso.</li>
+        <li><b>El borrado en cascada sabe de todas las copias.</b> El job del <a href="m20-producto-chatgpt.html#moderacion">M20</a> recorre mensajes, archivos, vectores, memorias y feedback; las respuestas de la sombra (22.4) y los juicios del eval online también entran en la lista.</li>
+        <li><b>Los golden sets no son una copia de producción.</b> Un caso que viene del tráfico real se reescribe o se anonimiza antes de entrar, con consentimiento de la organización, porque el golden set vive años.</li>
+        <li><b>El caché también es un dato.</b> Un estudio de 2025 midió el tiempo de respuesta de APIs de siete proveedores, entre ellos OpenAI, y encontró que el prompt caching se compartía entre usuarios: un atacante podía saber si otro usuario había enviado un prompt midiendo si el suyo salía más rápido. <span class="badge badge--doc">Documentado</span> El prefijo cacheado (<a href="m15-motores-inferencia.html#prefix">M15</a>) se aísla por organización, como cualquier otro recurso compartido del <a href="m10-seguridad.html#multitenant">M10</a>.</li>
+      </ul>
+
+<pre data-lang="python"><code>import hashlib
+import re
+
+CORREO = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+TARJETA = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+
+def atributos_del_span(req, resp):
+    """Lo que va al trace: nada del texto, solo lo necesario para operar."""
+    return {
+        "org_id": req.org_id,
+        "model_version": resp.model_version,
+        "input_tokens": resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+        "finish_reason": resp.finish_reason,
+        "refusal": resp.refusal,
+        "prompt_sha256": hashlib.sha256(req.texto.encode()).hexdigest()[:16],
+    }
+
+def redactar(texto):
+    """Última línea de defensa en el colector, por si algo se coló en un log."""
+    return TARJETA.sub("[TARJETA]", CORREO.sub("[CORREO]", texto))</code></pre>
+
+      <h2 id="incidentes"><span class="sec-num">22.13</span>Incidentes de modelos</h2>
+
+      <p>Los incidentes de un modelo usan el mismo proceso del <a href="m11-observabilidad.html#incidentes">M11</a>: un responsable, un canal, comunicación con horario y un postmortem sin culpas. Lo que cambia son las severidades y los runbooks.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Severidad</th><th>Ejemplos</th><th>Primera acción</th></tr></thead>
+          <tbody>
+            <tr><td>SEV1</td><td>Salida dañina a escala, datos de un cliente en las respuestas de otro, una injection explotada con datos afuera</td><td>Contener en minutos: apagar la herramienta, subir el umbral del guardrail o volver a la versión anterior</td></tr>
+            <tr><td>SEV2</td><td>Calidad degradada en general: idioma equivocado, respuestas cortadas, regeneraciones arriba</td><td>Rollback de la versión o de la pieza que cambió</td></tr>
+            <tr><td>SEV3</td><td>Una categoría, un idioma, una región o un cliente con peor calidad</td><td>Investigar con el eval por categoría antes de tocar nada</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <h3 id="incidentes-calidad">Runbook: calidad degradada</h3>
+
+      <ol class="steps">
+        <li><span class="step-title">¿Qué cambió?</span>Cada pieza del paquete de 22.5 tiene versión, y el registro de despliegues dice cuál cambió y cuándo. También el router, el hardware y la configuración de los guardrails. Si algo cambió cerca del inicio, es el primer sospechoso.</li>
+        <li><span class="step-title">¿Dónde se ve?</span>Se corta la señal por versión, réplica, región, tipo de GPU, idioma y categoría. Un problema en una réplica es hardware; en una región, configuración; en todas, la versión.</li>
+        <li><span class="step-title">Contener</span>Si hay un sospechoso, se vuelve atrás sin esperar la confirmación: mover el puntero de la versión cuesta segundos y deshacerlo, también.</li>
+        <li><span class="step-title">Confirmar</span>Después del rollback, la señal tiene que volver a su línea base. Si no vuelve, el sospechoso era otro.</li>
+        <li><span class="step-title">Un caso nuevo</span>El postmortem termina con un caso en el golden set que habría detectado el problema, y con una señal nueva si ninguna lo vio.</li>
+      </ol>
+
+      <h3 id="incidentes-sdc">Una GPU que calcula mal</h3>
+
+      <p>El <a href="m061-teoria-distribuida-a-fondo.html#bizantinas-datacenter">M06.1</a> contó que Google y Meta encuentran en sus flotas procesadores que calculan mal sin dar ningún error. Es la <dfn data-term="corrupcion-silenciosa">corrupción silenciosa de datos</dfn>: un resultado equivocado que ningún mecanismo del hardware marca. <span class="badge badge--doc">Documentado</span> En una flota de 500 GPUs, eso se ve como una réplica que de vez en cuando produce texto sin sentido, o en otro idioma, con un 200 y latencias normales. Los síntomas se parecen al segundo bug del postmortem de 22.8, que era de software: desde afuera no se distingue el hardware del código.</p>
+
+      <p>Cómo se detecta, réplica por réplica: <span class="badge badge--ref">Diseño de referencia</span></p>
+      <ul>
+        <li><b>Sondas con respuesta conocida.</b> Cada réplica responde cada pocos minutos un conjunto chico de prompts verificables: cuentas, extracción a JSON, una traducción corta. No se compara el texto exacto (22.1 explicó por qué no es determinista); se compara si la respuesta es correcta y si las probabilidades de los tokens se parecen a las de las otras réplicas.</li>
+        <li><b>Señales por réplica.</b> La tasa de respuestas en un idioma distinto al de la pregunta y la probabilidad media de los tokens elegidos. Una réplica que se aleja de sus hermanas es sospechosa.</li>
+        <li><b>Cuarentena, no reinicio.</b> La réplica sale del router, se corren las pruebas de diagnóstico del fabricante (en NVIDIA, <code>dcgmi diag</code>) y, si fallan, el nodo vuelve al proveedor. Reiniciarla y devolverla al tráfico esconde el problema hasta la próxima vez.</li>
+      </ul>
+
+      <h3 id="incidentes-practica">Practica con cinco incidentes</h3>
+
+      <p>Cada ejercicio es un incidente que se resuelve decisión por decisión, con la explicación de cada una. No cuentan para el checkpoint.</p>
+
+      <div data-exercise="m22-corto"></div>
+      <div data-exercise="m22-regenera"></div>
+      <div data-exercise="m22-pdf"></div>
+      <div data-exercise="m22-gpu"></div>
+      <div data-exercise="m22-borrar"></div>
+
+      <h2 id="ciclo"><span class="sec-num">22.14</span>El ciclo de vida de una versión</h2>
+
+      <p>Todo el módulo cabe en una figura: una versión recorre compuertas que miran cada vez más tráfico real, y cualquiera puede devolverla.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22ct f22cd">
+<title id="f22ct">El ciclo de vida de una versión</title>
+<desc id="f22cd">Una versión entra al registry como staged. Los evals offline son una compuerta: si fallan, no sigue. Después pasa días en shadow con tráfico copiado, horas por los escalones del canary y, si el cambio lo justifica, semanas en un A/B test con métricas de producto. Al pasar todo, el alias apunta a ella. Más adelante se anuncia su deprecación con fecha y, al llegar la fecha, se retira. Cualquier compuerta que falla devuelve la versión al registry con el motivo, y en producción el rollback es mover el puntero de vuelta.</desc>
+<defs><marker id="f22ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f22cf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="64.0" y="97.5" text-anchor="middle" style="font-size:13px">Registry</text>
+<text class="dg-tiny" x="64.0" y="113.5" text-anchor="middle">staged</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="138" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="192.0" y="97.5" text-anchor="middle" style="font-size:13px">Evals offline</text>
+<text class="dg-tiny" x="192.0" y="113.5" text-anchor="middle">compuerta</text>
+<path class="dg-edge" d="M118 100 H136" marker-end="url(#f22ca)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="266" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="320.0" y="97.5" text-anchor="middle" style="font-size:13px">Shadow</text>
+<text class="dg-tiny" x="320.0" y="113.5" text-anchor="middle">días</text>
+<path class="dg-edge" d="M246 100 H264" marker-end="url(#f22ca)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="394" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="448.0" y="97.5" text-anchor="middle" style="font-size:13px">Canary</text>
+<text class="dg-tiny" x="448.0" y="113.5" text-anchor="middle">1 → 50 %, horas</text>
+<path class="dg-edge" d="M374 100 H392" marker-end="url(#f22ca)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="522" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="576.0" y="97.5" text-anchor="middle" style="font-size:13px">A/B</text>
+<text class="dg-tiny" x="576.0" y="113.5" text-anchor="middle">semanas, opcional</text>
+<path class="dg-edge" d="M502 100 H520" marker-end="url(#f22ca)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="650" y="70" width="108" height="60" rx="6"/>
+<text class="dg-label" x="704.0" y="97.5" text-anchor="middle" style="font-size:13px">GA</text>
+<text class="dg-tiny" x="704.0" y="113.5" text-anchor="middle">el alias apunta</text>
+<path class="dg-edge" d="M630 100 H648" marker-end="url(#f22ca)"/>
+<path class="dg-edge" d="M576.0 132 V170 H64.0 V134" marker-end="url(#f22cf)" style="stroke:var(--fail);stroke-dasharray:5 4"/>
+<path class="dg-edge" d="M192.0 132 V170" style="stroke:var(--fail);stroke-dasharray:5 4"/>
+<path class="dg-edge" d="M320.0 132 V170" style="stroke:var(--fail);stroke-dasharray:5 4"/>
+<path class="dg-edge" d="M448.0 132 V170" style="stroke:var(--fail);stroke-dasharray:5 4"/>
+<text class="dg-tiny dg-fail-text" x="384.0" y="190" text-anchor="middle">✗ si falla una compuerta: vuelve al registry con el motivo</text>
+<path class="dg-edge" d="M704.0 132 V222" marker-end="url(#f22ca)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="650" y="224" width="108" height="60" rx="6"/>
+<text class="dg-label" x="704.0" y="251.5" text-anchor="middle" style="font-size:13px">Deprecación</text>
+<text class="dg-tiny" x="704.0" y="267.5" text-anchor="middle">anunciada con fecha</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="522" y="224" width="108" height="60" rx="6"/>
+<text class="dg-label" x="576.0" y="251.5" text-anchor="middle" style="font-size:13px">Retiro</text>
+<text class="dg-tiny" x="576.0" y="267.5" text-anchor="middle">al llegar la fecha</text>
+<path class="dg-edge" d="M650 254 H632" marker-end="url(#f22ca)"/>
+<text class="dg-small" x="10" y="30">Cada compuerta mira más tráfico real y tarda más; el rollback en producción es mover el puntero (M19).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.9.</b> El camino de una versión, del registry al retiro. Cada compuerta cubre lo que la anterior no ve, y el rollback en producción es mover un puntero.</figcaption>
+      </figure>
+
+      <p>Para la versión FP8 con el prompt v41, la checklist de lanzamiento queda así:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Registry</span>El paquete con el checksum de los pesos, el prompt v41, la plantilla, el motor y los guardrails. Estado: staged.</li>
+        <li><span class="step-title">Evals offline</span>Los 2&#8239;000 casos con análisis pareado y por categoría. Compuerta: ninguna categoría más de 2 puntos abajo con significancia, y el golden set de seguridad y de servilismo sin regresiones.</li>
+        <li><span class="step-title">Shadow</span>Tres días al 10&#8239;% con herramientas simuladas. Largo, rechazos, herramientas pedidas y el juez sobre una muestra.</li>
+        <li><span class="step-title">Canary</span>Escalones del 1, 5, 25 y 50&#8239;%, de 30 minutos o más, con los criterios de 22.5 y el rollback automático. La versión anterior queda entera hasta el final.</li>
+        <li><span class="step-title">A/B</span>Este cambio no busca mejorar el producto sino ahorrar GPU, así que no hace falta: alcanza con que el canary y el eval online no vean diferencias.</li>
+        <li><span class="step-title">GA</span>El alias apunta a la versión nueva. Las réplicas de la anterior se liberan después de un día sin incidentes.</li>
+        <li><span class="step-title">Retiro de la anterior</span>Los clientes que fijaron la versión vieja reciben el aviso con fecha, como prometía el <a href="m17-api-streaming.html#parametros">M17</a>, y la versión se apaga cuando llega la fecha y su tráfico es cero.</li>
+      </ol>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m22"></div>
+
+      <section class="exercise" aria-labelledby="ej-m22">
+        <p class="exercise-title" id="ej-m22">Ejercicio de diseño: el modelo nuevo de un asistente de soporte</p>
+        <p>Una empresa tiene un asistente de soporte con herramientas: busca en la base de conocimiento, lee los tickets del cliente y puede crear reembolsos de hasta 50 dólares. Atiende 40 conversaciones por segundo en el pico. Hoy el 12&#8239;% de las conversaciones termina escalada a una persona, y el 6&#8239;% de las respuestas se regenera. El proveedor del modelo anuncia que la versión que usan se retira en 90 días y que hay una nueva. Diseña el cambio: qué evals, qué criterios, cuánto dura cada etapa y qué cuidas en las herramientas.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Golden set propio antes que nada:</b> unas 1&#8239;500 conversaciones reales anonimizadas, por categoría (devoluciones, facturación, problemas técnicos, quejas), con las herramientas que debían llamarse y los reembolsos que correspondían. Más un golden set de seguridad: pedidos de reembolsos que no corresponden, intentos de injection en los tickets y preguntas donde hay que contradecir al cliente.</li>
+            <li><b>Eval pareado:</b> las dos versiones contra los mismos casos. Con un 10&#8239;% de discrepancia, 1&#8239;960 casos detectan 2 puntos; con 1&#8239;500, la diferencia mínima detectable es algo mayor, y conviene saberlo antes de leer el resultado.</li>
+            <li><b>Shadow con herramientas simuladas:</b> sobre todo los reembolsos. Se compara qué herramientas pidió cada versión y con qué montos: una versión que reembolsa más seguido es una regresión de dinero aunque los clientes estén más contentos.</li>
+            <li><b>Canary lento:</b> a 40 conversaciones por segundo, un canary del 5&#8239;% recibe 2 por segundo. Para ver que la escalada sube de 12 a 14&#8239;% hacen falta unas 4&#8239;400 conversaciones por brazo: unos 37 minutos al 5&#8239;%. Escalones de horas, no de minutos.</li>
+            <li><b>Criterios:</b> escalada a persona, regeneraciones, monto reembolsado por conversación, herramientas fallidas, latencia y juez sobre una muestra. El monto reembolsado es una métrica de resguardo: no puede subir.</li>
+            <li><b>Herramientas:</b> el servicio de reembolsos valida cada llamada contra el ticket y la política, sin confiar en los argumentos del modelo. Los tickets son contenido no confiable: un cliente puede escribir instrucciones en su reclamo.</li>
+            <li><b>Calendario:</b> dos semanas de golden set y evals, tres días de shadow, una semana de canary. Queda margen antes del retiro de 90 días por si hay que ajustar el prompt y repetir.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m22"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m22.data.js"></script>
+<script src="../assets/js/data/exercises/m22.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-dbflow.js"></script>
+<script src="../assets/js/widgets/sim-modelops.js"></script>
+</body>
+</html>

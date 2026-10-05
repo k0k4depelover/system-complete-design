@@ -100,6 +100,8 @@ a.rm-stop:focus-visible .rm-hit { stroke: var(--focus); stroke-width: 2; }
 }
 .pl-row[data-kind="checkpoint"]::before { border-radius: 2px; transform: rotate(45deg) scale(0.9); }
 .pl-row[data-kind="map"]::before { border-radius: 3px; }
+.pl-row[data-kind="deep"]::before { width: 10px; height: 10px; left: 19px; top: 19px; }
+.pl-opt { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: var(--radius-pill); background: var(--fill); color: var(--label-2); font-size: var(--fs-xs); font-weight: 600; vertical-align: 0.1em; }
 .pl-row.is-done::before { background: var(--line); }
 .pl-row.is-soon::before { border-color: color-mix(in srgb, var(--line) 40%, var(--bg-2)); }
 .pl-row.is-current::before { background: var(--accent-fill); border-color: var(--accent-fill); box-shadow: 0 0 0 3px var(--bg-2); }

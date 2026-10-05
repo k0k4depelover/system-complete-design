@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M05. Bases de datos</title>
-<meta name="description" content="Modelos de datos, B-tree vs LSM, índices, transacciones y niveles de aislamiento, replicación, quórum, sharding con hashing consistente y cómo elegir una base.">
+<meta name="description" content="Páginas, índices clusterizados y no clusterizados, consultas y joins, normalización, transacciones y MVCC, drivers y pools, vistas y CQRS, replicación, quórums, 2PC y sagas, fases de escalamiento y sharding al estilo de Instagram.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -38,11 +38,11 @@
 
       <header class="title-block">
         <h1>Bases de datos</h1>
-        <p class="lead">La base de datos es la pieza más difícil de cambiar de todo el sistema: se elige una vez y se vive con ella años. Este módulo recorre cómo guarda los datos, qué garantiza cuando dos transacciones chocan, cómo se replica y cómo se reparte entre máquinas, con widgets para ver cada trade-off.</p>
+        <p class="lead">La base de datos es la pieza más difícil de cambiar de todo el sistema: se elige una vez y se vive con ella años. Este módulo recorre cómo guarda los datos, cómo se buscan con índices, qué garantiza una transacción, cómo te conectas a ella, cómo se replica y en qué orden se escala, hasta llegar al sharding, que es lo último que se hace. Cada mecanismo tiene su animación.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M05</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Duración</dt><dd>210 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M00, M04</dd></div>
           <div><dt>Estado</dt><dd data-status="m05">Sin empezar</dd></div>
         </dl>
@@ -51,10 +51,14 @@
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
           <li>Elegir el modelo de datos y el motor según los patrones de acceso, no según la moda.</li>
-          <li>Diseñar índices compuestos y leer por qué una consulta es lenta.</li>
-          <li>Predecir qué anomalías permite cada nivel de aislamiento y cómo evitarlas.</li>
-          <li>Configurar replicación y quórums sabiendo qué consistencia obtienes.</li>
-          <li>Particionar datos con la clave correcta y rebalancear sin mover todo.</li>
+          <li>Explicar dónde vive la fila en un índice clusterizado y en un heap, y escribir consultas que usen los índices.</li>
+          <li>Leer un <code>EXPLAIN</code> y entender el orden y el algoritmo de cada join.</li>
+          <li>Normalizar para escribir y desnormalizar para leer, con vistas, vistas materializadas y CQRS.</li>
+          <li>Seguir una transacción por sus cinco estados y explicar cómo MVCC da snapshot isolation.</li>
+          <li>Conectarte con el driver, el DSN y el tamaño de pool correctos, con la cuenta hecha.</li>
+          <li>Configurar replicación y quórums sabiendo qué consistencia obtienes, y garantizar read-your-writes.</li>
+          <li>Coordinar un cambio entre dos bases con two-phase commit o con una saga.</li>
+          <li>Recorrer las fases de escalamiento y explicar por qué el sharding va al final.</li>
         </ul>
       </section>
 
@@ -76,9 +80,11 @@
         </table>
       </div>
 
-      <p>Un sistema real combina varios. El patrón habitual es una fuente de verdad transaccional y <b>vistas derivadas</b> (búsqueda, caché, analítica) alimentadas desde su log de cambios: si una vista se corrompe, se reconstruye desde la fuente.</p>
+      <p>Un sistema real combina varios. El patrón habitual es una fuente de verdad transaccional y <b>vistas derivadas</b> (búsqueda, caché, analítica) alimentadas desde su log de cambios: si una vista se corrompe, se reconstruye desde la fuente. Las secciones 5.8 y 5.13 vuelven sobre esta idea.</p>
 
-      <h2 id="almacenamiento"><span class="sec-num">5.2</span>Cómo guarda los datos: B-tree y LSM</h2>
+      <h2 id="almacenamiento"><span class="sec-num">5.2</span>Cómo guarda los datos: páginas, B-tree y LSM</h2>
+
+      <p>Una base no lee filas sueltas: lee y escribe <b>páginas</b>, bloques de tamaño fijo. Son de 8 kB en PostgreSQL y en SQL Server, y de 16 kB en InnoDB, el motor de MySQL <span class="badge badge--doc">Documentado</span>. Para leer una fila de 100 bytes, la base trae su página entera a memoria, a una zona que se llama buffer pool en MySQL y <code>shared_buffers</code> en PostgreSQL. Por eso el costo de una consulta se cuenta en páginas, y por eso importa que las filas que se leen juntas vivan en las mismas páginas. Esta idea vuelve en cada sección de índices.</p>
 
       <p>Toda base empieza escribiendo cada cambio en el <dfn data-term="wal">WAL</dfn> antes de aplicarlo: si se corta la luz, al arrancar reproduce el log. Lo que cambia es cómo organiza los datos después:</p>
 
@@ -148,35 +154,913 @@
 
       <h2 id="indices"><span class="sec-num">5.3</span>Índices</h2>
 
-      <p>Un índice es una copia ordenada de algunas columnas con un puntero a la fila. Las reglas que más importan en producción:</p>
+      <p>Un índice es una estructura aparte, ordenada por una o más columnas, que lleva de un valor a la fila sin leer la tabla entera. La diferencia se mide en páginas. Una tabla de 50 millones de filas de 200 bytes ocupa unos 10 GB, es decir, 1.25 millones de páginas de 8 kB: buscar un email sin índice las lee todas. Un B-tree con unas 300 entradas por página llega a 300<sup>3</sup> = 27 millones de entradas con tres niveles y a 8&#8239;100 millones con cuatro: la misma búsqueda lee 4 páginas, y las dos de arriba casi siempre están en memoria.</p>
+
+      <h3 id="indices-clustered">Clusterizado o no: ¿dónde vive la fila?</h3>
+
+      <p>Antes de hablar de qué índices crear hay que saber cómo está guardada la tabla, porque hay dos formas, y cambian el costo de cada búsqueda:</p>
       <ul>
-        <li><b>Prefijo izquierdo:</b> un índice <code>(tenant_id, created_at)</code> sirve para filtrar por <code>tenant_id</code>, o por <code>tenant_id</code> y un rango de <code>created_at</code>, pero no por <code>created_at</code> solo.</li>
-        <li><b>Igualdad primero, rango después:</b> en <code>(estado, fecha)</code>, <code>WHERE estado = 'pendiente' AND fecha &gt; X</code> recorre un tramo contiguo del índice.</li>
-        <li><b>Índice que cubre:</b> si el índice incluye todas las columnas que pide la consulta (<code>INCLUDE</code> en PostgreSQL), la base no necesita tocar la tabla.</li>
-        <li><b>Cada índice cuesta en escrituras:</b> una tabla con 8 índices hace 9 escrituras por cada <code>INSERT</code>. Los índices que nadie usa se borran.</li>
+        <li><b><dfn data-term="indice-clusterizado">Índice clusterizado</dfn></b>: la tabla misma es un B-tree ordenado por una clave, y las filas completas viven <em>incrustadas</em> en sus hojas. No hay otra copia de los datos: el índice es la tabla. Como las filas solo pueden estar en un orden físico, hay uno por tabla. InnoDB siempre lo usa con la clave primaria (sin PK, usa el primer <code>UNIQUE NOT NULL</code> o una columna oculta de 6 bytes); en SQL Server lo eliges con <code>CREATE CLUSTERED INDEX</code>, y la PK es clusterizada por defecto <span class="badge badge--doc">Documentado</span>.</li>
+        <li><b>Heap con <dfn data-term="indice-no-clusterizado">índices no clusterizados</dfn></b>: las filas viven <em>fuera</em> de los índices, en páginas de un heap, en el orden en que llegaron. Cada índice es una estructura aparte que guarda el valor indexado y un puntero a la posición física de la fila. PostgreSQL siempre funciona así: su puntero se llama <code>ctid</code> y es (página, posición). Su comando <code>CLUSTER</code> ordena el heap una vez, pero no mantiene el orden con las escrituras siguientes <span class="badge badge--doc">Documentado</span>.</li>
       </ul>
-<pre data-lang="sql"><code>EXPLAIN ANALYZE
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 392" role="img" aria-labelledby="f52t f52d">
+<title id="f52t">Índice clusterizado frente a heap con índices aparte</title>
+<desc id="f52d">A la izquierda, InnoDB: el árbol de la clave primaria es la tabla y sus hojas guardan las filas completas en orden de id; un índice secundario sobre email guarda la clave primaria y obliga a una segunda búsqueda. A la derecha, PostgreSQL: las filas viven en páginas de un heap sin orden, y el índice de la clave primaria y el de email son estructuras aparte que apuntan a una posición física (página, posición).</desc>
+<defs><marker id="f52a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">Clusterizado: la tabla está dentro del índice</text>
+<text class="dg-group" x="400" y="20">Heap: la tabla y los índices están separados</text>
+<path class="dg-frame" d="M388 8 V384"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="118" y="34" width="150" height="30" rx="6"/>
+<text class="dg-tiny dg-in" x="193" y="54" text-anchor="middle">PK: raíz (id)</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="12" y="98" width="116" height="92" rx="6"/>
+<text class="dg-tiny" x="70" y="116" text-anchor="middle">hoja de la PK</text>
+<text class="dg-tiny dg-in" x="24" y="138">id 1 · Ana · …</text>
+<text class="dg-tiny dg-in" x="24" y="156">id 2 · Luis · …</text>
+<text class="dg-tiny dg-in" x="24" y="174">id 3 · Eva · …</text>
+<path class="dg-edge" d="M193 64 L70 96" marker-end="url(#f52a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="136" y="98" width="116" height="92" rx="6"/>
+<text class="dg-tiny" x="194" y="116" text-anchor="middle">hoja de la PK</text>
+<text class="dg-tiny dg-in" x="148" y="138">id 4 · Ada · …</text>
+<text class="dg-tiny dg-in" x="148" y="156">id 5 · Leo · …</text>
+<text class="dg-tiny dg-in" x="148" y="174">id 6 · Noa · …</text>
+<path class="dg-edge" d="M193 64 L194 96" marker-end="url(#f52a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="260" y="98" width="116" height="92" rx="6"/>
+<text class="dg-tiny" x="318" y="116" text-anchor="middle">hoja de la PK</text>
+<text class="dg-tiny dg-in" x="272" y="138">id 7 · Rui · …</text>
+<text class="dg-tiny dg-in" x="272" y="156">id 8 · Sol · …</text>
+<text class="dg-tiny dg-in" x="272" y="174">id 9 · Tom · …</text>
+<path class="dg-edge" d="M193 64 L318 96" marker-end="url(#f52a)"/>
+<text class="dg-small" x="12" y="210">Las hojas son la tabla: filas completas, ordenadas por id.</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="12" y="236" width="172" height="30" rx="6"/>
+<text class="dg-tiny dg-in" x="98" y="256" text-anchor="middle">índice email: raíz</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="12" y="290" width="172" height="76" rx="6"/>
+<text class="dg-tiny dg-in" x="24" y="310">ana@… → id 1</text>
+<text class="dg-tiny dg-in" x="24" y="328">eva@… → id 3</text>
+<text class="dg-tiny dg-in" x="24" y="346">luis@… → id 2</text>
+<path class="dg-edge" d="M98 266 L98 288" marker-end="url(#f52a)"/>
+<text class="dg-tiny" x="198" y="330">guarda la PK, no la fila:</text>
+<text class="dg-tiny" x="198" y="346">segunda búsqueda en el</text>
+<text class="dg-tiny" x="198" y="362">árbol de la PK</text>
+<path class="dg-feedback" d="M184 300 C 300 300, 330 280, 334 194" marker-end="url(#f52a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="404" y="34" width="150" height="30" rx="6"/>
+<text class="dg-tiny dg-in" x="479" y="54" text-anchor="middle">índice PK (id)</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="404" y="82" width="150" height="74" rx="6"/>
+<text class="dg-tiny dg-in" x="416" y="102">id 1 → (2, 1)</text>
+<text class="dg-tiny dg-in" x="416" y="120">id 2 → (0, 2)</text>
+<text class="dg-tiny dg-in" x="416" y="138">id 3 → (1, 1)</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="604" y="34" width="152" height="30" rx="6"/>
+<text class="dg-tiny dg-in" x="680" y="54" text-anchor="middle">índice email</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="604" y="82" width="152" height="74" rx="6"/>
+<text class="dg-tiny dg-in" x="616" y="102">ana@… → (2, 1)</text>
+<text class="dg-tiny dg-in" x="616" y="120">eva@… → (1, 1)</text>
+<text class="dg-tiny dg-in" x="616" y="138">luis@… → (0, 2)</text>
+<path class="dg-edge" d="M479 64 V80"/>
+<path class="dg-edge" d="M680 64 V80"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="404" y="232" width="112" height="96" rx="6"/>
+<text class="dg-tiny" x="460" y="250" text-anchor="middle">heap · página 0</text>
+<text class="dg-tiny dg-in" x="412" y="272">(0,1) id 8 · Sol</text>
+<text class="dg-tiny dg-in" x="412" y="290">(0,2) id 2 · Luis</text>
+<text class="dg-tiny dg-in" x="412" y="308">(0,3) id 5 · Leo</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="522" y="232" width="112" height="96" rx="6"/>
+<text class="dg-tiny" x="578" y="250" text-anchor="middle">heap · página 1</text>
+<text class="dg-tiny dg-in" x="530" y="272">(1,1) id 3 · Eva</text>
+<text class="dg-tiny dg-in" x="530" y="290">(1,2) id 9 · Tom</text>
+<text class="dg-tiny dg-in" x="530" y="308">(1,3) id 4 · Ada</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="640" y="232" width="112" height="96" rx="6"/>
+<text class="dg-tiny" x="696" y="250" text-anchor="middle">heap · página 2</text>
+<text class="dg-tiny dg-in" x="648" y="272">(2,1) id 1 · Ana</text>
+<text class="dg-tiny dg-in" x="648" y="290">(2,2) id 7 · Rui</text>
+<text class="dg-tiny dg-in" x="648" y="308">(2,3) id 6 · Noa</text>
+<path class="dg-edge" d="M470 156 L460 230" marker-end="url(#f52a)"/>
+<path class="dg-edge" d="M500 156 L690 230" marker-end="url(#f52a)"/>
+<path class="dg-edge" d="M700 156 L700 230" marker-end="url(#f52a)"/>
+<path class="dg-edge" d="M650 156 L590 230" marker-end="url(#f52a)"/>
+<text class="dg-tiny" x="708" y="196">punteros</text>
+<text class="dg-tiny" x="708" y="210">físicos</text>
+<text class="dg-small" x="404" y="352">Las filas quedan en el orden en que llegaron. Todos los índices,</text>
+<text class="dg-small" x="404" y="369">también el de la PK, apuntan a (página, posición).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.2.</b> Con un índice clusterizado, las filas viven dentro de las hojas del árbol de la PK, y un índice secundario lleva a la PK. En un heap, las filas viven aparte, sin orden, y cada índice guarda un puntero físico.</figcaption>
+      </figure>
+
+      <p>La diferencia se ve cuando sigues una búsqueda página por página. Elige un caso y mira cuántas páginas lee cada motor:</p>
+
+      <div data-sim="idxlookup"></div>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Operación</th><th>Clusterizado (InnoDB)</th><th>Heap (PostgreSQL)</th></tr></thead>
+          <tbody>
+            <tr><td>Buscar por la clave primaria</td><td>Un árbol: la fila está en la hoja</td><td>El índice de la PK y una página del heap</td></tr>
+            <tr><td>Buscar por un índice secundario</td><td>Dos árboles: el secundario da la PK y después se busca la PK</td><td>El índice y una página del heap, igual que por PK</td></tr>
+            <tr><td>Un rango por la clave primaria</td><td>Hojas contiguas: pocas páginas</td><td>Hasta una página del heap por fila, salvo que la tabla esté casi en orden</td></tr>
+            <tr><td>Tamaño de cada entrada secundaria</td><td>Lleva la PK completa: una PK de UUID de 16 bytes engorda todos los índices</td><td>Lleva un <code>ctid</code> de 6 bytes</td></tr>
+            <tr><td>Un <code>UPDATE</code> de columnas no indexadas</td><td>Cambia la fila en su hoja; los índices no se tocan</td><td>Crea una versión nueva de la fila; con una actualización HOT en la misma página, los índices no se tocan</td></tr>
+            <tr><td>Insertar con PK aleatoria (UUIDv4)</td><td>Cada fila cae en una página distinta del árbol: divisiones de página, páginas a medio llenar, más memoria</td><td>El heap no sufre; solo el índice de la PK</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>En InnoDB, la clave primaria decide el orden físico de toda la tabla. Una PK creciente, como un <code>BIGINT AUTO_INCREMENT</code> o un UUIDv7, agrega cada fila nueva al final del árbol: las páginas se llenan enteras y las recientes están en memoria. Una PK aleatoria, como un UUIDv4, reparte las inserciones por todo el árbol: cada una puede leer una página fría del disco y partirla en dos. A cambio, una PK creciente concentra todas las inserciones en la última página, que se vuelve un punto caliente con mucha concurrencia. En PostgreSQL el efecto existe, pero solo en el índice de la PK.</p>
+      </aside>
+
+      <h3 id="indices-tipos">Tipos de índice</h3>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Tipo</th><th>Sirve para</th><th>Ejemplo</th></tr></thead>
+          <tbody>
+            <tr><td><b>B-tree</b></td><td>Igualdad, rangos, <code>ORDER BY</code>, prefijos. Es el tipo por defecto y el correcto casi siempre</td><td><code>CREATE INDEX ON pedidos (cliente_id, created_at)</code></td></tr>
+            <tr><td><b>Hash</b></td><td>Solo igualdad. Rara vez gana a un B-tree</td><td><code>USING hash (token)</code></td></tr>
+            <tr><td><b>GIN</b></td><td>Muchas claves por fila: arrays, JSONB, texto completo, trigramas</td><td><code>USING gin (etiquetas)</code></td></tr>
+            <tr><td><b>GiST</b></td><td>Geometrías, rangos que se solapan, búsqueda por cercanía (PostGIS)</td><td><code>USING gist (ubicacion)</code></td></tr>
+            <tr><td><b>BRIN</b></td><td>Tablas enormes cuyo orden físico sigue a una columna, como la fecha de un log. Guarda un resumen por bloque de páginas: ocupa kilobytes donde un B-tree ocupa gigas</td><td><code>USING brin (created_at)</code></td></tr>
+            <tr><td><b>Parcial</b></td><td>Indexar solo las filas que se consultan</td><td><code>ON pedidos (created_at) WHERE estado = 'pendiente'</code></td></tr>
+            <tr><td><b>De expresión</b></td><td>Buscar por una función de la columna</td><td><code>ON usuarios (lower(email))</code></td></tr>
+            <tr><td><b>Que cubre</b></td><td>Responder la consulta sin tocar la tabla (index-only scan)</td><td><code>ON usuarios (email) INCLUDE (nombre)</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="indices-compuestos">Índices compuestos: el orden de las columnas</h3>
+
+      <p>Un índice sobre <code>(cliente_id, fecha)</code> ordena primero por cliente y, dentro de cada cliente, por fecha, como una guía telefónica ordena por apellido y después por nombre. De ese orden salen las reglas:</p>
+      <ul>
+        <li><b>Prefijo izquierdo:</b> el índice sirve para filtrar por <code>cliente_id</code>, o por <code>cliente_id</code> y un rango de <code>fecha</code>, pero no por <code>fecha</code> sola: las fechas solo están ordenadas dentro de cada cliente.</li>
+        <li><b>Igualdad primero, rango después:</b> con <code>WHERE cliente_id = 7 AND fecha &gt;= '09-01'</code>, el índice <code>(cliente_id, fecha)</code> lee un tramo contiguo. El índice <code>(fecha, cliente_id)</code> tendría que recorrer todas las fechas desde el 1 de septiembre y descartar los otros clientes.</li>
+        <li><b>El orden también sirve para ordenar:</b> <code>WHERE cliente_id = 7 ORDER BY fecha DESC LIMIT 20</code> lee las 20 primeras entradas del tramo hacia atrás y se detiene. Sin ese índice, ordena todas las filas del cliente para quedarse con 20.</li>
+      </ul>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 236" role="img" aria-labelledby="f53t f53d">
+<title id="f53t">Entradas de un índice compuesto en orden</title>
+<desc id="f53d">Doce entradas de un índice sobre (cliente_id, fecha), ordenadas primero por cliente y después por fecha. La consulta por cliente 7 desde el 1 de septiembre lee tres entradas contiguas. La consulta solo por fecha encuentra sus entradas repartidas por todo el índice y tiene que recorrerlo entero.</desc>
+<defs><marker id="f53a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="28">WHERE cliente_id = 7 AND fecha &gt;= &#x27;09-01&#x27;</text>
+<rect class="dg-box" x="10.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="39.0" y="57" text-anchor="middle">cliente 5</text>
+<text class="dg-tiny dg-in" x="39.0" y="73" text-anchor="middle">08-30</text>
+<rect class="dg-box" x="72.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="101.5" y="57" text-anchor="middle">cliente 5</text>
+<text class="dg-tiny dg-in" x="101.5" y="73" text-anchor="middle">09-02</text>
+<rect class="dg-box" x="135.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="164.0" y="57" text-anchor="middle">cliente 6</text>
+<text class="dg-tiny dg-in" x="164.0" y="73" text-anchor="middle">07-11</text>
+<rect class="dg-box" x="197.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="226.5" y="57" text-anchor="middle">cliente 6</text>
+<text class="dg-tiny dg-in" x="226.5" y="73" text-anchor="middle">09-05</text>
+<rect class="dg-box" x="260.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="289.0" y="57" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="289.0" y="73" text-anchor="middle">06-01</text>
+<rect class="dg-box" x="322.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="351.5" y="57" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="351.5" y="73" text-anchor="middle">08-15</text>
+<rect class="dg-ok" x="385.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="414.0" y="57" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="414.0" y="73" text-anchor="middle">09-01</text>
+<rect class="dg-ok" x="447.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="476.5" y="57" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="476.5" y="73" text-anchor="middle">09-14</text>
+<rect class="dg-ok" x="510.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="539.0" y="57" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="539.0" y="73" text-anchor="middle">09-20</text>
+<rect class="dg-box" x="572.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="601.5" y="57" text-anchor="middle">cliente 8</text>
+<text class="dg-tiny dg-in" x="601.5" y="73" text-anchor="middle">05-05</text>
+<rect class="dg-box" x="635.0" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="664.0" y="57" text-anchor="middle">cliente 8</text>
+<text class="dg-tiny dg-in" x="664.0" y="73" text-anchor="middle">09-07</text>
+<rect class="dg-box" x="697.5" y="40" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="726.5" y="57" text-anchor="middle">cliente 9</text>
+<text class="dg-tiny dg-in" x="726.5" y="73" text-anchor="middle">09-30</text>
+<text class="dg-small" x="10" y="102">Un tramo contiguo: baja por el árbol hasta (7, 09-01) y lee hacia la derecha hasta que cambia el cliente.</text>
+<text class="dg-group" x="10" y="136">WHERE fecha &gt;= &#x27;09-01&#x27;</text>
+<rect class="dg-box" x="10.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="39.0" y="165" text-anchor="middle">cliente 5</text>
+<text class="dg-tiny dg-in" x="39.0" y="181" text-anchor="middle">08-30</text>
+<rect class="dg-warnbox" x="72.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="101.5" y="165" text-anchor="middle">cliente 5</text>
+<text class="dg-tiny dg-in" x="101.5" y="181" text-anchor="middle">09-02</text>
+<rect class="dg-box" x="135.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="164.0" y="165" text-anchor="middle">cliente 6</text>
+<text class="dg-tiny dg-in" x="164.0" y="181" text-anchor="middle">07-11</text>
+<rect class="dg-warnbox" x="197.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="226.5" y="165" text-anchor="middle">cliente 6</text>
+<text class="dg-tiny dg-in" x="226.5" y="181" text-anchor="middle">09-05</text>
+<rect class="dg-box" x="260.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="289.0" y="165" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="289.0" y="181" text-anchor="middle">06-01</text>
+<rect class="dg-box" x="322.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="351.5" y="165" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="351.5" y="181" text-anchor="middle">08-15</text>
+<rect class="dg-warnbox" x="385.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="414.0" y="165" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="414.0" y="181" text-anchor="middle">09-01</text>
+<rect class="dg-warnbox" x="447.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="476.5" y="165" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="476.5" y="181" text-anchor="middle">09-14</text>
+<rect class="dg-warnbox" x="510.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="539.0" y="165" text-anchor="middle">cliente 7</text>
+<text class="dg-tiny dg-in" x="539.0" y="181" text-anchor="middle">09-20</text>
+<rect class="dg-box" x="572.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="601.5" y="165" text-anchor="middle">cliente 8</text>
+<text class="dg-tiny dg-in" x="601.5" y="181" text-anchor="middle">05-05</text>
+<rect class="dg-warnbox" x="635.0" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="664.0" y="165" text-anchor="middle">cliente 8</text>
+<text class="dg-tiny dg-in" x="664.0" y="181" text-anchor="middle">09-07</text>
+<rect class="dg-warnbox" x="697.5" y="148" width="58" height="40" rx="4"/>
+<text class="dg-tiny" x="726.5" y="165" text-anchor="middle">cliente 9</text>
+<text class="dg-tiny dg-in" x="726.5" y="181" text-anchor="middle">09-30</text>
+<text class="dg-small" x="10" y="210">Las fechas están ordenadas solo dentro de cada cliente: las coincidencias quedan sueltas y hay que recorrer todo.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.3.</b> Un índice compuesto ordena por la primera columna y, dentro de ella, por la segunda. Una igualdad en la primera y un rango en la segunda leen un solo tramo contiguo.</figcaption>
+      </figure>
+
+      <h3 id="indices-consultas">Escribir consultas que usen el índice</h3>
+
+      <p>Tener el índice no alcanza: la consulta tiene que poder usarlo. Una condición es <dfn data-term="sargable">sargable</dfn> (de <em>search argument able</em>) cuando compara la columna indexada, tal cual, contra un valor. Si la columna está envuelta en una función, una cuenta o una conversión, el índice no sirve, porque está ordenado por la columna y no por lo que sale de la función. Los errores más comunes:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>En lugar de</th><th>Escribe</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td><code>WHERE date(created_at) = '2026-10-04'</code></td><td><code>WHERE created_at &gt;= '2026-10-04' AND created_at &lt; '2026-10-05'</code></td><td>La función sobre la columna esconde el orden del índice. El rango es un tramo contiguo</td></tr>
+            <tr><td><code>WHERE lower(email) = 'ana@ej.com'</code></td><td>Un índice de expresión <code>ON usuarios (lower(email))</code>, o guardar el email ya en minúsculas</td><td>El índice tiene que estar ordenado por exactamente lo que comparas</td></tr>
+            <tr><td><code>WHERE precio * 1.19 &gt; 100</code></td><td><code>WHERE precio &gt; 100 / 1.19</code></td><td>Deja la columna sola de un lado y haz la cuenta del otro</td></tr>
+            <tr><td><code>WHERE telefono = 5551234</code> con <code>telefono</code> de texto, en MySQL</td><td><code>WHERE telefono = '5551234'</code></td><td>MySQL convierte cada fila a número para comparar y no usa el índice. PostgreSQL directamente da error</td></tr>
+            <tr><td><code>WHERE nombre LIKE '%perez'</code></td><td>Un índice de trigramas (<code>pg_trgm</code> con GIN) o búsqueda de texto completo</td><td>Un B-tree solo sirve para prefijos: <code>LIKE 'perez%'</code> (en PostgreSQL, con collation C o con <code>text_pattern_ops</code>)</td></tr>
+            <tr><td><code>WHERE a = 1 OR b = 2</code></td><td>Un índice en cada columna; si el plan no los combina, <code>UNION</code> de dos consultas</td><td>PostgreSQL puede unir dos índices con un <code>BitmapOr</code>, y MySQL a veces con index merge</td></tr>
+            <tr><td><code>WHERE estado &lt;&gt; 'entregado'</code></td><td><code>WHERE estado IN ('creado', 'pagado')</code> con un índice parcial</td><td>Una negación suele abarcar casi toda la tabla. Si buscas pocas filas, nómbralas</td></tr>
+            <tr><td><code>SELECT *</code> cuando necesitas dos columnas</td><td><code>SELECT id, total</code> y un índice que las cubra</td><td>Pedir solo lo que usas habilita el index-only scan y mueve menos bytes</td></tr>
+            <tr><td><code>OFFSET 100000 LIMIT 20</code></td><td><code>WHERE (created_at, id) &lt; ($1, $2) ORDER BY created_at DESC, id DESC LIMIT 20</code></td><td>OFFSET lee y descarta 100&#8239;000 filas; el cursor baja directo por el índice (M02)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><b>Selectividad.</b> Aunque la condición sea sargable, el planner (5.4) puede elegir no usar el índice, y a veces tiene razón. Si buscas <code>WHERE pais = 'CL'</code> y el 90&#8239;% de las filas son de Chile, leer la tabla de corrido es más barato que saltar del índice al heap millones de veces. No hay un porcentaje fijo: el planner compara el costo estimado de cada camino con las estadísticas de la tabla. Si esas estadísticas están viejas, estima mal; por eso <code>ANALYZE</code> (o el autovacuum, que lo corre solo) importa tanto como el índice.</p>
+
+<pre data-lang="sql"><code>-- Índice parcial: solo los pedidos pendientes, que son el 2 % de la tabla y lo único que consulta la cola de despacho
+CREATE INDEX CONCURRENTLY pedidos_pendientes ON pedidos (created_at) WHERE estado = 'pendiente';
+
+-- Índice de expresión: la consulta tiene que usar exactamente la misma expresión
+CREATE INDEX CONCURRENTLY usuarios_email_lower ON usuarios (lower(email));
+SELECT id FROM usuarios WHERE lower(email) = lower($1);</code></pre>
+
+      <h3 id="indices-explain">Leer un EXPLAIN</h3>
+
+      <p><code>EXPLAIN</code> muestra el plan que eligió la base; con <code>ANALYZE</code> además lo ejecuta y anota lo que pasó de verdad; con <code>BUFFERS</code>, cuántas páginas tocó. El plan es un árbol: cada nodo recibe filas de sus hijos, y se lee de adentro hacia afuera. Esta es una salida de ejemplo, recortada:</p>
+
+<pre data-lang="sql"><code>EXPLAIN (ANALYZE, BUFFERS)
 SELECT id, total FROM pedidos
 WHERE tenant_id = 42 AND created_at &gt; now() - interval '7 days'
 ORDER BY created_at DESC LIMIT 50;
 
--- Bien:  Index Scan Backward using pedidos_tenant_created on pedidos  (rows=50, time=0.3 ms)
--- Mal:   Seq Scan on pedidos  Filter: …  Rows Removed by Filter: 48 000 000  (time=9 800 ms)</code></pre>
+-- Limit  (cost=0.56..48.10 rows=50) (actual time=0.031..0.290 rows=50 loops=1)
+--   -&gt;  Index Scan Backward using pedidos_tenant_created on pedidos
+--         (cost=0.56..1912.40 rows=2010) (actual time=0.030..0.281 rows=50 loops=1)
+--         Index Cond: ((tenant_id = 42) AND (created_at &gt; (now() - '7 days'::interval)))
+--         Buffers: shared hit=54
+-- Execution Time: 0.320 ms
 
-      <h2 id="transacciones"><span class="sec-num">5.4</span>Transacciones y niveles de aislamiento</h2>
+-- La misma consulta sin el índice:
+-- Seq Scan on pedidos  Filter: …  Rows Removed by Filter: 48 000 000  Buffers: shared read=1 250 000</code></pre>
 
-      <p>Una transacción <dfn data-term="acid">ACID</dfn> promete que sus cambios se aplican todos o ninguno y que, una vez confirmados, sobreviven. Lo delicado es la "I": qué ve cada transacción de las otras mientras corren a la vez. Aislar por completo (como si fueran de a una) es caro, así que las bases ofrecen <dfn data-term="isolation">niveles de aislamiento</dfn> que permiten ciertas anomalías a cambio de rendimiento. Elige un nivel y una anomalía para ver una ejecución intercalada:</p>
+      <ul>
+        <li><b><code>cost=inicio..total</code></b>: el costo estimado, en unidades internas del planner (no son milisegundos). Sirve para comparar planes entre sí.</li>
+        <li><b><code>rows</code> estimadas contra <code>actual … rows</code></b>: si el planner esperaba 10 filas y salieron 2 millones, las estadísticas están mal y el plan probablemente también. Es lo primero que se mira.</li>
+        <li><b><code>loops</code></b>: cuántas veces se ejecutó el nodo. Un nodo barato con 100&#8239;000 loops, dentro de un nested loop, puede ser todo el problema.</li>
+        <li><b><code>Buffers: shared hit</code> y <code>read</code></b>: páginas encontradas en memoria y páginas leídas del disco. Mil veces más páginas suele ser mil veces más lento.</li>
+      </ul>
+
+      <h3 id="indices-costo">Lo que cuesta un índice</h3>
+      <ul>
+        <li><b>Escrituras:</b> una tabla con 8 índices hace 9 escrituras por cada <code>INSERT</code>, y cada una también va al WAL y a las réplicas.</li>
+        <li><b>Memoria:</b> los índices compiten con los datos por el buffer pool. Un índice que no cabe en memoria convierte cada búsqueda en lecturas de disco.</li>
+        <li><b>Actualizaciones:</b> en PostgreSQL, un <code>UPDATE</code> que cambia una columna indexada no puede ser HOT y tiene que escribir en todos los índices.</li>
+        <li><b>Crearlos:</b> <code>CREATE INDEX</code> bloquea las escrituras en la tabla mientras dura; en producción se usa <code>CREATE INDEX CONCURRENTLY</code>, que tarda más pero no bloquea.</li>
+        <li><b>Limpieza:</b> los índices que nadie usa se borran. En PostgreSQL aparecen con <code>idx_scan = 0</code> en <code>pg_stat_user_indexes</code>, mirando un período que incluya el cierre de mes y otros procesos raros.</li>
+      </ul>
+
+      <h2 id="consultas"><span class="sec-num">5.4</span>Optimizar consultas</h2>
+
+      <p>SQL es declarativo: dices qué filas quieres, no cómo buscarlas. El cómo lo decide el <dfn data-term="query-planner">planner</dfn> (u optimizador), en cuatro pasos: analiza el texto, reescribe la consulta (por ejemplo, reemplaza las vistas por su definición), genera planes posibles y estima el costo de cada uno, y el ejecutor corre el más barato. Las estimaciones salen de estadísticas que guarda la base sobre cada columna: cuántos valores distintos tiene, cuáles son los más frecuentes y un histograma del resto. Las actualiza <code>ANALYZE</code>.</p>
+
+      <h3 id="joins-algoritmos">Tres formas de hacer un join</h3>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 318" role="img" aria-labelledby="f54t f54d">
+<title id="f54t">Tres algoritmos de join</title>
+<desc id="f54d">Nested loop: por cada fila de la entrada de afuera busca sus parejas en un índice de la de adentro. Hash join: arma una tabla hash con la entrada chica y recorre la grande una vez. Merge join: recorre las dos entradas ya ordenadas por la clave, avanzando en paralelo.</desc>
+<defs><marker id="f54a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">Nested loop</text>
+<text class="dg-group" x="270" y="20">Hash join</text>
+<text class="dg-group" x="530" y="20">Merge join</text>
+<path class="dg-frame" d="M258 8 V310"/>
+<path class="dg-frame" d="M518 8 V310"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="36" width="86" height="28" rx="4"/>
+<text class="dg-tiny dg-in" x="53" y="54" text-anchor="middle">cliente 3</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="72" width="86" height="28" rx="4"/>
+<text class="dg-tiny dg-in" x="53" y="90" text-anchor="middle">cliente 7</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="108" width="86" height="28" rx="4"/>
+<text class="dg-tiny dg-in" x="53" y="126" text-anchor="middle">cliente 9</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="146" y="36" width="100" height="100" rx="6"/>
+<text class="dg-tiny dg-in" x="196" y="60" text-anchor="middle">índice de</text>
+<text class="dg-tiny dg-in" x="196" y="76" text-anchor="middle">pedidos</text>
+<text class="dg-tiny dg-in" x="196" y="92" text-anchor="middle">(cliente_id)</text>
+<path class="dg-edge" d="M96 50 L144 70" marker-end="url(#f54a)"/>
+<path class="dg-edge" d="M96 86 L144 82" marker-end="url(#f54a)"/>
+<path class="dg-edge" d="M96 122 L144 94" marker-end="url(#f54a)"/>
+<text class="dg-tiny" x="10" y="160">afuera: 3 filas</text>
+<text class="dg-small" x="10" y="190">Por cada fila de afuera, una</text>
+<text class="dg-small" x="10" y="208">búsqueda en un índice de adentro.</text>
+<text class="dg-small" x="10" y="226">Trabajo ≈ filas de afuera × log n.</text>
+<text class="dg-small" x="10" y="244">Gana con pocas filas afuera y</text>
+<text class="dg-small" x="10" y="262">un índice en la columna del join.</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="270" y="36" width="100" height="100" rx="6"/>
+<text class="dg-tiny dg-in" x="320" y="60" text-anchor="middle">clientes de</text>
+<text class="dg-tiny dg-in" x="320" y="76" text-anchor="middle">UY (chica)</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="396" y="36" width="112" height="100" rx="6"/>
+<rect class="dg-box" x="406" y="46" width="92" height="16" rx="3"/>
+<text class="dg-tiny" x="412" y="58">cubo 0</text>
+<rect class="dg-box" x="406" y="67" width="92" height="16" rx="3"/>
+<text class="dg-tiny" x="412" y="79">cubo 1</text>
+<rect class="dg-box" x="406" y="88" width="92" height="16" rx="3"/>
+<text class="dg-tiny" x="412" y="100">cubo 2</text>
+<rect class="dg-box" x="406" y="109" width="92" height="16" rx="3"/>
+<text class="dg-tiny" x="412" y="121">cubo 3</text>
+<path class="dg-edge" d="M370 86 L394 86" marker-end="url(#f54a)"/>
+<text class="dg-tiny" x="398" y="152">hash en memoria</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="270" y="160" width="238" height="30" rx="4"/>
+<text class="dg-tiny dg-in" x="389" y="180" text-anchor="middle">pedidos (grande): se lee una vez</text>
+<path class="dg-feedback" d="M494 160 L494 138" marker-end="url(#f54a)"/>
+<text class="dg-small" x="270" y="214">Construye la tabla hash con la entrada</text>
+<text class="dg-small" x="270" y="232">chica y prueba cada fila de la grande.</text>
+<text class="dg-small" x="270" y="250">Trabajo ≈ n + m. Necesita memoria</text>
+<text class="dg-small" x="270" y="268">(work_mem); si no alcanza, usa disco.</text>
+<text class="dg-small" x="270" y="286">Solo sirve para igualdades.</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="540" y="36" width="70" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="575" y="51" text-anchor="middle">id 1</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="540" y="60" width="70" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="575" y="75" text-anchor="middle">id 3</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="540" y="84" width="70" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="575" y="99" text-anchor="middle">id 3</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="540" y="108" width="70" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="575" y="123" text-anchor="middle">id 7</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="540" y="132" width="70" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="575" y="147" text-anchor="middle">id 9</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="672" y="36" width="86" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="715" y="51" text-anchor="middle">cliente 3</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="672" y="60" width="86" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="715" y="75" text-anchor="middle">cliente 4</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="672" y="84" width="86" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="715" y="99" text-anchor="middle">cliente 7</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="672" y="108" width="86" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="715" y="123" text-anchor="middle">cliente 7</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="672" y="132" width="86" height="20" rx="3"/>
+<text class="dg-tiny dg-in" x="715" y="147" text-anchor="middle">cliente 9</text>
+<path class="dg-edge" d="M610 70 L672 46"/>
+<path class="dg-edge" d="M610 94 L672 46"/>
+<path class="dg-edge" d="M610 118 L672 94"/>
+<path class="dg-edge" d="M610 118 L672 118"/>
+<path class="dg-edge" d="M610 142 L672 142"/>
+<text class="dg-tiny" x="540" y="172">las dos ordenadas por la clave</text>
+<text class="dg-small" x="530" y="214">Avanza un puntero en cada lista;</text>
+<text class="dg-small" x="530" y="232">el que tiene el valor menor da</text>
+<text class="dg-small" x="530" y="250">el paso. Trabajo ≈ n + m si ya</text>
+<text class="dg-small" x="530" y="268">vienen ordenadas (por un índice);</text>
+<text class="dg-small" x="530" y="286">si no, suma el costo de ordenar.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.4.</b> Nested loop, hash join y merge join: los mismos datos, tres formas de emparejarlos. Cuál conviene depende de cuántas filas trae cada lado y de qué índices hay.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Algoritmo</th><th>Cómo trabaja</th><th>Lo elige cuando</th></tr></thead>
+          <tbody>
+            <tr><td><dfn data-term="nested-loop">Nested loop</dfn></td><td>Por cada fila de afuera, busca sus parejas adentro, idealmente con un índice</td><td>Afuera hay pocas filas y adentro hay un índice en la columna del join. Es el plan típico de una consulta OLTP</td></tr>
+            <tr><td><dfn data-term="hash-join">Hash join</dfn></td><td>Arma una tabla hash con la entrada chica y recorre la grande una vez</td><td>Las dos entradas son grandes, la condición es una igualdad y la chica cabe en <code>work_mem</code></td></tr>
+            <tr><td>Merge join</td><td>Recorre las dos entradas ordenadas por la clave, en paralelo</td><td>Las dos ya vienen ordenadas, por ejemplo por un índice, o hay que devolverlas ordenadas de todos modos</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="joins-orden">El orden de las tablas en un join</h3>
+
+      <p>Con <code>INNER JOIN</code>, el orden en que escribes las tablas no cambia el resultado, y en PostgreSQL casi nunca cambia el plan: el planner prueba los órdenes posibles por su cuenta. Hasta 8 tablas en un <code>FROM</code> (<code>join_collapse_limit = 8</code>) los evalúa de forma exhaustiva; desde 12 (<code>geqo_threshold = 12</code>) usa un algoritmo genético que busca uno bueno sin probarlos todos <span class="badge badge--doc">Documentado</span>. El orden escrito sí importa en tres casos:</p>
+      <ul>
+        <li><b><code>LEFT JOIN</code>:</b> el orden cambia el resultado (qué lado conserva sus filas sin pareja), así que el planner tiene menos libertad para reordenar.</li>
+        <li><b>Más tablas que el límite:</b> pasado <code>join_collapse_limit</code>, el orden escrito guía el plan.</li>
+        <li><b>MySQL con <code>STRAIGHT_JOIN</code>:</b> fuerza el orden escrito. Sin él, MySQL también reordena.</li>
+      </ul>
+
+      <p>Lo que hace el planner, y lo que tienes que hacer tú al diseñar los índices, es empezar por la tabla con el filtro más selectivo, para que cada paso arrastre la menor cantidad de filas, y tener un índice en la columna del join de la tabla de adentro. Un ejemplo con números: los pedidos de hoy de clientes de Uruguay.</p>
+
+<pre data-lang="sql"><code>SELECT p.id, p.total, c.nombre
+FROM clientes c JOIN pedidos p ON p.cliente_id = c.id
+WHERE c.pais = 'UY' AND p.created_at &gt;= current_date;
+-- clientes: 1 000 000 filas, 1 % de Uruguay = 10 000
+-- pedidos: 50 000 000 filas, 100 000 de hoy (0.2 %)</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Plan</th><th>Qué hace</th><th class="r">Búsquedas en índices</th></tr></thead>
+          <tbody>
+            <tr><td>Empezar por clientes de UY</td><td>Lee los 10&#8239;000 clientes con un índice en <code>pais</code> y, por cada uno, busca sus pedidos de hoy en <code>pedidos (cliente_id, created_at)</code>. Cada cliente tiene 50 pedidos en promedio y 0.1 de hoy: salen unas 1&#8239;000 filas</td><td class="r">10 000</td></tr>
+            <tr><td>Empezar por los pedidos de hoy</td><td>Lee los 100&#8239;000 pedidos de hoy con un índice en <code>created_at</code> y busca cada cliente por su PK para descartar los que no son de Uruguay. Salen las mismas 1&#8239;000 filas</td><td class="r">100 000</td></tr>
+            <tr><td>Hash join</td><td>Arma una tabla hash con los 10&#8239;000 clientes de UY y recorre los 100&#8239;000 pedidos de hoy probando cada uno</td><td class="r">2 recorridos</td></tr>
+            <tr><td>Sin índices</td><td>Recorre los 50 millones de pedidos</td><td class="r">1.25 M de páginas</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El primer plan existe solo si está el índice <code>(cliente_id, created_at)</code>: el orden de un join no se arregla reescribiendo la consulta, se arregla dándole al planner el índice que necesita el mejor orden. Si el planner igual elige mal, mira primero si las filas estimadas coinciden con las reales.</p>
+
+      <h3 id="consultas-patrones">Patrones que matan una base</h3>
+      <ul>
+        <li><b>N+1:</b> una consulta para traer 50 pedidos y otras 50 para traer el cliente de cada uno. Con 1 ms de ida y vuelta son 51 ms donde bastaban 2. Se arregla con un join o con <code>WHERE id = ANY($1)</code> en lote. Los ORM con carga perezosa lo producen sin que se note.</li>
+        <li><b>Muchas idas y vueltas:</b> diez sentencias de 0.1 ms con 1 ms de red cada una suman 11 ms. Agrupa, o usa un procedimiento almacenado (5.6).</li>
+        <li><b>Consultas sin <code>LIMIT</code></b> en listas que crecen: hoy devuelven 100 filas; en un año, 2 millones.</li>
+        <li><b>Transacciones que esperan a la red:</b> abrir una transacción, llamar a un servicio externo y recién después confirmar retiene locks y una conexión durante toda la llamada (5.7).</li>
+        <li><b>Reportes sobre la base transaccional:</b> un <code>GROUP BY</code> sobre 50 millones de filas compite con las escrituras. Va a una réplica o a un almacén analítico.</li>
+      </ul>
+
+      <h2 id="normalizacion"><span class="sec-num">5.5</span>Normalización y desnormalización</h2>
+
+      <p>La <dfn data-term="normalizacion">normalización</dfn> organiza las tablas para que cada dato viva en un solo lugar. Se entiende mejor viendo qué pasa cuando no se hace. Una tienda que guarda cada pedido en una sola fila "cómoda":</p>
+
+      <div class="table-wrap">
+        <table class="t t--mini">
+          <caption>pedidos_planos: sin normalizar</caption>
+          <thead><tr><th>pedido</th><th>fecha</th><th>cliente</th><th>email_cliente</th><th>ciudad</th><th>productos</th><th class="r">total</th></tr></thead>
+          <tbody>
+            <tr><td>101</td><td>2026-09-01</td><td>Ana</td><td>ana@ej.com</td><td>Montevideo</td><td>Taza ×2 a 10, Plato ×1 a 15</td><td class="r">35</td></tr>
+            <tr><td>102</td><td>2026-09-03</td><td>Ana</td><td>ana@ej.com</td><td>Montevideo</td><td>Taza ×1 a 10</td><td class="r">10</td></tr>
+            <tr><td>103</td><td>2026-09-03</td><td>Luis</td><td>luis@ej.com</td><td>Rosario</td><td>Plato ×4 a 15</td><td class="r">60</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Parece práctica: una lectura trae todo. Pero tiene tres anomalías que aparecen al escribir:</p>
+      <ul>
+        <li><b>De actualización:</b> Ana cambia su email y hay que cambiarlo en todas sus filas. Si una actualización falla a mitad de camino, Ana tiene dos emails.</li>
+        <li><b>De inserción:</b> no hay dónde registrar un cliente que todavía no compró, ni un producto que nadie pidió.</li>
+        <li><b>De borrado:</b> si se borra el pedido 103, Luis desaparece del sistema.</li>
+      </ul>
+
+      <h3 id="formas-normales">Las formas normales, en tres pasos</h3>
+      <ol class="steps">
+        <li><span class="step-title">Primera forma normal (1FN)</span>Un valor por celda. La columna <code>productos</code> guarda una lista dentro de un texto: no se puede indexar, sumar ni validar. Cada producto de un pedido pasa a ser una fila de <code>lineas_pedido</code>.</li>
+        <li><span class="step-title">Segunda forma normal (2FN)</span>Cada columna depende de la clave completa. En <code>lineas_pedido</code>, con clave <code>(pedido_id, producto_id)</code>, el nombre del producto depende solo de <code>producto_id</code>: se va a <code>productos</code>.</li>
+        <li><span class="step-title">Tercera forma normal (3FN)</span>Ninguna columna depende de otra que no sea la clave. En el pedido, la ciudad depende del cliente, no del pedido: se va a <code>clientes</code>. Hay una forma más estricta, la de Boyce-Codd, pero en la práctica 3FN es la meta.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 170" role="img" aria-labelledby="f55t f55d">
+<title id="f55t">El modelo normalizado de una tienda</title>
+<desc id="f55d">Cuatro tablas: clientes, pedidos, lineas_pedido y productos. Un cliente tiene muchos pedidos, un pedido tiene muchas líneas y cada línea apunta a un producto. Cada dato vive en un solo lugar.</desc>
+<defs><marker id="f55a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="14" width="150" height="140" rx="6"/>
+<text class="dg-label" x="22" y="36">clientes</text>
+<text class="dg-tiny dg-in" x="22" y="62">id PK</text>
+<text class="dg-tiny dg-in" x="22" y="84">nombre</text>
+<text class="dg-tiny dg-in" x="22" y="106">email UNIQUE</text>
+<text class="dg-tiny dg-in" x="22" y="128">ciudad</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="204" y="14" width="150" height="140" rx="6"/>
+<text class="dg-label" x="216" y="36">pedidos</text>
+<text class="dg-tiny dg-in" x="216" y="62">id PK</text>
+<text class="dg-tiny dg-in" x="216" y="84">cliente_id FK</text>
+<text class="dg-tiny dg-in" x="216" y="106">creado</text>
+<text class="dg-tiny dg-in" x="216" y="128">estado</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="398" y="14" width="160" height="140" rx="6"/>
+<text class="dg-label" x="410" y="36">lineas_pedido</text>
+<text class="dg-tiny dg-in" x="410" y="62">pedido_id PK FK</text>
+<text class="dg-tiny dg-in" x="410" y="84">producto_id PK FK</text>
+<text class="dg-tiny dg-in" x="410" y="106">cantidad</text>
+<text class="dg-tiny dg-in" x="410" y="128">precio_unitario</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="612" y="14" width="150" height="140" rx="6"/>
+<text class="dg-label" x="624" y="36">productos</text>
+<text class="dg-tiny dg-in" x="624" y="62">id PK</text>
+<text class="dg-tiny dg-in" x="624" y="84">nombre</text>
+<text class="dg-tiny dg-in" x="624" y="106">precio</text>
+<text class="dg-tiny dg-in" x="624" y="128">stock</text>
+<path class="dg-edge" d="M160 60 H204"/>
+<text class="dg-tiny dg-in" x="165" y="54">1</text>
+<text class="dg-tiny dg-in" x="192" y="54">N</text>
+<path class="dg-edge" d="M354 60 H398"/>
+<text class="dg-tiny dg-in" x="359" y="54">1</text>
+<text class="dg-tiny dg-in" x="386" y="54">N</text>
+<path class="dg-edge" d="M558 84 H612"/>
+<text class="dg-tiny dg-in" x="563" y="78">N</text>
+<text class="dg-tiny dg-in" x="600" y="78">1</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.5.</b> El modelo normalizado: cada dato vive en una sola tabla y las claves foráneas las unen. El precio de cada línea es el de la compra, no una copia.</figcaption>
+      </figure>
+
+      <p>Ahora el email de Ana vive en una sola fila, y un <code>UNIQUE</code> y las claves foráneas hacen que la base rechace los datos inconsistentes. Un detalle que confunde: <code>lineas_pedido.precio_unitario</code> parece una copia de <code>productos.precio</code>, pero no lo es. Es el precio <em>en el momento de la compra</em>, un hecho distinto que no debe cambiar si mañana sube el precio.</p>
+
+      <h3 id="desnormalizar">Desnormalizar para leer</h3>
+
+      <p>El modelo normalizado es ideal para escribir y caro para algunas lecturas: la pantalla "mis pedidos" necesita cuatro tablas y un <code>GROUP BY</code>, y se pide miles de veces por cada pedido nuevo. La <dfn data-term="desnormalizacion">desnormalización</dfn> guarda a propósito datos repetidos o precalculados para que esa lectura sea barata. La clave es que la copia se <b>deriva</b> de la fuente normalizada y se mantiene con un mecanismo explícito:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Técnica</th><th>Ejemplo</th><th>Cómo se mantiene</th><th>Riesgo</th></tr></thead>
+          <tbody>
+            <tr><td>Contador precalculado</td><td><code>productos.cantidad_resenas</code>, <code>posts.likes</code></td><td>En la misma transacción que inserta la reseña, o con un trigger</td><td>Contención: todas las escrituras tocan la misma fila caliente</td></tr>
+            <tr><td>Columna copiada</td><td><code>pedidos.nombre_cliente</code> para listar sin join</td><td>Al cambiar el nombre, actualizar también los pedidos, o aceptar que muestren el nombre viejo</td><td>Copias que divergen sin que nadie lo note</td></tr>
+            <tr><td>Documento embebido</td><td>Un <code>jsonb</code> con el pedido y sus líneas</td><td>Se reescribe entero al cambiar el pedido</td><td>Validación más débil que con columnas y claves foráneas</td></tr>
+            <tr><td>Tabla de resumen o vista materializada</td><td><code>resumen_clientes</code> con total gastado y último pedido</td><td><code>REFRESH</code> periódico o actualización incremental (5.8)</td><td>Datos atrasados hasta la próxima actualización</td></tr>
+            <tr><td>Modelo de lectura separado</td><td>Un índice de búsqueda o una tabla por pantalla</td><td>CQRS con un proyector (5.8)</td><td>Dos modelos que operar, y la lectura va atrasada</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">La regla</p>
+        <p><b>Normaliza para escribir, desnormaliza para leer.</b> Las escrituras van a un modelo normalizado, que es la fuente de verdad y donde la base hace cumplir las reglas. Las lecturas pesadas leen estructuras derivadas con la forma exacta de cada pantalla. Si las estructuras derivadas se pueden reconstruir desde la fuente, desnormalizar es una optimización; si no, es una segunda fuente de verdad, y tarde o temprano las dos dirán cosas distintas.</p>
+      </aside>
+
+      <h2 id="transacciones"><span class="sec-num">5.6</span>Transacciones</h2>
+
+      <p>Una transacción <dfn data-term="acid">ACID</dfn> agrupa varias sentencias y promete cuatro cosas: se aplican todas o ninguna (atomicidad), dejan la base cumpliendo sus reglas (consistencia), no se ven a medias desde otras transacciones (aislamiento) y, una vez confirmadas, sobreviven a un corte de luz (durabilidad). Sin un <code>BEGIN</code> explícito, cada sentencia es su propia transacción (autocommit).</p>
+
+      <h3 id="tx-ciclo">El ciclo de vida de una transacción</h3>
+
+      <p>El modelo clásico de los libros de bases de datos describe cinco estados <span class="badge badge--doc">Documentado</span>:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estado</th><th>Qué significa</th><th>Cómo sale</th></tr></thead>
+          <tbody>
+            <tr><td><b>Activa</b></td><td>Ejecuta sentencias. Toma locks y deja registros del WAL en memoria</td><td>A parcialmente confirmada, al terminar la última sentencia; a fallida, si algo sale mal</td></tr>
+            <tr><td><b>Parcialmente confirmada</b></td><td>Terminó su última sentencia, pero sus cambios todavía están solo en memoria</td><td>A confirmada, cuando el registro de commit llega al disco; a fallida, si la base se cae antes o detecta un conflicto</td></tr>
+            <tr><td><b>Fallida</b></td><td>Ya no puede seguir normalmente: falló una sentencia, hubo un conflicto o se cortó la luz</td><td>A abortada, cuando se deshacen sus cambios</td></tr>
+            <tr><td><b>Abortada</b></td><td>Sus cambios se descartaron y sus locks se liberaron: es como si nunca hubiera existido</td><td>Termina. La aplicación decide si reiniciarla o devolver el error</td></tr>
+            <tr><td><b>Confirmada</b></td><td>El registro de commit está en disco. Sus cambios son durables y visibles</td><td>Termina. Para revertirla hace falta otra transacción, una compensación</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Recorre los cuatro escenarios: un commit normal, un error en una sentencia, un corte de luz al confirmar y un conflicto de serialización.</p>
+
+      <div data-sim="txlife"></div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si la conexión se corta durante el COMMIT</p>
+        <p>El cliente no sabe en qué estado quedó su transacción: pudo cortarse antes del <code>fsync</code> (abortada) o justo después (confirmada). Desde afuera, los dos casos se ven igual. Por eso un reintento después de un error de red necesita una clave de idempotencia y un <code>UNIQUE</code> que descarte el duplicado (M02). Los errores que dicen "reinicia" son otros: <code>40001</code> (serialización) y <code>40P01</code> (deadlock) en PostgreSQL. Ante ellos se repite la transacción completa, desde el <code>BEGIN</code>, no solo la última sentencia.</p>
+      </aside>
+
+      <h3 id="tx-mvcc">Cómo se aíslan: locks y MVCC</h3>
+
+      <p>Hay dos formas de que dos transacciones no se pisen. Con <b>locks</b>, quien lee bloquea a quien quiere escribir y al revés: es correcto, pero un reporte largo frena todas las escrituras. Con <dfn data-term="mvcc">MVCC</dfn> (control de concurrencia multiversión), cada escritura crea una <em>versión nueva</em> de la fila en lugar de pisarla, y cada transacción lee las versiones que le corresponden según su snapshot. Los lectores no esperan a los escritores, y los escritores no esperan a los lectores; solo dos escritores sobre la misma fila se esperan entre sí. PostgreSQL, InnoDB, Oracle y SQL Server (con <code>READ_COMMITTED_SNAPSHOT</code>) usan MVCC.</p>
+
+      <p>PostgreSQL guarda las versiones en el mismo heap: cada versión lleva <code>xmin</code>, el id de la transacción que la creó, y <code>xmax</code>, el de la que la borró o reemplazó. InnoDB deja la fila actual en su lugar y guarda las versiones viejas en el undo log. Mira cómo dos transacciones ven versiones distintas de la misma fila:</p>
+
+      <div data-sim="mvcc"></div>
+
+      <p>El escenario "Snapshot isolation" muestra la idea central. Con <dfn data-term="snapshot-isolation">snapshot isolation</dfn>, cada transacción lee de un snapshot tomado al empezar (en PostgreSQL, en su primera sentencia): ve la base congelada en ese instante, sin importar lo que confirmen las demás mientras tanto. Si intenta escribir una fila que otra transacción cambió y confirmó después de ese snapshot, falla, y la aplicación reintenta: gana la primera que escribe. Un snapshot no copia nada; es una lista de qué transacciones estaban confirmadas al tomarlo, que se compara con el <code>xmin</code> y el <code>xmax</code> de cada versión.</p>
+
+      <h3 id="tx-niveles">Los niveles de aislamiento y cómo los implementa cada base</h3>
+
+      <p>Aislar por completo, como si las transacciones corrieran de a una, es caro. Por eso el estándar SQL define <dfn data-term="isolation">niveles de aislamiento</dfn> según qué anomalías permite cada uno, y cada base los implementa a su manera. El nombre del nivel no alcanza: hay que saber qué hace tu base con él.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Nivel</th><th>PostgreSQL</th><th>MySQL InnoDB</th></tr></thead>
+          <tbody>
+            <tr><td><b>Read uncommitted</b></td><td>Se comporta como read committed: nunca hay lecturas sucias</td><td>Permite lecturas sucias</td></tr>
+            <tr><td><b>Read committed</b></td><td>Por defecto. Un snapshot nuevo por cada sentencia. Un <code>UPDATE</code> que espera un lock relee la versión nueva y aplica su cambio sobre ella</td><td>Un snapshot nuevo por cada lectura simple</td></tr>
+            <tr><td><b>Repeatable read</b></td><td>Snapshot isolation: un solo snapshot por transacción, sin fantasmas. Si otro cambió tu fila, error <code>40001</code>. Permite write skew</td><td>Por defecto. Las lecturas simples usan el snapshot de la primera lectura; pero <code>UPDATE</code> y <code>SELECT … FOR UPDATE</code> leen la última versión confirmada y bloquean huecos del índice (next-key locks). Sin error: un <code>UPDATE</code> puede tocar filas que tu <code>SELECT</code> no veía</td></tr>
+            <tr><td><b>Serializable</b></td><td>SSI: deja correr a todas, anota quién leyó lo que otro escribió y aborta una con <code>40001</code> si las dependencias forman un ciclo peligroso</td><td>Convierte cada lectura simple en <code>SELECT … FOR SHARE</code>: más bloqueos y más deadlocks</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Por defecto, PostgreSQL, Oracle y SQL Server usan read committed, y MySQL repeatable read <span class="badge badge--doc">Documentado</span>. Elige un nivel y una anomalía para ver una ejecución intercalada (con la semántica de PostgreSQL):</p>
 
       <div data-sim="isolation"></div>
 
-      <p>La anomalía más traicionera es el <dfn data-term="write-skew">write skew</dfn>, porque el nivel por defecto de casi todas las bases la permite y no produce ningún error: solo datos que violan una regla del negocio. Tres formas de protegerse, de más a menos general:</p>
+      <p>La anomalía más traicionera es el <dfn data-term="write-skew">write skew</dfn>, porque snapshot isolation la permite y no produce ningún error: solo datos que violan una regla del negocio. Dos transacciones leen el mismo conjunto, cada una decide según lo que leyó y escriben filas distintas; como no escribieron la misma fila, la regla de "gana el primero que escribe" no las detecta. Tres formas de protegerse, de más a menos general:</p>
       <ol class="steps">
         <li><span class="step-title">Serializable</span>La base detecta el conflicto y aborta una transacción. La aplicación tiene que estar preparada para reintentar (error <code>40001</code> en PostgreSQL).</li>
-        <li><span class="step-title">Bloquear lo que lees</span><code>SELECT … FOR UPDATE</code> sobre las filas en las que basas la decisión.</li>
+        <li><span class="step-title">Bloquear lo que lees</span><code>SELECT … FOR UPDATE</code> sobre las filas en las que basas la decisión. La segunda transacción espera a la primera y, al seguir, lee el dato nuevo.</li>
         <li><span class="step-title">Llevar la regla a una restricción</span>Un <code>UNIQUE</code>, un <code>CHECK</code> o una restricción de exclusión hacen que la base haga cumplir la regla sin importar el aislamiento. Siempre que puedas, esta es la mejor.</li>
       </ol>
 
-      <h2 id="replicacion"><span class="sec-num">5.5</span>Replicación</h2>
+<pre data-lang="sql"><code>BEGIN;
+-- Bloquea las filas de la guardia de hoy: otra transacción que haga lo mismo espera aquí
+SELECT medico FROM guardias WHERE turno = current_date AND activo FOR UPDATE;
+-- La aplicación cuenta las filas: si son 2 o más, puede dar de baja a una
+UPDATE guardias SET activo = false WHERE turno = current_date AND medico = 'Ana';
+COMMIT;</code></pre>
+
+      <h3 id="tx-procedimientos">Procedimientos almacenados</h3>
+
+      <p>Un <dfn data-term="stored-procedure">procedimiento almacenado</dfn> es código que vive dentro de la base y se ejecuta en ella, escrito en su propio lenguaje: PL/pgSQL en PostgreSQL, T-SQL en SQL Server, PL/SQL en Oracle. En PostgreSQL hay dos variantes: una <code>FUNCTION</code> se llama dentro de una consulta y corre en la transacción de quien la llama; un <code>PROCEDURE</code> (desde la versión 11) se llama con <code>CALL</code> y puede confirmar transacciones en su interior <span class="badge badge--doc">Documentado</span>.</p>
+
+<pre data-lang="sql"><code>CREATE FUNCTION transferir(origen bigint, destino bigint, monto bigint) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE cuentas SET saldo = saldo - monto WHERE id = origen AND saldo &gt;= monto;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'saldo insuficiente en %', origen USING ERRCODE = 'P0001';
+  END IF;
+  UPDATE cuentas SET saldo = saldo + monto WHERE id = destino;
+END $$;
+
+SELECT transferir(1, 2, 100);   -- una sola ida y vuelta para todas las sentencias</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>A favor</th><th>En contra</th></tr></thead>
+          <tbody>
+            <tr><td>Una ida y vuelta en lugar de una por sentencia: cinco sentencias a 1 ms de red son 5 ms, o 1 ms como procedimiento</td><td>La CPU de la base es el recurso más caro y más difícil de escalar del sistema; cada procedimiento la usa</td></tr>
+            <tr><td>La lógica corre junto a los datos y dentro de la transacción, sin datos viajando por la red</td><td>Versionar, probar, desplegar y depurar es más difícil que con el código de la aplicación</td></tr>
+            <tr><td>Permisos finos: la aplicación puede ejecutar <code>transferir</code> sin poder escribir en <code>cuentas</code> (<code>SECURITY DEFINER</code>)</td><td>Ata el sistema a una base: PL/pgSQL no corre en MySQL</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>La regla práctica: procedimientos cortos, cerca de los datos y atómicos (mover saldo, generar un id, mantener un contador), y la lógica de negocio en la aplicación. El generador de ids de Instagram de 5.14 es un buen ejemplo de lo que sí conviene: una función de PL/pgSQL de diez líneas.</p>
+
+      <h2 id="conexiones"><span class="sec-num">5.7</span>Conectarse a la base</h2>
+
+      <p>Entre tu código y la tabla hay varias capas, y cada una explica algo que se ve en producción: por qué abrir una conexión es lento, por qué una base acepta pocas conexiones y por qué existen los pools.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f56t f56d">
+<title id="f56t">Las capas entre tu código y la base</title>
+<desc id="f56d">Seis cajas de izquierda a derecha: tu código, la API estándar (JDBC, ODBC, DB-API), el driver de la base, el protocolo de la base sobre TCP y TLS, el proceso que acepta conexiones y un proceso del servidor por cada conexión.</desc>
+<defs><marker id="f56a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="65" y="64" text-anchor="middle">Tu código</text>
+<text class="dg-tiny" x="65" y="88" text-anchor="middle">repositorio,</text>
+<text class="dg-tiny" x="65" y="104" text-anchor="middle">ORM</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="135" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="192" y="64" text-anchor="middle">API estándar</text>
+<text class="dg-tiny" x="192" y="88" text-anchor="middle">JDBC, ODBC,</text>
+<text class="dg-tiny" x="192" y="104" text-anchor="middle">DB-API, ADO.NET</text>
+<path class="dg-edge" d="M122 82 L133 82" marker-end="url(#f56a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="262" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="319" y="64" text-anchor="middle">Driver</text>
+<text class="dg-tiny" x="319" y="88" text-anchor="middle">pgJDBC, psqlODBC,</text>
+<text class="dg-tiny" x="319" y="104" text-anchor="middle">psycopg</text>
+<path class="dg-edge" d="M249 82 L260 82" marker-end="url(#f56a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="389" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="446" y="64" text-anchor="middle">Protocolo</text>
+<text class="dg-tiny" x="446" y="88" text-anchor="middle">de PostgreSQL,</text>
+<text class="dg-tiny" x="446" y="104" text-anchor="middle">TCP + TLS :5432</text>
+<path class="dg-edge" d="M376 82 L387 82" marker-end="url(#f56a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="516" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="573" y="64" text-anchor="middle">postmaster</text>
+<text class="dg-tiny" x="573" y="88" text-anchor="middle">autentica y</text>
+<text class="dg-tiny" x="573" y="104" text-anchor="middle">crea un proceso</text>
+<path class="dg-edge" d="M503 82 L514 82" marker-end="url(#f56a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="643" y="40" width="114" height="84" rx="6"/>
+<text class="dg-label" x="700" y="64" text-anchor="middle">Backend</text>
+<text class="dg-tiny" x="700" y="88" text-anchor="middle">1 proceso por</text>
+<text class="dg-tiny" x="700" y="104" text-anchor="middle">conexión</text>
+<path class="dg-edge" d="M630 82 L641 82" marker-end="url(#f56a)"/>
+<text class="dg-group" x="8" y="24">En tu proceso</text>
+<text class="dg-group" x="389" y="24">En la red</text>
+<text class="dg-group" x="516" y="24">En el servidor de la base</text>
+<path class="dg-frame" d="M379 34 V132"/>
+<path class="dg-frame" d="M506 34 V132"/>
+<text class="dg-small" x="8" y="160">Tu código habla con una API estándar; el driver traduce a los mensajes del protocolo de esa base. Cambiar de</text>
+<text class="dg-small" x="8" y="178">base cambia el driver y la cadena de conexión, no las llamadas.</text>
+<text class="dg-small" x="8" y="208">Abrir una conexión cuesta: TCP (1 RTT), TLS (1 a 2 RTT), autenticación (1 a 2 RTT más) y crear un proceso en el</text>
+<text class="dg-small" x="8" y="226">servidor. Entre 5 y 50 ms según la red. Por eso las conexiones se reutilizan.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.6.</b> De tu código a la base hay una API estándar, un driver y un protocolo. Abrir una conexión cuesta varias idas y vueltas y un proceso en el servidor.</figcaption>
+      </figure>
+
+      <h3 id="drivers">JDBC, ODBC y los demás</h3>
+
+      <p>Cada base habla su propio protocolo sobre TCP: PostgreSQL usa su protocolo frontend/backend en el puerto 5432, y MySQL el suyo en el 3306. Para no escribir ese protocolo a mano, cada lenguaje define una <b>API estándar</b> y cada base trae un <b>driver</b> que la implementa:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>API</th><th>Para</th><th>Qué es</th><th>Drivers de ejemplo</th></tr></thead>
+          <tbody>
+            <tr><td><dfn data-term="jdbc">JDBC</dfn></td><td>Java y la JVM</td><td>Java Database Connectivity: las interfaces de <code>java.sql</code> (<code>Connection</code>, <code>PreparedStatement</code>, <code>ResultSet</code>). Los drivers modernos son "tipo 4": escritos en Java, hablan el protocolo de la base directamente</td><td>pgJDBC, MySQL Connector/J</td></tr>
+            <tr><td><dfn data-term="odbc">ODBC</dfn></td><td>Cualquier lenguaje, vía C</td><td>Open Database Connectivity: una API en C de los años 90. Un <em>driver manager</em> (el de Windows, o unixODBC) carga el driver que corresponde según el DSN. Lo usan Excel, Power BI y muchas herramientas de BI</td><td>psqlODBC, el driver ODBC de SQL Server</td></tr>
+            <tr><td>DB-API 2.0</td><td>Python</td><td>La interfaz de la PEP 249: <code>connect()</code>, <code>cursor()</code>, <code>execute()</code></td><td>psycopg, mysqlclient</td></tr>
+            <tr><td>ADO.NET, <code>database/sql</code></td><td>.NET, Go</td><td>Las APIs estándar de cada plataforma</td><td>Npgsql, pgx</td></tr>
+            <tr><td>libpq</td><td>C</td><td>La biblioteca cliente oficial de PostgreSQL. Muchos drivers de otros lenguajes, como psycopg, la usan por debajo</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Hay además APIs sobre HTTP, como la Data API de Amazon Aurora o el driver serverless de Neon, para entornos donde no se pueden mantener conexiones largas, como funciones serverless <span class="badge badge--doc">Documentado</span>.</p>
+
+<pre data-lang="python"><code>import psycopg
+
+with psycopg.connect("postgresql://app@db.interna:5432/tienda?sslmode=verify-full") as conn:
+    with conn.transaction():
+        # Parámetros con %s: el driver los envía aparte del texto SQL. Nunca concatenes strings.
+        fila = conn.execute(
+            "SELECT id, total FROM pedidos WHERE cliente_id = %s ORDER BY created_at DESC LIMIT 20",
+            (cliente_id,),
+        ).fetchall()</code></pre>
+
+      <h3 id="dsn">DSN: la dirección de la base</h3>
+
+      <p>Un <dfn data-term="dsn">DSN</dfn> (Data Source Name) es todo lo que hace falta para llegar a una base: servidor, puerto, base, usuario y opciones. El término tiene dos usos. En ODBC, un DSN es una entrada con nombre en un archivo de configuración (<code>odbc.ini</code>) y la aplicación solo dice <code>DSN=tienda</code>. En general, se llama DSN a cualquier cadena de conexión. La misma base, en cuatro formatos:</p>
+
+<pre><code># libpq (y psycopg), formato clave=valor
+host=db.interna port=5432 dbname=tienda user=app sslmode=verify-full connect_timeout=5 application_name=api-pedidos
+
+# libpq, formato URI
+postgresql://app@db.interna:5432/tienda?sslmode=verify-full&amp;connect_timeout=5&amp;application_name=api-pedidos
+
+# JDBC (pgJDBC)
+jdbc:postgresql://db.interna:5432/tienda?sslmode=verify-full&amp;connectTimeout=5&amp;ApplicationName=api-pedidos
+
+# ODBC: odbc.ini define el DSN "tienda"; la aplicación se conecta con "DSN=tienda"
+[tienda]
+Driver     = PostgreSQL Unicode
+Servername = db.interna
+Port       = 5432
+Database   = tienda
+SSLmode    = verify-full</code></pre>
+
+      <ul>
+        <li><b>Sin contraseña en la cadena:</b> va en una variable de entorno, en un gestor de secretos, en <code>~/.pgpass</code> o se reemplaza por autenticación con IAM (M10). Una cadena con contraseña termina en un log.</li>
+        <li><b><code>sslmode=verify-full</code></b> cifra y además comprueba el certificado y el nombre del servidor. <code>require</code> solo cifra: no te protege de alguien que se haga pasar por la base.</li>
+        <li><b><code>connect_timeout</code></b>: sin él, una base que no responde deja a tu proceso esperando lo que diga el sistema operativo, que pueden ser minutos.</li>
+        <li><b><code>application_name</code></b>: aparece en <code>pg_stat_activity</code> y te dice qué servicio abrió cada conexión cuando algo se cuelga.</li>
+        <li><b>Varios servidores:</b> libpq acepta <code>host=a,b</code> con <code>target_session_attrs=read-write</code>, y prueba hasta encontrar el primario <span class="badge badge--doc">Documentado</span>.</li>
+      </ul>
+
+      <h3 id="pool">Pools de conexiones</h3>
+
+      <p>Abrir una conexión cuesta entre 5 y 50 ms (figura 5.6), y en PostgreSQL cada conexión es un proceso del sistema operativo, con su memoria. Por eso trae <code>max_connections = 100</code> por defecto. Un <dfn data-term="connection-pool">pool de conexiones</dfn> abre unas pocas conexiones y las presta: cada request toma una, la usa durante su transacción y la devuelve. Hay dos niveles:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f57t f57d">
+<title id="f57t">Dos niveles de pool de conexiones</title>
+<desc id="f57d">Varias instancias de la aplicación, cada una con muchos hilos y un pool de 10 conexiones, hablan con PgBouncer en modo transacción, que reparte esas 2 000 conexiones de cliente sobre 40 conexiones reales a PostgreSQL.</desc>
+<defs><marker id="f57a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="20" width="250" height="76" rx="6"/>
+<text class="dg-label" x="20" y="42">Instancia 1</text>
+<text class="dg-tiny" x="20" y="62">200 hilos atienden requests</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="176" y="50" width="70" height="36" rx="4"/>
+<text class="dg-tiny dg-in" x="211" y="65" text-anchor="middle">pool</text>
+<text class="dg-tiny dg-in" x="211" y="79" text-anchor="middle">10 conex.</text>
+<path class="dg-edge" d="M246 68 L384 128" marker-end="url(#f57a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="112" width="250" height="76" rx="6"/>
+<text class="dg-label" x="20" y="134">Instancia 2</text>
+<text class="dg-tiny" x="20" y="154">200 hilos atienden requests</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="176" y="142" width="70" height="36" rx="4"/>
+<text class="dg-tiny dg-in" x="211" y="157" text-anchor="middle">pool</text>
+<text class="dg-tiny dg-in" x="211" y="171" text-anchor="middle">10 conex.</text>
+<path class="dg-edge" d="M246 160 L384 150" marker-end="url(#f57a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="204" width="250" height="76" rx="6"/>
+<text class="dg-label" x="20" y="226">Instancia 200</text>
+<text class="dg-tiny" x="20" y="246">200 hilos atienden requests</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="176" y="234" width="70" height="36" rx="4"/>
+<text class="dg-tiny dg-in" x="211" y="249" text-anchor="middle">pool</text>
+<text class="dg-tiny dg-in" x="211" y="263" text-anchor="middle">10 conex.</text>
+<path class="dg-edge" d="M246 252 L384 172" marker-end="url(#f57a)"/>
+<text class="dg-label" x="130" y="194" text-anchor="middle">…</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="388" y="100" width="160" height="100" rx="6"/>
+<text class="dg-label" x="468" y="124" text-anchor="middle">PgBouncer</text>
+<text class="dg-label" x="468" y="144" text-anchor="middle">modo transacción</text>
+<text class="dg-tiny" x="468" y="172" text-anchor="middle">2 000 conexiones de</text>
+<text class="dg-tiny" x="468" y="187" text-anchor="middle">cliente, baratas</text>
+<path class="dg-edge" d="M548 150 L604 150" marker-end="url(#f57a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="608" y="90" width="154" height="120" rx="6"/>
+<text class="dg-label" x="685" y="116" text-anchor="middle">PostgreSQL</text>
+<text class="dg-tiny" x="685" y="140" text-anchor="middle">40 conexiones</text>
+<text class="dg-tiny" x="685" y="156" text-anchor="middle">reales: 40</text>
+<text class="dg-tiny" x="685" y="172" text-anchor="middle">procesos</text>
+<text class="dg-small" x="388" y="240">Cada hilo toma una conexión del pool solo mientras dura su</text>
+<text class="dg-small" x="388" y="258">transacción. PgBouncer hace lo mismo con las conexiones reales.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.7.</b> Dos niveles de pool: cada instancia presta sus conexiones a sus hilos, y PgBouncer presta las conexiones reales a todas las instancias.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>En la aplicación:</b> HikariCP en Java (10 conexiones por defecto), el pool de SQLAlchemy en Python (5 más 10 de desborde), <code>database/sql</code> en Go <span class="badge badge--doc">Documentado</span>. Ahorra el costo de conectar, pero cada instancia tiene el suyo: 200 instancias con 10 conexiones son 2&#8239;000 conexiones a la base.</li>
+        <li><b>Entre la aplicación y la base:</b> un pooler como PgBouncer o RDS Proxy recibe miles de conexiones baratas y las reparte sobre unas pocas conexiones reales.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Modo de PgBouncer</th><th>Cuándo devuelve la conexión real</th><th>Qué se rompe</th></tr></thead>
+          <tbody>
+            <tr><td><code>session</code></td><td>Cuando el cliente se desconecta</td><td>Nada, pero casi no ahorra conexiones</td></tr>
+            <tr><td><code>transaction</code></td><td>Al terminar cada transacción</td><td>Lo que dura más que una transacción: <code>SET</code> de sesión, advisory locks de sesión, <code>LISTEN</code>, tablas temporales. Los prepared statements funcionan desde PgBouncer 1.21 con <code>max_prepared_statements</code></td></tr>
+            <tr><td><code>statement</code></td><td>Al terminar cada sentencia</td><td>Las transacciones de varias sentencias</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><b>¿Cuántas conexiones?</b> Menos de las que crees. Una base no ejecuta más consultas en paralelo que núcleos tiene; pasado ese punto, más conexiones solo agregan contención. La guía de HikariCP propone empezar con <code>(núcleos × 2) + discos efectivos</code> conexiones en total <span class="badge badge--doc">Documentado</span>: con 16 núcleos y SSD, unas 33. La ley de Little da la otra mitad de la cuenta:</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Ejemplo resuelto</p>
+        <p>Una API hace 3&#8239;000 transacciones por segundo y cada una retiene la conexión 4 ms. Conexiones ocupadas en promedio = 3&#8239;000 × 0.004 = <b>12</b>. Con un margen para picos, un pool total de 20 alcanza. Si un deploy agrega una llamada HTTP de 200 ms <em>dentro</em> de la transacción, cada una retiene la conexión 204 ms: 3&#8239;000 × 0.204 = <b>612</b> conexiones ocupadas. El pool se agota y las requests esperan, aunque la base esté ociosa. No hace falta un pool más grande: hay que sacar la llamada de la transacción.</p>
+      </aside>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si el pool se agota</p>
+        <p>Las requests esperan una conexión hasta el <code>connectionTimeout</code>, que en HikariCP es de 30 segundos por defecto. Mientras tanto ocupan hilos y memoria, y los clientes reintentan: el problema crece en cascada. Pon un timeout de espera corto (de 1 a 3 s), alerta sobre el tiempo de espera del pool y busca conexiones que no se devuelven (HikariCP tiene <code>leakDetectionThreshold</code>). El pool es un bulkhead (M08): con pools separados, una consulta lenta de reportes no se lleva las conexiones de los pagos.</p>
+      </aside>
+
+      <h2 id="vistas"><span class="sec-num">5.8</span>Vistas, vistas materializadas y CQRS</h2>
+
+      <p>5.5 terminó con una regla: normalizar para escribir y desnormalizar para leer. Las vistas permiten hacer las dos cosas <b>dentro de la misma base</b>, antes de pensar en otra.</p>
+
+      <h3 id="vista">Una vista es una consulta con nombre</h3>
+
+      <p>Una <b>vista</b> no guarda datos. Guarda una consulta, con un nombre, y se lee como si fuera una tabla. Cada vez que alguien hace <code>SELECT</code> sobre ella, la base reemplaza el nombre por la consulta y la ejecuta sobre las tablas base. Sirve para esconder joins complicados, para dar a cada equipo una interfaz estable aunque las tablas cambien y para dar permisos sobre algunas columnas o filas. Lo que <b>no</b> hace es acelerar nada: leer la vista cuesta exactamente lo mismo que ejecutar su consulta.</p>
+
+<pre data-lang="sql"><code>CREATE VIEW resumen_clientes AS
+SELECT c.id, c.nombre, count(p.id) AS pedidos, coalesce(sum(p.total), 0) AS gastado, max(p.created_at) AS ultimo
+FROM clientes c LEFT JOIN pedidos p ON p.cliente_id = c.id
+GROUP BY c.id, c.nombre;
+
+SELECT * FROM resumen_clientes WHERE id = 42;   -- ejecuta el JOIN y el GROUP BY en cada lectura</code></pre>
+
+      <h3 id="vistas-materializadas">Una vista materializada guarda el resultado</h3>
+
+      <p>Una <dfn data-term="vista-materializada">vista materializada</dfn> ejecuta la consulta una vez y guarda el resultado en disco, como una tabla. Se lee rápido y se le pueden crear índices, pero va atrasada: muestra los datos del último <code>REFRESH</code>. En PostgreSQL, <code>REFRESH MATERIALIZED VIEW</code> recalcula todo; con <code>CONCURRENTLY</code> no bloquea a los lectores mientras lo hace, y para eso exige un índice único sobre la vista <span class="badge badge--doc">Documentado</span>.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f58t f58d">
+<title id="f58t">Vista y vista materializada</title>
+<desc id="f58d">Arriba, una vista: una consulta guardada con nombre que se ejecuta sobre las tablas base cada vez que alguien la lee. Abajo, una vista materializada: el resultado de esa consulta guardado en disco, que se lee como una tabla y se recalcula con REFRESH.</desc>
+<defs><marker id="f58a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="8" y="70" width="170" height="120" rx="6"/>
+<text class="dg-label" x="93" y="94" text-anchor="middle">Tablas base</text>
+<text class="dg-tiny dg-in" x="93" y="118" text-anchor="middle">clientes</text>
+<text class="dg-tiny dg-in" x="93" y="136" text-anchor="middle">pedidos</text>
+<text class="dg-tiny dg-in" x="93" y="154" text-anchor="middle">lineas_pedido</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="268" y="14" width="230" height="96" rx="6"/>
+<text class="dg-label" x="383" y="38" text-anchor="middle">Vista</text>
+<text class="dg-tiny" x="383" y="60" text-anchor="middle">solo guarda la consulta</text>
+<text class="dg-tiny" x="383" y="76" text-anchor="middle">sin datos propios</text>
+<text class="dg-tiny" x="383" y="92" text-anchor="middle">cada lectura ejecuta los JOIN</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="268" y="150" width="230" height="96" rx="6"/>
+<text class="dg-label" x="383" y="174" text-anchor="middle">Vista materializada</text>
+<text class="dg-tiny" x="383" y="196" text-anchor="middle">guarda el resultado en disco</text>
+<text class="dg-tiny" x="383" y="212" text-anchor="middle">se le pueden crear índices</text>
+<text class="dg-tiny" x="383" y="228" text-anchor="middle">va atrasada hasta el REFRESH</text>
+<path class="dg-edge" d="M93 70 V40 H266" marker-end="url(#f58a)"/>
+<text class="dg-tiny" x="180" y="32" text-anchor="middle">en cada lectura</text>
+<path class="dg-feedback" d="M93 190 V222 H266" marker-end="url(#f58a)"/>
+<text class="dg-tiny" x="180" y="240" text-anchor="middle">en cada REFRESH</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="590" y="70" width="172" height="120" rx="6"/>
+<text class="dg-label" x="676" y="94" text-anchor="middle">Lector</text>
+<text class="dg-tiny dg-in" x="676" y="118" text-anchor="middle">SELECT * FROM</text>
+<text class="dg-tiny dg-in" x="676" y="136" text-anchor="middle">resumen_clientes</text>
+<text class="dg-tiny dg-in" x="676" y="154" text-anchor="middle">WHERE id = 42</text>
+<path class="dg-edge" d="M676 70 V40 H500" marker-end="url(#f58a)"/>
+<path class="dg-edge" d="M676 190 V222 H500" marker-end="url(#f58a)"/>
+<text class="dg-tiny" x="588" y="32" text-anchor="middle">lento, al día</text>
+<text class="dg-tiny" x="588" y="240" text-anchor="middle">rápido, atrasado</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.8.</b> Una vista ejecuta su consulta en cada lectura; una vista materializada guarda el resultado y lo recalcula en cada <code>REFRESH</code>.</figcaption>
+      </figure>
+
+<pre data-lang="sql"><code>CREATE MATERIALIZED VIEW resumen_clientes_mv AS
+SELECT c.id, c.nombre, count(p.id) AS pedidos, coalesce(sum(p.total), 0) AS gastado, max(p.created_at) AS ultimo
+FROM clientes c LEFT JOIN pedidos p ON p.cliente_id = c.id
+GROUP BY c.id, c.nombre;
+
+CREATE UNIQUE INDEX ON resumen_clientes_mv (id);              -- necesario para CONCURRENTLY
+REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, por ejemplo con pg_cron</code></pre>
+
+      <p>El costo del <code>REFRESH</code> es recalcular todo, aunque haya cambiado una fila. Cuando eso se vuelve caro, la alternativa es una <b>tabla de resumen</b> que se actualiza de a una fila: en la misma transacción que crea el pedido, con un trigger o con un proceso que lee el log de cambios. En los tres casos, el modelo sigue igual: tablas normalizadas para escribir y estructuras desnormalizadas, derivadas, para leer, en la misma base.</p>
+
+      <h3 id="cqrs">CQRS: un modelo para escribir y otro para leer</h3>
+
+      <p><dfn data-term="cqrs">CQRS</dfn> (Command Query Responsibility Segregation) lleva esa idea al extremo: los comandos (crear, cambiar, borrar) y las consultas usan modelos separados, a veces en almacenes distintos. El modelo de escritura protege las reglas y está normalizado. El modelo de lectura tiene una tabla, un documento o un índice por pantalla, y lo llena un <b>proyector</b> que lee cada cambio del modelo de escritura. Recorre los cuatro escenarios:</p>
+
+      <div data-sim="cqrs"></div>
+
+      <ul>
+        <li><b>El modelo de lectura puede ser otra base:</b> Elasticsearch para la búsqueda, Redis para un contador, una tabla de Cassandra para un timeline. Lo alimentan el CDC o una outbox (M07).</li>
+        <li><b>Siempre va atrasado:</b> de milisegundos a segundos. Quien acaba de escribir necesita read-your-writes, como en el escenario 3; la sección 5.10 trata ese problema en general.</li>
+        <li><b>No lo uses por defecto:</b> para un CRUD donde se lee lo mismo que se escribe, CQRS duplica el trabajo sin ganar nada. Empieza con vistas materializadas en la misma base y separa el modelo de lectura cuando una pantalla concreta lo justifique.</li>
+      </ul>
+
+      <h2 id="replicacion"><span class="sec-num">5.9</span>Replicación</h2>
 
       <p>Se replica por tres razones: sobrevivir a la caída de una máquina, repartir lecturas y acercar datos a los usuarios. Hay tres arquitecturas:</p>
 
@@ -184,7 +1068,7 @@ ORDER BY created_at DESC LIMIT 50;
         <table class="t">
           <thead><tr><th></th><th>Un líder</th><th>Varios líderes</th><th>Sin líder</th></tr></thead>
           <tbody>
-            <tr><td><b>Quién acepta escrituras</b></td><td>Solo el líder</td><td>Un líder por región o datacenter</td><td>Cualquier réplica</td></tr>
+            <tr><td><b>Quién acepta escrituras</b></td><td>Solo el líder (también llamado primario)</td><td>Un líder por región o datacenter</td><td>Cualquier réplica</td></tr>
             <tr><td><b>Conflictos</b></td><td>No hay</td><td>Sí: dos regiones cambian lo mismo</td><td>Sí: se resuelven con versiones o último que escribe</td></tr>
             <tr><td><b>Si cae el líder</b></td><td>Failover: segundos a minutos sin escrituras</td><td>Las otras regiones siguen</td><td>No hay líder que perder</td></tr>
             <tr><td><b>Ejemplos</b></td><td>PostgreSQL, MySQL, MongoDB</td><td>Replicación activa-activa entre regiones</td><td>Cassandra, DynamoDB (<dfn data-term="leaderless">estilo Dynamo</dfn>)</td></tr>
@@ -192,24 +1076,374 @@ ORDER BY created_at DESC LIMIT 50;
         </table>
       </div>
 
-      <p>Con un líder, la decisión central es <b>síncrona o asíncrona</b>. Síncrona: el commit espera a que la réplica confirme, así que un failover no pierde nada, pero cada escritura paga la ida y vuelta a la réplica y, si la réplica cae, el líder se frena. Asíncrona: escrituras rápidas, pero el failover puede perder las últimas transacciones y las réplicas van detrás. Es exactamente el trade-off de latencia contra consistencia de PACELC (M06). Lo habitual es una réplica síncrona en otra zona y el resto asíncronas.</p>
+      <p>Con un líder, el líder envía su WAL a las réplicas, que lo aplican en el mismo orden. Los textos viejos los llaman maestro y esclavos; hoy se dice primario y réplicas.</p>
 
-      <aside class="callout callout--fail">
-        <p class="callout-label">Qué pasa con el retraso de replicación</p>
-        <p>El <dfn data-term="replication-lag">retraso de replicación</dfn> suele ser de milisegundos, pero bajo carga o durante un vacuum largo puede llegar a minutos. Síntomas: un usuario guarda algo y no lo ve al recargar (falta <dfn data-term="read-your-writes">read-your-writes</dfn>); una lista muestra un elemento y en la siguiente recarga desaparece (falta de lecturas monótonas, porque la segunda lectura fue a una réplica más atrasada).</p>
-        <p><b>Mitigación:</b> leer del líder durante unos segundos después de que el usuario escribe; o guardar la posición del log (LSN) de su última escritura y leer solo de réplicas que ya la aplicaron; y fijar a cada usuario a la misma réplica para lecturas monótonas. Y alertar sobre el retraso: una réplica una hora atrasada es un incidente.</p>
-      </aside>
+      <h3 id="repl-sync">Síncrona o asíncrona</h3>
 
-      <h3 id="quorum">Quórums</h3>
-      <p>En la replicación sin líder, el cliente escribe en N réplicas y espera W confirmaciones; lee de R y se queda con la versión más nueva. Si W + R &gt; N, todo conjunto de lectura se solapa con todo conjunto de escritura: al menos una de las réplicas leídas tiene el último valor.</p>
+      <p>La decisión central es <b>cuándo responde el líder</b>. En la replicación síncrona, el commit espera a que al menos una réplica confirme que tiene el WAL. En la asíncrona, el líder responde en cuanto el WAL está en su propio disco y lo envía después. La diferencia aparece el día que el líder se cae:</p>
+
+      <div class="tabs" data-tabs="Replicación síncrona y asíncrona">
+        <section data-tab="Síncrona">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 342" role="img" aria-labelledby="f59t f59d">
+<title id="f59t">Replicación síncrona: el failover no pierde el commit</title>
+<desc id="f59d">La aplicación confirma; el líder envía el WAL a la réplica y espera su confirmación antes de responder. Luego el líder se cae y la réplica promovida tiene el commit.</desc>
+<defs><marker id="f59-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f59-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f59-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f59-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Aplicación</text>
+<path class="dg-frame" d="M70.0 40 V332"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Líder</text>
+<path class="dg-frame" d="M385.0 40 V332"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica</text>
+<path class="dg-frame" d="M700.0 40 V332"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f59-a)"/>
+<rect x="201.7" y="55" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">COMMIT</text>
+<path class="dg-edge" d="M388.0 106 L695.0 106" marker-end="url(#f59-a)"/>
+<rect x="490.3" y="89" width="104.39999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="100" text-anchor="middle">WAL del commit</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 140 L390.0 140" marker-end="url(#f59-r)"/>
+<rect x="467.2" y="123" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="134" text-anchor="middle">ACK: escrito en disco</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 174 L75.0 174" marker-end="url(#f59-r)"/>
+<rect x="191.8" y="157" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="168" text-anchor="middle">COMMIT OK</text>
+<rect x="80.0" y="194" width="132" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="210">esperó 1 RTT más</text>
+<path d="M20 240 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="229" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="244" text-anchor="middle" style="fill:var(--fail)">el líder se cae</text>
+<rect x="488.0" y="262" width="202" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="498.0" y="278">promovida: tiene el commit</text>
+</svg>
+            </div>
+            <figcaption><b>Figura 5.9.</b> Con replicación síncrona, el OK llega después de que la réplica tiene el commit. El failover no pierde nada; cada commit pagó una ida y vuelta más.</figcaption>
+          </figure>
+        </section>
+        <section data-tab="Asíncrona">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 308" role="img" aria-labelledby="f510t f510d">
+<title id="f510t">Replicación asíncrona: el failover pierde el commit</title>
+<desc id="f510d">La aplicación confirma; el líder responde de inmediato y el WAL todavía no salió hacia la réplica. El líder se cae, la réplica promovida no tiene el commit y la aplicación ya informó éxito.</desc>
+<defs><marker id="f510-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f510-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f510-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f510-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Aplicación</text>
+<path class="dg-frame" d="M70.0 40 V298"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Líder</text>
+<path class="dg-frame" d="M385.0 40 V298"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica</text>
+<path class="dg-frame" d="M700.0 40 V298"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f510-a)"/>
+<rect x="201.7" y="55" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">COMMIT</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 106 L75.0 106" marker-end="url(#f510-r)"/>
+<rect x="191.8" y="89" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="100" text-anchor="middle">COMMIT OK</text>
+<rect x="80.0" y="126" width="188" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="142">el usuario ve &quot;guardado&quot;</text>
+<path d="M20 172 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="161" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="176" text-anchor="middle" style="fill:var(--fail)">el líder se cae antes de enviar el WAL</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M388.0 208 L695.0 208" marker-end="url(#f510-f)"/>
+<rect x="450.7" y="191" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="202" text-anchor="middle">WAL del commit: nunca sale</text>
+<rect x="467.0" y="228" width="223" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="477.0" y="244">promovida: le falta el commit</text>
+</svg>
+            </div>
+            <figcaption><b>Figura 5.10.</b> Con replicación asíncrona, el OK sale antes de que el WAL viaje. Si el líder se cae en ese hueco, la réplica promovida no tiene el commit y la aplicación ya dijo "guardado".</figcaption>
+          </figure>
+        </section>
+      </div>
+
+      <p>Ahora con movimiento, y con dos casos más: una réplica síncrona que se cae y una lectura en una réplica atrasada.</p>
+
+      <div data-sim="replsync"></div>
+
+      <p>Síncrona y asíncrona no son dos opciones sino una escala. En PostgreSQL, la escala es el parámetro <code>synchronous_commit</code>, que se puede cambiar por transacción <span class="badge badge--doc">Documentado</span>:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th><code>synchronous_commit</code></th><th>El commit espera a que…</th><th>Si se cae el líder</th></tr></thead>
+          <tbody>
+            <tr><td><code>off</code></td><td>Nada: ni siquiera al <code>fsync</code> local</td><td>Puede perder las últimas transacciones aun sin failover (hasta tres veces <code>wal_writer_delay</code>)</td></tr>
+            <tr><td><code>local</code></td><td>El WAL esté en el disco del líder</td><td>Un failover pierde lo que no viajó</td></tr>
+            <tr><td><code>remote_write</code></td><td>La réplica síncrona haya recibido el WAL y se lo haya dado a su sistema operativo</td><td>Solo se pierde si las dos máquinas caen a la vez</td></tr>
+            <tr><td><code>on</code> (por defecto)</td><td>La réplica síncrona haya hecho <code>fsync</code> del WAL</td><td>No se pierde nada confirmado</td></tr>
+            <tr><td><code>remote_apply</code></td><td>La réplica síncrona haya <em>aplicado</em> el cambio</td><td>No se pierde nada, y una lectura en esa réplica ya ve el commit</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Sin réplicas síncronas configuradas en <code>synchronous_standby_names</code>, <code>on</code> equivale a <code>local</code>. Ese parámetro acepta <code>FIRST 1 (r1, r2)</code> (la primera de la lista que esté sana) o <code>ANY 1 (r1, r2)</code> (cualquiera de las dos), y así una réplica caída no frena las escrituras. Lo habitual es una réplica síncrona en otra zona de la misma región, donde la ida y vuelta cuesta de 1 a 2 ms, y el resto asíncronas. Es el trade-off de latencia contra consistencia de PACELC (M06).</p>
+
+      <h2 id="read-your-writes"><span class="sec-num">5.10</span>Leer lo que escribiste</h2>
+
+      <p>En cuanto las lecturas van a réplicas asíncronas, o a un modelo de lectura de CQRS, aparece el <dfn data-term="replication-lag">retraso de replicación</dfn>: el tiempo entre que el líder confirma un cambio y una réplica lo aplica. Suele ser de milisegundos, pero bajo carga, durante un vacuum largo o con una consulta larga en la réplica puede llegar a minutos. El síntoma más visible es la falta de <dfn data-term="read-your-writes">read-your-writes</dfn>: un usuario guarda algo, recarga, y no lo ve (escenario 4 de la animación anterior). Lo que el usuario espera es razonable: <em>sus propias</em> escrituras tienen que verse enseguida, aunque las de los demás tarden un poco. Hay cinco formas de dárselo, y se combinan:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Técnica</th><th>Cómo funciona</th><th>Pagas</th></tr></thead>
+          <tbody>
+            <tr><td><b>Leer del líder después de escribir</b></td><td>Durante unos segundos después de que un usuario escribe (una marca en su sesión o una cookie), sus lecturas van al líder. O siempre, para pantallas como "mi perfil"</td><td>Más carga en el líder; elegir los segundos es una apuesta sobre el retraso</td></tr>
+            <tr><td><b>Token de posición</b></td><td>Al escribir, la aplicación guarda la posición del WAL de ese commit (<code>pg_current_wal_lsn()</code>, un LSN). Al leer, usa una réplica solo si ya aplicó esa posición (<code>pg_last_wal_replay_lsn()</code>); si no, espera unos milisegundos o va al líder</td><td>Llevar el token en la sesión y una consulta extra por lectura</td></tr>
+            <tr><td><b>Esperar a que la réplica aplique</b></td><td><code>SET LOCAL synchronous_commit = remote_apply</code> solo en las transacciones cuyas lecturas importan</td><td>Esas escrituras tardan lo que tarda la réplica síncrona en aplicar</td></tr>
+            <tr><td><b>Fijar al usuario a una réplica</b></td><td>Todas las lecturas de un usuario van a la misma réplica, por hash de su id. No da read-your-writes, pero evita que el tiempo "retroceda" entre dos recargas (lecturas monótonas)</td><td>Si esa réplica cae, el usuario cambia de réplica</td></tr>
+            <tr><td><b>Mostrar lo que el cliente ya sabe</b></td><td>La interfaz muestra el valor recién guardado sin volver a leerlo (actualización optimista)</td><td>Solo sirve en el dispositivo que escribió</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Read-your-writes es una de las garantías de sesión que M06 estudia junto con las lecturas monótonas y otras dos. Y alerta sobre el retraso: una réplica una hora atrasada es un incidente, aunque nadie se haya quejado todavía.</p>
+
+      <h2 id="quorum"><span class="sec-num">5.11</span>Quórums</h2>
+
+      <p>En la replicación sin líder no hay nadie que ordene las escrituras: el cliente, o un nodo que hace de coordinador, habla directamente con las réplicas. Todo se describe con tres números:</p>
+      <dl class="def-rows">
+        <dt>N</dt><dd>Cuántas réplicas guardan cada clave. Por ejemplo, 3.</dd>
+        <dt>W</dt><dd>Cuántas confirmaciones <b>espera</b> el coordinador antes de decir "escrito". La escritura se envía siempre a las N; W solo dice a cuántas esperar.</dd>
+        <dt>R</dt><dd>Cuántas respuestas <b>espera</b> antes de devolver una lectura. Entre las respuestas, gana la de <b>versión más alta</b>, no la mayoría: por eso cada valor viaja con su versión.</dd>
+      </dl>
+
+      <p>La regla es una sola: si <b>W + R &gt; N</b>, las réplicas que confirmaron la escritura y las que responden la lectura no caben sin pisarse, así que al menos una de las que responden tiene el valor nuevo, y la versión más alta lo delata. No es magia, es contar:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f511t f511d">
+<title id="f511t">Por qué W + R &gt; N garantiza que se crucen</title>
+<desc id="f511d">A la izquierda, con tres réplicas, escritura en 2 y lectura de 2: las nueve combinaciones posibles de réplicas escritas y leídas comparten al menos una réplica. A la derecha, escritura en 1 y lectura de 1: solo tres de las nueve combinaciones coinciden y en las otras seis la lectura no ve la escritura.</desc>
+<defs><marker id="f511a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">N = 3, W = 2, R = 2</text>
+<text class="dg-small" x="10" y="38">2 + 2 = 4 &gt; 3: siempre se cruzan</text>
+<text class="dg-tiny dg-in" x="150.0" y="66" text-anchor="middle">lee 1+2</text>
+<text class="dg-tiny dg-in" x="238.0" y="66" text-anchor="middle">lee 1+3</text>
+<text class="dg-tiny dg-in" x="326.0" y="66" text-anchor="middle">lee 2+3</text>
+<text class="dg-tiny dg-in" x="98" y="104" text-anchor="end">escribe 1+2</text>
+<rect class="dg-ok" x="109" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="150.0" y="104" text-anchor="middle">✓ ve R1</text>
+<rect class="dg-ok" x="197" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="238.0" y="104" text-anchor="middle">✓ ve R1</text>
+<rect class="dg-ok" x="285" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="326.0" y="104" text-anchor="middle">✓ ve R2</text>
+<text class="dg-tiny dg-in" x="98" y="150" text-anchor="end">escribe 1+3</text>
+<rect class="dg-ok" x="109" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="150.0" y="150" text-anchor="middle">✓ ve R1</text>
+<rect class="dg-ok" x="197" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="238.0" y="150" text-anchor="middle">✓ ve R1</text>
+<rect class="dg-ok" x="285" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="326.0" y="150" text-anchor="middle">✓ ve R3</text>
+<text class="dg-tiny dg-in" x="98" y="196" text-anchor="end">escribe 2+3</text>
+<rect class="dg-ok" x="109" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="150.0" y="196" text-anchor="middle">✓ ve R2</text>
+<rect class="dg-ok" x="197" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="238.0" y="196" text-anchor="middle">✓ ve R3</text>
+<rect class="dg-ok" x="285" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="326.0" y="196" text-anchor="middle">✓ ve R2</text>
+<text class="dg-group" x="398" y="20">N = 3, W = 1, R = 1</text>
+<text class="dg-small" x="398" y="38">1 + 1 = 2 ≤ 3: casi nunca se cruzan</text>
+<text class="dg-tiny dg-in" x="538.0" y="66" text-anchor="middle">lee 1</text>
+<text class="dg-tiny dg-in" x="626.0" y="66" text-anchor="middle">lee 2</text>
+<text class="dg-tiny dg-in" x="714.0" y="66" text-anchor="middle">lee 3</text>
+<text class="dg-tiny dg-in" x="486" y="104" text-anchor="end">escribe 1</text>
+<rect class="dg-ok" x="497" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="538.0" y="104" text-anchor="middle">✓ ve R1</text>
+<rect class="dg-bad" x="585" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="626.0" y="104" text-anchor="middle">✗ no la ve</text>
+<rect class="dg-bad" x="673" y="79" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="714.0" y="104" text-anchor="middle">✗ no la ve</text>
+<text class="dg-tiny dg-in" x="486" y="150" text-anchor="end">escribe 2</text>
+<rect class="dg-bad" x="497" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="538.0" y="150" text-anchor="middle">✗ no la ve</text>
+<rect class="dg-ok" x="585" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="626.0" y="150" text-anchor="middle">✓ ve R2</text>
+<rect class="dg-bad" x="673" y="125" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="714.0" y="150" text-anchor="middle">✗ no la ve</text>
+<text class="dg-tiny dg-in" x="486" y="196" text-anchor="end">escribe 3</text>
+<rect class="dg-bad" x="497" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="538.0" y="196" text-anchor="middle">✗ no la ve</text>
+<rect class="dg-bad" x="585" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="626.0" y="196" text-anchor="middle">✗ no la ve</text>
+<rect class="dg-ok" x="673" y="171" width="82" height="40" rx="4"/>
+<text class="dg-tiny dg-in" x="714.0" y="196" text-anchor="middle">✓ ve R3</text>
+<path class="dg-frame" d="M388 8 V218"/>
+<text class="dg-small" x="10" y="236">Es como dos personas que eligen 2 sillas de 3: por fuerza comparten una. Con W + R &gt; N, el grupo que</text>
+<text class="dg-small" x="10" y="254">confirmó la escritura y el grupo que responde la lectura no caben sin pisarse.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.11.</b> Con N = 3, cualquier par de réplicas que confirmó la escritura y cualquier par que responde la lectura comparten al menos una. Con W = 1 y R = 1 pueden no cruzarse.</figcaption>
+      </figure>
+
+      <p>Ahora míralo pasar, con una réplica que no recibe la escritura. El primer escenario es el caso que garantiza la regla; los otros dos muestran qué pasa cuando no se cumple y cuando W es tan alto que una caída frena las escrituras:</p>
+
+      <div data-sim="quorumflow"></div>
+
+      <p>Con la idea clara, juega con los números. Cambia N, W y R y mira qué garantiza cada combinación y cuántas réplicas pueden caerse:</p>
 
       <div data-sim="quorum"></div>
 
-      <p>Configuraciones típicas: N = 3, W = 2, R = 2 (equilibrado); W = 3, R = 1 (lecturas rápidas, escrituras frágiles); W = 1, R = 1 (máxima velocidad, consistencia eventual). Para que las réplicas converjan aunque nadie las lea, estos sistemas usan <em>read repair</em> (al leer, se corrigen las réplicas atrasadas) y <em>anti-entropía</em> con árboles de Merkle (comparan resúmenes de rangos de claves y sincronizan solo lo que difiere).</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>N = 3</th><th>¿Lee lo último?</th><th>Escrituras siguen con</th><th>Lecturas siguen con</th><th>Úsalo para</th></tr></thead>
+          <tbody>
+            <tr><td>W = 2, R = 2</td><td>Sí (4 &gt; 3)</td><td>1 réplica caída</td><td>1 réplica caída</td><td>El equilibrio por defecto</td></tr>
+            <tr><td>W = 3, R = 1</td><td>Sí (4 &gt; 3)</td><td>0 caídas</td><td>2 réplicas caídas</td><td>Muchas lecturas, pocas escrituras</td></tr>
+            <tr><td>W = 1, R = 3</td><td>Sí (4 &gt; 3)</td><td>2 réplicas caídas</td><td>0 caídas</td><td>Escrituras que no pueden fallar, lecturas raras</td></tr>
+            <tr><td>W = 1, R = 1</td><td>No (2 ≤ 3)</td><td>2 réplicas caídas</td><td>2 réplicas caídas</td><td>Velocidad máxima; tolera datos viejos</td></tr>
+          </tbody>
+        </table>
+      </div>
 
-      <h2 id="sharding"><span class="sec-num">5.6</span>Particionado (sharding)</h2>
+      <p>Cassandra lo expone como el nivel de consistencia de cada operación: <code>ONE</code>, <code>QUORUM</code> (la mayoría de N), <code>ALL</code>, y <code>LOCAL_QUORUM</code> para contar solo las réplicas de la región local <span class="badge badge--doc">Documentado</span>. Para que las réplicas converjan aunque nadie las lea, estos sistemas usan <em>read repair</em> (al leer, se corrigen las réplicas atrasadas, como en el escenario 1) y <em>anti-entropía</em> con árboles de Merkle (comparan resúmenes de rangos de claves y sincronizan solo lo que difiere).</p>
 
-      <p>Cuando los datos o las escrituras no caben en una máquina, se reparten con <dfn data-term="sharding">sharding</dfn>. Todo depende de la <dfn data-term="partition-key">partition key</dfn>, que decide en qué shard vive cada fila:</p>
+      <aside class="callout callout--fail">
+        <p class="callout-label">Lo que un quórum no resuelve</p>
+        <p>W + R &gt; N no convierte al sistema en una base con transacciones. Una escritura que falla no se deshace en las réplicas que sí la recibieron (escenario 3). Dos escrituras concurrentes a la misma clave necesitan una regla para elegir, como "gana la última" o relojes vectoriales. Y si el sistema acepta escrituras en réplicas que no son de la clave cuando las suyas no responden (sloppy quorum), la regla deja de valer. M06 explica estos casos y qué hace falta para tener linealizabilidad.</p>
+      </aside>
+
+      <h2 id="distribuidas"><span class="sec-num">5.12</span>Transacciones entre bases: 2PC y sagas</h2>
+
+      <p>Todo lo de 5.6 vale dentro de una base. Cuando una operación de negocio toca dos bases (cobrar en la base de pagos y descontar stock en la de inventario, cada una de un servicio distinto), ninguna transacción local cubre las dos. Si el cobro se confirma y el descuento falla, el cliente pagó por algo que no se le va a enviar. Hay dos familias de soluciones.</p>
+
+      <h3 id="dos-fases">Two-phase commit</h3>
+
+      <p>El <dfn data-term="two-phase-commit">two-phase commit</dfn> (2PC) da atomicidad real entre bases con un coordinador. En la fase 1 pregunta a cada participante si puede confirmar; cada uno deja su transacción preparada en disco, con sus locks, y vota. En la fase 2, si todos votaron sí, el coordinador ordena confirmar; si uno dijo no, ordena deshacer. Mira los tres escenarios, sobre todo el tercero:</p>
+
+      <div data-sim="twopc"></div>
+
+      <ul>
+        <li><b>Es bloqueante:</b> si el coordinador se cae entre las dos fases, los participantes preparados retienen sus locks hasta que vuelva. Ninguno puede decidir solo.</li>
+        <li><b>Es lento:</b> dos idas y vueltas y varias escrituras a disco por transacción, con locks tomados todo ese tiempo.</li>
+        <li><b>Dónde sí se usa:</b> dentro de bases distribuidas que controlan coordinador y participantes, como Spanner o CockroachDB, que además replican al coordinador con consenso para que su caída no bloquee <span class="badge badge--doc">Documentado</span>. El estándar XA lo ofrece entre bases y colas de distintos fabricantes, pero entre microservicios casi siempre se evita.</li>
+      </ul>
+
+      <h3 id="sagas">Sagas: transacciones locales con compensaciones</h3>
+
+      <p>Una <dfn data-term="saga">saga</dfn> renuncia a la atomicidad inmediata. Divide la operación en pasos, cada uno una transacción local en su propia base, y define para cada paso una <dfn data-term="compensacion">compensación</dfn>: otra transacción que revierte su efecto en términos de negocio (reembolsar un cobro, liberar una reserva). Si un paso falla, se ejecutan las compensaciones de los pasos anteriores, en orden inverso. Hay dos formas de encadenar los pasos:</p>
+      <ul>
+        <li><b><dfn data-term="coreografia">Coreografía</dfn>:</b> cada servicio publica un evento al terminar su paso y los demás reaccionan. Nadie dirige.</li>
+        <li><b><dfn data-term="orquestacion">Orquestación</dfn>:</b> un orquestador conoce los pasos, llama a cada servicio, guarda en qué paso va cada saga y decide qué sigue, incluidas las compensaciones.</li>
+      </ul>
+
+      <div data-sim="saga"></div>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>2PC</th><th>Saga coreografiada</th><th>Saga orquestada</th></tr></thead>
+          <tbody>
+            <tr><td><b>Atomicidad</b></td><td>Real: todo o nada</td><td>Eventual, con compensaciones</td><td>Eventual, con compensaciones</td></tr>
+            <tr><td><b>Aislamiento</b></td><td>Sí, con locks</td><td>No: otros ven los pasos intermedios</td><td>No</td></tr>
+            <tr><td><b>Si algo se cae</b></td><td>Los participantes quedan bloqueados</td><td>Cada servicio sigue cuando vuelve; los eventos esperan en el broker</td><td>El orquestador retoma desde su estado guardado</td></tr>
+            <tr><td><b>Dónde se ve el flujo</b></td><td>En el coordinador</td><td>En ningún lado: hay que reconstruirlo con trazas</td><td>En el orquestador</td></tr>
+            <tr><td><b>Úsalo para</b></td><td>Dentro de una base distribuida</td><td>Sagas cortas, con pocos caminos de error</td><td>Sagas largas o críticas, como los pagos (M27)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Cuatro reglas para que una saga funcione:</p>
+      <ol class="steps">
+        <li><span class="step-title">Publica con una outbox</span>La transacción local y el evento que la anuncia tienen que ser atómicos: el evento se escribe en una tabla outbox en la misma transacción y un relay lo publica (M07). Sin eso, un paso puede confirmarse sin que nadie se entere.</li>
+        <li><span class="step-title">Todo idempotente</span>Los eventos llegan dos veces y los reintentos repiten llamadas. Cada paso y cada compensación llevan una clave de idempotencia.</li>
+        <li><span class="step-title">Lo que puede fallar, primero</span>Ordena los pasos para que los que suelen fallar (reservar stock) vayan antes que los difíciles de revertir (despachar). Desde el paso que no tiene vuelta atrás, la saga solo puede seguir adelante, reintentando.</li>
+        <li><span class="step-title">Estados visibles a propósito</span>Como no hay aislamiento, el pedido existe como <code>PENDIENTE</code> mientras la saga corre, y el resto del sistema lo trata como tal: no se envía, no se factura. Es un "lock semántico".</li>
+      </ol>
+
+      <h2 id="escalar"><span class="sec-num">5.13</span>Las fases de escalamiento</h2>
+
+      <p>Todo lo anterior se junta en una pregunta práctica: ¿qué haces cuando la base empieza a no dar abasto? La respuesta es una escalera. Cada escalón resuelve más, pero agrega complejidad que vas a operar para siempre, así que se sube <b>un escalón a la vez y solo cuando el anterior ya no alcanza</b>, medido con datos y no por si acaso.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 400" role="img" aria-labelledby="f512t f512d">
+<title id="f512t">Las fases de escalamiento de una base de datos</title>
+<desc id="f512d">Siete escalones de izquierda a derecha, cada uno más alto (más complejo) que el anterior: índices y consultas, pool de conexiones, máquina más grande, vistas materializadas y caché, réplicas de lectura, particionar tablas y separar por dominio, y sharding. Los cuatro primeros siguen siendo una sola base; el quinto agrega copias; los dos últimos reparten los datos en varias bases.</desc>
+<defs><marker id="f512a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="40" y="242" width="96" height="70" rx="4"/>
+<text class="dg-tiny" x="88" y="262" text-anchor="middle">Fase 0</text>
+<text class="dg-tiny dg-in" x="88" y="282" text-anchor="middle">Índices y</text>
+<text class="dg-tiny dg-in" x="88" y="298" text-anchor="middle">consultas</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="144" y="206" width="96" height="106" rx="4"/>
+<text class="dg-tiny" x="192" y="226" text-anchor="middle">Fase 1</text>
+<text class="dg-tiny dg-in" x="192" y="246" text-anchor="middle">Pool de</text>
+<text class="dg-tiny dg-in" x="192" y="262" text-anchor="middle">conexiones</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="248" y="170" width="96" height="142" rx="4"/>
+<text class="dg-tiny" x="296" y="190" text-anchor="middle">Fase 2</text>
+<text class="dg-tiny dg-in" x="296" y="210" text-anchor="middle">Máquina</text>
+<text class="dg-tiny dg-in" x="296" y="226" text-anchor="middle">más grande</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="352" y="134" width="96" height="178" rx="4"/>
+<text class="dg-tiny" x="400" y="154" text-anchor="middle">Fase 3</text>
+<text class="dg-tiny dg-in" x="400" y="174" text-anchor="middle">Vistas</text>
+<text class="dg-tiny dg-in" x="400" y="190" text-anchor="middle">y caché</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="456" y="98" width="96" height="214" rx="4"/>
+<text class="dg-tiny" x="504" y="118" text-anchor="middle">Fase 4</text>
+<text class="dg-tiny dg-in" x="504" y="138" text-anchor="middle">Réplicas</text>
+<text class="dg-tiny dg-in" x="504" y="154" text-anchor="middle">de lectura</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="62" width="96" height="250" rx="4"/>
+<text class="dg-tiny" x="608" y="82" text-anchor="middle">Fase 5</text>
+<text class="dg-tiny dg-in" x="608" y="102" text-anchor="middle">Particionar</text>
+<text class="dg-tiny dg-in" x="608" y="118" text-anchor="middle">y separar</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="664" y="26" width="96" height="286" rx="4"/>
+<text class="dg-tiny" x="712" y="46" text-anchor="middle">Fase 6</text>
+<text class="dg-tiny dg-in" x="712" y="66" text-anchor="middle">Sharding</text>
+<path class="dg-edge" d="M22 312 L22 40" marker-end="url(#f512a)"/>
+<text class="dg-small" x="30" y="32">complejidad y costo de operar</text>
+<path class="dg-edge" d="M40 312 H770"/>
+<path class="dg-edge" d="M40 326 V334 H448 V326"/>
+<text class="dg-group" x="244.0" y="352" text-anchor="middle">una sola base de datos</text>
+<path class="dg-edge" d="M456 326 V334 H552 V326"/>
+<text class="dg-group" x="504.0" y="352" text-anchor="middle">base + copias</text>
+<path class="dg-edge" d="M560 326 V334 H760 V326"/>
+<text class="dg-group" x="660.0" y="352" text-anchor="middle">varias bases</text>
+<text class="dg-small" x="40" y="384">Cada fase se agrega cuando la anterior ya no alcanza, medido, no por si acaso. Muchas empresas nunca pasan de la fase 4.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.12.</b> La escalera de escalamiento: cuatro escalones con una sola base, uno con copias y dos que reparten los datos. Se sube de a uno y solo cuando hace falta.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Fase</th><th>Qué haces</th><th>Resuelve</th><th>Lo nuevo que operas</th></tr></thead>
+          <tbody>
+            <tr><td><b>0. Índices y consultas</b></td><td>Activa <code>pg_stat_statements</code>, ordena por tiempo total, mira los <code>EXPLAIN</code> de las diez peores y crea los índices que faltan; arregla los N+1 (5.3 y 5.4)</td><td>La mayoría de los problemas de rendimiento. Un índice bien puesto convierte 1.25 millones de páginas en 4</td><td>Nada</td></tr>
+            <tr><td><b>1. Pool de conexiones</b></td><td>Un pool por instancia con el tamaño de la cuenta de 5.7 y, si hay muchas instancias, PgBouncer</td><td>Conexiones agotadas, memoria de la base consumida por procesos ociosos</td><td>Un pooler, y sus límites en modo transacción</td></tr>
+            <tr><td><b>2. Una máquina más grande</b></td><td>Más núcleos, más memoria (que quepa el conjunto de datos activo) y discos más rápidos</td><td>CPU y E/S. Hoy un solo servidor llega a cientos de núcleos y varios terabytes de memoria</td><td>Una factura más alta. El costo no crece en línea recta con el tamaño</td></tr>
+            <tr><td><b>3. Vistas y caché</b></td><td>Vistas materializadas y tablas de resumen para las lecturas pesadas, y una caché delante de lo que más se lee (5.8 y M04). Todavía es <b>una sola base</b>: tablas normalizadas para escribir, estructuras desnormalizadas para leer</td><td>Lecturas caras y repetidas</td><td>Datos atrasados que hay que refrescar, e invalidación de la caché</td></tr>
+            <tr><td><b>4. Primario y réplicas</b></td><td>Réplicas de lectura para los reportes, las búsquedas y las pantallas que toleran segundos de atraso, y una réplica síncrona para el failover (5.9)</td><td>Lecturas que una máquina no alcanza a servir; caídas del primario</td><td>Consistencia eventual: read-your-writes (5.10), monitorear el retraso y elegir en el código a dónde va cada lectura</td></tr>
+            <tr><td><b>5. Particionar y separar</b></td><td>Particionado declarativo de las tablas enormes, dentro de la misma base; mover un dominio entero (pagos, notificaciones) a su propia base, que es la partición vertical</td><td>Tablas de miles de millones de filas, vacuum que no termina, un dominio que asfixia a los demás</td><td>Joins entre dominios que ahora cruzan bases y se resuelven en la aplicación</td></tr>
+            <tr><td><b>6. Sharding</b></td><td>Repartir las filas de una misma tabla entre varias bases por una clave (5.14)</td><td>Escrituras o volumen que no caben en el primario más grande que existe</td><td>Joins y transacciones entre shards, ids globales, rebalanceo, migraciones multiplicadas por cada shard</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El <dfn data-term="particionado-tabla">particionado declarativo</dfn> de la fase 5 suele confundirse con el sharding. Es otra cosa: una tabla lógica, como <code>eventos</code>, se guarda en varias tablas físicas dentro de <b>la misma base</b>, por ejemplo una por mes. Las consultas con <code>WHERE created_at &gt;= …</code> leen solo las particiones que corresponden (partition pruning), y borrar un mes viejo es un <code>DROP</code> de su partición, instantáneo, en lugar de un <code>DELETE</code> de millones de filas que deja trabajo para el vacuum. No reparte la carga entre máquinas, pero suele ser la última mejora antes de necesitarlo.</p>
+
+<pre data-lang="sql"><code>CREATE TABLE eventos (
+  id bigint NOT NULL, tenant_id bigint NOT NULL, created_at timestamptz NOT NULL, datos jsonb,
+  PRIMARY KEY (id, created_at)          -- la clave de partición tiene que estar en la PK
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE eventos_2026_10 PARTITION OF eventos FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+DROP TABLE eventos_2025_10;             -- borrar un mes entero: instantáneo</code></pre>
+
+      <h3 id="escalar-casos">Hasta dónde llega una base</h3>
+
+      <ul>
+        <li><b>OpenAI</b> sirve ChatGPT y su API sobre <b>un solo primario</b> de Azure Database for PostgreSQL Flexible Server, con casi 50 réplicas de lectura en varias regiones y PgBouncer delante. No hace sharding de PostgreSQL: las cargas nuevas con muchas escrituras van a otros sistemas, como Azure Cosmos DB, y el trabajo se concentra en reducir las escrituras del primario <span class="badge badge--doc">Documentado</span>. Es la fase 4 llevada muy lejos.</li>
+        <li><b>Figma</b> primero separó grupos de tablas en bases distintas (partición vertical, fase 5) y recién cuando las tablas más grandes no cabían en ninguna máquina hizo sharding horizontal, con una capa propia que enruta las consultas <span class="badge badge--doc">Documentado</span>.</li>
+        <li><b>Notion</b> hizo sharding de su PostgreSQL por espacio de trabajo en 2021: 480 shards lógicos repartidos en 32 bases físicas. En 2023 los redistribuyó en 96 máquinas moviendo shards lógicos enteros, sin cambiar la cantidad de shards <span class="badge badge--doc">Documentado</span>. Es el mismo esquema de Instagram que se explica en 5.14.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Subir un escalón antes de tiempo es caro de las dos formas: pagas la complejidad desde el primer día y además eliges la clave de shard sin conocer todavía tus patrones de acceso reales. Quedarte demasiado tiempo también lo es: el sharding se hace mejor con margen que con la base al 95&#8239;% de CPU. La señal para subir es una tendencia medida (la CPU del primario, el tamaño del conjunto de datos activo frente a la memoria, el retraso de las réplicas) que llega al límite en meses, no en años.</p>
+      </aside>
+
+      <h2 id="sharding"><span class="sec-num">5.14</span>Sharding</h2>
+
+      <p>Cuando ni la máquina más grande ni las réplicas alcanzan, normalmente porque las <em>escrituras</em> no caben en un primario, se reparten las filas entre varias bases con <dfn data-term="sharding">sharding</dfn>. Cada shard es una base completa, con sus réplicas, que tiene una parte de las filas. Todo depende de la <dfn data-term="partition-key">partition key</dfn> (o clave de shard), que decide en qué shard vive cada fila:</p>
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Estrategia</th><th>Cómo</th><th>Ganas</th><th>Pagas</th></tr></thead>
@@ -221,42 +1455,229 @@ ORDER BY created_at DESC LIMIT 50;
         </table>
       </div>
 
-      <p>La clave correcta hace que las consultas frecuentes toquen un solo shard. En un chat, <code>conversation_id</code>: todo el historial de una conversación vive junto (M00). En un SaaS, <code>tenant_id</code>: cada cliente vive en un shard, con un plan para los clientes gigantes. Las consultas que cruzan shards (un índice secundario global, un reporte de todo) se resuelven aparte: consultando todos los shards en paralelo (scatter-gather) o manteniendo una vista derivada.</p>
+      <p>La clave correcta hace que las consultas frecuentes toquen un solo shard. En un chat, <code>conversation_id</code>: todo el historial de una conversación vive junto (M00). En un SaaS, <code>tenant_id</code>: cada cliente vive en un shard, con un plan para los clientes gigantes. Una buena clave cumple tres cosas: aparece en casi todas las consultas, reparte las escrituras de forma pareja y agrupa lo que se lee y se escribe junto.</p>
+
+      <h3 id="shard-problemas">Lo que se rompe al hacer sharding</h3>
+
+      <p>Una base sola te daba gratis cosas que ahora se pierden. La más visible es el join:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f514t f514d">
+<title id="f514t">Join co-localizado frente a join entre shards</title>
+<desc id="f514d">A la izquierda, usuarios y pedidos se reparten por user_id: el join de un usuario con sus pedidos se resuelve dentro de un solo shard. A la derecha, los productos se reparten por product_id: el join de un pedido con sus productos tiene que pedir filas a otros shards.</desc>
+<defs><marker id="f514a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20">Co-localizado: misma clave de shard</text>
+<text class="dg-group" x="400" y="20">Entre shards: claves distintas</text>
+<path class="dg-frame" d="M390 8 V242"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="36" width="176" height="116" rx="6"/>
+<text class="dg-tiny dg-in" x="22" y="56">shard 1</text>
+<rect class="dg-box" x="22" y="66" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="98" y="85" text-anchor="middle">usuarios 0–49</text>
+<rect class="dg-box" x="22" y="106" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="98" y="125" text-anchor="middle">sus pedidos</text>
+<path class="dg-edge" d="M98 96 V106"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="196" y="36" width="176" height="116" rx="6"/>
+<text class="dg-tiny dg-in" x="208" y="56">shard 2</text>
+<rect class="dg-box" x="208" y="66" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="284" y="85" text-anchor="middle">usuarios 50–99</text>
+<rect class="dg-box" x="208" y="106" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="284" y="125" text-anchor="middle">sus pedidos</text>
+<path class="dg-edge" d="M284 96 V106"/>
+<text class="dg-small" x="10" y="178">El join de un usuario con sus pedidos no sale</text>
+<text class="dg-small" x="10" y="196">del shard: es un join normal de SQL.</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="400" y="36" width="176" height="116" rx="6"/>
+<text class="dg-tiny dg-in" x="412" y="56">shard 1</text>
+<rect class="dg-box" x="412" y="66" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="488" y="85" text-anchor="middle">pedidos</text>
+<rect class="dg-box" x="412" y="106" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="488" y="125" text-anchor="middle">productos A–M</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="586" y="36" width="176" height="116" rx="6"/>
+<text class="dg-tiny dg-in" x="598" y="56">shard 2</text>
+<rect class="dg-box" x="598" y="66" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="674" y="85" text-anchor="middle">pedidos</text>
+<rect class="dg-box" x="598" y="106" width="152" height="30" rx="4"/>
+<text class="dg-tiny" x="674" y="125" text-anchor="middle">productos N–Z</text>
+<path class="dg-feedback" d="M552 81 C 580 81, 580 121, 600 121" marker-end="url(#f514a)"/>
+<path class="dg-feedback" d="M640 81 C 600 60, 560 130, 552 121" marker-end="url(#f514a)"/>
+<text class="dg-small" x="400" y="178">Cada pedido busca sus productos en otro shard:</text>
+<text class="dg-small" x="400" y="196">viajes por la red, sin transacción común y sin</text>
+<text class="dg-small" x="400" y="214">un plan que vea todo. Se evita eligiendo la clave.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.13.</b> Si las tablas que se juntan comparten la clave de shard, el join no sale del shard. Si no, cada fila busca a su pareja por la red.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>Joins distribuidos.</b> Un <dfn data-term="join-distribuido">join distribuido</dfn> junta filas que viven en shards distintos: la consulta viaja por la red, ningún planner ve todo y no hay una transacción común. Se evitan de tres formas: <b>co-ubicar</b>, dando la misma clave de shard a las tablas que se juntan (usuarios y sus pedidos, por <code>user_id</code>), como hace Citus con las tablas "co-located"; <b>copiar a todos los shards</b> las tablas chicas que se leen mucho, como países o planes (las "reference tables" de Citus); y <b>desnormalizar</b>, guardando en el pedido lo que se necesita del producto. Lo que queda se resuelve en la aplicación o en un sistema analítico <span class="badge badge--doc">Documentado</span>.</li>
+        <li><b>Scatter-gather.</b> Una consulta sin la clave de shard, como "buscar el usuario por email", tiene que preguntar a todos los shards y juntar las respuestas. Con 64 shards, la consulta tarda lo que tarda el más lento de los 64: la latencia de cola de M00. Para las búsquedas frecuentes se mantiene un índice global, como una tabla <code>email → user_id</code> que vive en un solo lugar.</li>
+        <li><b>Transacciones entre shards.</b> Una transferencia entre dos usuarios de shards distintos ya no es un <code>BEGIN … COMMIT</code>: es un 2PC o una saga (5.12).</li>
+        <li><b>Restricciones globales.</b> Un <code>UNIQUE (email)</code> solo vale dentro de cada shard. La unicidad global necesita la tabla de índice global, con su propia transacción.</li>
+        <li><b>Ids.</b> Una secuencia por shard repite valores entre shards. Hace falta un id único global, y conviene que diga en qué shard vive la fila (el caso de Instagram, más abajo).</li>
+        <li><b>Operación.</b> Cada migración de esquema se corre N veces, cada backup son N backups y cada shard tiene su propio failover. Herramientas como Vitess (MySQL) o Citus (PostgreSQL) automatizan una parte <span class="badge badge--doc">Documentado</span>.</li>
+      </ul>
+
+      <h3 id="instagram">El esquema de Instagram: shards lógicos sobre pocos servidores</h3>
+
+      <p>En 2012, Instagram publicó cómo hizo sharding de PostgreSQL <span class="badge badge--doc">Documentado</span>. Es una de las formas más simples y más copiadas de hacerlo, y resuelve dos problemas a la vez: dónde vive cada fila y cómo crecer sin mover filas.</p>
+
+      <p><b>La idea: muchos shards lógicos, pocos físicos.</b> Desde el primer día crearon varios miles de <dfn data-term="shard-logico">shards lógicos</dfn>, muchos más que los servidores que tenían. Cada shard lógico es un <b>esquema de PostgreSQL</b> (un espacio de nombres dentro de una base, como <code>shard1341.fotos</code>) con las mismas tablas. Cientos de esquemas viven en el mismo servidor físico. Dos reglas fijas deciden todo:</p>
+      <ol class="steps">
+        <li><span class="step-title">Clave a shard lógico: nunca cambia</span><code>shard = user_id mod 2000</code> (el artículo usa 2000 shards en su ejemplo). El usuario 31341 vive en el shard 1341 para siempre, y con él todas sus fotos.</li>
+        <li><span class="step-title">Shard lógico a servidor: un mapa</span>Una tabla chica de rangos: del 0 al 499 en <code>pg-01</code>, del 500 al 999 en <code>pg-02</code>, etc. En Instagram, ese mapa <b>vivía en el código de la aplicación</b>, en su configuración.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f513t f513d">
+<title id="f513t">Shards lógicos sobre pocos servidores físicos</title>
+<desc id="f513d">A la izquierda, los servidores de aplicación con un mapa en el código: rangos de shards lógicos hacia servidores físicos. Al centro, cuatro servidores PostgreSQL, cada uno con cientos de esquemas, uno por shard lógico. A la derecha, un servidor nuevo recibe una mitad de los esquemas de uno de ellos: solo cambia el mapa, ninguna fila cambia de shard.</desc>
+<defs><marker id="f513a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="60" width="190" height="196" rx="6"/>
+<text class="dg-label" x="103" y="84" text-anchor="middle">Aplicación</text>
+<text class="dg-tiny dg-in" x="20" y="110">shard = user_id mod 2000</text>
+<text class="dg-tiny dg-in" x="20" y="129"></text>
+<text class="dg-tiny dg-in" x="20" y="148">mapa en el código:</text>
+<text class="dg-tiny dg-in" x="20" y="167">0–499 → pg-01</text>
+<text class="dg-tiny dg-in" x="20" y="186">500–999 → pg-02</text>
+<text class="dg-tiny dg-in" x="20" y="205">1000–1499 → pg-03</text>
+<text class="dg-tiny dg-in" x="20" y="224">1500–1999 → pg-04</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="288" y="14" width="250" height="66" rx="6"/>
+<text class="dg-tiny dg-in" x="300" y="34">pg-01 (servidor físico)</text>
+<rect class="dg-box" x="300" y="44" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="326" y="61" text-anchor="middle">shard0</text>
+<rect class="dg-box" x="358" y="44" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="384" y="61" text-anchor="middle">shard1</text>
+<rect class="dg-box" x="416" y="44" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="442" y="61" text-anchor="middle">…</text>
+<rect class="dg-box" x="474" y="44" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="500" y="61" text-anchor="middle">shard499</text>
+<path class="dg-edge" d="M198 158 L286 47" marker-end="url(#f513a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="288" y="90" width="250" height="66" rx="6"/>
+<text class="dg-tiny dg-in" x="300" y="110">pg-02 (servidor físico)</text>
+<rect class="dg-box" x="300" y="120" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="326" y="137" text-anchor="middle">shard500</text>
+<rect class="dg-box" x="358" y="120" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="384" y="137" text-anchor="middle">shard501</text>
+<rect class="dg-box" x="416" y="120" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="442" y="137" text-anchor="middle">…</text>
+<rect class="dg-box" x="474" y="120" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="500" y="137" text-anchor="middle">shard999</text>
+<path class="dg-edge" d="M198 158 L286 123" marker-end="url(#f513a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="288" y="166" width="250" height="66" rx="6"/>
+<text class="dg-tiny dg-in" x="300" y="186">pg-03 (servidor físico)</text>
+<rect class="dg-box" x="300" y="196" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="326" y="213" text-anchor="middle">shard1000</text>
+<rect class="dg-box" x="358" y="196" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="384" y="213" text-anchor="middle">shard1001</text>
+<rect class="dg-box" x="416" y="196" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="442" y="213" text-anchor="middle">…</text>
+<rect class="dg-box" x="474" y="196" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="500" y="213" text-anchor="middle">shard1499</text>
+<path class="dg-edge" d="M198 158 L286 199" marker-end="url(#f513a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="288" y="242" width="250" height="66" rx="6"/>
+<text class="dg-tiny dg-in" x="300" y="262">pg-04 (servidor físico)</text>
+<rect class="dg-box" x="300" y="272" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="326" y="289" text-anchor="middle">shard1500</text>
+<rect class="dg-box" x="358" y="272" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="384" y="289" text-anchor="middle">shard1501</text>
+<rect class="dg-box" x="416" y="272" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="442" y="289" text-anchor="middle">…</text>
+<rect class="dg-box" x="474" y="272" width="52" height="26" rx="3"/>
+<text class="dg-tiny" x="500" y="289" text-anchor="middle">shard1999</text>
+<path class="dg-edge" d="M198 158 L286 275" marker-end="url(#f513a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="620" y="166" width="142" height="66" rx="6"/>
+<text class="dg-tiny dg-in" x="632" y="186">pg-05 (nuevo)</text>
+<text class="dg-tiny" x="632" y="206">shard1250 … 1499</text>
+<path class="dg-feedback" d="M538 199 L618 199" marker-end="url(#f513a)"/>
+<text class="dg-tiny" x="620" y="254">Se mueven esquemas enteros</text>
+<text class="dg-tiny" x="620" y="270">(réplica y corte). En el mapa,</text>
+<text class="dg-tiny" x="620" y="286">1250–1499 → pg-05.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 5.14.</b> Instagram: 2 000 shards lógicos (esquemas) sobre pocos servidores, con el mapa en el código. Para crecer se mueven esquemas enteros; ninguna fila cambia de shard.</figcaption>
+      </figure>
+
+      <p><b>Crecer sin mover filas.</b> Cuando <code>pg-03</code> se llena, se agrega <code>pg-05</code> y se mueve la mitad de sus esquemas. Ninguna fila cambia de shard lógico: lo que se mueve son esquemas enteros, y lo único que cambia es el mapa. En la práctica se hace con replicación: <code>pg-05</code> empieza como réplica de <code>pg-03</code>, se espera a que esté al día, se detienen un momento las escrituras de esos shards, se actualiza el mapa y se borran los esquemas sobrantes de cada lado. Compara con <code>hash mod N</code> sobre servidores: pasar de 4 a 5 servidores cambia el destino de casi todas las filas (lo verás en "Rebalancear sin mover todo").</p>
+
+      <p><b>Ids que dicen dónde vive la fila.</b> Cada shard lógico genera sus propios ids con una función de PL/pgSQL, sin un servicio central. El id de 64 bits tiene tres partes: 41 bits con los milisegundos desde una época propia (alcanzan para 69 años), 13 bits con el número de shard lógico (hasta 8&#8239;192) y 10 bits con una secuencia de PostgreSQL módulo 1&#8239;024 (hasta 1&#8239;024 ids por shard por milisegundo). Como el tiempo va adelante, los ids se ordenan por fecha de creación; y como el shard va adentro, cualquier servicio sabe dónde buscar una foto con solo mirar su id. Prueba con otros valores:</p>
+
+      <div data-calc="igid"></div>
+
+<pre data-lang="sql"><code>-- Adaptada del artículo de Instagram: vive en cada esquema shardN
+CREATE OR REPLACE FUNCTION shard1341.next_id(OUT result bigint) AS $$
+DECLARE
+  our_epoch bigint := 1293840000000;   -- 1 de enero de 2011, en milisegundos
+  seq_id    bigint;
+  now_ms    bigint;
+  shard_id  int := 1341;
+BEGIN
+  SELECT nextval('shard1341.table_id_seq') % 1024 INTO seq_id;
+  SELECT floor(extract(epoch FROM clock_timestamp()) * 1000) INTO now_ms;
+  result := (now_ms - our_epoch) &lt;&lt; 23;
+  result := result | (shard_id &lt;&lt; 10);
+  result := result | seq_id;
+END $$ LANGUAGE plpgsql;
+
+CREATE TABLE shard1341.fotos (id bigint NOT NULL DEFAULT shard1341.next_id(), user_id bigint NOT NULL, …);
+INSERT INTO shard1341.fotos (user_id, …) VALUES (31341, …) RETURNING id;   -- la aplicación recibe el id</code></pre>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">¿Mapa en el código o directorio central?</p>
+        <p>A veces se describe el esquema de Instagram como "un servidor central que sabe dónde está cada shard". No es exactamente así: su artículo dice que los shards lógicos se mapeaban a los físicos <em>en el código</em>. Pero esa es la otra variante del mismo diseño, y también existe: un <b>directorio de shards</b>, un servicio o una base pequeña y muy replicada que guarda el mapa y que todas las aplicaciones consultan (y cachean). Pinterest, por ejemplo, guardaba su configuración de shards en ZooKeeper y usaba ids de 64 bits con 16 bits de shard, 10 de tipo de objeto y 36 de id local <span class="badge badge--doc">Documentado</span>.</p>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th></th><th>Mapa en el código o la configuración</th><th>Directorio central</th></tr></thead>
+            <tbody>
+              <tr><td>Cambiar el mapa</td><td>Un deploy o recargar la configuración en todas las instancias</td><td>Se escribe en un lugar y las aplicaciones lo ven al refrescar su caché</td></tr>
+              <tr><td>Si falla</td><td>No hay pieza nueva que pueda caerse</td><td>Es una dependencia crítica: tiene que ser replicado, y las aplicaciones cachean el mapa para sobrevivir si no responde</td></tr>
+              <tr><td>Granularidad</td><td>Rangos de shards lógicos: el mapa es chico</td><td>Puede mapear cada tenant por separado y mover a uno grande a su propio servidor (sharding por directorio)</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Lo esencial no cambia entre una y otra: dos niveles (clave a shard lógico fijo, shard lógico a servidor movible), un mapa chico y crecer moviendo shards lógicos enteros. Notion (5.13) aplicó el mismo patrón con 480 shards lógicos.</p>
+      </aside>
 
       <h3 id="rebalanceo">Rebalancear sin mover todo</h3>
-      <p>El día que agregas un shard hay que mover datos. Con <code>hash(clave) mod N</code>, cambiar N cambia el destino de casi todas las claves. Dos soluciones:</p>
+      <p>El día que agregas un shard hay que mover datos. Con <code>hash(clave) mod N</code> sobre los servidores, cambiar N cambia el destino de casi todas las claves. Dos soluciones:</p>
       <ul>
-        <li><b>Muchas particiones fijas:</b> se crean, por ejemplo, 1&#8239;024 particiones desde el principio y se asignan a los nodos; agregar un nodo es mover algunas particiones enteras. Lo usan Elasticsearch, Kafka y Riak.</li>
+        <li><b>Muchas particiones fijas:</b> se crean, por ejemplo, 1&#8239;024 particiones desde el principio y se asignan a los nodos; agregar un nodo es mover algunas particiones enteras. Es el esquema de Instagram, y lo usan Elasticsearch, Kafka y Riak.</li>
         <li><b><dfn data-term="consistent-hashing">Hashing consistente</dfn></b>: nodos y claves en un anillo de hashes; cada clave pertenece al siguiente nodo en sentido horario. Con <dfn data-term="vnodes">nodos virtuales</dfn>, cada nodo ocupa muchas posiciones y la carga se empareja. Lo usan Cassandra, DynamoDB y muchas cachés distribuidas.</li>
       </ul>
 
       <div data-sim="ring"></div>
 
-      <h2 id="elegir"><span class="sec-num">5.7</span>Cómo elegir</h2>
+      <h2 id="elegir"><span class="sec-num">5.15</span>Cómo elegir</h2>
 
       <p>Tres preguntas resuelven la mayoría de los casos, en este orden:</p>
       <ol class="steps">
         <li><span class="step-title">¿Qué no puedo perder ni duplicar?</span>Dinero, pedidos, inventario: base transaccional con aislamiento fuerte y replicación síncrona. No se negocia.</li>
         <li><span class="step-title">¿Cómo se accede?</span>Por clave, por rango, por texto, por similitud, por agregación temporal. Cada patrón tiene su almacén.</li>
-        <li><span class="step-title">¿Cuánto y qué tan rápido crece?</span>Si cabe en un PostgreSQL grande con réplicas (y cabe mucho más de lo que se suele creer: terabytes y decenas de miles de transacciones por segundo), empieza por ahí.</li>
+        <li><span class="step-title">¿Cuánto y qué tan rápido crece?</span>Si cabe en un PostgreSQL grande con réplicas (y cabe mucho más de lo que se suele creer: terabytes y decenas de miles de transacciones por segundo), empieza por ahí y sube la escalera de 5.13 de a un escalón.</li>
       </ol>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>Muchas empresas grandes corren sobre bases relacionales mucho más allá de lo que parecería razonable: Figma documentó cómo escaló PostgreSQL particionando verticalmente (tablas en distintas bases) antes de hacer sharding horizontal, y Notion hizo sharding de su PostgreSQL por espacio de trabajo. <span class="badge badge--doc">Documentado</span> Cambiar de base de datos es de los proyectos más caros que existen; elegir la aburrida al principio rara vez es un error.</p>
+        <p>Cambiar de base de datos es de los proyectos más caros que existen. Los casos de 5.13 (OpenAI, Figma, Notion) tienen algo en común: empezaron con una base relacional aburrida y la estiraron mucho más allá de lo que parecía razonable antes de repartirla <span class="badge badge--doc">Documentado</span>. Elegir la base aburrida al principio rara vez es un error.</p>
       </aside>
 
-      <h2 id="fallos"><span class="sec-num">5.8</span>Fallos típicos</h2>
+      <h2 id="fallos"><span class="sec-num">5.16</span>Fallos típicos</h2>
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Falla</th><th>Mecanismo</th><th>Defensa</th></tr></thead>
           <tbody>
+            <tr><td>Consulta no sargable</td><td>Un <code>date(created_at) = …</code> o una conversión de tipos deja el índice sin usar: lectura completa de la tabla</td><td>Reescribir el predicado (5.3) y revisar <code>pg_stat_statements</code></td></tr>
+            <tr><td>Cambio de plan</td><td>Las estadísticas cambian, el planner estima mal y elige otro join: una consulta de 2 ms pasa a 20 s</td><td><code>ANALYZE</code> después de cargas grandes, estadísticas extendidas, alertas por latencia de cada consulta</td></tr>
+            <tr><td>Pool agotado</td><td>Una transacción que espera a la red retiene su conexión; las demás requests esperan el <code>connectionTimeout</code></td><td>Nada de llamadas externas dentro de la transacción, timeout de espera corto, pools separados (5.7)</td></tr>
+            <tr><td>Conexiones agotadas en la base</td><td>1&#8239;000 instancias × 20 conexiones = 20&#8239;000 procesos en PostgreSQL</td><td>Pooler (PgBouncer) en modo transacción</td></tr>
             <tr><td>Split brain</td><td>Una partición de red deja a dos nodos creyéndose líderes</td><td>Consenso para elegir líder (M06) y <dfn data-term="fencing">fencing tokens</dfn></td></tr>
-            <tr><td>Conexiones agotadas</td><td>1&#8239;000 instancias × 20 conexiones = 20&#8239;000 procesos en PostgreSQL</td><td>Pooler (PgBouncer) en modo transacción</td></tr>
+            <tr><td>Failover que pierde datos</td><td>Réplica asíncrona promovida sin tener los últimos commits</td><td>Réplica síncrona en otra zona (5.9)</td></tr>
+            <tr><td>Réplica atrasada</td><td>Una consulta larga en la réplica o un pico de escrituras: los usuarios no ven lo que acaban de guardar</td><td>Alertas sobre el retraso, read-your-writes con token LSN (5.10), sacar la réplica atrasada del balanceo</td></tr>
             <tr><td>Partición caliente</td><td>Una clave monótona o un tenant enorme</td><td>Cambiar la clave, sufijos aleatorios, directorio para tenants grandes</td></tr>
-            <tr><td>Transacción eterna</td><td>Una transacción abierta horas impide limpiar versiones viejas (vacuum) y la tabla se hincha</td><td>Timeouts de transacción y alertas sobre la más antigua</td></tr>
-            <tr><td>Migración que bloquea</td><td>Un <code>ALTER TABLE</code> que reescribe la tabla toma un lock exclusivo durante minutos</td><td>Migraciones expand/contract y herramientas en línea (M11)</td></tr>
-            <tr><td>Failover que pierde datos</td><td>Réplica asíncrona promovida sin tener los últimos commits</td><td>Réplica síncrona en otra zona</td></tr>
+            <tr><td>Transacción eterna</td><td>Una transacción abierta horas impide que el vacuum limpie versiones viejas y la tabla se hincha</td><td><code>idle_in_transaction_session_timeout</code> y alertas sobre la transacción más antigua</td></tr>
+            <tr><td>Coordinador de 2PC caído</td><td>Participantes preparados retienen sus locks hasta que vuelve</td><td>Coordinador replicado con consenso, o una saga en lugar de 2PC (5.12)</td></tr>
+            <tr><td>Compensación que falla</td><td>El reembolso de una saga falla y el pedido queda a medias</td><td>Compensaciones idempotentes que se reintentan hasta lograrlo, y una cola de casos para revisión manual</td></tr>
+            <tr><td>Migración que bloquea</td><td>Un <code>ALTER TABLE</code> que reescribe la tabla toma un lock exclusivo durante minutos</td><td>Migraciones expand/contract y herramientas en línea (M11); <code>CREATE INDEX CONCURRENTLY</code></td></tr>
           </tbody>
         </table>
       </div>
@@ -299,7 +1720,7 @@ CREATE TABLE pedidos (
   created_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (comprador_id, idempotency_key)    -- un reintento no crea otro pedido
 );</code></pre>
-          <p>El <code>UPDATE … WHERE disponible &gt;= 2</code> evita la actualización perdida sin bloqueos explícitos, y el <code>CHECK</code> es la red de seguridad. La reserva de stock y la creación del pedido van en la misma transacción; el pago, que es externo, se coordina con una saga (M27).</p>
+          <p>El <code>UPDATE … WHERE disponible &gt;= 2</code> evita la actualización perdida sin bloqueos explícitos, y el <code>CHECK</code> es la red de seguridad. La reserva de stock y la creación del pedido van en la misma transacción; el pago, que es externo, se coordina con una saga orquestada (5.12 y M27).</p>
         </details>
       </section>
 
@@ -322,5 +1743,7 @@ CREATE TABLE pedidos (
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
 <script src="../assets/js/widgets/sim-db.js"></script>
+<script src="../assets/js/widgets/sim-dbflow.js"></script>
+<script src="../assets/js/widgets/sim-dtx.js"></script>
 </body>
 </html>

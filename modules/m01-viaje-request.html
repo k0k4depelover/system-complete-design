@@ -994,7 +994,7 @@ Cache-Control: max-age=60
 
       <ul>
         <li><b>HTTP/1.1</b> (1997) envía texto, y por cada conexión va una request a la vez: hasta que no termina la respuesta, no puede salir la siguiente. Para cargar decenas de archivos en paralelo, los navegadores abren hasta 6 conexiones por sitio, y pagan 6 handshakes.</li>
-        <li><b>HTTP/2</b> (2015) envía <em>frames</em> binarios y multiplexa: muchas requests viajan a la vez por una sola conexión, cada una en su propio <b>stream</b>, con sus trozos intercalados. También comprime los headers, que se repiten casi idénticos en cada request.</li>
+        <li><b>HTTP/2</b> (2015) envía <em>frames</em> binarios y <span class="no-autolink">multiplexa</span>: muchas requests viajan a la vez por una sola conexión, cada una en su propio <b>stream</b>, con sus trozos intercalados. También comprime los headers, que se repiten casi idénticos en cada request.</li>
         <li><b>HTTP/3</b> (2022) hace lo mismo que HTTP/2, pero sobre QUIC en lugar de TCP (sección 1.8).</li>
       </ul>
 
@@ -1011,6 +1011,23 @@ Cache-Control: max-age=60
           </tbody>
         </table>
       </div>
+
+      <h3 id="http-animacion">Las tres versiones en movimiento</h3>
+
+      <p>La palabra que separa a HTTP/1.1 de las otras dos es <dfn data-term="multiplexar">multiplexar</dfn>: llevar varias conversaciones independientes por un mismo canal. Cada mensaje se corta en pedazos, cada pedazo lleva una etiqueta que dice a qué conversación pertenece, y los pedazos de todas se intercalan en el cable. Del otro lado, el receptor lee las etiquetas y vuelve a armar cada conversación por separado. Es lo mismo que hace un camión de mudanza compartido: las cajas de tres familias viajan mezcladas, pero cada una tiene el apellido escrito, y al llegar se reparten.</p>
+
+      <p>En HTTP/2, la etiqueta es el número de <b>stream</b> que va en la cabecera de cada frame: los streams 1, 3 y 5 son tres requests distintas que comparten una conexión TCP. En HTTP/3, los streams son de QUIC, que a diferencia de TCP sabe que existen y los entrega por separado. La animación muestra las tres versiones pidiendo lo mismo, tres recursos de tres paquetes cada uno, a un servidor a 30&#8239;ms:</p>
+
+      <div data-sim="httpver"></div>
+
+      <p>Qué mirar en cada carril:</p>
+      <ul>
+        <li><b>Los handshakes.</b> HTTP/1.1 y HTTP/2 pagan dos viajes de ida y vuelta antes de la primera request: uno para TCP (SYN, SYN-ACK) y otro para TLS 1.3 (ClientHello, ServerHello). QUIC mete el ClientHello de TLS 1.3 dentro de su primer paquete, así que transporte y cifrado se negocian a la vez: un solo RTT. Con la opción de reconexión, el cliente reusa la clave de una visita anterior y manda la request cifrada en el primer paquete (0-RTT). <span class="badge badge--doc">Documentado</span></li>
+        <li><b>El orden de las requests.</b> HTTP/1.1 manda <code>GET B</code> recién cuando terminó A: la conexión está ocupada. HTTP/2 y HTTP/3 mandan las tres juntas, y las respuestas vuelven intercaladas.</li>
+        <li><b>La pérdida.</b> Activa "Perder un paquete de A". En HTTP/2, B y C llegan completos pero quedan en amarillo: TCP los retiene porque entrega todo en orden y le falta A2. En HTTP/3 solo espera A. Es el head-of-line blocking de la sección siguiente.</li>
+      </ul>
+
+      <p>Los tiempos del modelo son redondos para que la animación se pueda seguir (un RTT de 60&#8239;ms y un paquete cada 8&#8239;ms), pero la cuenta de RTTs es la real: con TLS 1.3, HTTP/2 necesita 2 RTT antes de la primera request y HTTP/3, 1. Con TLS 1.2, que todavía se ve, HTTP/2 necesita 3.</p>
 
       <h3 id="hol">Head-of-line blocking</h3>
 
@@ -1442,5 +1459,6 @@ total 0.161</code></pre>
 <script src="../assets/js/core/quiz.js"></script>
 <script src="../assets/js/map/map-engine.js"></script>
 <script src="../assets/js/map/flow-sim.js"></script>
+<script src="../assets/js/widgets/sim-http.js"></script>
 </body>
 </html>

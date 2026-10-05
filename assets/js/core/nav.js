@@ -37,9 +37,9 @@
 
   SD.statusText = { soon: 'En construcción', done: 'Completado', started: 'En curso', new: 'Sin empezar' };
 
-  /* Ítems que cuentan para el progreso: módulos y checkpoints de la Fase 1 */
+  /* Ítems que cuentan para el progreso: módulos y checkpoints de la Fase 1 (las versiones a fondo son opcionales) */
   SD.countable = function () {
-    return SD.courseItems().filter(function (it) { return it.kind !== 'map' && it.part.phase !== 2; });
+    return SD.courseItems().filter(function (it) { return it.kind !== 'map' && it.kind !== 'deep' && it.part.phase !== 2; });
   };
 
   /* ---------- Ruta (sidebar) ---------- */
@@ -64,6 +64,7 @@
           h('span', { class: 'stop-title', text: it.short || it.title }),
           h('span', { class: 'visually-hidden', text: '. ' + SD.statusText[st] })
         ];
+        if (it.kind === 'deep') inner.push(h('span', { class: 'stop-tag', text: 'opcional' }));
         if (st === 'soon') {
           inner.push(h('span', { class: 'stop-tag', 'aria-hidden': 'true', text: 'pronto' }));
           li.appendChild(h('span', { class: 'stop-link' }, inner));
@@ -121,7 +122,20 @@
   /* ---------- Anterior / siguiente ---------- */
 
   function buildPager(pagerEl, currentId) {
-    var items = SD.courseItems();
+    /* Las versiones a fondo no entran en la secuencia: M06 sigue con M07, y M06.1 vuelve a M06 y sigue con M07 */
+    var all = SD.courseItems();
+    var items = all.filter(function (it) { return it.kind !== 'deep'; });
+    var me = null;
+    all.forEach(function (it) { if (it.id === currentId) me = it; });
+    if (me && me.kind === 'deep') {
+      var pos = all.indexOf(me), j = pos - 1;
+      while (j >= 0 && all[j].kind === 'deep') j--;
+      var base = all[j], k = pos + 1;
+      while (k < all.length && all[k].kind === 'deep') k++;
+      var nextIt = all[k] || null;
+      items = [base, me, nextIt].filter(Boolean);
+      if (!base) items.unshift(null);
+    }
     var idx = -1;
     items.forEach(function (it, i) { if (it.id === currentId) idx = i; });
     if (idx < 0) return;
