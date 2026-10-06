@@ -9,9 +9,9 @@ SD.defineExercise('a02-api', {
       prompt: 'Un cliente va por la página 10 del catálogo ordenado por título. Mientras tanto, un editor carga 50 libros que empiezan con "A". ¿Qué ve el cliente en la página 11?',
       options: [
         'Con OFFSET y con el cursor, lo mismo: la página 11 de siempre.',
-        'Con OFFSET, 20 libros que ya vio en la página 10, porque todo se corrió 50 lugares; con el cursor, la continuación exacta, sin los 50 nuevos, que quedaron antes de su posición.',
+        'Con OFFSET, 20 libros repetidos; con el cursor, la continuación exacta.',
         'Con OFFSET, la continuación exacta; con el cursor, los 50 libros nuevos.',
-        'Con el cursor, un 400: el cursor ya no es válido después de un insert.'
+        'Con el cursor, un 400: el cursor ya no es válido después de un insert en la tabla.'
       ],
       answer: 1,
       explain: 'OFFSET cuenta posiciones, y 50 filas nuevas antes de la posición corren todo 50 lugares: el cliente vuelve a ver 20 que ya tenía, como en la página anterior. El cursor recuerda la última fila, no la posición, y sigue justo después de ella. Los libros nuevos van antes, así que este recorrido no los ve; el siguiente, sí.'
@@ -20,10 +20,10 @@ SD.defineExercise('a02-api', {
       id: 'vary', type: 'single',
       prompt: 'Un socio pide un libro sin cabecera, recibe la 1.0 y la CDN la guarda. Un segundo después, la app pide el mismo libro con <code>API-Version: 1.1</code>. ¿Qué recibe la app, y qué falta?',
       options: [
-        'La 1.1: la CDN ve que la cabecera es distinta.',
-        'La 1.0 cacheada, con author como texto. Falta Vary: API-Version en la respuesta, para que la CDN guarde una copia por versión.',
-        'Un 304, porque el ETag es el mismo.',
-        'Un 400: la CDN no deja pasar cabeceras propias.'
+        'La 1.1: la CDN ve que la cabecera es distinta y va al origen.',
+        'La 1.0 cacheada: falta Vary: API-Version en la respuesta.',
+        'Un 304, porque el ETag de las dos versiones es el mismo.',
+        'La 1.0 cacheada: falta un ETag distinto por versión en la respuesta.'
       ],
       answer: 1,
       explain: 'Una caché compartida arma la clave con la URL y solo agrega las cabeceras que nombra Vary. Las dos versiones tienen la misma URL, así que, sin Vary: API-Version, comparten la entrada. Con la versión en la URL, como /v1/books, el problema no existe: es una de las razones por las que ese esquema es tan común.'
@@ -34,8 +34,8 @@ SD.defineExercise('a02-api', {
       options: [
         'Repite el PUT con If-Match: "4" y el mismo body.',
         'Repite el PUT con If-Match: *, que acepta cualquier versión.',
-        'Vuelve a leer el libro, le muestra al editor qué cambió desde la versión que tenía, y deja que decida qué guardar con If-Match: "4".',
-        'Borra el libro y lo vuelve a crear.'
+        'Vuelve a leer el libro y deja que el editor decida qué guardar.',
+        'Espera unos segundos y repite el PUT con el If-Match de antes.'
       ],
       answer: 2,
       explain: 'Repetir el PUT con la versión nueva, o con If-Match: *, pisa el cambio de la oficina 1 sin que nadie lo vea: es exactamente lo que If-Match vino a evitar. El 412 no dice que algo falló, dice que hay que mirar de nuevo. Lo que se mezcla, y cómo, lo decide una persona o una regla del dominio.'
@@ -46,8 +46,8 @@ SD.defineExercise('a02-api', {
       options: [
         'Nada: el Sunset ya avisó, y el día llegado la 1.0 deja de responder.',
         'Cambiar la versión por defecto a 1.1 hoy, sin avisar.',
-        'Medir quién manda ese 8&#8239;% por clave de API y avisarle, cortar la 1.0 en ventanas cortas y anunciadas para que los olvidados se enteren, y mover la fecha si un socio grande no llega.',
-        'Mantener la 1.0 para siempre.'
+        'Medir quién manda ese 8&#8239;% por clave de API y avisarle.',
+        'Mantener la 1.0 para siempre detrás de un flag, sin costo extra.'
       ],
       answer: 2,
       explain: 'Las cabeceras Deprecation y Sunset solo sirven si alguien las lee, y casi nadie lo hace. Los cortes cortos y anunciados, conocidos como brownouts, convierten el aviso en un error que se ve en los logs del cliente sin dejarlo caído un día entero. Para eso necesitas saber quién llama, y por eso cada request debería llevar una identidad.'

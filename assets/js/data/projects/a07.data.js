@@ -9,9 +9,9 @@ SD.defineExercise('a07-cuentas', {
       prompt: 'Alguien propone sumar la base a la readiness, con <code>management.endpoint.health.group.readiness.include=readinessState,db</code>, para que un pod sin base deje de recibir tráfico. ¿Qué pasa cuando se cae el primario?',
       options: [
         'Nada grave: los pods salen del Service unos segundos y vuelven solos cuando la base responde.',
-        'Todos los pods fallan la readiness a la vez, porque dependen del mismo primario: el Gateway se queda sin pods y responde 503 a todo, y el corte dura lo mismo, porque la base sigue caída.',
-        'Kubernetes reinicia los pods hasta que la base vuelva.',
-        'El HPA suma pods para compensar los que salieron.'
+        'Todos los pods fallan la readiness a la vez y el Gateway responde 503 a todo.',
+        'Kubernetes reinicia los pods en bucle hasta que la base vuelva.',
+        'El HPA suma pods para compensar los que salieron del Service.'
       ],
       answer: 1,
       explain: 'La readiness dice si este pod puede atender, no si todo el sistema está sano. Una dependencia que comparten todos los pods convierte una falla de la base en una falla de todos los pods a la vez: el Gateway no tiene a quién mandar nada y responde 503. Sin la base en la readiness, cada pod sigue recibiendo requests y responde su propio error a los 5&#8239;s de Hikari. Reiniciar es cosa de la liveness, no de la readiness, y el HPA mira la CPU, no la readiness.'
@@ -21,7 +21,7 @@ SD.defineExercise('a07-cuentas', {
       prompt: 'Para que los rollouts tarden menos, alguien quita el <code>preStop</code> y deja todo lo demás: readiness, apagado ordenado y <code>maxUnavailable: 0</code>. ¿Qué esperas ver en la próxima medición con carga?',
       options: [
         'Nada: el apagado ordenado ya espera a que terminen los requests en curso.',
-        'Algunos 502 por cada pod que se baja: el SIGTERM llega mientras Traefik todavía le manda requests, y Tomcat ya no los acepta.',
+        'Algunos 502 por cada pod que se baja.',
         'Que el rollout no termine, porque los pods viejos no se pueden bajar.',
         'Errores solo en los pods nuevos, porque reciben tráfico antes de estar listos.'
       ],
@@ -32,9 +32,9 @@ SD.defineExercise('a07-cuentas', {
       id: 'maximo', type: 'single',
       prompt: 'En la rampa, el HPA llegó a su máximo de 8 pods con el uso entre 148 y 182&#8239;% de lo pedido, y la fórmula pedía entre 20 y 25. ¿Qué haces antes de subir <code>maxReplicas</code>?',
       options: [
-        'Nada: lo subo a 25, que es lo que dio la fórmula.',
-        'Bajo el costo de bcrypt a 4, como en las pruebas.',
-        'Reviso de dónde sale la CPU: cuántos núcleos gasta la carga, y si los nodos los tienen libres. En un clúster real, sumo nodos con un autoscaler de nodos.',
+        'Nada: lo subo a 25, que es lo que dio la fórmula del HPA.',
+        'Bajo el costo de bcrypt a 4, como en las pruebas, para que cada login gaste menos.',
+        'Reviso cuántos núcleos gasta la carga y si los nodos los tienen libres.',
         'Subo el objetivo del HPA de 60 a 90&#8239;% para que pida menos pods.'
       ],
       answer: 2,
@@ -45,7 +45,7 @@ SD.defineExercise('a07-cuentas', {
       prompt: 'Con los valores por defecto, cuando se muere el primario, las escrituras siguen fallando unos 14&#8239;s después de la promoción. ¿Qué cambias?',
       options: [
         'El <code>failoverDelay</code> del operador, para que promueva antes.',
-        'Los plazos de los que esperan al primario muerto: el <code>server_connect_timeout</code> y el <code>server_login_retry</code> de PgBouncer, y el <code>connection-timeout</code> de Hikari.',
+        'Los plazos de PgBouncer y de Hikari que esperan al primario muerto.',
         'El tamaño del pool de Hikari, para tener conexiones de repuesto.',
         'Reintentos en la app para cada escritura, sin límite, hasta que la base vuelva.'
       ],

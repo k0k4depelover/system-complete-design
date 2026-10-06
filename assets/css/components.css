@@ -513,6 +513,33 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-sub); line
 .vo-ctx p { margin: 0 0 6px !important; max-width: none !important; }
 .vo-unheard { text-decoration: underline wavy var(--fail); text-underline-offset: 3px; }
 .vo-flag { color: var(--fail); font-weight: 600; }
+/* M25: agentes (sim-agent.js) */
+.ag-chart svg { min-width: 560px; display: block; }
+.ag-log { list-style: none; margin: var(--s-3) 0 0 !important; padding: 0 !important; max-height: 260px; overflow-y: auto; font-size: var(--fs-sm); }
+.ag-log li { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; margin: 0 !important; padding: 6px 0 6px 8px; border-bottom: 0.5px solid var(--separator); border-left: 3px solid var(--l-gpu); max-width: none !important; }
+.ag-log li b { font-variant-numeric: tabular-nums; color: var(--label-2); }
+.ag-log li code { overflow-wrap: anywhere; font-size: var(--fs-xs); }
+.ag-log li span { color: var(--label-3); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: var(--fs-xs); }
+.ag-log .ag-repetida { border-left-color: var(--warn); }
+.ag-log .ag-falla { border-left-color: var(--fail); }
+.ag-log .ag-final, .ag-log .ag-resumen { border-left-color: var(--ok); }
+.ag-log .ag-gap { display: block; border-left-color: transparent; color: var(--label-3); text-align: center; }
+.ag-cap { margin: 0 0 6px !important; font-size: var(--fs-xs); font-weight: 600; color: var(--label-2); }
+.ag-tools { display: grid; gap: 6px; margin-bottom: var(--s-3); }
+.ag-tool { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; text-align: left; padding: 8px 10px; border: 1px solid var(--separator); border-radius: var(--radius-m); background: var(--bg); color: var(--label); font: inherit; cursor: pointer; }
+.ag-tool small { grid-column: 1 / -1; color: var(--label-3); font-size: var(--fs-xs); }
+.ag-tool code { overflow-wrap: anywhere; }
+.ag-tool[aria-pressed="false"] { opacity: 0.45; }
+.ag-tool[aria-pressed="false"] code { text-decoration: line-through; }
+.ag-tags { font-weight: 700; font-size: var(--fs-xs); letter-spacing: 0.06em; color: var(--label-2); }
+.ag-props { display: grid; gap: 6px; }
+.ag-prop { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 0 8px; padding: 8px 10px; border-radius: var(--radius-m); background: var(--bg); border-left: 3px solid var(--separator); }
+.ag-prop b { grid-row: span 2; font-family: var(--f-head); font-size: var(--fs-lg); color: var(--label-3); }
+.ag-prop small { color: var(--label-3); font-size: var(--fs-xs); }
+.ag-prop.is-on { border-left-color: var(--fail); }
+.ag-prop.is-on b { color: var(--fail); }
+.ag-prop.is-cut { border-left-color: var(--ok); }
+.ag-verdict { padding: var(--s-3); background: var(--bg); border-radius: var(--radius-m); }
 /* Snowflake (M30): el id en binario tiene 68 caracteres; va en su propia línea y se corta donde haga falta */
 .snowflake-calc .out-row { grid-template-columns: minmax(0, 1fr); }
 .snowflake-calc .out-value { white-space: normal; overflow-wrap: anywhere; text-align: left; font-size: var(--fs-md); }

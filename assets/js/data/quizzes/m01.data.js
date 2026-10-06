@@ -6,10 +6,10 @@ SD.defineQuiz('m01', {
       id: 'puerto', type: 'single',
       prompt: 'Tu navegador abre seis conexiones TCP al mismo servidor, <code>104.16.132.229:443</code>. ¿Qué distingue a cada conexión de las otras cinco?',
       options: [
-        'La IP de destino: el servidor tiene seis IPs.',
-        'El puerto de origen: el sistema operativo elige un puerto efímero distinto para cada una.',
-        'El puerto de destino: cada conexión usa uno entre 443 y 448.',
-        'Nada: las seis son en realidad la misma conexión.'
+        'La IP de destino: el servidor publica seis IPs detrás del mismo nombre y asigna una a cada conexión.',
+        'El puerto de origen: el sistema operativo elige uno efímero distinto para cada una.',
+        'El puerto de destino: el servidor asigna uno distinto entre 443 y 448 a cada conexión que acepta.',
+        'El número de secuencia inicial del handshake, que el kernel usa como identificador de la conexión.'
       ],
       answer: 1,
       explain: 'Una conexión se identifica por la 4-tupla: IP y puerto de origen, IP y puerto de destino. Las seis comparten tres valores y se diferencian por el puerto efímero del cliente. Repasa "Puertos: a qué programa va cada paquete" (1.2).'
@@ -18,10 +18,10 @@ SD.defineQuiz('m01', {
       id: 'ancho', type: 'single',
       prompt: 'Una API responde 10 kB desde un servidor a 80 ms de ida y vuelta, por una conexión ya abierta. Cambias tu plan de internet de 100 Mbps a 1 Gbps. ¿Cuánto más rápido llega la respuesta?',
       options: [
-        'Diez veces más rápido: de ~81 ms a ~8 ms.',
-        'Casi nada: transmitir 10 kB tarda menos de 1 ms con cualquiera de los dos planes, y los 80 ms de ida y vuelta no cambian.',
-        'La mitad: de ~81 ms a ~40 ms.',
-        'Más lento, porque 1 Gbps satura los routers.'
+        'Diez veces más rápido: el plan es 10 veces mayor, así que la respuesta pasa de ~81 ms a ~8 ms.',
+        'Casi nada: mandan los 80 ms de ida y vuelta, y 10 kB tardan menos de 1 ms con ambos planes.',
+        'La mitad: los paquetes salen más rápido de la placa de red y la respuesta baja de ~81 ms a ~40 ms.',
+        'Más lento: con 1 Gbps la ventana de TCP se llena antes y la conexión vuelve a slow start.'
       ],
       answer: 1,
       explain: '10 kB × 8 / 100 Mbps = 0.8 ms; con 1 Gbps, 0.08 ms. La respuesta tarda lo mismo, ~81 ms, porque manda la latencia: el ancho de banda agrega carriles, no acorta la autopista. Repasa "Latencia, RTT y ancho de banda" (1.2).'
@@ -30,10 +30,10 @@ SD.defineQuiz('m01', {
       id: 'udp', type: 'single',
       prompt: '¿Por qué las consultas DNS clásicas viajan por UDP y no por TCP?',
       options: [
-        'Porque UDP está cifrado y TCP no.',
-        'Porque la pregunta y la respuesta caben en un paquete, y abrir una conexión TCP costaría una ida y vuelta más que la consulta misma.',
-        'Porque UDP garantiza que la respuesta llegue.',
-        'Porque los routers no dejan pasar TCP al puerto 53.'
+        'Porque UDP cifra la consulta, y por TCP viajaría en claro, visible para cualquiera en la red.',
+        'Porque pregunta y respuesta caben en un paquete, y un handshake TCP costaría otra ida y vuelta.',
+        'Porque UDP confirma cada paquete recibido, así que la respuesta llega garantizada sin reintentos.',
+        'Porque los routers y firewalls bloquean TCP hacia el puerto 53 en la mayoría de las redes.'
       ],
       answer: 1,
       explain: 'UDP no tiene handshake: la pregunta sale en el primer paquete. Si se pierde, el cliente simplemente vuelve a preguntar. UDP no cifra ni garantiza nada; para cifrar DNS están DoH y DoT. Repasa 1.2 y 1.4.'
@@ -42,10 +42,10 @@ SD.defineQuiz('m01', {
       id: 'refused', type: 'single',
       prompt: 'Tu servicio de Spring Boot no arrancó. Un cliente intenta conectarse al puerto 8080 de esa máquina, que sí está encendida. ¿Qué ve el cliente?',
       options: [
-        '<code>connection timed out</code> después de unos 2 minutos.',
-        '<code>connection refused</code> al instante: el sistema operativo responde al SYN con un RST porque nadie escucha en ese puerto.',
-        'Un <code>404 Not Found</code>.',
-        'Un error de certificado.'
+        '<code>connection timed out</code> tras unos 2 minutos, porque nadie contesta el SYN del cliente.',
+        '<code>connection refused</code> al instante: el sistema operativo contesta el SYN con un RST.',
+        'Un <code>404 Not Found</code> del sistema operativo, porque ninguna aplicación atiende esa ruta.',
+        'Un <code>503</code> que devuelve el kernel mientras el proceso arranca.'
       ],
       answer: 1,
       explain: 'La máquina existe y su sistema operativo contesta: no hay ningún programa escuchando en el puerto, así que responde con RST. El timeout de ~2 minutos aparece cuando nadie responde, por ejemplo si un firewall descarta los paquetes. Repasa "Abrir la conexión: el handshake" (1.5).'
@@ -54,10 +54,10 @@ SD.defineQuiz('m01', {
       id: 'cert', type: 'single',
       prompt: 'Alguien en el wifi de una cafetería descarga el certificado de tu banco (es público) y lo presenta haciéndose pasar por el banco. ¿Por qué falla el engaño?',
       options: [
-        'Porque los certificados solo se pueden descargar una vez.',
-        'Porque el handshake exige una firma (<code>CertificateVerify</code>) hecha con la clave privada del banco, y el impostor no la tiene.',
-        'Porque el navegador llama al banco para preguntar.',
-        'No falla: con el certificado alcanza para hacerse pasar por el sitio.'
+        'Porque cada certificado se emite para una sola IP, y en el wifi de la cafetería el impostor tiene otra.',
+        'Porque el handshake exige una firma (<code>CertificateVerify</code>) con la clave privada del banco.',
+        'Porque el navegador le pregunta al banco si el certificado es suyo.',
+        'No falla: el certificado es lo que prueba la identidad, así que con él alcanza para suplantar el sitio.'
       ],
       answer: 1,
       explain: 'El certificado une un nombre con una clave pública, pero copiarlo no da la clave privada. Sin ella, el impostor no puede firmar el handshake y el navegador corta la conexión. Repasa "Certificados" y "El handshake de TLS 1.3" (1.6).'
@@ -67,10 +67,10 @@ SD.defineQuiz('m01', {
       prompt: 'Visitas <code>https://www.ejemplo.com/perfil</code> sin ECH. ¿Qué puede ver tu proveedor de internet?',
       options: [
         'La IP del servidor.',
-        'El nombre <code>www.ejemplo.com</code>, que viaja en el SNI del ClientHello.',
-        'La ruta <code>/perfil</code>.',
-        'Tus cookies.',
-        'El contenido de la página.'
+        'El nombre <code>www.ejemplo.com</code>, que viaja en el SNI.',
+        'La ruta <code>/perfil</code>, que va en la primera línea de la request HTTP.',
+        'Tus cookies de sesión, que el navegador manda en los headers.',
+        'El contenido de la página, aunque no pueda modificarlo.'
       ],
       answer: [0, 1],
       explain: 'La IP va en cada paquete y el SNI viaja sin cifrar porque el servidor lo necesita para elegir el certificado. La request HTTP (ruta, headers, cookies) y la respuesta van dentro de TLS, cifradas. ECH cifra también el SNI. Repasa "SNI: una IP, miles de sitios" (1.6).'
@@ -86,10 +86,10 @@ SD.defineQuiz('m01', {
       id: 'cdnmiss', type: 'single',
       prompt: 'La página no está en la caché de la CDN (MISS) y hay que ir al origen igual. ¿Por qué la CDN sigue haciendo más rápida esa request?',
       options: [
-        'Porque comprime el HTML mejor que el origen.',
-        'Porque los handshakes TCP y TLS se hacen contra un PoP cercano, y el PoP llega al origen por una conexión que ya tenía abierta.',
-        'Porque la CDN responde con una versión vieja de la página.',
-        'No la hace más rápida: en un MISS la CDN solo agrega latencia.'
+        'Porque el PoP comprime y minifica el HTML del origen antes de mandarlo, y eso ahorra bytes.',
+        'Porque los handshakes se hacen con un PoP cercano, que ya tiene una conexión abierta al origen.',
+        'Porque la CDN sirve mientras tanto una versión vieja de la página y revalida contra el origen después.',
+        'No la hace más rápida: en un MISS la CDN solo agrega un salto, así que suma latencia en vez de restarla.'
       ],
       answer: 1,
       explain: 'Los handshakes cuestan idas y vueltas, y una ida y vuelta al PoP (20 ms) es mucho más barata que una al origen (80 ms o más). Después, el PoP reenvía por un túnel caliente: la distancia larga se paga una sola vez por request.'
@@ -98,10 +98,10 @@ SD.defineQuiz('m01', {
       id: 'ttl', type: 'single',
       prompt: 'Vas a mover tu servicio a otra IP el sábado. El registro DNS tiene TTL de 1 día. ¿Qué haces?',
       options: [
-        'Cambias la IP el sábado: el DNS propaga en segundos.',
-        'El miércoles bajas el TTL a 60 s; el sábado cambias la IP y mantienes la vieja funcionando un tiempo.',
-        'Pones TTL 0 para siempre.',
-        'Le pides a los usuarios que borren su caché DNS.'
+        'Cambias la IP el sábado: los resolvers modernos propagan el cambio en segundos sin importar el TTL.',
+        'El miércoles bajas el TTL a 60 s; el sábado cambias la IP y mantienes la vieja un tiempo.',
+        'Pones TTL 0 para siempre: así ningún resolver guarda la IP vieja.',
+        'El sábado cambias la IP y bajas el TTL a 60 s en el mismo momento, para que el cambio llegue rápido.'
       ],
       answer: 1,
       explain: 'Los resolvers pueden guardar la respuesta vieja hasta que venza su TTL (un día). Bajando el TTL con anticipación, el sábado nadie tiene guardada la IP vieja por más de un minuto. Y la IP vieja sigue sirviendo mientras tanto, por los clientes que ignoran el TTL.'
@@ -110,10 +110,10 @@ SD.defineQuiz('m01', {
       id: 'hol', type: 'single',
       prompt: 'En una red con pérdida de paquetes, una página con 30 recursos va más lenta con HTTP/2 que con HTTP/3. ¿Por qué?',
       options: [
-        'HTTP/3 comprime mejor los headers.',
-        'En HTTP/2 todos los streams comparten una conexión TCP, y un paquete perdido frena a todos hasta que se retransmite. En QUIC cada stream se recupera por separado.',
-        'HTTP/2 abre 6 conexiones y HTTP/3 una sola.',
-        'HTTP/3 no retransmite los paquetes perdidos.'
+        'HTTP/3 comprime los headers con QPACK, que ocupa bastante menos que el HPACK de HTTP/2.',
+        'En HTTP/2 los streams comparten un TCP y un paquete perdido frena a todos; QUIC recupera cada stream por separado.',
+        'HTTP/2 abre 6 conexiones por dominio y las reparte mal, mientras HTTP/3 multiplexa todo en una sola.',
+        'HTTP/3 no retransmite los paquetes perdidos: los descarta y el navegador tolera los huecos.'
       ],
       answer: 1,
       explain: 'TCP entrega bytes en orden: si falta uno, todo lo que viene detrás espera (head-of-line blocking de transporte). QUIC conoce los streams y solo bloquea al que perdió datos.'
@@ -129,10 +129,10 @@ SD.defineQuiz('m01', {
       id: 'readyz', type: 'single',
       prompt: 'Tu <code>/readyz</code> hace un <code>SELECT 1</code> a la base de datos. Un día la base se pone lenta y el SELECT tarda más que el timeout del health check. ¿Qué pasa?',
       options: [
-        'Nada: el balanceador ignora los timeouts.',
-        'Todas las instancias fallan el health check a la vez, el balanceador se queda sin backends sanos y el sitio entero responde 503.',
-        'Solo se sacan de rotación las instancias más lentas.',
-        'La base de datos se recupera sola porque recibe menos tráfico.'
+        'Nada grave: el balanceador ignora los timeouts del health check y solo saca instancias ante un 500.',
+        'Todas fallan el check a la vez, el balanceador queda sin backends sanos y el sitio da 503.',
+        'Solo salen de rotación las instancias más lentas, y las demás absorben su tráfico sin problema.',
+        'La base se recupera sola porque recibe menos tráfico, y las instancias vuelven a rotación en segundos.'
       ],
       answer: 1,
       explain: 'Un health check que depende de una dependencia compartida convierte un problema parcial en una caída total. El readiness debe medir la instancia (¿arrancó?, ¿tiene hilos libres?), y la degradación por dependencias se maneja con timeouts y circuit breakers.'
@@ -147,10 +147,10 @@ SD.defineQuiz('m01', {
       id: 'slowstart', type: 'single',
       prompt: '¿Por qué conviene que el HTML crítico de la primera respuesta ocupe menos de ~14 kB comprimido?',
       options: [
-        'Porque los navegadores no leen más de 14 kB por respuesta.',
-        'Porque en una conexión nueva TCP arranca con una ventana de 10 segmentos (~14 kB): lo que exceda llega en idas y vueltas adicionales.',
-        'Porque las CDNs no cachean archivos más grandes.',
-        'Porque TLS cifra solo los primeros 14 kB.'
+        'Porque el navegador no empieza a parsear el HTML hasta tener los primeros 14 kB completos.',
+        'Porque TCP arranca con una ventana de 10 segmentos (~14 kB) y el resto llega en idas y vueltas extra.',
+        'Porque las CDNs solo guardan en el borde los archivos menores a 14 kB comprimidos.',
+        'Porque TLS cifra en registros de 14 kB, y cada registro adicional exige otro handshake.'
       ],
       answer: 1,
       explain: 'Slow start: la ventana inicial es de 10 segmentos (RFC 6928) y se duplica en cada ida y vuelta. Si la respuesta cabe en la primera ventana, llega completa en un solo RTT.'
@@ -161,9 +161,9 @@ SD.defineQuiz('m01', {
       options: [
         'Poner una CDN que termine TCP y TLS cerca del usuario.',
         'Habilitar HTTP/3.',
-        'Subir el TTL del DNS de 5 minutos a 1 día.',
-        'Comprar servidores de origen con CPUs más rápidas.',
-        'Agrupar varias llamadas secuenciales a la API en una sola (un endpoint agregador o BFF).'
+        'Subir el TTL del DNS de 5 minutos a 1 día para que los resolvers guarden la respuesta.',
+        'Comprar servidores de origen con CPUs más rápidas para responder antes.',
+        'Agrupar las llamadas secuenciales a la API en un solo endpoint (BFF).'
       ],
       answer: [0, 1, 4],
       explain: 'La primera visita la domina la red: menos idas y vueltas (HTTP/3, menos llamadas secuenciales) y más cortas (CDN). Un TTL alto solo ayuda a visitas posteriores, y una CPU más rápida ahorra milisegundos de los cientos que cuesta la red.'

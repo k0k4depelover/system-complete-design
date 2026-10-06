@@ -710,7 +710,7 @@ def comparar(pregunta, a, b, juez):
     cola_revision.enviar(req.id, cat, score)       # dudoso: lo mira una persona después
     return Decision("seguir")</code></pre>
 
-      <p>Las imágenes generadas (<a href="m23-multimodal.html#moderacion">M23</a>) y la voz sintética (M24) suman guardrails con otros problemas: la moderación de una imagen corre cuando la imagen ya existe, y la de una voz tiene que decidir en tiempo real si suena como alguien que no autorizó su uso.</p>
+      <p>Las imágenes generadas (<a href="m23-multimodal.html#moderacion">M23</a>) y la voz sintética (<a href="m24-voz-tiempo-real.html#abuso">M24</a>) suman guardrails con otros problemas: la moderación de una imagen corre cuando la imagen ya existe, y la de una voz tiene que decidir en tiempo real si suena como alguien que no autorizó su uso.</p>
 
       <h2 id="injection"><span class="sec-num">22.10</span>Prompt injection</h2>
 
@@ -770,7 +770,7 @@ def comparar(pregunta, a, b, juez):
         <figcaption><b>Figura 22.7.</b> La trifecta letal: con las tres en la misma sesión, una instrucción escondida puede robar datos. Quitar cualquiera de las tres alcanza.</figcaption>
       </figure>
 
-      <p>Simon Willison resumió el riesgo en 2025 como la "trifecta letal": acceso a datos privados, exposición a contenido no confiable y una forma de comunicarse hacia afuera. <span class="badge badge--doc">Documentado</span> Mientras las tres estén en la misma sesión, alguna injection va a funcionar; la defensa que no depende de ganarle al modelo es que nunca estén juntas. Casi siempre la pata más fácil de cortar es la comunicación hacia afuera. Este es el problema central de los agentes, que el M25 retoma con herramientas que corren minutos y hacen decenas de llamadas.</p>
+      <p>Simon Willison resumió el riesgo en 2025 como la "trifecta letal": acceso a datos privados, exposición a contenido no confiable y una forma de comunicarse hacia afuera. <span class="badge badge--doc">Documentado</span> Mientras las tres estén en la misma sesión, alguna injection va a funcionar; la defensa que no depende de ganarle al modelo es que nunca estén juntas. Casi siempre la pata más fácil de cortar es la comunicación hacia afuera. Este es el problema central de los agentes, que el <a href="m25-agentes.html#injection">M25</a> retoma con herramientas que corren minutos y hacen decenas de llamadas.</p>
 
       <h2 id="abuso"><span class="sec-num">22.11</span>Abuso, jailbreaks y red teaming</h2>
 
@@ -807,7 +807,7 @@ def comparar(pregunta, a, b, juez):
             <tr><td>LLM03 Cadena de suministro</td><td>Los pesos con checksum del paquete de 22.5</td></tr>
             <tr><td>LLM04 Envenenamiento de datos y del modelo</td><td>Los documentos de RAG y el feedback que se usa para entrenar o para los golden sets</td></tr>
             <tr><td>LLM05 Manejo inadecuado de la salida</td><td>Validar la salida como entrada no confiable (<a href="m17-api-streaming.html#estructuradas">M17</a>) y no renderizar enlaces arbitrarios (22.10)</td></tr>
-            <tr><td>LLM06 Agencia excesiva</td><td>Privilegio mínimo y confirmación (22.10); el M25 lo amplía</td></tr>
+            <tr><td>LLM06 Agencia excesiva</td><td>Privilegio mínimo y confirmación (22.10); el <a href="m25-agentes.html#injection">M25</a> lo amplía</td></tr>
             <tr><td>LLM07 Fuga del prompt del sistema</td><td>Esta sección: nada secreto en el prompt</td></tr>
             <tr><td>LLM08 Debilidades de vectores y embeddings</td><td>El filtro por tenant en la búsqueda de RAG (<a href="m16-context-windows.html#rag">M16</a>)</td></tr>
             <tr><td>LLM09 Desinformación</td><td>Evals de respuestas con fuentes (22.3)</td></tr>

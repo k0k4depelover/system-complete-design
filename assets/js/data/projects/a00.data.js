@@ -16,9 +16,9 @@ SD.defineExercise('a00-laboratorio', {
       id: 'clientes', type: 'single',
       prompt: 'Las 4 réplicas suman 40 conexiones hacia PgBouncer, y PgBouncer tiene 20 hacia PostgreSQL. ¿Qué pasa?',
       options: [
-        'Nada grave: en modo transacción, una conexión real se presta solo mientras dura una transacción, y 40 clientes comparten 20 conexiones.',
+        'Nada grave: en modo transacción, los 40 clientes comparten las 20 conexiones.',
         'La mitad de las réplicas no puede conectarse hasta que se libere una sesión.',
-        'PgBouncer rechaza las conexiones que pasan de 20.',
+        'PgBouncer rechaza las conexiones que pasan de 20 con un error de pool lleno.',
         'Hay que subir default_pool_size a 40 para que cada cliente tenga la suya.'
       ],
       answer: 0,
@@ -29,9 +29,9 @@ SD.defineExercise('a00-laboratorio', {
       prompt: 'Para que el trabajo nocturno no corra dos veces a la vez a través de PgBouncer, ¿qué usas?',
       options: [
         'pg_advisory_lock(42) al empezar y pg_advisory_unlock(42) al terminar.',
-        'pg_try_advisory_xact_lock(42) dentro de la transacción que hace el trabajo, o una conexión directa a PostgreSQL para el trabajo.',
+        'pg_try_advisory_xact_lock(42) dentro de la transacción del trabajo.',
         'Un SET application_name = \'nocturno\' y revisar pg_stat_activity antes de empezar.',
-        'Nada: PgBouncer serializa las transacciones del mismo usuario.'
+        'Nada: PgBouncer serializa las transacciones del mismo usuario y la misma base.'
       ],
       answer: 1,
       explain: 'Un lock de sesión queda en la conexión real, que PgBouncer le presta después a otro cliente: lo mediste en la falla 2, donde el segundo cliente recibió t. La versión de transacción se libera en el commit y no se filtra. Si el trabajo dura más que una transacción, conéctalo directo a PostgreSQL.'
@@ -40,10 +40,10 @@ SD.defineExercise('a00-laboratorio', {
       id: 'timeout', type: 'single',
       prompt: '¿Cómo le das 30&#8239;s de statement_timeout solo al reporte lento?',
       options: [
-        'SET statement_timeout = \'30s\' antes de la consulta.',
+        'SET statement_timeout = \'30s\' en la misma conexión, justo antes de la consulta.',
         'SET LOCAL statement_timeout = \'30s\' dentro de la transacción del reporte.',
         'ALTER DATABASE app SET statement_timeout = \'30s\'.',
-        'Subir el connection-timeout de Hikari a 30&#8239;s.'
+        'Subir el connection-timeout de Hikari a 30&#8239;s solo para ese repositorio.'
       ],
       answer: 1,
       explain: 'SET LOCAL dura hasta el commit de esa transacción, que en modo transacción es justo lo que el pooler te presta. Un SET suelto se queda en la conexión real y le llega al cliente siguiente, como en la falla 1. ALTER DATABASE se lo cambia a todos, y el connection-timeout de Hikari es otra cosa: cuánto espera una request por una conexión del pool.'

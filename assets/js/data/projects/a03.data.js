@@ -17,8 +17,8 @@ SD.defineExercise('a03-cache', {
       prompt: 'En el pico, la base se pone lenta y cargar una ficha pasa de 50&#8239;ms a 2&#8239;s. Se vacía Redis por error. ¿Qué pasa con las 400 lecturas de un producto rebajado que llegan a la vez?',
       options: [
         'Una toma el lock y carga; las otras 399 esperan los 2&#8239;s y reciben la ficha de Redis.',
-        'Una toma el lock y carga; las otras 399 esperan 500&#8239;ms, se cansan y van a la base, todas juntas: la estampida vuelve.',
-        'Las 400 reciben un 503, porque el lock está tomado.',
+        'Una toma el lock; las otras esperan 500&#8239;ms y van todas a la base.',
+        'Las 399 reciben un 503, porque el lock está tomado y no hay ficha vieja.',
         'El lock vence a los 3&#8239;s y todas van a la base.'
       ],
       answer: 1,
@@ -29,9 +29,9 @@ SD.defineExercise('a03-cache', {
       prompt: 'Sin el script <code>PUT_IF_NOT_OLDER</code>, una lectura lenta lee la versión 4 de la base, y mientras tanto alguien cambia el precio a la versión 5. La lectura termina después y escribe su versión 4 en Redis. ¿Qué ve la gente?',
       options: [
         'El precio nuevo: la versión 5 ya estaba en la base.',
-        'El precio viejo durante unos 60&#8239;s, hasta que la ficha vence en Redis, en todas las réplicas.',
+        'El precio viejo durante unos 60&#8239;s, en todas las réplicas.',
         'El precio viejo durante 2&#8239;s, hasta que vence la memoria de la réplica.',
-        'Un error, porque Redis rechaza versiones viejas.'
+        'Un error, porque Redis rechaza la escritura de una versión vieja.'
       ],
       answer: 1,
       explain: 'Las réplicas leen de Redis, no de la base, mientras la ficha esté fresca. Una escritura vieja que llega tarde deja el precio viejo por todo el TTL de Redis, y las memorias locales lo vuelven a copiar cada 2&#8239;s. Comparar versiones dentro de un script de Lua, que Redis ejecuta sin intercalar otros comandos, descarta esa escritura.'
@@ -40,10 +40,10 @@ SD.defineExercise('a03-cache', {
       id: 'contador', type: 'single',
       prompt: 'Alguien propone usar el mismo write-behind para el stock: restar en Redis cada venta y pasar el stock a la base cada 2&#8239;s. ¿Qué le respondes?',
       options: [
-        'Bien: es lo mismo que las visitas.',
-        'No: si Redis se cae, con fsync cada segundo se pierde hasta un segundo de ventas, y la base, que es la fuente de verdad, no se entera. Una visita perdida no importa; una venta, sí. El stock va con la base en la misma transacción que la venta.',
+        'Bien: es lo mismo que las visitas y saca escrituras de la base.',
+        'No: si Redis se cae, se pierden ventas que la base nunca vio.',
         'Bien, si el lote es de 100&#8239;ms en vez de 2&#8239;s.',
-        'No, porque HINCRBY no acepta números negativos.'
+        'No, porque HINCRBY no acepta números negativos para restar el stock.'
       ],
       answer: 1,
       explain: 'Write-behind cambia durabilidad por velocidad: lo que está en Redis y todavía no llegó a la base se puede perder, por mucho AOF que tengas. Para las visitas, perder un segundo es aceptable. Para el stock, es vender lo que no tienes. Un lote más chico achica la ventana, pero no la cierra. HINCRBY sí acepta negativos.'

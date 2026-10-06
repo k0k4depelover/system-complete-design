@@ -16,10 +16,10 @@ SD.defineExercise('m19-flota', {
       id: 'routing', type: 'single',
       prompt: 'Las requests de una sesión comparten unos 34&#8239;000 tokens iniciales (prompt de sistema y repositorio). ¿Qué política de routing conviene?',
       options: [
-        'Round robin: es la más pareja.',
-        'La réplica con menos requests en curso.',
-        'El prefijo más largo en caché entre las réplicas por debajo de 1.25 veces la carga promedio, con un índice de prefijos que alimentan las réplicas.',
-        'Hash de los primeros 256 tokens del prompt.'
+        'Round robin: es la más pareja y el prefix caching funciona igual en cada réplica.',
+        'La réplica con menos requests en curso, que reparte la carga real mejor que nada.',
+        'El prefijo más largo en caché, entre las réplicas por debajo de un techo de carga.',
+        'Hash de los primeros 256 tokens del prompt, para que cada sesión caiga siempre igual.'
       ],
       answer: 2,
       explain: 'Recalcular 34&#8239;000 tokens cuesta unos 2.4 s de prefill por request. Round robin y la menos cargada los recalculan casi siempre; el hash de los primeros 256 tokens solo ve el prompt de sistema, que es igual para todos, y manda toda la app a una réplica. Lo que distingue a una sesión es el repositorio, y el índice lo ve.'
@@ -28,10 +28,10 @@ SD.defineExercise('m19-flota', {
       id: 'metrica', type: 'single',
       prompt: '¿Con qué métrica escala el autoscaler?',
       options: [
-        'La utilización de GPU de nvidia-smi, con objetivo del 75&#8239;%.',
-        'El uso de KV cache con objetivo del 75&#8239;%, con las requests en cola como señal de respaldo.',
-        'La CPU de los pods.',
-        'La cantidad de requests por segundo del gateway.'
+        'La utilización de GPU de nvidia-smi, con objetivo del 75&#8239;% y ventana de 1 minuto.',
+        'El uso de KV cache con objetivo del 75&#8239;%, y la cola como respaldo.',
+        'La CPU de los pods, que sube cuando el motor arma batches más grandes.',
+        'La cantidad de requests por segundo que pasan por el gateway.'
       ],
       answer: 1,
       explain: 'Con contextos de 34&#8239;000 tokens, lo que se agota primero es la memoria de KV cache. La utilización de GPU marca casi lo mismo con una request o con 64, y las requests por segundo no ven el tamaño.'
@@ -41,9 +41,9 @@ SD.defineExercise('m19-flota', {
       prompt: 'Un nodo nuevo tarda unos 9 minutos en servir. Con los pesos en NVMe y nodos listos, 90 s. Si el tráfico sube un 4&#8239;% por minuto, ¿qué colchón hace falta sobre las 100 réplicas en cada caso?',
       options: [
         'Unas 43 réplicas con nodos nuevos, unas 7 con nodos listos.',
-        'Unas 4 en los dos casos.',
-        'Unas 100 en los dos casos.',
-        'No hace falta colchón: el autoscaler reacciona solo.'
+        'Unas 4 en los dos casos: el 4&#8239;% de 100 réplicas.',
+        'Unas 100 en los dos casos: duplicar la flota.',
+        'No hace falta colchón: el autoscaler reacciona solo en cuanto sube el KV cache.'
       ],
       answer: 0,
       explain: '1.04 elevado a 9 da 1.42: un 42&#8239;% más, unas 43 réplicas. 1.04 elevado a 1.5 da 1.06: unas 7. Un pool de nodos listos con los pesos en disco cuesta mucho menos que 43 réplicas sirviendo de más, y además escalar por calendario antes de cada jornada achica el salto.'
@@ -52,11 +52,11 @@ SD.defineExercise('m19-flota', {
       id: 'spot', type: 'multi',
       prompt: 'Finanzas quiere que una parte de la flota sea spot. ¿Qué condiciones pones? Marca todo lo que corresponde.',
       options: [
-        'Spot solo para una fracción acotada, por ejemplo el 30&#8239;%, y nunca para la capacidad que garantiza el tráfico empresa.',
-        'Un agente en cada nodo que, ante el aviso, falla la readiness probe para que el router deje de mandarle requests.',
-        'Continuar en otra réplica los streams que no terminan antes del corte, con el prompt y los tokens ya generados.',
-        'Dejar terminationGracePeriodSeconds en 30 s, el valor por defecto.',
-        'Mezclar varios tipos de instancia y zonas, para que una ola de interrupciones no se lleve todo el spot a la vez.'
+        'Spot solo para una fracción acotada, nunca para la capacidad del tráfico empresa.',
+        'Un agente que, ante el aviso, falla la readiness probe.',
+        'Continuar en otra réplica los streams que no terminan antes del corte.',
+        'Dejar terminationGracePeriodSeconds en 30 s, el valor por defecto, para no demorar el corte.',
+        'Mezclar varios tipos de instancia y zonas.'
       ],
       answer: [0, 1, 2, 4],
       explain: 'Un asistente de código genera respuestas largas que pueden durar más que un aviso de 30 s o de 2 min: hay que drenar y continuar. El periodo de gracia por defecto, 30 s, corta esos streams cuando el apagado lo decide Kubernetes; hay que subirlo.'
@@ -65,10 +65,10 @@ SD.defineExercise('m19-flota', {
       id: 'region', type: 'single',
       prompt: 'Las dos regiones trabajan al 70&#8239;% y cae una. La otra recibe el 140&#8239;% de su capacidad. ¿Qué haces?',
       options: [
-        'Nada: el autoscaler lo resuelve en segundos.',
-        'Admitir todo el tráfico empresa (el 84&#8239;% de la capacidad), mandar el gratuito a un modelo más chico con un aviso en la respuesta, rechazar con 503 y Retry-After lo que no entra, y pedir réplicas.',
-        'Rechazar el 30&#8239;% de las requests al azar.',
-        'Mandar el tráfico excedente a la región caída.'
+        'Nada: el autoscaler pide réplicas nuevas y lo resuelve en segundos.',
+        'Admitir el tráfico empresa, degradar el gratuito, rechazar el resto con 503 y escalar.',
+        'Rechazar el 30&#8239;% de las requests al azar, para que nadie quede fuera del todo.',
+        'Admitir todo y dejar que las colas absorban el exceso hasta que vuelva la otra región.'
       ],
       answer: 1,
       explain: 'Con dos regiones, absorber la caída sin recortar exigiría trabajar al 50&#8239;%. Al 70&#8239;%, el recorte tiene que estar decidido antes: el tráfico pago entra, el gratuito se degrada o espera. Las réplicas nuevas tardan minutos, y en un pico regional la nube puede no tenerlas.'

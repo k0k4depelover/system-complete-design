@@ -8,7 +8,7 @@ SD.defineExercise('a05-sucursales', {
       id: 'corte', type: 'single',
       prompt: 'El enlace entre las sucursales se corta dos horas. Las dos siguen vendiendo de su stock, y sur hace tres traspasos a norte. ¿Qué pasa cuando vuelve el enlace?',
       options: [
-        'Cada suscripción se pone al día desde su slot. Las ventas llegan sin conflictos, porque son inserciones con UUIDv7 y cada fila de stock tiene una sola dueña, y norte suma los tres traspasos en cuanto le llegan.',
+        'Cada suscripción se pone al día desde su slot, sin conflictos.',
         'Las dos bases tienen que copiarse de nuevo, con <code>copy_data = true</code>.',
         'Las ventas de esas dos horas chocan entre sí, y hay que elegir cuáles quedan.',
         'Los traspasos se pierden, porque sur los mandó mientras norte no estaba.'
@@ -21,7 +21,7 @@ SD.defineExercise('a05-sucursales', {
       prompt: 'A media mañana, norte se queda sin café y sur tiene 400. Un cliente de norte quiere dos. ¿Qué haces?',
       options: [
         'Que norte reste de la fila de sur: la replicación lleva el cambio.',
-        'Responder 409 en norte y pedirle un traspaso a sur. Sur resta de su fila, y norte suma cuando recibe.',
+        'Responder 409 en norte y pedirle a sur un traspaso de dos cafés.',
         'Vender igual y corregir el stock negativo al final del día.',
         'Pausar la replicación mientras norte vende del stock de sur.'
       ],
@@ -33,9 +33,9 @@ SD.defineExercise('a05-sucursales', {
       prompt: 'Sur consigue un proveedor local de miel y quiere venderla hoy. ¿Cómo la das de alta?',
       options: [
         'Sur la da de alta en su base, con el SKU del proveedor.',
-        'La da de alta norte, la dueña del catálogo. Si sur necesita hacerlo sola, sus SKU llevan un prefijo propio, como <code>SUR-</code>, que norte nunca usa.',
-        'Quitar la restricción <code>UNIQUE</code> de <code>sku</code>.',
-        'Darla de alta en las dos a la vez, con el mismo id.'
+        'La da de alta norte, o sur con un prefijo de SKU propio, como <code>SUR-</code>.',
+        'Quitar la restricción <code>UNIQUE</code> de <code>sku</code> en la base de sur.',
+        'Darla de alta en las dos a la vez, con el mismo UUIDv7, para que no choquen.'
       ],
       answer: 1,
       explain: 'Si norte da de alta el mismo SKU por su lado, las dos chocan, y la replicación entera se detiene, como con MATE-500. Sin <code>UNIQUE</code>, el choque no se ve, pero quedan dos productos con el mismo SKU y nadie sabe cuál es cuál. El mismo id en las dos choca con la clave primaria, que también es única. Un prefijo por sucursal reparte el espacio de claves: cada una inventa solo en el suyo.'
@@ -45,8 +45,8 @@ SD.defineExercise('a05-sucursales', {
       prompt: 'A las 3 de la mañana, la alerta sobre <code>apply_error_count</code> de norte empieza a sonar. ¿Qué haces?',
       options: [
         '<code>ALTER SUBSCRIPTION … SKIP</code> con el LSN del log, apenas suena la alerta.',
-        'Leer en el log qué fila choca y qué trae la transacción, reparar los datos para que la transacción entre entera, y usar <code>SKIP</code> solo si sabes qué descartas.',
-        'Borrar la suscripción y crearla de nuevo.',
+        'Leer en el log qué fila choca y reparar los datos para que la transacción entre.',
+        'Borrar la suscripción y crearla de nuevo con <code>copy_data = true</code>.',
         'Esperar: el worker reintenta cada 5&#8239;s, y en algún momento entra.'
       ],
       answer: 1,

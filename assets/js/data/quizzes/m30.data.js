@@ -8,8 +8,8 @@ SD.defineQuiz('m30', {
       options: [
         'Porque mueve el costo de armarla a la operación que ocurre 50 veces menos.',
         'Porque las escrituras son más baratas que las lecturas en Redis.',
-        'Porque así no hace falta guardar los tweets.',
-        'Porque elimina la necesidad de caché.'
+        'Porque así no hace falta guardar los tweets fuera de las timelines.',
+        'Porque reparte el costo por igual entre lecturas y escrituras.'
       ],
       answer: 0,
       explain: 'Armar la timeline al leer se paga en cada una de las 300&#8239;000 lecturas; precalcularla se paga en cada escritura. Repasa 30.1.'
@@ -18,10 +18,10 @@ SD.defineQuiz('m30', {
       id: 'planos', type: 'single',
       prompt: 'En la arquitectura de X, ¿qué papel cumple Kafka entre el plano de escritura y lo derivado?',
       options: [
-        'Cada escritura entra una vez al log, y cada vista derivada (Thunder, Earlybird, tendencias, notificaciones) lo consume a su ritmo.',
+        'Cada escritura entra una vez al log y cada vista derivada lo consume a su ritmo.',
         'Es la base de datos donde se guardan los posts para siempre.',
-        'Reparte las requests de lectura entre los servidores de Home Mixer.',
-        'Guarda las sesiones de los usuarios para TFE.'
+        'Reparte las requests de lectura entre los servidores de Home Mixer según su carga.',
+        'Coordina una transacción entre Manhattan y cada vista para que se actualicen juntas.'
       ],
       answer: 0,
       explain: 'La verdad se guarda una vez, en Manhattan; Kafka lleva el evento a todo lo que depende de él. Cada consumidor puede atrasarse segundos sin perder nada. Repasa las cinco ideas de 30.2 y la figura 30.1.'
@@ -30,11 +30,11 @@ SD.defineQuiz('m30', {
       id: 'derivado', type: 'multi',
       prompt: '¿Cuáles de estas piezas son vistas derivadas del log, que se pueden reconstruir si pierden su estado? Marca todo lo que corresponde.',
       options: [
-        'Thunder, con los posts recientes de cada autor.',
+        'Thunder, con los posts recientes por autor.',
         'Earlybird, el índice de búsqueda.',
         'Los contadores de tendencias.',
-        'Manhattan, donde se guarda cada post.',
-        'TFE, el borde.'
+        'Manhattan, donde se guarda cada post de forma durable.',
+        'TFE, el borde, con sus sesiones.'
       ],
       answer: [0, 1, 2],
       explain: 'Manhattan es la fuente de verdad, no una vista; TFE no guarda estado del producto. Lo derivado vive en memoria justamente porque se puede volver a llenar desde el log. Repasa 30.2.'
@@ -43,10 +43,10 @@ SD.defineQuiz('m30', {
       id: 'thunder', type: 'single',
       prompt: 'En Para ti, un post de una cuenta con 30 millones de seguidores cuesta lo mismo que uno de una cuenta con 200. ¿Por qué?',
       options: [
-        'Porque Thunder guarda los posts recientes por autor, y Home Mixer los lee al armar la timeline: no hay una copia por seguidor.',
+        'Porque Thunder guarda los posts por autor y no hay una copia por seguidor.',
         'Porque las cuentas famosas tienen servidores dedicados.',
-        'Porque el fan-out de las cuentas famosas corre con más prioridad.',
-        'Porque Para ti solo muestra posts de fuera de tu red.'
+        'Porque el fan-out de las cuentas famosas corre con más prioridad y en paralelo.',
+        'Porque Para ti solo muestra posts de fuera de tu red, que no pasan por el fan-out.'
       ],
       answer: 0,
       explain: 'Leer 400 listas por autor en cada request es barato porque Thunder vive en memoria y cada entrada pesa 16 bytes. El problema de las cuentas famosas sigue existiendo en el fan-out clásico de Siguiendo. Repasa el trade-off de 30.2 y 30.8.'
@@ -68,10 +68,10 @@ SD.defineQuiz('m30', {
       id: 'filtros-antes', type: 'single',
       prompt: 'Home Mixer corre catorce filtros antes de puntuar y solo tres después. ¿Por qué?',
       options: [
-        'Porque puntuar en GPU es la etapa más cara, y cada candidato que sale antes es GPU que no se gasta.',
-        'Porque los filtros de después son más lentos.',
-        'Porque Phoenix no acepta más de 100 candidatos.',
-        'Porque los filtros de visibilidad dependen del puntaje.'
+        'Porque puntuar en GPU es la etapa más cara y cada candidato filtrado antes la ahorra.',
+        'Porque los filtros de después son más lentos y conviene correrlos sobre menos posts.',
+        'Porque Phoenix no acepta más de 100 candidatos por request.',
+        'Porque los filtros de visibilidad dependen del puntaje que asigna Phoenix.'
       ],
       answer: 0,
       explain: 'En el presupuesto de referencia, Phoenix se lleva 92 de los 175&#8239;ms del servidor. Los tres filtros finales corren solo sobre los elegidos. Repasa la tabla del viaje en 30.2.'
@@ -88,10 +88,10 @@ SD.defineQuiz('m30', {
       id: 'snowflake-bits', type: 'single',
       prompt: '¿Cómo se reparten los 64 bits de un id Snowflake?',
       options: [
-        '1 de signo, 41 de milisegundos, 10 de nodo (datacenter y worker) y 12 de secuencia.',
-        '32 de segundos y 32 aleatorios.',
-        '48 de milisegundos y 16 de secuencia.',
-        '64 aleatorios, como un UUID corto.'
+        '1 de signo, 41 de milisegundos, 10 de nodo y 12 de secuencia.',
+        '32 de segundos desde la época Unix y 32 aleatorios para evitar choques.',
+        '48 de milisegundos y 16 de secuencia, sin bits de nodo porque hay un solo generador.',
+        '1 de signo, 31 de segundos, 16 de nodo y 16 de secuencia.'
       ],
       answer: 0,
       explain: 'El tiempo en los bits altos hace que ordenar por id sea ordenar por tiempo. Con 12 bits de secuencia, cada worker genera 4&#8239;096 ids por milisegundo. Repasa 30.4 y la figura 30.3.'
@@ -100,10 +100,10 @@ SD.defineQuiz('m30', {
       id: 'reloj', type: 'single',
       prompt: 'NTP atrasa el reloj de un generador Snowflake 3&#8239;ms. ¿Qué debe hacer?',
       options: [
-        'Seguir generando: los ids igual son únicos.',
-        'Negarse a generar hasta que el reloj supere el último milisegundo usado, para no repetir ids.',
-        'Reiniciar la secuencia en cero.',
-        'Cambiar de worker id.'
+        'Seguir generando: los ids igual son únicos porque la secuencia sigue subiendo.',
+        'Esperar a que el reloj supere el último milisegundo usado.',
+        'Reiniciar la secuencia en cero y seguir con la hora nueva.',
+        'Cambiar de worker id, así los ids nuevos no chocan con los viejos.'
       ],
       answer: 1,
       explain: 'Con el reloj atrasado podría volver a un milisegundo ya usado con la misma secuencia y repetir un id. Repasa "Cuando el reloj miente", en 30.4.'
@@ -112,10 +112,10 @@ SD.defineQuiz('m30', {
       id: 'grafo', type: 'single',
       prompt: '¿Por qué el grafo social se guarda en las dos direcciones?',
       options: [
-        'Por redundancia ante fallas.',
-        'Porque el fan-out necesita los seguidores de una cuenta y la lectura necesita a quién sigue un usuario, y las dos consultas tienen que tocar una sola partición.',
-        'Porque MySQL lo exige.',
-        'Para contar seguidores más rápido.'
+        'Por redundancia: si se pierde una dirección, se reconstruye desde la otra.',
+        'Para que seguidores y seguidos se lean cada uno desde una sola partición.',
+        'Porque MySQL no permite índices secundarios en tablas particionadas por hash.',
+        'Para contar seguidores más rápido sin un COUNT sobre toda la tabla.'
       ],
       answer: 1,
       explain: 'Particionar por un lado deja la otra consulta repartida por todas las particiones. FlockDB guardaba cada arista en las dos direcciones. Repasa 30.5.'
@@ -126,7 +126,7 @@ SD.defineQuiz('m30', {
       options: [
         'Publicar: una copia por seguidor; leer la timeline: una lectura.',
         'Publicar: una escritura; leer: una lectura por cuenta seguida.',
-        'Publicar y leer: una operación cada una.',
+        'Publicar y leer: una operación cada una, porque la timeline es una lista compartida.',
         'Publicar: una copia por cuenta seguida; leer: ninguna.'
       ],
       answer: 0,
@@ -136,10 +136,10 @@ SD.defineQuiz('m30', {
       id: 'solo-ids', type: 'single',
       prompt: '¿Por qué la timeline en Redis guarda ids y no el texto de los tweets?',
       options: [
-        'Porque Redis no admite texto.',
-        'Porque un tweet está en millones de timelines: copiar el texto multiplicaría la memoria, y editarlo o borrarlo exigiría tocar todas las copias.',
-        'Porque los ids se comprimen mejor que el texto.',
-        'Porque el texto se cifra.'
+        'Porque Redis solo admite enteros como miembros de un sorted set.',
+        'Porque un tweet está en millones de timelines y el texto multiplicaría la memoria.',
+        'Porque los ids se comprimen mejor que el texto y la red de Redis es el cuello.',
+        'Porque el texto se cifra y Redis no puede guardar datos cifrados en listas.'
       ],
       answer: 1,
       explain: 'La timeline guarda unos 20 bytes por entrada y el contenido se hidrata desde un caché de tweets. Repasa "La timeline en Redis", en 30.6.'
@@ -156,10 +156,10 @@ SD.defineQuiz('m30', {
       id: 'cola', type: 'single',
       prompt: '¿Por qué el fan-out en escritura va por una cola con prioridad?',
       options: [
-        'Para que un tweet de una cuenta chica no espere detrás del fan-out de una cuenta con casi un millón de seguidores.',
-        'Para garantizar orden total entre todos los tweets.',
-        'Porque Redis no acepta escrituras directas.',
-        'Para cobrar más a las cuentas grandes.'
+        'Para que un tweet de una cuenta chica no espere detrás del de una cuenta enorme.',
+        'Para garantizar orden total entre todos los tweets de todas las cuentas.',
+        'Porque Redis no acepta escrituras directas desde los servicios de fan-out.',
+        'Para que las cuentas grandes pasen primero y sus tweets lleguen antes a más gente.'
       ],
       answer: 0,
       explain: 'Las copias son trabajo asíncrono de tamaño muy desigual: sin prioridad, las grandes tapan a las chicas. Repasa "La cola del fan-out", en 30.7.'
@@ -176,10 +176,10 @@ SD.defineQuiz('m30', {
       id: 'hibrido', type: 'single',
       prompt: '¿Cómo funciona el timeline híbrido?',
       options: [
-        'Las cuentas comunes hacen fan-out en escritura; las que superan un umbral de seguidores no, y sus tweets se mezclan al leer.',
-        'Todos hacen fan-out en lectura, salvo los usuarios que pagan.',
+        'Las cuentas comunes hacen fan-out en escritura; las enormes se mezclan al leer.',
+        'Todos hacen fan-out en lectura, salvo los usuarios que más leen, que reciben copias.',
         'Los tweets se copian a la mitad de los seguidores y la otra mitad los lee al cargar.',
-        'Las cuentas famosas hacen fan-out en escritura con prioridad.'
+        'Las cuentas famosas hacen fan-out en escritura con prioridad y las comunes al leer.'
       ],
       answer: 0,
       explain: 'Cada usuario sigue a pocas cuentas famosas, y las listas de esas cuentas son las más cacheadas. Repasa 30.8.'
@@ -196,11 +196,11 @@ SD.defineQuiz('m30', {
       id: 'contadores', type: 'multi',
       prompt: 'Un tweet recibe 50&#8239;000 likes por segundo. ¿Qué técnicas sirven para su contador? Marca todo lo que corresponde.',
       options: [
-        'Guardar cada like como fila (user_id, tweet_id) y derivar el número aparte.',
-        'Acumular incrementos en memoria en cada servidor y volcar uno por segundo.',
+        'Guardar cada like como fila (user_id, tweet_id) y derivar el número.',
+        'Acumular incrementos en memoria y volcar uno por segundo.',
         'Partir el contador en subcontadores y sumarlos al leer.',
-        'Un UPDATE likes = likes + 1 por cada like sobre la misma fila.',
-        'Bloquear la fila con SELECT FOR UPDATE antes de cada incremento.'
+        'Un UPDATE likes = likes + 1 por cada like sobre la misma fila, dentro de una transacción.',
+        'Bloquear la fila con SELECT FOR UPDATE antes de cada incremento para no perder ninguno.'
       ],
       answer: [0, 1, 2],
       explain: 'Las dos últimas serializan todas las escrituras sobre una sola fila: es la clave caliente del M04. Repasa 30.11.'
@@ -209,10 +209,10 @@ SD.defineQuiz('m30', {
       id: 'sketch', type: 'single',
       prompt: 'Un count-min sketch con ε = 0.001 y δ = 0.01 en una ventana de 10 millones de menciones. ¿Qué garantiza?',
       options: [
-        'Conteos exactos.',
-        'Que cada conteo se pase como mucho en 10&#8239;000 con 99&#8239;% de probabilidad, y que nunca cuente de menos.',
-        'Que cada conteo pueda quedar corto en hasta 10&#8239;000.',
-        'Que use memoria proporcional a la cantidad de frases.'
+        'Conteos exactos con una memoria fija, sin importar cuántas frases haya.',
+        'Que cada conteo se pase como mucho en 10&#8239;000, con 99&#8239;% de probabilidad.',
+        'Que cada conteo pueda quedar corto o largo en hasta 10&#8239;000, con 99&#8239;% de probabilidad.',
+        'Que use memoria proporcional a la cantidad de frases distintas de la ventana.'
       ],
       answer: 1,
       explain: 'El error es ε × N = 0.001 × 10 millones = 10&#8239;000, siempre hacia arriba, con 2&#8239;719 × 5 contadores fijos. Una tendencia, además, mide cuánto supera la ventana actual a la línea base de la frase, no el volumen. Repasa 30.12.'
@@ -221,11 +221,11 @@ SD.defineQuiz('m30', {
       id: 'busqueda', type: 'multi',
       prompt: '¿Qué hace que un tweet sea buscable en segundos? Marca todo lo que corresponde.',
       options: [
-        'Un índice invertido en memoria para la franja de tiempo reciente.',
+        'Un índice invertido en memoria para lo reciente.',
         'Listas de ids ordenadas, que se recorren desde lo más nuevo.',
         'Un solo escritor por índice y lectores sin locks.',
         'Reconstruir todo el índice cada 10 segundos.',
-        'Buscar con LIKE sobre la tabla de tweets.'
+        'Buscar con LIKE sobre la tabla de tweets particionada por fecha.'
       ],
       answer: [0, 1, 2],
       explain: 'Earlybird indexa en memoria, particiona por tiempo y aprovecha que los ids Snowflake ya están ordenados. Repasa 30.13.'

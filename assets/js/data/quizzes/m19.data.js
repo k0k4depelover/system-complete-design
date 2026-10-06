@@ -7,9 +7,9 @@ SD.defineQuiz('m19', {
       prompt: 'El servicio de despliegues, que publica la tabla de rutas, se cae durante una hora. ¿Qué tendría que pasar con las requests?',
       options: [
         'Fallan con 503 hasta que vuelva, porque el router no sabe a dónde mandarlas.',
-        'Se siguen atendiendo con la última tabla de rutas que el router tiene en memoria; lo que no se puede es desplegar ni cambiar pesos de tráfico.',
+        'Se atienden con la última tabla que el router tiene en memoria.',
         'El router consulta el registry directamente en cada request mientras tanto.',
-        'Se mandan todas a otra región.'
+        'Se mandan todas a otra región mientras tanto.'
       ],
       answer: 1,
       explain: 'El plano de datos no depende del plano de control para atender una request: es la estabilidad estática. Si dependiera, una caída del plano de control sería una caída de toda la API. Repasa 19.2.'
@@ -18,10 +18,10 @@ SD.defineQuiz('m19', {
       id: 'senales', type: 'single',
       prompt: 'Dos réplicas tienen 20 requests en curso cada una. La A tiene en cola tres prompts de 40 000 tokens sin procesar; la B, tres de 500. ¿Qué señal distingue cuál está más cargada?',
       options: [
-        'Las requests en curso: son iguales, así que da lo mismo.',
-        'Los tokens de prefill pendientes: la A tiene unos 120 000 por calcular y la B unos 1 500.',
-        'La utilización de GPU que reporta nvidia-smi.',
-        'La cantidad de GPUs de cada réplica.'
+        'Las requests en curso: son iguales, así que da lo mismo a cuál mandar la siguiente.',
+        'Los tokens de prefill pendientes: la A tiene unos 120 000 y la B unos 1 500.',
+        'La utilización de GPU que reporta nvidia-smi, que sube con el prefill pendiente.',
+        'El uso de KV cache, que ya incluye los prompts que esperan en la cola.'
       ],
       answer: 1,
       explain: 'Contar requests no ve su tamaño. A unos 14 000 tokens por segundo, la A tiene más de 8 s de prefill por delante y la B unos 0.1 s. Repasa la tabla de señales en 19.5.'
@@ -30,10 +30,10 @@ SD.defineQuiz('m19', {
       id: 'hash-prefijo', type: 'single',
       prompt: 'Un router hashea los primeros 256 tokens del prompt para elegir réplica. Una app con el 40&#8239;% del tráfico usa siempre el mismo prompt de sistema. ¿Qué pasa?',
       options: [
-        'Todas sus requests van a la misma réplica, que se satura mientras otras quedan vacías.',
-        'El tráfico se reparte parejo porque el hash es uniforme.',
+        'Todas sus requests van a la misma réplica, que se satura.',
+        'El tráfico se reparte parejo, porque el hash es uniforme sobre todas las réplicas.',
         'Las requests se rechazan por prompt duplicado.',
-        'La réplica comparte su KV cache con las demás.'
+        'La réplica copia su KV cache a las demás cuando detecta que el prefijo es popular.'
       ],
       answer: 0,
       explain: 'El hash es uniforme sobre claves distintas, pero aquí casi todo el tráfico tiene la misma clave. En el simulador, esa política deja una réplica con 6.6 veces la carga promedio. Hace falta acotar la carga. Repasa 19.6.'
@@ -42,11 +42,11 @@ SD.defineQuiz('m19', {
       id: 'carga-acotada', type: 'multi',
       prompt: '¿Qué hace el routing por prefijo con carga acotada? Marca todo lo que corresponde.',
       options: [
-        'Entre las réplicas por debajo de un techo de carga, por ejemplo 1.25 veces el promedio, elige la que tiene el prefijo más largo en su KV cache.',
+        'Entre las réplicas bajo un techo de carga, elige la que tiene el prefijo más largo.',
         'Si ninguna réplica está por debajo del techo, elige la menos cargada.',
-        'Garantiza que cada conversación siempre vaya a la misma réplica.',
-        'Un prefijo muy pedido termina replicado en varias réplicas, porque las que reciben el desborde pagan su prefill una vez y lo guardan.',
-        'Necesita consenso entre routers para mantener el índice.'
+        'Garantiza que cada conversación siempre vaya a la misma réplica mientras esa réplica siga viva.',
+        'Un prefijo muy pedido termina en varias réplicas, por el desborde.',
+        'Necesita consenso entre routers para mantener el índice de prefijos idéntico en todos.'
       ],
       answer: [0, 1, 3],
       explain: 'Es la idea del hashing consistente con carga acotada aplicada al prefijo. No garantiza afinidad (el techo la rompe cuando hace falta) y el índice es una pista que puede estar desactualizada, sin consenso. Repasa 19.6.'
@@ -55,10 +55,10 @@ SD.defineQuiz('m19', {
       id: 'metrica', type: 'single',
       prompt: '¿Por qué la utilización de GPU es una mala métrica para el autoscaling de inferencia?',
       options: [
-        'Porque no se puede leer desde Kubernetes.',
-        'Porque mide la fracción del tiempo en que algún kernel estaba corriendo: una réplica con una request y otra con 64 marcan casi lo mismo.',
-        'Porque siempre marca 0 en las H100.',
-        'Porque cambia demasiado rápido.'
+        'Porque Kubernetes no puede leer métricas de GPU sin un operador especial.',
+        'Porque una réplica con una request y otra con 64 marcan casi lo mismo.',
+        'Porque en las H100 la reporta el driver solo cada varios minutos.',
+        'Porque cambia demasiado rápido y el HPA escalaría y desescalaría todo el tiempo.'
       ],
       answer: 1,
       explain: 'Hay que medir lo que se agota: el uso de KV cache, la cola o el TTFT contra su SLO. Repasa 19.7.'
@@ -94,10 +94,10 @@ SD.defineQuiz('m19', {
       id: 'regiones', type: 'single',
       prompt: 'Tres regiones trabajan al 70&#8239;% de su capacidad. Cae una. ¿Qué pasa con las otras dos, y qué uso máximo permitiría absorber la caída sin recortar?',
       options: [
-        'Quedan al 70&#8239;%; el uso máximo es 100&#8239;%.',
-        'Quedan al 105&#8239;%; el uso máximo sin recortar es (3 − 1) / 3, un 67&#8239;%.',
+        'Quedan al 70&#8239;%, porque el tráfico de la caída se pierde; el uso máximo es 100&#8239;%.',
+        'Quedan al 105&#8239;%; el uso máximo es (3 − 1) / 3, un 67&#8239;%.',
         'Quedan al 140&#8239;%; el uso máximo es 50&#8239;%.',
-        'Quedan al 90&#8239;%; el uso máximo es 75&#8239;%.'
+        'Quedan al 90&#8239;%, porque reparten el 70&#8239;% entre más; el uso máximo es 75&#8239;%.'
       ],
       answer: 1,
       explain: '0.70 × 3 / 2 = 1.05. Para absorber la caída de una región entre R sin recortar, u ≤ (R − 1) / R. Si no, hay que decidir de antemano a quién se recorta. Repasa 19.10.'

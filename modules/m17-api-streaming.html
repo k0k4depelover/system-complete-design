@@ -472,7 +472,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         <li>Una línea que empieza con dos puntos es un comentario. El estándar recomienda mandar uno cada unos 15 segundos para que ningún proxy cierre la conexión por inactividad.</li>
       </ul>
 
-      <p>El navegador trae un cliente de SSE, <code>EventSource</code>, pero no sirve para una API de LLM: solo hace GET y no permite headers propios como <code>Authorization</code>. <span class="badge badge--doc">Documentado</span> Las APIs de LLM reciben un POST con el prompt en el cuerpo, así que los clientes leen el stream con <code>fetch</code> e interpretan el formato ellos mismos, que es lo que hacen los SDK. ¿Por qué no WebSockets? Porque SSE es HTTP común: pasa por proxies, CDNs y balanceadores sin configuración especial, se multiplexa en HTTP/2 y usa la misma autenticación que el resto de la API. Para texto alcanza con un solo sentido. La voz en tiempo real, que sí necesita los dos sentidos, usa WebSockets o WebRTC (M24).</p>
+      <p>El navegador trae un cliente de SSE, <code>EventSource</code>, pero no sirve para una API de LLM: solo hace GET y no permite headers propios como <code>Authorization</code>. <span class="badge badge--doc">Documentado</span> Las APIs de LLM reciben un POST con el prompt en el cuerpo, así que los clientes leen el stream con <code>fetch</code> e interpretan el formato ellos mismos, que es lo que hacen los SDK. ¿Por qué no WebSockets? Porque SSE es HTTP común: pasa por proxies, CDNs y balanceadores sin configuración especial, se multiplexa en HTTP/2 y usa la misma autenticación que el resto de la API. Para texto alcanza con un solo sentido. La voz en tiempo real, que sí necesita los dos sentidos, usa WebSockets o WebRTC (<a href="m24-voz-tiempo-real.html#transporte">M24</a>).</p>
 
       <h3 id="sse-formatos">Tres formatos, la misma idea</h3>
 
@@ -775,11 +775,11 @@ for (;;) {
 
       <p>Responses y Messages hacen lo mismo con otros nombres: un ítem <code>function_call</code> que se responde con <code>function_call_output</code>, o un bloque <code>tool_use</code> que se responde con <code>tool_result</code>. Lo que importa es lo que queda de tu lado:</p>
       <ul>
-        <li><b>Los argumentos no son una autorización.</b> El modelo puede equivocarse o ser manipulado por un texto que leyó (prompt injection, <a href="m22-operar-modelos.html#injection">M22</a> y M25). Si pide el pedido 8812, tu servicio verifica que ese pedido sea del usuario de la sesión, igual que con cualquier request de un cliente (BOLA, M10).</li>
+        <li><b>Los argumentos no son una autorización.</b> El modelo puede equivocarse o ser manipulado por un texto que leyó (prompt injection, <a href="m22-operar-modelos.html#injection">M22</a> y <a href="m25-agentes.html#injection">M25</a>). Si pide el pedido 8812, tu servicio verifica que ese pedido sea del usuario de la sesión, igual que con cualquier request de un cliente (BOLA, M10).</li>
         <li><b>Las acciones con efectos necesitan idempotencia.</b> Si una herramienta cobra, envía un correo o crea un ticket, deriva una idempotency key del id de la llamada: un reintento no puede cobrar dos veces (M02, M27).</li>
         <li><b>Los errores vuelven al modelo.</b> Si la herramienta falla o tarda demasiado, se le devuelve el error como resultado ("el servicio de pedidos no responde") para que responda con lo que tiene o proponga otra cosa.</li>
         <li><b>Las llamadas pueden venir juntas.</b> Con <code>parallel_tool_calls</code>, el modelo pide varias en un mismo turno: se ejecutan en paralelo y cada una se responde con su id.</li>
-        <li><b>El bucle necesita un límite.</b> Un modelo puede pedir herramientas en cadena. Se fija un máximo de pasos, de tokens, de tiempo y de dinero por tarea (M25).</li>
+        <li><b>El bucle necesita un límite.</b> Un modelo puede pedir herramientas en cadena. Se fija un máximo de pasos, de tokens, de tiempo y de dinero por tarea (<a href="m25-agentes.html#presupuestos">M25</a>).</li>
         <li><b>Las definiciones cuestan tokens.</b> Viajan en cada request como parte de la entrada. Conviene que sean cortas y que estén siempre en el mismo orden para no romper el prompt caching (M16).</li>
       </ul>
 

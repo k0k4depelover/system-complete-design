@@ -14,10 +14,10 @@ SD.defineQuiz('m13', {
       id: 'h200', type: 'single',
       prompt: 'Cambias las H100 de un servicio de chat por H200. ¿Qué mejora?',
       options: [
-        'Solo el prefill.',
-        'El decode, por el 43 % más de ancho de banda, y la cantidad de usuarios que caben, por el 76 % más de memoria; el prefill queda igual.',
-        'Todo por igual.',
-        'Nada: tienen el mismo cómputo.'
+        'Solo el prefill, por el cómputo extra que trae la H200 sobre la H100.',
+        'El decode, por el 43 % más de ancho de banda, y los usuarios que caben, por la memoria.',
+        'Todo por igual: la H200 es una generación nueva, con más cómputo y más memoria.',
+        'Nada: tienen el mismo cómputo, y eso es lo que limita a un servicio de chat.'
       ],
       answer: 1,
       explain: 'La H200 tiene el mismo cómputo que la H100 con más y más rápida memoria. El prefill vive del cómputo; el decode, del ancho de banda y de la memoria para el KV cache.'
@@ -34,10 +34,10 @@ SD.defineQuiz('m13', {
       id: 'tp', type: 'single',
       prompt: '¿Por qué el tensor parallelism se usa dentro de un servidor y no entre servidores?',
       options: [
-        'Porque los servidores no pueden compartir memoria.',
-        'Porque sincroniza las GPUs dos veces por capa, cientos de veces por token, y solo NVLink tiene el ancho de banda y la latencia para eso: la red entre servidores es unas 9 veces más lenta por sentido.',
-        'Porque la licencia del modelo lo prohíbe.',
-        'Porque InfiniBand no soporta GPUs.'
+        'Porque los servidores no comparten memoria y cada GPU necesita el modelo entero.',
+        'Porque sincroniza las GPUs dos veces por capa, y solo NVLink aguanta ese ritmo.',
+        'Porque las licencias de los modelos abiertos prohíben repartirlos entre servidores.',
+        'Porque InfiniBand no puede transportar tensores, solo paquetes de red comunes.'
       ],
       answer: 1,
       explain: 'Entre servidores se usan formas de paralelismo que se comunican mucho menos, como pipeline o réplicas independientes. Los racks con NVLink de 72 GPUs amplían el dominio donde el tensor parallelism es viable.'
@@ -54,10 +54,10 @@ SD.defineQuiz('m13', {
       id: 'kv', type: 'single',
       prompt: '¿Por qué el decode con contextos largos sigue limitado por memoria aunque juntes cientos de usuarios en el batch?',
       options: [
-        'Porque los pesos no se pueden compartir entre usuarios.',
-        'Porque cada usuario suma su KV cache a los bytes que hay que leer en cada paso, y la intensidad aritmética casi no sube.',
-        'Porque la GPU se calienta.',
-        'Porque el prefill ocupa todo el cómputo.'
+        'Porque los pesos no se pueden compartir entre usuarios y cada uno lee su copia.',
+        'Porque cada usuario suma su KV cache a lo que se lee en cada paso.',
+        'Porque la GPU baja su frecuencia por temperatura cuando el batch es grande.',
+        'Porque el prefill de los usuarios nuevos ocupa todo el cómputo disponible.'
       ],
       answer: 1,
       explain: 'Los pesos sí se comparten, pero el KV de cada usuario no. Con 64 usuarios y 4000 tokens de contexto, el 70B hace unas 58 operaciones por byte, diez veces por debajo del quiebre de la H100.'
@@ -66,10 +66,10 @@ SD.defineQuiz('m13', {
       id: 'mfu', type: 'single',
       prompt: 'Un entrenamiento reporta un MFU del 40 %. ¿Qué significa?',
       options: [
-        'Que usa el 40 % de la memoria de las GPUs.',
-        'Que el 40 % del pico de FLOPS de las GPUs se dedica a cómputo útil del modelo; el resto se pierde en esperas, comunicación y trabajo que no es del modelo.',
-        'Que el 40 % de las GPUs está roto.',
-        'Que tarda un 40 % más de lo previsto.'
+        'Que usa el 40 % de la memoria de las GPUs y el resto queda libre para el batch.',
+        'Que el 40 % del pico de FLOPS se dedica a cómputo útil del modelo.',
+        'Que el 40 % de las GPUs del clúster está activo y el resto espera turno.',
+        'Que el entrenamiento tarda un 40 % más de lo que predice el cálculo teórico.'
       ],
       answer: 1,
       explain: 'Entre un 35 y un 45 % es un MFU muy bueno para entrenamientos grandes: Llama 3 405B reportó entre 38 y 43 % en BF16.'
@@ -78,10 +78,10 @@ SD.defineQuiz('m13', {
       id: 'falla', type: 'single',
       prompt: 'En una réplica que reparte el modelo en 8 GPUs con tensor parallelism, una GPU empieza a dar errores de HBM. ¿Qué pasa?',
       options: [
-        'Las otras 7 siguen sirviendo con un poco menos de velocidad.',
-        'Se cae toda la réplica, porque cada capa necesita a las 8. Se drena, el tráfico va a otras réplicas y se reemplaza el servidor.',
+        'Las otras 7 siguen sirviendo con un poco menos de velocidad hasta el reemplazo.',
+        'Se cae toda la réplica, porque cada capa necesita a las 8 GPUs.',
         'El modelo se reparte solo entre las 7 restantes.',
-        'No pasa nada: la HBM tiene redundancia.'
+        'No pasa nada: la HBM tiene ECC y corrige los errores sin afectar la réplica.'
       ],
       answer: 1,
       explain: 'Cada GPU tiene una parte de cada capa: sin ella, ningún token puede calcularse. Por eso hacen falta varias réplicas y health checks de GPU (DCGM, errores Xid) que saquen la réplica rápido.'

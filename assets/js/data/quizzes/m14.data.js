@@ -6,10 +6,10 @@ SD.defineQuiz('m14', {
       id: 'bf16', type: 'single',
       prompt: '¿Por qué BF16 reemplazó a FP16 para entrenar y servir LLMs?',
       options: [
-        'Porque tiene más precisión que FP16.',
-        'Porque conserva los 8 bits de exponente de FP32: el mismo rango, sin desbordes, a cambio de menos precisión.',
-        'Porque ocupa menos memoria que FP16.',
-        'Porque lo exige PyTorch.'
+        'Porque tiene más precisión que FP16 en la mantisa, y eso mejora la calidad.',
+        'Porque conserva los 8 bits de exponente de FP32: el mismo rango, sin desbordes.',
+        'Porque ocupa menos memoria que FP16 y entra en GPUs más chicas.',
+        'Porque PyTorch dejó de soportar FP16 para entrenar en GPUs recientes.'
       ],
       answer: 1,
       explain: 'FP16 llega hasta 65 504 y las activaciones grandes lo desbordan. BF16 ocupa lo mismo (16 bits) y tiene el rango de FP32; la precisión perdida casi no importa para redes neuronales.'
@@ -26,10 +26,10 @@ SD.defineQuiz('m14', {
       id: 'grupos', type: 'single',
       prompt: '¿Para qué sirve usar una escala por cada grupo de 128 pesos en lugar de una para toda la matriz?',
       options: [
-        'Para que el modelo ocupe menos memoria.',
-        'Para que un outlier solo infle la escala de su propio grupo y no la de toda la matriz.',
-        'Para calcular más rápido.',
-        'Para no necesitar datos de calibración.'
+        'Para que el modelo ocupe menos memoria, porque las escalas por grupo son más chicas.',
+        'Para que un outlier solo infle la escala de su grupo y no la de toda la matriz.',
+        'Para calcular más rápido, porque cada grupo se multiplica en un núcleo distinto.',
+        'Para no necesitar datos de calibración al cuantizar.'
       ],
       answer: 1,
       explain: 'Las escalas por grupo cuestan un poco de memoria (4.125 bits por peso en INT4 con escalas de 16 bits) y protegen al resto de los pesos de los extremos de cada zona.'
@@ -38,10 +38,10 @@ SD.defineQuiz('m14', {
       id: 'w4a16', type: 'single',
       prompt: 'Cuantizas los pesos a INT4 (W4A16) en un servicio de chat. ¿Qué mejora sobre todo?',
       options: [
-        'El prefill, porque calcula en 4 bits.',
-        'El decode y la memoria: se leen 4 veces menos bytes de pesos por paso, aunque el cálculo siga en 16 bits.',
-        'La calidad de las respuestas.',
-        'Nada: solo cambia el tamaño del archivo.'
+        'El prefill, porque los tensor cores calculan en 4 bits y hacen más operaciones.',
+        'El decode y la memoria: se leen 4 veces menos bytes de pesos por paso.',
+        'La calidad de las respuestas, porque INT4 redondea el ruido de los pesos.',
+        'Nada en el servicio: solo cambia el tamaño del archivo en disco.'
       ],
       answer: 1,
       explain: 'El decode está limitado por la memoria: leer menos bytes lo acelera casi en proporción. El prefill, limitado por cómputo, no gana, porque los pesos se desempaquetan a 16 bits para calcular.'
@@ -50,10 +50,10 @@ SD.defineQuiz('m14', {
       id: 'smoothquant', type: 'single',
       prompt: '¿Qué hace SmoothQuant?',
       options: [
-        'Entrena el modelo de nuevo en 8 bits.',
-        'Divide los canales de activación con outliers por un factor y multiplica los pesos por el mismo factor: el resultado no cambia, pero activaciones y pesos quedan fáciles de cuantizar a 8 bits.',
-        'Borra los outliers de las activaciones.',
-        'Cuantiza solo el KV cache.'
+        'Reentrena el modelo en 8 bits para que aprenda a no generar outliers.',
+        'Divide los canales de activación con outliers por un factor y multiplica los pesos por él.',
+        'Borra los outliers de las activaciones, recortándolos al rango de INT8 antes de cada multiplicación.',
+        'Cuantiza solo el KV cache a 8 bits y deja pesos y activaciones en 16.'
       ],
       answer: 1,
       explain: 'Las activaciones tienen outliers enormes en pocos canales; los pesos son más parejos. SmoothQuant reparte la dificultad entre los dos con una transformación que no altera la cuenta.'
@@ -62,10 +62,10 @@ SD.defineQuiz('m14', {
       id: 'awq', type: 'single',
       prompt: '¿Qué idea usa AWQ para cuantizar pesos a 4 bits con poca pérdida?',
       options: [
-        'Reentrenar cada capa.',
-        'Proteger el ~1 % de canales de pesos más importantes, que reconoce por el tamaño de sus activaciones, agrandándolos antes de cuantizar.',
-        'Guardar los pesos importantes en FP32.',
-        'Usar escalas de 32 bits.'
+        'Reentrenar cada capa con los pesos cuantizados para que recupere la calidad.',
+        'Proteger el ~1 % de canales más importantes, según sus activaciones, antes de cuantizar.',
+        'Guardar el ~1 % de pesos más importantes en FP32 y el resto en INT4, en una matriz de precisión mixta.',
+        'Usar escalas de 32 bits por peso en lugar de una por grupo.'
       ],
       answer: 1,
       explain: 'AWQ mira las activaciones de la calibración para saber qué canales de pesos más influyen en la salida, y los escala para que el redondeo les haga menos daño.'
@@ -81,10 +81,10 @@ SD.defineQuiz('m14', {
       id: 'calib', type: 'single',
       prompt: 'Cuantizaste con AWQ calibrando con chat en inglés, y tu tráfico real es generación de código en español. ¿Cuál es el riesgo?',
       options: [
-        'Ninguno: la calibración no importa.',
-        'Que los canales importantes para tu tráfico sean otros y la calidad caiga justo en las tareas que no mediste.',
-        'Que el modelo responda en inglés.',
-        'Que ocupe más memoria.'
+        'Ninguno: la calibración solo fija las escalas y sirve igual para cualquier tipo de tráfico.',
+        'Que los canales importantes para tu tráfico sean otros y la calidad caiga ahí.',
+        'Que el modelo empiece a responder en inglés aunque le hablen en español.',
+        'Que el modelo cuantizado ocupe más memoria al ver tokens que no calibró.'
       ],
       answer: 1,
       explain: 'La calibración decide escalas y qué se protege. Hay que calibrar con muestras parecidas al tráfico real y medir con evals de esas mismas tareas.'
@@ -93,11 +93,11 @@ SD.defineQuiz('m14', {
       id: 'medir', type: 'multi',
       prompt: '¿Qué deberías medir antes de desplegar un modelo cuantizado?',
       options: [
-        'Tus evals de tareas reales: código que compila, JSON válido, tool calls correctas.',
-        'Solo la perplejidad global.',
+        'Tus evals de tareas reales: código que compila, JSON válido.',
+        'Solo la perplejidad global sobre un corpus general, que resume la calidad.',
         'Esas mismas tareas con contextos largos.',
         'Una comparación contra la versión BF16 con los mismos prompts.',
-        'El tamaño del archivo en disco.'
+        'El tamaño del archivo en disco y el tiempo de carga del modelo.'
       ],
       answer: [0, 2, 3],
       explain: 'La perplejidad puede casi no moverse mientras una tarea concreta se rompe. Lo que decide es la comparación contra la referencia en tus tareas, incluidos los contextos largos, que suelen degradar primero.'

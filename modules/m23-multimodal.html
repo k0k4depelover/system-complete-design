@@ -1088,7 +1088,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
         <p>Si el servicio de moderación se cae, la moderación <b>falla cerrada</b>: los jobs se quedan en <code>moderating</code> o terminan en <code>failed</code> con <code>internal</code>, y nada se entrega sin revisar. Es lo contrario del <a href="m08-resiliencia.html#rate-limiting">rate limiter</a> del M08, que falla abierto porque un error deja pasar unas requests de más. Acá, un error entrega una imagen que no se puede retirar. Lo que sí se puede hacer es degradar con cuidado: seguir aceptando jobs y avisar que van a tardar, en lugar de rechazarlos.</p>
       </aside>
 
-      <p>Cuando la generación de imágenes es una herramienta de un agente, el prompt ya no lo escribe el usuario sino el modelo, a partir de un pedido que puede venir de un documento o de una página web. La moderación del prompt sigue siendo la misma; lo que cambia es de dónde salió el pedido, y ese es el tema de los agentes (M25).</p>
+      <p>Cuando la generación de imágenes es una herramienta de un agente, el prompt ya no lo escribe el usuario sino el modelo, a partir de un pedido que puede venir de un documento o de una página web. La moderación del prompt sigue siendo la misma; lo que cambia es de dónde salió el pedido, y ese es el tema de los agentes (<a href="m25-agentes.html#injection">M25</a>).</p>
 
       <h2 id="procedencia"><span class="sec-num">23.11</span>Procedencia: de dónde viene una imagen</h2>
 

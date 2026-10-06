@@ -13,10 +13,10 @@ SD.defineQuiz('m00', {
       id: 'p99', type: 'single',
       prompt: 'Un endpoint tiene latencia promedio de 149 ms y p99 de 5 s. ¿Qué afirmación es correcta?',
       options: [
-        'El promedio basta: 149 ms es una buena experiencia para casi todos.',
-        'Al menos 1 de cada 100 requests tarda 5 s o más, y en una página que hace muchas llamadas casi todos los usuarios lo van a notar.',
-        'El p99 es ruido estadístico; conviene descartarlo y mirar el p50.',
-        'El p99 no puede ser 30 veces el promedio: los datos están mal.'
+        'El promedio es lo que importa: con 149 ms la gran mayoría tiene buena experiencia y el p99 afecta a muy pocos.',
+        'Al menos 1 de cada 100 requests tarda 5 s o más, y en una página con muchas llamadas casi todos lo notan.',
+        'El p99 es ruido de unas pocas requests anómalas; conviene descartarlo y fijar el SLO sobre el p50.',
+        'El p99 no puede ser 30 veces el promedio con 100 muestras, así que la medición está mal.'
       ],
       answer: 1,
       explain: 'Con 98 requests de 50 ms y 2 de 5 s, el promedio es 149 ms y el p99 es 5 s. El promedio esconde la cola, y con fan-out la cola se vuelve la experiencia normal: si una página hace 100 llamadas, 1 − 0.99¹⁰⁰ ≈ 63 % de las cargas incluye al menos una lenta.'
@@ -47,10 +47,10 @@ SD.defineQuiz('m00', {
       prompt: 'En un chat con LLM, ¿cuáles de estos son requisitos no funcionales?',
       options: [
         'El p95 del tiempo al primer token es menor a 1.5 s.',
-        'El usuario puede regenerar una respuesta.',
-        'Un mensaje confirmado no se pierde aunque caiga una zona de disponibilidad completa.',
-        'El costo de GPU por millón de tokens servidos no supera un tope definido.',
-        'El usuario puede exportar sus conversaciones.'
+        'El usuario puede regenerar una respuesta y elegir cuál de las versiones queda en el historial.',
+        'Un mensaje confirmado sobrevive a la caída de una zona completa.',
+        'El costo de GPU por millón de tokens no supera un tope.',
+        'El usuario puede exportar todas sus conversaciones en JSON desde la configuración de la cuenta.'
       ],
       answer: [0, 2, 3],
       explain: 'Latencia, durabilidad y costo describen qué tan bien funciona el sistema: son no funcionales, y cada uno trae un número. Regenerar y exportar son funcionalidades (qué hace).'
@@ -65,10 +65,10 @@ SD.defineQuiz('m00', {
       id: 'failopen', type: 'single',
       prompt: 'El Redis que guarda los contadores del rate limiter se cae. Tu gateway está configurado en <b>fail-open</b>. ¿Qué pasa?',
       options: [
-        'Todas las requests reciben 429 hasta que Redis vuelve.',
-        'Las requests siguen pasando sin límite: el producto sigue disponible, pero queda expuesto a abuso y a saturar las GPUs.',
-        'El gateway cambia solo a fail-closed después de un minuto.',
-        'Nada: el rate limiter no afecta a las requests.'
+        'Todas las requests reciben 429 hasta que Redis vuelve, para proteger las GPUs mientras no hay contadores.',
+        'Las requests pasan sin límite: el producto sigue arriba, pero expuesto a abuso y a saturar las GPUs.',
+        'El gateway pasa solo a fail-closed tras un minuto sin Redis y desde ahí rechaza con 503.',
+        'Cada instancia del gateway cuenta en su memoria local y se mantiene el mismo límite global exacto.'
       ],
       answer: 1,
       explain: 'Fail-open prioriza la disponibilidad: sin contadores, deja pasar todo. Es razonable si hay otras defensas aguas abajo (colas con límite, admission control en las GPUs). Fail-closed protegería la capacidad a costa de tirar el producto.'
@@ -77,10 +77,10 @@ SD.defineQuiz('m00', {
       id: 'correlacion', type: 'single',
       prompt: 'Con dos réplicas independientes de 99.9 % la fórmula da 99.9999 %. ¿Por qué en la práctica casi nunca se logra?',
       options: [
-        'Porque la fórmula correcta es sumar las disponibilidades.',
-        'Porque las fallas suelen estar correlacionadas: el mismo deploy, la misma región, la misma dependencia o el mismo bug tiran las dos réplicas a la vez.',
-        'Porque dos réplicas duplican la latencia.',
-        'Porque ninguna réplica puede pasar de 99.9 %.'
+        'Porque la fórmula correcta suma las indisponibilidades en lugar de multiplicarlas, y eso da 99.8 %.',
+        'Porque las fallas suelen estar correlacionadas: un mismo deploy o región tira las dos.',
+        'Porque mantener dos réplicas sincronizadas duplica la latencia, y los timeouts cuentan como caídas.',
+        'Porque el total queda topado por la réplica más débil, y ninguna pasa de 99.9 %.'
       ],
       answer: 1,
       explain: '1 − (1 − a)ⁿ supone independencia. Un deploy con un bug llega a todas las réplicas; una región caída se lleva todo lo que vive en ella. Por eso se despliega de forma escalonada (canary) y se reparte entre zonas y regiones.'

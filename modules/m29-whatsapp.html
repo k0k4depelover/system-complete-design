@@ -777,7 +777,7 @@ def pendientes(dispositivo: str, desde: int, limite: int = 100):
         <li><b>Las claves de la llamada viajan cifradas de extremo a extremo.</b> El que llama genera un secreto maestro de SRTP de 32 bytes para cada dispositivo del destinatario y se lo manda en un mensaje cifrado, igual que cualquier mensaje. Los servidores no tienen acceso a él ni al audio. <span class="badge badge--doc">Documentado</span></li>
         <li><b>En las llamadas grupales,</b> el servidor guarda el estado de la llamada (lista de participantes, quién la inició) y elige a uno como distribuidor de claves; las claves se renuevan cada vez que alguien entra o sale, y la sesión anterior sigue viva 5 segundos para cubrir la transición. <span class="badge badge--doc">Documentado</span></li>
         <li><b>Retransmisión con TURN.</b> La mayoría de las llamadas van directas; una fracción (se suele estimar entre el 10 y el 30&#8239;%) necesita un relay. Un millón de llamadas simultáneas, con un 25&#8239;% retransmitidas, a 40 kbps por sentido, son 1 000 000 × 0.25 × 80 kbps = 20 Gbps. En AWS no hay un TURN administrado para esto; se arma con coturn en instancias EC2 optimizadas para red (c7gn), en varias regiones, o se usa Kinesis Video Streams con WebRTC, que incluye señalización y TURN administrados.</li>
-        <li>El tema completo de voz y tiempo real, con WebRTC, está en el M24.</li>
+        <li>El tema completo de voz y tiempo real, con WebRTC, está en el <a href="m24-voz-tiempo-real.html#transporte">M24</a>.</li>
       </ul>
 
       <h2 id="fallas"><span class="sec-num">29.12</span>Fallas, tormentas de reconexión y despliegues</h2>

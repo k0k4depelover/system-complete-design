@@ -6,10 +6,10 @@ SD.defineQuiz('m06', {
       id: 'e-paradigma', type: 'single',
       prompt: 'En sistemas distribuidos, ¿qué distingue a un modelo síncrono de uno asíncrono?',
       options: [
-        'Si el cliente se bloquea esperando la respuesta o recibe un callback.',
-        'Si existe un límite conocido para cuánto puede tardar un mensaje: con límite, un silencio largo prueba una falla; sin límite, no prueba nada.',
-        'Si las réplicas confirman antes o después de responder.',
-        'Si los mensajes viajan por TCP o por UDP.'
+        'Si el cliente se bloquea esperando la respuesta o sigue trabajando y recibe un callback.',
+        'Si hay un límite conocido para lo que tarda un mensaje: con límite, un silencio prueba una falla.',
+        'Si las réplicas confirman la escritura antes de responder al cliente o después.',
+        'Si los mensajes viajan por TCP, que garantiza la entrega en orden, o por UDP, que no.'
       ],
       answer: 1,
       explain: 'En programación, síncrono es bloquear. En teoría distribuida, es que haya una cota de tiempo conocida. El mundo real es parcialmente síncrono: caótico por momentos, pero en algún momento se calma. Repasa 6.2.'
@@ -18,10 +18,10 @@ SD.defineQuiz('m06', {
       id: 'e-timeout', type: 'single',
       prompt: 'Un nodo deja de responder durante 10 segundos. ¿Qué puede concluir el resto del clúster?',
       options: [
-        'Que el nodo murió, con certeza.',
-        'Que el nodo está vivo pero lento, con certeza.',
-        'Nada con certeza: puede estar muerto, lento, en una pausa de GC o aislado por la red. El timeout es una apuesta.',
-        'Que la red está partida.'
+        'Que el nodo murió con certeza: 10 s es mucho más que cualquier pausa normal.',
+        'Que el nodo está vivo pero lento, porque una caída real cortaría las conexiones TCP.',
+        'Nada con certeza: puede estar muerto, lento, en una pausa de GC o aislado.',
+        'Que la red está partida, porque un nodo caído responde con un RST.'
       ],
       answer: 2,
       explain: 'Sin una cota de tiempo en la que confiar, un silencio no distingue entre caído y lento. Por eso la safety nunca depende de un timeout. Repasa 6.1 y 6.2.'
@@ -30,10 +30,10 @@ SD.defineQuiz('m06', {
       id: 'e-cap', type: 'single',
       prompt: 'Durante una partición, una réplica aislada recibe una lectura. Según CAP, ¿qué opciones tiene?',
       options: [
-        'Responder con el valor más reciente del clúster, que siempre conoce.',
-        'Responder con lo que tiene, que puede estar viejo (elige A), o no responder (elige C).',
-        'Ninguna: CAP dice que los sistemas distribuidos no pueden leer durante una partición.',
-        'Elegir CA y evitar la partición.'
+        'Responder con el valor más reciente del clúster, que conoce por el último heartbeat.',
+        'Responder con lo que tiene, quizá viejo (elige A), o no responder (elige C).',
+        'Ninguna: según CAP, ningún sistema distribuido puede atender lecturas durante una partición.',
+        'Elegir CA: seguir respondiendo con consistencia y renunciar a la tolerancia a particiones.'
       ],
       answer: 1,
       explain: 'La réplica aislada no puede enterarse de lo que se escribió del otro lado. La P no se elige, así que no existe "CA": se elige entre C y A, y la elección puede ser distinta para cada operación. Repasa 6.3.'
@@ -42,10 +42,10 @@ SD.defineQuiz('m06', {
       id: 'e-quorumlat', type: 'single',
       prompt: 'Un primario en Virginia replica a Ohio (~11 ms) y a Irlanda (~75 ms). Cada escritura espera a 2 de 3, contando al primario. Irlanda se congela 2 segundos. ¿Qué pasa con las escrituras?',
       options: [
-        'Tardan unos 2 segundos.',
-        'Siguen tardando unos 11 ms: el quórum espera a la segunda respuesta más rápida, la de Ohio.',
-        'Fallan hasta que Irlanda vuelva.',
-        'Tardan unos 75 ms.'
+        'Tardan unos 2 segundos, porque cada escritura espera a que Irlanda despierte.',
+        'Siguen en unos 11 ms: el quórum espera a la respuesta de Ohio.',
+        'Fallan hasta que Irlanda vuelva, porque el quórum necesita a las tres réplicas.',
+        'Tardan unos 75 ms, como siempre.'
       ],
       answer: 1,
       explain: 'Un quórum espera a la W-ésima respuesta más rápida, no a la más lenta. Solo esperar a todas las réplicas ataría cada escritura a la peor. Repasa 6.4.'
@@ -54,10 +54,10 @@ SD.defineQuiz('m06', {
       id: 'e-el', type: 'single',
       prompt: 'Un sistema EL (latencia sobre consistencia) responde las escrituras en cuanto las confirma el nodo que las recibió. ¿Qué gana y qué arriesga?',
       options: [
-        'Gana latencia baja, porque no espera a ninguna réplica; arriesga que otra réplica lea el valor viejo y perder escrituras si el nodo cae antes de replicar.',
-        'Gana consistencia fuerte; arriesga latencia alta.',
-        'Gana tolerancia a particiones; no arriesga nada.',
-        'Gana latencia baja sin arriesgar nada, porque replica después.'
+        'Gana latencia baja; arriesga lecturas viejas en otras réplicas y perder lo que no se replicó.',
+        'Gana consistencia fuerte, porque un solo nodo decide; arriesga latencia alta en las lecturas.',
+        'Gana tolerancia a particiones; no arriesga nada, porque la réplica termina llegando.',
+        'Gana latencia baja sin arriesgar nada, porque replicar en segundo plano nunca pierde datos.'
       ],
       answer: 0,
       explain: 'Responder con lo que sabe el nodo al que le preguntaste evita cargar con la latencia de las réplicas lejanas, pero lo confirmado todavía no está en ninguna otra parte. Repasa 6.4.'
@@ -72,10 +72,10 @@ SD.defineQuiz('m06', {
       id: 'e-sesion', type: 'single',
       prompt: 'Un usuario cambia su foto de perfil, recarga y ve la foto vieja, porque la lectura fue a una réplica atrasada. ¿Qué garantía mínima falta?',
       options: [
-        'Linealizabilidad.',
-        'Read-your-writes, una garantía de sesión: cada cliente ve sus propias escrituras.',
-        'Serializabilidad.',
-        'Ninguna: es el comportamiento esperado de cualquier sistema.'
+        'Linealizabilidad: todo el sistema tiene que comportarse como una sola copia.',
+        'Read-your-writes: cada cliente ve sus propias escrituras.',
+        'Serializabilidad: las transacciones tienen que parecer ejecutadas una detrás de otra.',
+        'Ninguna: es lo esperado con réplicas, y no se arregla sin replicación síncrona.'
       ],
       answer: 1,
       explain: 'No hace falta que todo el sistema sea linealizable; basta con que cada usuario vea lo suyo, con un token de versión o leyendo del líder un rato después de escribir. Repasa 6.5.'
@@ -97,10 +97,10 @@ SD.defineQuiz('m06', {
       id: 'e-2pc', type: 'single',
       prompt: 'En two-phase commit, el coordinador cae justo después de que todos los participantes votaron que sí. ¿Qué pasa?',
       options: [
-        'Los participantes confirman solos, porque todos votaron que sí.',
-        'Los participantes abortan solos después de un timeout.',
-        'Los participantes quedan bloqueados con los locks tomados: no saben qué decidió el coordinador y no pueden decidir por su cuenta.',
-        'Nada: 2PC tolera la caída del coordinador.'
+        'Los participantes confirman solos, porque cada uno sabe que votó que sí.',
+        'Los participantes abortan solos tras un timeout y liberan los locks.',
+        'Quedan bloqueados con los locks tomados: no pueden decidir sin el coordinador.',
+        'Nada grave: un participante asume el rol de coordinador y termina el commit.'
       ],
       answer: 2,
       explain: 'Ningún participante sabe si los demás votaron que sí, ni si el coordinador ya decidió. Por eso se replica al coordinador con consenso o se usan sagas. Repasa 6.8.'

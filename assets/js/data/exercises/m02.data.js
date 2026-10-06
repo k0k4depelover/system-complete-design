@@ -8,10 +8,10 @@ SD.defineExercise('m02-feed', {
       id: 'tipo', type: 'single',
       prompt: 'La primera versión usa <code>?page=N</code> con <code>OFFSET (N − 1) × 20</code>. ¿Qué problema aparece primero en las cuentas grandes?',
       options: [
-        'Ninguno: el índice hace que OFFSET sea barato.',
-        'La página 1&#8239;000 lee 20&#8239;000 entradas para devolver 20, y los movimientos nuevos que llegan mientras el usuario scrollea hacen que vea repetidos.',
-        'Que no se puede ordenar por fecha.',
-        'Que los clientes no saben cuántas páginas hay.'
+        'Ninguno: el índice por fecha hace que OFFSET salte directo a la página pedida.',
+        'La página 1&#8239;000 lee 20&#8239;000 entradas para devolver 20, y aparecen repetidos.',
+        'Que no se puede ordenar por fecha si la consulta usa OFFSET.',
+        'Que el COUNT(*) para saber cuántas páginas hay bloquea la tabla de movimientos.'
       ],
       answer: 1,
       explain: 'OFFSET cuenta posiciones desde el principio: el costo crece con la página. Y como es una posición, un insert arriba corre todo un lugar y la página siguiente repite. Las dos cosas se resuelven con un cursor.'
@@ -20,10 +20,10 @@ SD.defineExercise('m02-feed', {
       id: 'indice', type: 'single',
       prompt: 'Pasas a cursor sobre <code>(posted_at, id)</code>. ¿Qué índice necesita la consulta <code>WHERE account_id = $1 AND (posted_at, id) &lt; ($2, $3) ORDER BY posted_at DESC, id DESC LIMIT 21</code>?',
       options: [
-        '<code>(posted_at)</code>',
-        '<code>(account_id)</code>',
+        '<code>(posted_at DESC, id DESC)</code>',
+        '<code>(account_id)</code> y otro aparte en <code>(posted_at)</code>',
         '<code>(account_id, posted_at DESC, id DESC)</code>',
-        '<code>(id, account_id)</code>'
+        '<code>(id, account_id, posted_at)</code>'
       ],
       answer: 2,
       explain: 'Primero la igualdad (la cuenta), después las columnas de orden en el mismo orden y dirección que el ORDER BY. Así el árbol baja directo a la marca dentro de esa cuenta y lee 21 entradas seguidas: O(log n + k). Con solo <code>(account_id)</code>, la base tendría que ordenar las 30&#8239;000 filas de la cuenta en cada página.'
@@ -32,10 +32,10 @@ SD.defineExercise('m02-feed', {
       id: 'perdidos', type: 'single',
       prompt: 'Con el cursor andando, un comercio reclama: a su sistema contable le faltan movimientos que sí aparecen en la app. Sincroniza con <code>posted_at &gt; marca</code>. ¿Qué pasa?',
       options: [
-        'El sistema contable tiene un bug de deduplicación.',
-        'now() devuelve la hora de inicio de la transacción. Un movimiento que tardó 2 s en confirmar aparece con una hora anterior a la marca que el sistema contable ya guardó, y nunca lo vuelve a pedir.',
-        'El índice está corrupto.',
-        'La réplica de lectura borra filas.'
+        'El sistema contable deduplica por monto y fecha, y descarta movimientos iguales legítimos.',
+        'now() es la hora de inicio de la transacción: lo que confirma tarde queda antes de la marca.',
+        'La réplica de lectura tiene lag y el sistema contable lee antes de que lleguen las filas.',
+        'El cursor de la app y el del sistema contable usan zonas horarias distintas.'
       ],
       answer: 1,
       explain: 'Es el commit tardío de la figura 2.5. La fila no existía para nadie cuando el sistema contable sincronizó, y cuando aparece, lo hace detrás de su marca. La app no lo nota porque el usuario vuelve a cargar la lista entera; la sincronización incremental, sí.'
@@ -44,11 +44,11 @@ SD.defineExercise('m02-feed', {
       id: 'arreglo', type: 'multi',
       prompt: '¿Qué cambios arreglan la sincronización sin perder movimientos?',
       options: [
-        'Pedir <code>posted_at &gt; marca − 10 s</code> y descartar por id lo que ya se tiene.',
-        'Volver a OFFSET.',
-        'Devolver solo movimientos con <code>posted_at &lt; now() − 5 s</code>, para no entregar lo que todavía puede estar en vuelo.',
-        'Publicar cada movimiento confirmado en un log con posición de commit (outbox numerada o Kafka) y sincronizar por esa posición.',
-        'Subir el LIMIT a 1&#8239;000.'
+        'Pedir desde <code>marca − 10 s</code> y descartar por id lo repetido.',
+        'Volver a OFFSET, que no depende de la hora de los movimientos.',
+        'Devolver solo movimientos con <code>posted_at &lt; now() − 5 s</code>.',
+        'Sincronizar por la posición de commit de un log (outbox numerada o Kafka).',
+        'Subir el LIMIT a 1&#8239;000 para que cada sincronización traiga todo lo pendiente.'
       ],
       answer: [0, 2, 3],
       explain: 'La ventana de solape y la marca de agua funcionan si las transacciones están acotadas (aquí, 2 s, con un statement_timeout que lo garantice). El log con posición de commit lo resuelve de raíz: el orden es el de confirmación, no el de inicio. OFFSET y un LIMIT más grande no cambian nada.'
@@ -57,10 +57,10 @@ SD.defineExercise('m02-feed', {
       id: 'refrescar', type: 'single',
       prompt: 'Un comerciante abre la app después de un fin de semana con 900 movimientos nuevos. ¿Cómo carga "lo nuevo" sin dejar un hueco?',
       options: [
-        'Pide los 20 más nuevos con <code>ORDER BY posted_at DESC</code>.',
-        'Pide lo posterior a su marca de arriba con <code>ORDER BY posted_at ASC</code>, de a páginas, hasta alcanzar el presente; o trae los 20 más nuevos y marca el hueco con un "cargar más".',
-        'Recarga todo desde cero cada vez.',
-        'Usa OFFSET negativo.'
+        'Pide los 20 más nuevos con <code>ORDER BY posted_at DESC</code> y los pone arriba.',
+        'Pide lo posterior a su marca en orden ascendente, de a páginas, hasta el presente.',
+        'Recarga todo desde cero cada vez que la app vuelve al primer plano.',
+        'Usa el cursor de abajo con <code>ORDER BY posted_at DESC</code> y sigue bajando.'
       ],
       answer: 1,
       explain: 'Los 20 más nuevos dejan 880 movimientos sin cargar entre esos y la lista vieja. En orden ascendente desde la marca no hay hueco; la alternativa es mostrarlo y llenarlo paginando hacia abajo. Repasa "Bajar y subir: before y after".'
@@ -84,10 +84,10 @@ SD.defineExercise('m02-protocolos', {
       id: 'banco', type: 'single',
       prompt: 'La integración con el banco corresponsal:',
       options: [
-        'REST con un API key en un header.',
-        'SOAP con WS-Security: firma X.509 sobre Body y Timestamp, porque el mensaje atraviesa su ESB y necesitan no repudio.',
-        'GraphQL.',
-        'WebSocket.'
+        'REST con un API key en un header y TLS mutuo entre los dos bancos.',
+        'SOAP con WS-Security, porque el mensaje firmado atraviesa su ESB.',
+        'GraphQL con una sola mutación por transferencia.',
+        'gRPC con TLS mutuo, porque es más rápido que SOAP.'
       ],
       answer: 1,
       explain: 'El requisito es seguridad de mensaje, no solo de transporte: integridad a través de intermediarios y una prueba de quién envió. Es el caso de manual para WS-Security, con una biblioteca mantenida y el parser de XML endurecido (sin DTD).'
@@ -96,10 +96,10 @@ SD.defineExercise('m02-protocolos', {
       id: 'pantalla', type: 'single',
       prompt: 'El panel web que combina saldo, últimos movimientos, tarjetas y alertas en una sola pantalla, que el equipo de frontend cambia seguido:',
       options: [
-        'Cinco endpoints REST llamados en paralelo, o GraphQL con persisted queries registradas en el build.',
-        'SOAP.',
-        'gRPC directo desde el navegador.',
-        'Polling cada segundo.'
+        'Endpoints REST en paralelo, o GraphQL con persisted queries.',
+        'SOAP, para tener un contrato WSDL que el frontend no rompa.',
+        'gRPC directo desde el navegador, con un stream por cada panel.',
+        'Un WebSocket que empuja la pantalla completa cada vez que algo cambia.'
       ],
       answer: 0,
       explain: 'Las dos opciones valen. GraphQL evita endpoints a medida, pero exige DataLoader, límites de costo y, en una API propia, aceptar solo las consultas registradas. Si las pantallas son pocas y estables, REST en paralelo (o un BFF, M03) es más simple.'
@@ -108,10 +108,10 @@ SD.defineExercise('m02-protocolos', {
       id: 'comercios', type: 'single',
       prompt: 'Avisar a los comercios de cada pago confirmado:',
       options: [
-        'Webhooks firmados con HMAC, con id de evento, reintentos con backoff y un endpoint para consultar el estado.',
-        'Que los comercios hagan polling cada segundo.',
-        'Un WebSocket abierto con cada comercio.',
-        'SOAP.'
+        'Webhooks firmados con HMAC, con id de evento y reintentos.',
+        'Que los comercios hagan polling cada segundo al endpoint de pagos.',
+        'Un WebSocket abierto con cada comercio, que recibe los pagos al instante.',
+        'Un correo por pago, que el comercio procesa con su sistema contable.'
       ],
       answer: 0,
       explain: 'Es la integración de evento a sistema ajeno por excelencia. La firma HMAC es seguridad de mensaje, igual que WS-Security pero liviana. El receptor deduplica por id de evento y no confía en el orden (2.10).'
@@ -120,10 +120,10 @@ SD.defineExercise('m02-protocolos', {
       id: 'vivo', type: 'single',
       prompt: 'Mostrar en vivo el estado de una transferencia (enviada, en el banco, acreditada):',
       options: [
-        'SSE: el flujo es solo del servidor al cliente, reconecta solo y retoma con Last-Event-ID.',
-        'WebSocket con un protocolo de mensajes propio.',
-        'Webhooks hacia el navegador.',
-        'gRPC bidireccional.'
+        'SSE: el flujo va solo del servidor al cliente y retoma con Last-Event-ID.',
+        'WebSocket con un protocolo de mensajes propio, que es bidireccional.',
+        'Webhooks hacia el navegador, firmados igual que los de los comercios.',
+        'Polling al endpoint de estado cada segundo, con ETag.'
       ],
       answer: 0,
       explain: 'Son pocos eventos y en un solo sentido: SSE es HTTP normal, atraviesa proxies y trae reconexión. WebSocket también funciona, pero obliga a reinventar correlación, reintentos y control de flujo para algo que no lo necesita.'

@@ -9,7 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
-- **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo. Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos".
+- **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo, y al final de la página los tutoriales de AI Engineering, en Python (IA01, IA02…). Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos" y "De los tutoriales de AI Engineering".
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
 
@@ -44,6 +44,17 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - **Lo que sí se usa** son las herramientas de la página: `tools/mkguide.py` para generarla, y `test-page.mjs`, `links.mjs` y `shots.mjs` para revisarla (abren la página en Chrome con `file://`, sin servidor).
 - El orden de las secciones es fijo: la excusa con una figura, los endpoints, las dependencias de Maven con su propósito, la infraestructura comentada, el paso a paso (cada paso con La decisión, Lo que descartas y Qué puede salir mal), las decisiones guiadas, cómo comprobarlo (pruebas, Gatling y fallas provocadas), tu repositorio y, al final, cómo conectar.
 - Cada proyecto funciona solo. "Cómo conectar" va al final y solo nombra proyectos anteriores en la lista, nunca posteriores, con enlaces a los módulos y al glosario (`../glosario.html#t-<id>`).
+
+### De los tutoriales de AI Engineering (`proyectos/iaNN-*.html`)
+- **Misma forma que las guías de Java**, con el mismo orden de secciones y las mismas reglas: todos los archivos completos, Claude los escribe y no los ejecuta, y nunca se inventan cifras ni salidas. Las dependencias son de `pyproject.toml` en lugar de Maven, y "cómo comprobar" suma evals con pass^k a las pruebas y las fallas provocadas.
+- **Python 3.13 con uv, LangGraph y LangChain 1.x.** Las versiones se verifican antes de escribir y se fijan con `==`; la sección de tutoriales en `proyectos.html` tiene la tabla de versiones con su fecha, y se actualiza cuando cambian.
+- **Dos modelos a la par:** Claude por API y uno local en Ollama, con `init_chat_model` y una variable de entorno (`GUARDIA_MODELO` en IA01). Cada paso dice qué comparar entre los dos (aciertos, pasos, tokens, segundos, costo).
+- **Cada tutorial levanta su víctima** en Docker Compose (un sistema que se rompe de verdad, con métricas, logs y una base) y trae un script que provoca las fallas. Nada de herramientas con datos de mentira.
+- **El grafo se prueba sin modelo:** pytest con un modelo falso que responde con un guion, sin red ni tokens. Lo que hace el modelo se mide aparte, con evals que repiten cada caso.
+- **Leer es libre, actuar se aprueba:** las herramientas con efecto pasan por un `interrupt` y llevan una clave de idempotencia; los permisos los impone la base o el servicio, no el prompt.
+- **Revisión sin ejecutar:** el código se escribe en el scratchpad y se revisa con `ast.parse` (Python) y `tomllib` (TOML). No se corren pip, uv, pytest, Docker ni servidores.
+- **Datos:** la lista está en `SD.data.projects.aiTracks` (misma forma que `tracks`), que `projects.js` dibuja en `[data-ai-tracks]`; `project-state.js` los marca con `series: 'ia'` y `project-guide.js` mantiene el anterior/siguiente dentro de la serie. Las decisiones guiadas van en `data/projects/iaNN.data.js` con `SD.defineExercise('iaNN-…')`.
+- "Cómo conectar" nombra primero los tutoriales anteriores de la serie y, de forma opcional, las guías de la serie A que se juntan con este.
 
 ### De contenido
 - Español con tú, sin voseo. Los términos técnicos quedan en inglés y se definen la primera vez que aparecen.
@@ -114,7 +125,7 @@ Un tema muy complejo puede dividirse en una versión esencial y una a fondo. Hoy
    `css`, `data`, `scripts` y `quiz` son opcionales; `"exercises": true` carga `data/exercises/<id>.data.js` y `core/exercise.js` para los ejercicios guiados. `<!--INCLUDE figura.svg-->` inserta un archivo relativo al fragmento.
 
 3. **Página.** Genérala con `python tools/mkpage.py fragmento.html`, que escribe `modules/<file>`. Desde ese momento, la página en `modules/` es la fuente de verdad y se edita directamente.
-4. **Quiz.** Créalo en `assets/js/data/quizzes/<id>.data.js`.
+4. **Quiz.** Créalo en `assets/js/data/quizzes/<id>.data.js` y corre `node tools/test/quiz-bias.mjs assets/js/data/quizzes/<id>.data.js` hasta que pase (ver "Quiz y checkpoint").
 5. **Glosario.** Agrega los términos nuevos al final de `assets/js/data/glossary.data.js`, en un bloque `/* ---------- MNN: … ---------- */`. Todo `data-term` que uses tiene que existir.
 6. **Publicación.** En `assets/js/data/course.data.js`, cambia `status: 'soon'` por `'ready'`. La ruta, el anterior/siguiente y la portada se actualizan solos.
 7. **Pruebas.** Corre `test-page.mjs` y `links.mjs` (ver "Pruebas") y mira las capturas en claro, en oscuro y a 390 px.
@@ -310,7 +321,7 @@ SD.defineExercise('m06-planificador', {
 
 - Los scripts: `data/exercises/<id>.data.js` después de los datos del quiz, y `core/exercise.js` después de `core/quiz.js` (usa `SD.quizKit`). Con `mkpage.py`, alcanza con `"exercises": true` en el META; en una página existente se agregan a mano (así está en M18).
 - El glosario no enlaza dentro de `[data-exercise]`: los términos se explican en el texto del módulo.
-- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21 y cinco en M22 (incidentes).
+- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21, cinco en M22 (incidentes), uno en M23, uno en M24 y uno en M25.
 
 ### Quiz y checkpoint
 
@@ -332,6 +343,7 @@ SD.defineQuiz('m17', {
 
 - Las opciones se barajan; `fixed: true` conserva el orden (por ejemplo, si son números).
 - `explain` dice por qué la respuesta es esa y adónde volver a leer. El `prompt` admite HTML.
+- **La longitud no da pistas.** Cada distractor es plausible y trae su propia justificación falsa pero creíble (un error de concepto real, nada absurdo), con un largo parecido al de la correcta. La correcta dice la idea y deja el "porque" largo para `explain`. En cada archivo, la correcta no es la opción más larga por sistema, ni la más corta: se reparte. Vale también para los ejercicios guiados y las decisiones de `projects/`. `node tools/test/quiz-bias.mjs` lo revisa.
 - Los módulos de las Partes I y II tienen 8 o 9 preguntas (el M06, ampliado, tiene 18); los casos de estudio, entre 16 y 20, y el Checkpoint A, 20.
 
 ### Término del glosario
@@ -390,7 +402,10 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-calc="pricing"`, `data-sim="credits"`, `"usagepipe"` | `widgets/sim-meter.js` | Costo de una request por tipo de token con redondeo por línea, saldo de créditos con streams en vuelo y reservas, y el viaje de un evento de uso (normal, duplicado, tardío, perdido); `usagepipe` necesita `sim-dbflow.js`; lógica en `SD.meterCore` (M21) |
 | `data-calc="evalsize"`, `data-sim="canarymodel"`, `"shadowflow"`, `"injection"` | `widgets/sim-modelops.js` | Ejemplos que hacen falta en un eval (independiente y pareado), canary con una regresión escondida, shadow traffic con y sin efectos, y prompt injection indirecta con dos defensas; los dos últimos necesitan `sim-dbflow.js`; lógica en `SD.opsCore` (M22) |
 | `data-calc="snowflake"`, `data-calc="fanout"` | `widgets/sim-feed.js` | Id Snowflake bit por bit, y escrituras y lecturas del fan-out en escritura, en lectura e híbrido (M30) |
-| `data-calc="bom" data-preset="m21\|m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (casos de estudio) |
+| `data-calc="imgtokens"`, `"imgfleet"`, `data-sim="imgjob"` | `widgets/sim-vision.js` | Tokens de una imagen por proveedor y modo con la grilla dibujada, GPUs y espera de un servicio de generación (Erlang C), y el viaje de un job en cuatro escenas; `imgjob` necesita `sim-dbflow.js`; lógica en `SD.visionCore` (M23) |
+| `data-calc="voicebudget"`, `data-sim="bargein"`, `"jitterbuf"` | `widgets/sim-voice.js` | Presupuesto de latencia voz a voz en cascada ingenua, en streaming y speech-to-speech; una interrupción con el truncado de lo que no sonó, en cuatro casos; y paquetes con jitter y pérdida contra el jitter buffer, fijo o adaptativo, con FEC; lógica en `SD.voiceCore` (M24) |
+| `data-sim="agentloop"`, `"durable"`, `data-calc="agentcost"`, `"trifecta"` | `widgets/sim-agent.js` | El bucle de un agente con presupuesto en cuatro escenarios (normal, bucle, herramienta caída, resultado gigante) y cinco defensas; costo de una tarea y de la flota con caché y la ley de Little; la trifecta con herramientas, defensas y ataques por día; y la ejecución durable en tres escenas; `durable` necesita `sim-dbflow.js`; lógica en `SD.agentCore` (M25) |
+| `data-calc="bom" data-preset="m21\|m23\|m24\|m25\|m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (módulos a fondo y casos de estudio) |
 
 Para escribir un widget nuevo:
 
@@ -417,6 +432,7 @@ Se necesitan Node 22 o superior (usa el WebSocket nativo) y Chrome instalado. No
 | `node tools/test/test-page.mjs <salida> <archivo en modules/> ["sel1\|sel2"]` | Errores de consola, términos faltantes, quiz, cada paso de cada escenario de los mapas, índice, desborde a 390 px y capturas. **La carpeta de salida tiene que existir.** |
 | `node tools/test/links.mjs [modules/x.html …]` | Qué enlazó el glosario en cada sección, enlaces anidados, anclas rotas y términos faltantes. Sin argumentos revisa todo el sitio. |
 | `node tools/test/shots.mjs <salida> <página> <light\|dark> <ancho> "<pasos>"` | Capturas guiadas: `@sel`, `hover:`, `click:`, `tap:`, `key:`, `eval:`, `shot` y `full`. |
+| `node tools/test/quiz-bias.mjs [archivo.data.js …]` | Sesgo de longitud en quizzes, ejercicios guiados y decisiones de proyectos: en cuántas preguntas la correcta es la opción más larga o la más corta (sin HTML; ignora `order`, `fixed` y las de opciones de menos de 30 caracteres). Falla si un archivo pasa del 40&#8239;% en cualquiera de las dos, o si el sitio pasa del 35&#8239;% de "más larga". No abre Chrome. Sin argumentos revisa todo. |
 
 Una página está lista cuando las pruebas dan cero errores de consola, cero términos faltantes, cero problemas de enlaces y ningún desborde a 390 px, y las capturas en claro y en oscuro se ven bien.
 
@@ -483,6 +499,9 @@ ia-system-desing
 │       │   │       m19.data.js
 │       │   │       m21.data.js
 │       │   │       m22.data.js
+│       │   │       m23.data.js
+│       │   │       m24.data.js
+│       │   │       m25.data.js
 │       │   │
 │       │   ├───maps
 │       │   │       m01-request.data.js
@@ -490,6 +509,7 @@ ia-system-desing
 │       │   │       m09-objetos.data.js
 │       │   │       m19-flota.data.js
 │       │   │       m21-metering.data.js
+│       │   │       m24-voz.data.js
 │       │   │       m27-pagos.data.js
 │       │   │       m28-cloudflare.data.js
 │       │   │       m29-whatsapp.data.js
@@ -507,6 +527,7 @@ ia-system-desing
 │       │   │       a08.data.js
 │       │   │       a09.data.js
 │       │   │       a10.data.js
+│       │   │       ia01.data.js
 │       │   │
 │       │   └───quizzes
 │       │           cpa.data.js
@@ -534,6 +555,9 @@ ia-system-desing
 │       │           m20.data.js
 │       │           m21.data.js
 │       │           m22.data.js
+│       │           m23.data.js
+│       │           m24.data.js
+│       │           m25.data.js
 │       │           m27.data.js
 │       │           m28.data.js
 │       │           m29.data.js
@@ -551,12 +575,13 @@ ia-system-desing
 │       │
 │       └───widgets
 │               calculators.js
+│               sim-agent.js
 │               sim-api.js
 │               sim-cache.js
 │               sim-cachepat.js
 │               sim-collab.js
-│               sim-context.js
 │               sim-consist.js
+│               sim-context.js
 │               sim-db.js
 │               sim-dbflow.js
 │               sim-dtx.js
@@ -582,6 +607,8 @@ ia-system-desing
 │               sim-signurl.js
 │               sim-slowstart.js
 │               sim-sse.js
+│               sim-vision.js
+│               sim-voice.js
 │
 ├───modules
 │       checkpoint-a.html
@@ -609,6 +636,9 @@ ia-system-desing
 │       m20-producto-chatgpt.html
 │       m21-metering.html
 │       m22-operar-modelos.html
+│       m23-multimodal.html
+│       m24-voz-tiempo-real.html
+│       m25-agentes.html
 │       m27-pagos-stripe.html
 │       m28-cloudflare.html
 │       m29-whatsapp.html
@@ -626,6 +656,7 @@ ia-system-desing
 │       a08-lider.html
 │       a09-colas.html
 │       a10-circuit-breaker.html
+│       ia01-agente-guardia.html
 │
 └───tools
     │   mkguide.py
@@ -635,6 +666,7 @@ ia-system-desing
     └───test
             cdp.mjs
             links.mjs
+            quiz-bias.mjs
             shots.mjs
             test-page.mjs
 ```
@@ -644,9 +676,9 @@ ia-system-desing
 |---|---|
 | `index.html` + `assets/css/home.css` + `assets/js/pages/home.js` | Portada: mapa de la ruta del curso, "continuar donde quedaste", plan por partes y respaldo del progreso |
 | `glosario.html` | Glosario con buscador y filtro por categoría; lo arma `core/glossary.js` |
-| `proyectos.html` + `assets/css/projects.css` + `assets/js/pages/projects.js` | "Aplicación de conocimiento": índice de mini-proyectos en Java y Spring Boot, con sus datos en `data/projects.data.js` (cada proyecto con `tier`, `status`, `mods` y `repo`, obligatorio para publicarlo) |
-| `proyectos/` + `assets/js/pages/project-guide.js` + `project-state.js` | Una guía por proyecto, generada con `tools/mkguide.py` y editada después a mano. `project-guide.js` arma la ruta de proyectos y el anterior/siguiente, resalta java, yaml, xml, bash, nginx, ini y dockerfile, y le pone ruta y botón de copiar a cada `<pre data-file>`; `project-state.js` guarda el enlace al repositorio y las comprobaciones de cada guía |
-| `assets/js/data/projects/` | Las decisiones guiadas de cada guía, con `SD.defineExercise('aNN-…')` |
+| `proyectos.html` + `assets/css/projects.css` + `assets/js/pages/projects.js` | "Aplicación de conocimiento": índice de mini-proyectos en Java y Spring Boot y de tutoriales de AI Engineering (`#ia-engineering`), con sus datos en `data/projects.data.js` (`tracks`, `capstones` y `aiTracks`; cada proyecto con `tier`, `status`, `mods` y `repo`, obligatorio para publicarlo) |
+| `proyectos/` + `assets/js/pages/project-guide.js` + `project-state.js` | Una guía por proyecto, generada con `tools/mkguide.py` y editada después a mano. `project-guide.js` arma la ruta de proyectos y el anterior/siguiente (dentro de cada serie), resalta java, javascript, yaml, xml, bash, nginx, ini, toml y dockerfile (python, sql y json los resalta `sd.js`), y le pone ruta y botón de copiar a cada `<pre data-file>`; `project-state.js` guarda el enlace al repositorio y las comprobaciones de cada guía |
+| `assets/js/data/projects/` | Las decisiones guiadas de cada guía, con `SD.defineExercise('aNN-…')` o `SD.defineExercise('iaNN-…')` |
 | `modules/` | Una página por módulo y por checkpoint, generada con `mkpage.py` y editada después a mano |
 | `assets/css/tokens.css` | Colores semánticos en claro y oscuro, paleta de capas `--l-*`, tipografía y espacios |
 | `assets/css/layout.css` | Barra superior, sidebar, índice lateral y responsive |

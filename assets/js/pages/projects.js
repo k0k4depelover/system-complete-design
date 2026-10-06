@@ -48,8 +48,8 @@
     ]);
   }
 
-  function renderTracks(host, data) {
-    data.tracks.forEach(function (t) {
+  function renderTracks(host, tracks) {
+    tracks.forEach(function (t) {
       var core = t.items.filter(function (p) { return p.tier === 'core'; }).length;
       var extra = t.items.length - core;
       var parts = [];
@@ -126,7 +126,9 @@
     var caps = document.querySelector('[data-capstones]');
     var count = document.querySelector('[data-projects-count]');
     var blocks = document.querySelector('[data-project-blocks]');
-    if (tracks) renderTracks(tracks, data);
+    var aiTracks = document.querySelector('[data-ai-tracks]');
+    if (tracks) renderTracks(tracks, data.tracks);
+    if (aiTracks && data.aiTracks) renderTracks(aiTracks, data.aiTracks);
     if (caps) renderCapstones(caps, data);
     if (count) renderCount(count, data);
     if (blocks) renderBlocks(blocks, data);

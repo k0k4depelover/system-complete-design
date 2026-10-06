@@ -1,5 +1,5 @@
 /* Widgets de las secciones "Impleméntalo tú mismo" de los casos de estudio:
-   <div data-calc="bom" data-preset="m21|m23|m24|m27|m28|m29|m30">  factura mensual estimada de un clon en AWS, en tres escalas
+   <div data-calc="bom" data-preset="m21|m23|m24|m25|m27|m28|m29|m30">  factura mensual estimada de un clon en AWS, en tres escalas
    <div data-calc="gateways">                     cuántos gateways de conexión necesita un clon de WhatsApp
    Precios: lista on-demand aproximada de us-east-1 (septiembre de 2026). Son editables porque cambian. */
 (function () {
@@ -173,6 +173,31 @@
         { c: 'Logs y métricas', s: 'CloudWatch Logs, GB ingerido', u: 'GB', p: 0.5, q: [10, 300, 3000] }
       ],
       foot: 'Supuestos de diseño de referencia, para medir con tus modelos: un SFU cada 1 000 sesiones, un worker de 8 vCPU cada 80, una L4 de STT cada 300 sesiones y una de TTS cada 200; los pools que escalan siguen la curva del día y promedian el 65 % del pico. El 10 % de los minutos entra por teléfono y el 10 % se graba (Opus a 32 kbps). En producción sale a 0.13 centavos por minuto, unas 40 veces menos que la Realtime API con caché, sin contar al equipo que lo opera ni el entrenamiento de los modelos.'
+    },
+    m25: {
+      title: 'Factura mensual de tu plataforma de agentes',
+      scales: ['MVP', 'Producción', 'Gran escala'],
+      scaleNote: [
+        '1 000 tareas por día (30 000 al mes), cada una de 30 pasos como la de 25.1. Unas 4 tareas en curso en el pico.',
+        'El servicio de referencia de 25.1: 100 000 tareas por día, 3 millones al mes, unas 417 en curso en el pico y 104 llamadas al modelo por segundo.',
+        '1 millón de tareas por día: 30 millones al mes, unas 4 170 en curso en el pico. Los checkpoints se reparten en cuatro clústeres por cliente.'
+      ],
+      rows: [
+        { c: 'Modelo: lecturas del caché', s: 'Claude Sonnet 5.5, millón de tokens leídos del caché', u: 'M', p: 0.2, q: [16965, 1696500, 16965000] },
+        { c: 'Modelo: salida', s: 'Claude Sonnet 5.5, millón de tokens de salida', u: 'M', p: 10, q: [270, 27000, 270000] },
+        { c: 'Modelo: escrituras del caché', s: 'Claude Sonnet 5.5, millón de tokens escritos en el caché de 5 minutos', u: 'M', p: 2.5, q: [1035, 103500, 1035000] },
+        { c: 'Checkpoints: instancias', s: 'Aurora PostgreSQL db.r7g.large (MVP) o db.r7g.xlarge, escritor y réplica', u: 'h', p: [0.276, 0.552, 0.552], q: [2, 2, 8] },
+        { c: 'Sandbox de código', s: 'Lambda en una VPC sin internet, millón de GB-s (20 % de las tareas, 30 s, 2 GB)', u: 'M', p: 16.6667, q: [0.36, 36, 360] },
+        { c: 'Checkpoints: E/S', s: 'Aurora PostgreSQL, millón de operaciones (unas 600 por tarea)', u: 'M', p: 0.2, q: [18, 1800, 18000] },
+        { c: 'Datos hacia la API del modelo', s: 'NAT Gateway, GB procesado (unos 2.4 MB de contexto por tarea)', u: 'GB', p: 0.045, q: [72, 7200, 72000] },
+        { c: 'Trazas', s: 'CloudWatch Logs, GB ingerido (unos 150 KB por tarea)', u: 'GB', p: 0.5, q: [4.5, 450, 4500] },
+        { c: 'Workers del agente', s: 'Fargate ARM, 1 vCPU y 2 GB, unas 50 tareas en curso cada uno', u: 'h', p: 0.0395, q: [2, 6, 55] },
+        { c: 'Checkpoints: almacenamiento', s: 'Aurora PostgreSQL, GB al mes (3 días completos, después solo el estado final)', u: 'GB', p: 0.1, q: [11, 1134, 11340] },
+        { c: 'Salida a internet', s: 'NAT Gateway, por hora, uno por zona', u: 'h', p: 0.045, q: [1, 3, 6] },
+        { c: 'API de tareas y aprobaciones', s: 'Fargate ARM, 1 vCPU y 2 GB', u: 'h', p: 0.0395, q: [2, 3, 6] },
+        { c: 'Colas de tareas y reanudaciones', s: 'SQS estándar, millón de peticiones', u: 'M', p: 0.4, q: [0.0945, 9.45, 94.5] }
+      ],
+      foot: 'Supuestos de diseño de referencia, para medir con tu propio agente: tareas de 30 pasos con 5 500 tokens de prefijo y 1 000 por paso, con prompt caching; un worker de Python asíncrono lleva unas 50 tareas en curso porque casi todo el tiempo espera al modelo; los pools siguen la curva del día y promedian el 65 % del pico. Si guardas la lista entera de mensajes en cada paso, el checkpoint crece como la entrada: mide los tuyos. En producción, el modelo es el 99.7 % de la factura: cada paso que ahorras vale más que cualquier ajuste de la infraestructura. Con Bedrock y PrivateLink, el NAT deja de cobrar por los datos hacia el modelo.'
     },
     m30: {
       title: 'Factura mensual de tu clon de Twitter',

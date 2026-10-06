@@ -9,7 +9,7 @@ SD.defineExercise('a08-lider', {
       prompt: 'La primera versión no tiene líder: cada réplica tiene un <code>@Scheduled(fixedDelay = 1000)</code> que lee los vencidos, los manda y los anota con <code>UPDATE … WHERE delivered_at IS NULL</code>. ¿Qué pasa con un recordatorio?',
       options: [
         'Sale una vez: el <code>UPDATE</code> condicional deja que lo anote una sola réplica.',
-        'Puede salir hasta tres veces: cada réplica que lo leyó antes de que otra lo anotara lo manda. Y la base dice que salió una vez, porque el <code>UPDATE</code> solo protege la marca, no el envío.',
+        'Puede salir hasta tres veces, aunque la base diga que salió una.',
         'Spring coordina los <code>@Scheduled</code> entre réplicas del mismo Deployment, así que solo una lo manda.',
         'Solo despacha la réplica que arrancó primero, porque las otras encuentran la tabla bloqueada.'
       ],
@@ -21,8 +21,8 @@ SD.defineExercise('a08-lider', {
       prompt: 'Con <code>leaseDuration</code> 15&#8239;s, <code>renewDeadline</code> 10&#8239;s y <code>retryPeriod</code> 2&#8239;s, la JVM del líder muere con <code>kill -KILL</code> y no suelta el Lease. ¿Cuánto tarda otra réplica en tomar el turno?',
       options: [
         'Unos 2&#8239;s: lo que tarda una candidata en volver a preguntar.',
-        'Exactamente 10&#8239;s, el <code>renewDeadline</code>.',
-        'Entre 13 y 19.4&#8239;s: la última renovación fue hasta 2&#8239;s antes del kill, el Lease vence 15&#8239;s después de ella, y una candidata lo nota en su próxima pregunta, hasta 4.4&#8239;s más tarde.',
+        'Exactamente 10&#8239;s, el <code>renewDeadline</code>, medidos desde la última renovación.',
+        'Entre 13 y 19.4&#8239;s, según cuándo fue la última renovación y la próxima pregunta.',
         'Exactamente 15&#8239;s, el <code>leaseDuration</code>, medidos desde el kill.'
       ],
       answer: 2,
@@ -34,8 +34,8 @@ SD.defineExercise('a08-lider', {
       options: [
         'Preguntar <code>isLeader()</code> antes de cada entrega, no solo antes del lote.',
         'Leer el Lease del API antes de cada entrega y mandar solo si el dueño sigue siendo uno mismo.',
-        'Que el proveedor compare el token de cada pedido con el más alto que ya vio, en la misma transacción en que anota el mensaje, y rechace los más bajos.',
-        'Bajar <code>leaseDuration</code> a 3&#8239;s, para que el zombi dure menos.'
+        'Que el proveedor rechace los tokens más bajos que el más alto que ya vio.',
+        'Bajar <code>leaseDuration</code> a 3&#8239;s, para que el zombi pierda el turno antes de despertar.'
       ],
       answer: 2,
       explain: 'Las dos primeras son comprobar y después actuar: el proceso se puede congelar entre la comprobación y el envío, y al despertar manda sin volver a mirar. <code>isLeader()</code> es además una bandera local, que cambia cuando corre el hilo de renovación, congelado también. La comprobación tiene que estar donde ocurre el efecto, en el que recibe la escritura, y ser atómica con ella. Un Lease más corto achica la ventana, no la cierra, y suma relevos falsos con cada pausa del recolector de basura.'
@@ -44,9 +44,9 @@ SD.defineExercise('a08-lider', {
       id: 'token', type: 'single',
       prompt: '¿Qué usas como fencing token?',
       options: [
-        '<code>leaseTransitions</code>: sube en 1 cada vez que el Lease cambia de dueño y nunca baja, mientras nadie borre el Lease.',
-        '<code>renewTime</code>: es más reciente en cada renovación.',
-        'El nombre del pod que tiene el Lease.',
+        '<code>leaseTransitions</code>: sube en 1 con cada cambio de dueño.',
+        '<code>renewTime</code>: es más reciente en cada renovación, así que nunca baja.',
+        'El nombre del pod que tiene el Lease, que es único en el clúster.',
         'Un contador que cada réplica sube en memoria cada vez que gana.'
       ],
       answer: 0,
@@ -56,9 +56,9 @@ SD.defineExercise('a08-lider', {
       id: 'proveedor-real', type: 'single',
       prompt: 'El proveedor de SMS de verdad acepta <code>Idempotency-Key</code>, pero no sabe nada de fencing tokens. ¿Qué haces?',
       options: [
-        'Mandas el token igual: aunque el proveedor lo ignore, deja rastro.',
-        'Solo la clave: frena los repetidos, y con eso alcanza.',
-        'Pones la valla en algo tuyo, antes del proveedor: el despachador reclama cada envío en tu base con su token, y la base rechaza los tokens viejos. La clave cubre lo que queda, el envío que estaba en vuelo cuando el líder se congeló.',
+        'Mandas el token igual en una cabecera: aunque el proveedor lo ignore, deja rastro.',
+        'Solo la clave: frena los repetidos del zombi, y con eso alcanza.',
+        'Pones la valla en tu base, antes del proveedor, y la clave cubre el resto.',
         'Bajas el lote a un recordatorio, para que el zombi tenga menos en memoria.'
       ],
       answer: 2,
@@ -68,10 +68,10 @@ SD.defineExercise('a08-lider', {
       id: 'shedlock', type: 'single',
       prompt: 'Con ShedLock, alguien baja <code>lockAtMostFor</code> de 20 a 5&#8239;s para que el turno cambie más rápido si una réplica se cae. Un lote de 50 tarda 50 × 200&#8239;ms = 10&#8239;s. ¿Qué pasa en un día normal, sin caídas?',
       options: [
-        'Nada malo: el candado se suelta al terminar cada lote, y el plazo solo importa si una réplica se cae.',
-        'El candado vence a mitad de cada lote largo: otra réplica lo toma y manda los pendientes que la primera todavía no anotó, sin que nadie esté congelado.',
+        'Nada malo: el candado se suelta al terminar cada lote.',
+        'El candado vence a mitad de cada lote y otra réplica manda los pendientes.',
         'ShedLock extiende el candado mientras la tarea corre, así que da igual.',
-        'La segunda réplica espera en fila a que la primera termine.'
+        'La segunda réplica espera en fila a que la primera termine el lote y suelte.'
       ],
       answer: 1,
       explain: '<code>lockAtMostFor</code> es lo que dura el candado si nadie lo suelta, y nadie lo extiende: tiene que ser bastante más largo que la tarea. Con 5&#8239;s, cualquier lote de más de 25 recordatorios convive con otro. Extenderlo es lo que hace <code>KeepAliveLockProvider</code>, que hay que configurar aparte, y un proceso congelado no extiende nada. Y una réplica que no consigue el candado se salta la vuelta: no espera en fila.'
@@ -80,10 +80,10 @@ SD.defineExercise('a08-lider', {
       id: 'skip-locked', type: 'single',
       prompt: 'Otra forma, sin líder: cada réplica abre una transacción, toma hasta 50 vencidos con <code>SELECT … FOR UPDATE SKIP LOCKED</code>, los manda, los anota y hace commit. ¿Qué cambia?',
       options: [
-        'Nada: cada recordatorio sale tres veces, porque las tres réplicas leen lo mismo.',
-        'No funciona detrás de PgBouncer en modo transaction.',
-        'Las tres despachan a la vez sin pisarse, porque cada una se salta las filas que otra tiene bloqueadas. El costo: filas bloqueadas y una conexión tomada mientras esperas al proveedor, y un <code>DELETE</code> que espera al commit. Y no elimina al zombi: si PostgreSQL corta la transacción de la réplica congelada, otra toma sus filas, y la congelada manda igual al despertar.',
-        'Elimina al zombi: mientras la réplica congelada tenga la transacción abierta, nadie más manda sus filas.'
+        'Cada recordatorio sale tres veces, porque las tres réplicas leen lo mismo.',
+        'No funciona detrás de PgBouncer en modo transaction, que suelta el bloqueo.',
+        'Las tres despachan sin pisarse, pero el zombi sigue siendo posible.',
+        'Elimina al zombi: nadie más manda sus filas mientras la transacción siga abierta.'
       ],
       answer: 2,
       explain: 'SKIP LOCKED reparte el trabajo sin Lease, y funciona en modo transaction porque todo pasa dentro de una transacción. Pero el envío sigue fuera de la base. Mientras la congelada tenga la transacción abierta, sus filas quedan quietas. Si esa transacción se corta, por ejemplo con <code>idle_in_transaction_session_timeout</code>, otra réplica toma las filas, y la congelada, al despertar, manda lo que tenía en memoria antes de enterarse de que su commit falla. Sigue haciendo falta la clave, y para los cancelados, un reclamo con token.'
@@ -92,9 +92,9 @@ SD.defineExercise('a08-lider', {
       id: 'corto', type: 'single',
       prompt: 'Con la clave y la valla encendidas, un congelamiento de 5&#8239;s manda igual los 25 recordatorios cancelados. ¿Por qué, y qué lo arregla?',
       options: [
-        'La valla tiene un error: tiene que rechazar también los tokens iguales.',
-        'Nadie tomó el turno, así que no hubo un token más alto: el líder seguía siendo legítimo, y mandó entero un lote leído antes de las cancelaciones. Lo arregla reclamar cada recordatorio en la base justo antes de mandarlo, y que cancelar uno reclamado responda 409.',
-        'Hay que bajar <code>renewDeadline</code> a 3&#8239;s, para que un congelamiento de 5&#8239;s también cambie de líder.',
+        'La valla tiene un error: tiene que rechazar también los tokens iguales al último.',
+        'Nadie tomó el turno; lo arregla reclamar cada recordatorio justo antes de mandarlo.',
+        'Hay que bajar <code>renewDeadline</code> a 3&#8239;s, para que 5&#8239;s también cambie de líder.',
         'La clave de idempotencia tendría que haberlos frenado: está mal configurada.'
       ],
       answer: 1,

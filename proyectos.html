@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aplicación de conocimiento: diseño de sistemas reales</title>
-<meta name="description" content="Mini-proyectos en Java y Spring Boot para construir lo que enseña cada módulo del curso: Nginx, una API que no se rompe, caché, réplicas, dos primarios, sharding, Kubernetes con k3s, colas, idempotencia, OAuth, observabilidad y un ChatGPT en una CPU.">
+<meta name="description" content="Mini-proyectos en Java y Spring Boot para construir lo que enseña cada módulo del curso: Nginx, una API que no se rompe, caché, réplicas, dos primarios, sharding, Kubernetes con k3s, colas, idempotencia, OAuth, observabilidad y un ChatGPT en una CPU. Además, tutoriales de AI Engineering en Python: agentes con LangGraph, Claude y Ollama.">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/css/tokens.css">
 <link rel="stylesheet" href="assets/css/layout.css">
@@ -37,6 +37,7 @@
       <div class="hero-actions">
         <a class="btn btn--primary btn--lg" href="proyectos/a00-laboratorio.html">Empezar por A00</a>
         <a class="btn btn--ghost btn--lg" href="#indice">Ver el índice</a>
+        <a class="btn btn--ghost btn--lg" href="#ia-engineering">Tutoriales de AI Engineering</a>
         <p class="continue-where" data-projects-count></p>
       </div>
     </div>
@@ -166,6 +167,45 @@
         <dd>Elasticsearch para A16, con Spring Data Elasticsearch. Prometheus, Grafana, Tempo y Loki con OpenTelemetry para A14: para empezar, la imagen <code>grafana/otel-lgtm</code> los trae juntos.</dd>
       </div>
     </dl>
+  </section>
+
+  <section class="pj-sec" id="ia-engineering" aria-labelledby="ia-title">
+    <h2 id="ia-title">Tutoriales de AI Engineering</h2>
+    <p class="pj-sub">Una serie aparte, para construir sistemas con modelos de lenguaje: agentes, evals y RAG. Siguen el mismo orden que las guías de arriba, con dos diferencias. Van en Python, porque ahí están LangGraph, LangChain y el SDK de MCP. Y cada paso corre con dos modelos a la par: Claude por API y uno local en Ollama, para que compares calidad, costo y latencia con tus propios números.</p>
+    <dl class="how-grid">
+      <div>
+        <dt>Un sistema que se rompe de verdad</dt>
+        <dd>El agente no trabaja sobre datos inventados: cada tutorial levanta su víctima en Docker Compose, con métricas, logs y una base, y un script que provoca las fallas.</dd>
+      </div>
+      <div>
+        <dt>Pruebas sin modelo, evals con modelo</dt>
+        <dd>El grafo se prueba con pytest y un modelo falso con guion, sin red ni tokens. Lo que hace el modelo se mide aparte, con evals que repiten cada caso varias veces y cuentan pass^k.</dd>
+      </div>
+      <div>
+        <dt>Leer es libre, actuar se aprueba</dt>
+        <dd>Las herramientas de lectura corren solas. Todo lo que cambia algo pasa por una persona y lleva una clave de idempotencia, como enseña <a href="modules/m25-agentes.html#aprobacion">M25</a>.</dd>
+      </div>
+      <div>
+        <dt>Claude o local, con una variable</dt>
+        <dd>Claude Sonnet 5.5 cobra por token; qwen3:8b en Ollama corre en tu máquina, sin costo por token, y pide unos 5.2&#8239;GB de descarga. <span class="badge badge--doc">Documentado</span> Puedes seguir cada tutorial con uno solo de los dos.</dd>
+      </div>
+    </dl>
+    <div class="table-wrap">
+      <table class="t">
+        <thead><tr><th>Pieza</th><th>Versión</th><th>Para qué</th></tr></thead>
+        <tbody>
+          <tr><td>Python y uv</td><td>3.13</td><td>El lenguaje y el gestor de proyecto: <code>uv sync</code> instala todo desde el <code>pyproject.toml</code>.</td></tr>
+          <tr><td>LangGraph</td><td>1.2.13</td><td>El grafo del agente: estado, checkpoints, <code>interrupt</code> y reanudar.</td></tr>
+          <tr><td>LangChain</td><td>1.4.3</td><td>Los modelos detrás de una misma interfaz (<code>init_chat_model</code>) y las herramientas.</td></tr>
+          <tr><td>langchain-anthropic y langchain-ollama</td><td>1.7.5 y 1.1.0</td><td>Claude y los modelos locales, de chat y de embeddings.</td></tr>
+          <tr><td>PostgreSQL con pgvector</td><td>17</td><td>Checkpoints, embeddings, acciones e informes, en la misma base.</td></tr>
+          <tr><td>Prometheus y Phoenix</td><td>3.15.0 y 20.19.0</td><td>Las métricas de la víctima y las traces del agente, por OpenTelemetry.</td></tr>
+          <tr><td>SDK de MCP para Python</td><td>2.3.0</td><td>Las herramientas como servidor MCP, para usarlas desde otro host.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="pj-sub">Las versiones son las de PyPI y Docker Hub al 5 de octubre de 2026. <span class="badge badge--doc">Documentado</span></p>
+    <div class="pj-tracks" data-ai-tracks></div>
   </section>
 
   <footer class="site-foot home-foot">

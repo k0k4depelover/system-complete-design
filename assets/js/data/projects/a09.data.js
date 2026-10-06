@@ -9,9 +9,9 @@ SD.defineExercise('a09-colas', {
       prompt: 'La primera versión no tiene outbox: guarda el pedido, hace commit y después publica el evento con <code>XADD</code>. El proceso muere entre el commit y el <code>XADD</code>. ¿Qué pasa?',
       options: [
         'PostgreSQL deshace el pedido, porque el proceso murió antes de terminar la request.',
-        'El pedido queda guardado y su evento no existe en ninguna parte: nadie va a mandar el correo. El cliente recibió un error, y si reintenta crea un segundo pedido.',
+        'El pedido queda guardado y su evento no existe en ninguna parte.',
         'Spring vuelve a mandar el <code>XADD</code> al arrancar, porque lo tenía en su cola interna.',
-        'Redis guarda el <code>XADD</code> pendiente hasta que el proceso vuelva.'
+        'Redis guarda el <code>XADD</code> a medias y lo completa cuando el proceso vuelve.'
       ],
       answer: 1,
       explain: 'El commit ya ocurrió, y Redis nunca recibió nada: no hay transacción que una a los dos. Es lo que mide la falla "la API muere después del commit": un pedido, cero correos, y ningún registro de que faltaba uno. La outbox mete el evento en la misma transacción que el pedido, y el relay lo publica cuando la API vuelve. La clave de idempotencia de A02 cubre la otra mitad: el reintento del cliente.'
@@ -32,7 +32,7 @@ SD.defineExercise('a09-colas', {
       id: 'claim-idle', type: 'single',
       prompt: 'Para que los reintentos sean más rápidos, alguien baja <code>claim-idle</code> de 15 a 1&#8239;s. El plazo de lectura de JavaMail es de 5&#8239;s, y a veces el servidor de correo tarda 3. ¿Qué pasa?',
       options: [
-        'El reaper se lleva entradas que su worker todavía está mandando. Con dedupe, el segundo <code>INSERT</code> espera al primero y no sale un correo de más; sin dedupe, sale dos veces. Y cada reclamo suma una entrega: un correo lento pero sano puede llegar a la DLQ sin haber fallado nunca.',
+        'El reaper se lleva entradas que su worker todavía está mandando.',
         'Nada: <code>XCLAIM</code> no le quita una entrada a un consumidor que sigue conectado.',
         'Los reintentos salen antes y no hay ningún costo, porque el dedupe lo absorbe todo.',
         'Redis rechaza un tiempo mínimo menor que el <code>BLOCK</code> de los workers.'
@@ -56,9 +56,9 @@ SD.defineExercise('a09-colas', {
       id: 'pubsub', type: 'single',
       prompt: 'Un compañero propone cambiar el stream por Redis Pub/Sub, con tres workers suscritos al canal, porque "es más simple y más rápido". ¿Qué le contestas?',
       options: [
-        'Que está bien, siempre que el dedupe esté encendido.',
-        'Que cada evento les llegaría a los tres, así que con dedupe hacen tres veces el trabajo de uno, y sin dedupe mandan tres correos. Y que lo que se publique mientras no hay nadie suscrito, por ejemplo durante un despliegue, se pierde, porque Pub/Sub no guarda nada.',
-        'Que Pub/Sub reparte los mensajes entre los suscriptores en turnos, como un grupo de consumo, pero sin <code>XACK</code>.',
+        'Que está bien, siempre que el dedupe esté encendido en los tres workers.',
+        'Que cada evento les llega a los tres, y lo publicado sin suscriptores se pierde.',
+        'Que Pub/Sub reparte los mensajes en turnos, como un grupo de consumo, sin <code>XACK</code>.',
         'Que Pub/Sub guarda los mensajes hasta que se conecta el primer suscriptor.'
       ],
       answer: 1,
@@ -70,7 +70,7 @@ SD.defineExercise('a09-colas', {
       options: [
         'La trata como un 451: queda pendiente y se reintenta hasta la tercera entrega.',
         'La confirma con <code>XACK</code> y la descarta en silencio, porque no tiene arreglo.',
-        'La manda a la DLQ en la primera entrega, con el error, y la confirma en el stream principal.',
+        'La manda a la DLQ en la primera entrega y la confirma en el stream.',
         'La deja pendiente para siempre, para que alguien la vea en <code>XPENDING</code>.'
       ],
       answer: 2,
@@ -80,9 +80,9 @@ SD.defineExercise('a09-colas', {
       id: 'recorte', type: 'single',
       prompt: 'El stream tiene <code>MAXLEN = 50</code> con la política por defecto. Durante un despliegue, los workers están detenidos y entran 300 pedidos. ¿Qué pasa, y cómo te enteras?',
       options: [
-        'Se pierden 250 eventos sin un error. El lag del grupo dice 50, que es el largo del stream, así que tampoco lo muestra. Lo descubres comparando la outbox con <code>emails</code>, o con <code>entries-read</code> antes de que los workers vuelvan.',
+        'Se pierden 250 eventos en silencio; lo ves comparando la outbox con <code>emails</code>.',
         'Redis rechaza los <code>XADD</code> que pasan de 50, y el relay los reintenta.',
-        'Se pierden 250 eventos, y el lag del grupo queda vacío porque Redis no puede calcularlo.',
+        'Se pierden 250 eventos, y el lag del grupo dice 250, así que lo ves en el tablero.',
         'Nada se pierde: el recorte nunca borra entradas que un grupo no leyó.'
       ],
       answer: 0,
@@ -92,13 +92,13 @@ SD.defineExercise('a09-colas', {
       id: 'capacidad', type: 'single',
       prompt: 'Para una oferta esperas 12 pedidos por segundo durante 10 minutos. Un correo le toma 0.25&#8239;s a un worker. ¿Cuántos workers pones?',
       options: [
-        'Dos: con backpressure, el relay frena y el lag nunca crece.',
-        'Tres es el mínimo, porque 12 × 0.25 = 3 workers ocupados todo el tiempo. Con tres exactos, cualquier variación deja un lag que no baja durante la oferta, así que pones cuatro o cinco. Con dos, el lag crece 12 − 2 / 0.25 = 4 entradas por segundo: 2&#8239;400 a los 10 minutos.',
-        'Doce, uno por cada pedido de cada segundo.',
+        'Tres exactos: 12 × 0.25 = 3, y un cuarto sería capacidad ociosa.',
+        'Cuatro o cinco: 12 × 0.25 = 3 ocupados todo el tiempo, más margen.',
+        'Dos: con backpressure, el relay frena y el lag nunca crece durante la oferta.',
         'Da lo mismo: el cuello de botella es <code>XREADGROUP</code>, no los workers.'
       ],
       answer: 1,
-      explain: 'Es la ley de Little: los workers ocupados son la tasa de llegada por el tiempo de cada correo. El backpressure no agrega capacidad: mueve la espera a la outbox, y los correos llegan igual de tarde. Un stream de Redis atiende muchísimas más lecturas por segundo que 12, así que aquí el límite son los correos, no Redis.'
+      explain: 'Es la ley de Little: los workers ocupados son la tasa de llegada por el tiempo de cada correo. Con tres exactos, cualquier variación deja un lag que no baja durante la oferta; con dos, el lag crece 12 − 2 / 0.25 = 4 entradas por segundo: 2&#8239;400 a los 10 minutos. El backpressure no agrega capacidad: mueve la espera a la outbox, y los correos llegan igual de tarde. Un stream de Redis atiende muchísimas más lecturas por segundo que 12, así que aquí el límite son los correos, no Redis.'
     }
   ],
   solution: '<ul>' +

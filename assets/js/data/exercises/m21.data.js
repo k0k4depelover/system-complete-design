@@ -9,9 +9,9 @@ SD.defineExercise('m21-metering', {
       prompt: '¿Dónde nace el evento de uso que se cobra?',
       options: [
         'En el motor, al terminar cada request, porque es quien cuenta los tokens.',
-        'En el gateway, al cerrar el stream, con el usage que le manda el motor; el motor publica además su propio registro para conciliar.',
-        'En el cliente, que manda el usage de vuelta.',
-        'En el limitador, al reconciliar cada reserva.'
+        'En el gateway, al cerrar el stream, con el usage que le manda el motor.',
+        'En el cliente, que manda el usage de vuelta y así confirma lo que recibió.',
+        'En el limitador, al reconciliar cada reserva con el uso real.'
       ],
       answer: 1,
       explain: 'El gateway sabe a quién cobrar, qué recibió el cliente y qué herramientas cobró aparte. El registro del motor es una fuente independiente: si un gateway muere, la conciliación encuentra lo que falta.'
@@ -20,10 +20,10 @@ SD.defineExercise('m21-metering', {
       id: 'id', type: 'single',
       prompt: '¿Cómo se construye el event_id?',
       options: [
-        'Un UUID v4 generado al emitir.',
-        'request_id más el tipo de evento y, en los parciales, su número de tramo: req_9f2c41:partial:0003.',
+        'Un UUID v4 generado al emitir, que nunca se repite entre eventos.',
+        'request_id más el tipo de evento y el número de tramo.',
         'El hash del contenido del evento, incluida la hora de emisión.',
-        'El offset de Kafka donde quedó escrito.'
+        'El offset de Kafka donde quedó escrito, único dentro de su partición.'
       ],
       answer: 1,
       explain: 'Tiene que salir igual en cada copia del mismo uso: en el reenvío del spool y en el evento que reconstruye la conciliación. Un UUID, una hora de emisión o un offset cambian entre copias.'
@@ -33,8 +33,8 @@ SD.defineExercise('m21-metering', {
       prompt: 'Un agente mantiene un stream abierto 20 minutos y gasta 6 USD. ¿Cómo se mide?',
       options: [
         'Con un solo evento al final, como cualquier request.',
-        'Con eventos parciales cada 30 s o cada 4&#8239;000 tokens, cada uno con su número de tramo, y un final con el resto.',
-        'Con un evento por token.',
+        'Con eventos parciales cada 30 s o cada 4&#8239;000 tokens, y un final.',
+        'Con un evento por token generado, para no perder nada si el stream se corta.',
         'No se mide hasta que el agente termina su tarea completa.'
       ],
       answer: 1,
@@ -44,10 +44,10 @@ SD.defineExercise('m21-metering', {
       id: 'ventanas', type: 'single',
       prompt: 'Una región aislada vuelve y publica eventos de hace tres horas. ¿Qué configuración del procesador conviene?',
       options: [
-        'La de Flink por defecto: tolerancia 0, se descartan.',
-        'Marca de agua con 5 minutos de desorden, tolerancia de 1 hora con reemisión de la ventana, y salida de tardíos para lo que llegue después, que se aplica como fila de corrección.',
-        'Agrupar por hora de procesamiento, así no hay tardíos.',
-        'Mantener todas las ventanas abiertas 35 días.'
+        'La de Flink por defecto: tolerancia 0, y los tardíos se descartan.',
+        'Tolerancia de 1 hora con reemisión, y una salida de tardíos para lo posterior.',
+        'Agrupar por hora de procesamiento, así no hay tardíos y el resultado es estable.',
+        'Mantener todas las ventanas abiertas 35 días, hasta cerrar la factura del mes.'
       ],
       answer: 1,
       explain: 'Descartar es perder dinero. Agrupar por hora de procesamiento hace que el resultado dependa del lag y no se pueda reproducir. Mantener 35 días de ventanas abiertas es estado enorme para un caso raro: la salida de tardíos lo resuelve.'
@@ -56,10 +56,10 @@ SD.defineExercise('m21-metering', {
       id: 'precio', type: 'single',
       prompt: 'El precio de un modelo baja el 1 de octubre a las 00:00 UTC. Un evento de las 23:59:58 del 30 de septiembre llega a las 00:00:03. ¿Qué precio se aplica?',
       options: [
-        'El nuevo, porque es el vigente cuando se procesa.',
+        'El nuevo, porque es el vigente cuando se procesa y se factura.',
         'El viejo, porque el catálogo se consulta con la hora del evento.',
-        'El más bajo de los dos, por política comercial.',
-        'El promedio de los dos.'
+        'El más bajo de los dos, para no cobrar de más en el cambio.',
+        'El nuevo, porque el evento llegó en octubre y la factura es de octubre.'
       ],
       answer: 1,
       explain: 'El precio de la hora del evento hace que reprocesar dé siempre el mismo resultado. Una política comercial distinta se modela en el catálogo, no se decide al procesar.'
@@ -69,9 +69,9 @@ SD.defineExercise('m21-metering', {
       prompt: 'Los clientes prepagos no pueden pasar de 5 USD de sobregiro. ¿Qué política de autorización usas?',
       options: [
         'Cobrar al terminar y admitir mientras el saldo sea positivo.',
-        'Reservar el costo máximo de cada request.',
-        'Reservar por tramos contra el saldo más el sobregiro permitido, con recarga automática opcional y una idempotency key por cruce de umbral.',
-        'Consultar el ledger en PostgreSQL en cada request.'
+        'Reservar el costo máximo de cada request contra el saldo, sin sobregiro.',
+        'Reservar por tramos contra el saldo más el sobregiro permitido.',
+        'Consultar el ledger en PostgreSQL en cada request y en cada tramo del stream.'
       ],
       answer: 2,
       explain: 'Cobrar al terminar no acota el sobregiro: depende de cuántos streams haya en vuelo. Reservar el máximo bloquea dinero y rechaza requests pagables. Consultar el ledger en cada request pone una base transaccional en el camino de 400 requests por segundo. Los tramos acotan el sobregiro y desperdician poco.'
@@ -80,9 +80,9 @@ SD.defineExercise('m21-metering', {
       id: 'redondeo', type: 'single',
       prompt: '¿Dónde se redondea al centavo?',
       options: [
-        'En cada evento, al descontar el saldo.',
-        'En cada agregado horario.',
-        'Una vez por línea de factura, sobre la cantidad del ciclo; el saldo guarda nanodólares y no redondea.',
+        'En cada evento, al descontar el saldo, para que el saldo siempre sea exacto.',
+        'En cada agregado horario, antes de mandarlo a Stripe.',
+        'Una vez por línea de factura, sobre la cantidad del ciclo.',
         'En ningún lado: las facturas se emiten con decimales de centavo.'
       ],
       answer: 2,
@@ -92,10 +92,10 @@ SD.defineExercise('m21-metering', {
       id: 'conciliar', type: 'multi',
       prompt: '¿Qué compara la conciliación horaria? Marca todas las que correspondan.',
       options: [
-        'El registro del motor contra los eventos final del log crudo, por request_id.',
+        'El registro del motor contra los eventos final, por request_id.',
         'El log crudo deduplicado contra los agregados, por organización y hora.',
-        'Los contadores del limitador contra el uso exacto, para corregir al limitador.',
-        'Los agregados contra el limitador, para corregir los agregados.'
+        'Los contadores del limitador contra el uso exacto.',
+        'Los agregados contra el limitador, para corregir los agregados con el número en tiempo real.'
       ],
       answer: [0, 1, 2],
       explain: 'Las tres primeras encuentran eventos perdidos, errores del pipeline y desvíos del limitador. La cuarta va en la dirección equivocada: el limitador es aproximado y nunca corrige al metering.'

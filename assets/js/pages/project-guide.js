@@ -1,6 +1,8 @@
 /* Guías de proyectos (proyectos/aNN-*.html). Necesita sd.js, projects.data.js y project-state.js.
    - Ruta de proyectos en el sidebar y anterior/siguiente entre proyectos.
-   - Resaltado de java, javascript, yaml, xml, bash, nginx, ini y dockerfile (sd.js ya cubre json, http, sse, sql y python).
+   - Resaltado de java, javascript, yaml, xml, bash, nginx, ini, toml y dockerfile (sd.js ya cubre json, http, sse, sql y python).
+   - Dos series: los proyectos en Java (A y C) y los tutoriales de AI Engineering (IA). La ruta y el
+     anterior/siguiente muestran solo la serie de la guía abierta.
    - <pre data-file="ruta"> recibe una cabecera con la ruta del archivo y un botón para copiar.
    - La caja "Tu repositorio" ([data-repo]): enlace al repositorio y lista de comprobación, que marcan
      el proyecto como terminado. */
@@ -94,12 +96,18 @@
     return tokens(src, re, ['c-c', 'c-m', 'c-k', 'c-s']);
   }
 
+  /* TOML, para pyproject.toml: comentarios, [tablas], claves, cadenas, booleanos y números. */
+  function hlToml(src) {
+    var re = /(#[^\n]*)|(^\s*\[\[?[^\]\n]+\]\]?)|(^\s*[A-Za-z0-9_.\-"]+(?=\s*=))|("(?:\\.|[^"\\\n])*"|'[^'\n]*')|(\b(?:true|false)\b)|(\b\d+(?:\.\d+)?\b)/gm;
+    return tokens(src, re, ['c-c', 'c-m', 'c-k', 'c-s', 'c-b', 'c-n']);
+  }
+
   function hlDocker(src) {
     var re = /(^\s*#[^\n]*)|(^\s*(?:FROM|RUN|COPY|ADD|WORKDIR|ENV|ARG|EXPOSE|USER|ENTRYPOINT|CMD|HEALTHCHECK|LABEL|VOLUME)\b)|("(?:\\.|[^"\\])*")|(\$\{?[A-Za-z_]\w*\}?)/gm;
     return tokens(src, re, ['c-c', 'c-m', 'c-s', 'c-h']);
   }
 
-  var HL = { java: hlJava, javascript: hlJs, yaml: hlYaml, xml: hlXml, bash: hlBash, nginx: hlNginx, ini: hlIni, dockerfile: hlDocker };
+  var HL = { java: hlJava, javascript: hlJs, yaml: hlYaml, xml: hlXml, bash: hlBash, nginx: hlNginx, ini: hlIni, toml: hlToml, dockerfile: hlDocker };
 
   function highlight(root) {
     root.querySelectorAll('pre[data-lang]').forEach(function (pre) {
@@ -187,12 +195,19 @@
       el.appendChild(h('ol', { class: 'route-stops' }, items.map(function (p) { return stop(p, kind); })));
       container.appendChild(el);
     }
+    var cur = SD.projectItem(currentId);
+    if (cur && cur.series === 'ia') {
+      (d.aiTracks || []).forEach(function (t) { part(t.label, t.title, t.line, t.items, 'module'); });
+      return;
+    }
     d.tracks.forEach(function (t) { part(t.label, t.title, t.line, t.items, 'module'); });
     part('Al final', 'Sistemas completos', '--label-3', d.capstones, 'checkpoint');
   }
 
   function buildPager(pagerEl, currentId) {
-    var items = SD.projectItems(), idx = -1;
+    var cur = SD.projectItem(currentId);
+    if (!cur) return;
+    var items = SD.projectItems().filter(function (p) { return p.series === cur.series; }), idx = -1;
     items.forEach(function (p, i) { if (p.id === currentId) idx = i; });
     if (idx < 0) return;
     function cell(p, dir) {

@@ -5,7 +5,8 @@
      guardado en el navegador. Un proyecto se marca como terminado con el enlace y su lista de comprobación completa.
    repoName: el nombre sugerido para el repositorio. mods: ids de course.data.js.
    Cada proyecto se construye solo, sin código de otro; "Cómo conectar", al final de cada guía, solo nombra
-   proyectos anteriores en esta lista. */
+   proyectos anteriores en esta lista.
+   aiTracks: los tutoriales de AI Engineering, una serie aparte (al final del archivo). */
 window.SD = window.SD || {};
 SD.data = SD.data || {};
 SD.data.projects = {
@@ -162,5 +163,40 @@ SD.data.projects = {
       excuse: 'Una app de comida para un barrio.',
       learn: 'Catálogo con búsqueda y caché, fotos con URLs firmadas, pago idempotente, asignar el repartidor libre más cercano sin asignarlo dos veces, seguimiento en vivo por WebSocket con Pub/Sub entre pods, y avisos por cola.',
       uses: ['a03', 'a11', 'a15', 'a16', 'a17', 'a09', 'a07', 'a14'] }
+  ],
+
+  /* Tutoriales de AI Engineering (sección #ia-engineering de proyectos.html): otra serie, en Python.
+     Misma forma que tracks; la ruta y el anterior/siguiente de sus guías se quedan dentro de la serie. */
+  aiTracks: [
+    {
+      id: 'ia', label: 'AI Engineering', title: 'Agentes, evals y RAG', line: '--line-p2',
+      intro: 'Sistemas con modelos de lenguaje, en Python, con un modelo por API (Claude) y uno local (Ollama) a la par. Cada guía construye algo que se rompe de verdad y lo comprueba con pruebas y evals.',
+      items: [
+        { id: 'ia01', num: 'IA01', title: 'Un agente de guardia', tier: 'core', status: 'ready', href: 'proyectos/ia01-agente-guardia.html', repo: '', repoName: 'ia01-agente-guardia', mods: ['m25', 'm22', 'm11'], front: false,
+          excuse: 'Son las 3 de la mañana y la tienda se rompe. El agente investiga antes de despertarte.',
+          learn: 'Un grafo de LangGraph: triage con salida estructurada, un bucle con herramientas de solo lectura (métricas de Prometheus, logs, runbooks con RAG en pgvector y SQL con un rol de solo lectura), presupuesto de pasos y de tokens en el estado, aprobación humana con interrupt antes de cambiar un flag o cancelar una consulta, checkpoints en PostgreSQL que sobreviven a un kill -9, y un informe final. El mismo agente con Claude y con un modelo local en Ollama, evals de tres incidentes con pass^k y una línea de log envenenada.',
+          stack: ['Python 3.13', 'LangGraph', 'Claude', 'Ollama', 'PostgreSQL + pgvector', 'Prometheus', 'Phoenix'] },
+        { id: 'ia02', num: 'IA02', title: 'Un analista de datos', tier: 'core', status: 'proposed', repo: '', mods: ['m25', 'm20'], front: false,
+          excuse: 'Preguntas de negocio, en español, contra la base de una tienda.',
+          learn: 'El modelo escribe SQL y Python que corren en un sandbox sin red, con un rol de solo lectura, límites de filas y de tiempo, gráficos como archivos, y una forma de comprobar que la respuesta sale de los datos y no del modelo.',
+          stack: ['LangGraph', 'PostgreSQL', 'Docker como sandbox', 'pandas'] },
+        { id: 'ia03', num: 'IA03', title: 'Soporte que reembolsa', tier: 'core', status: 'proposed', repo: '', mods: ['m25', 'm22', 'm27'], front: false,
+          excuse: 'El agente del ejercicio de M25, construido.',
+          learn: 'Un clasificador que manda lo conocido a workflows y lo abierto al agente, reembolsos con idempotency key y aprobación sobre 50 USD, usuarios simulados para evals de trayectoria con pass^k, y el costo por ticket medido.',
+          stack: ['LangGraph', 'FastAPI', 'PostgreSQL', 'Claude', 'Ollama'] },
+        { id: 'ia04', num: 'IA04', title: 'Revisor de pull requests por MCP', tier: 'core', status: 'proposed', repo: '', mods: ['m25', 'm10'], front: false,
+          excuse: 'Un revisor que comenta tus pull requests.',
+          learn: 'Un servidor de MCP propio por Streamable HTTP con OAuth, un token de GitHub con permisos mínimos, la regla de dos aplicada a un repositorio público con un pull request envenenado, y comentarios que pasan por aprobación.',
+          stack: ['MCP', 'SDK de MCP para Python', 'GitHub', 'Claude'] },
+        { id: 'ia05', num: 'IA05', title: 'RAG de documentación con evals', tier: 'core', status: 'proposed', repo: '', mods: ['m16', 'm22'], front: false,
+          excuse: 'Preguntas sobre la documentación de tu equipo, con citas.',
+          learn: 'Trocear, embeddings y búsqueda híbrida en pgvector, re-ranking, citas que se pueden verificar, un set de evals con respuestas de referencia y un juez calibrado, y cómo cambia la calidad al cambiar el modelo o el troceado.',
+          stack: ['PostgreSQL + pgvector', 'Ollama', 'Claude', 'pytest'] },
+        { id: 'ia06', num: 'IA06', title: 'Un agente de voz', tier: 'extra', status: 'proposed', repo: '', mods: ['m24', 'm25'], front: false,
+          excuse: 'Una línea que agenda citas por teléfono.',
+          learn: 'STT, modelo y TTS en streaming, fin de turno, interrupciones con truncado, herramientas con aprobación y el presupuesto de latencia medido de punta a punta.',
+          stack: ['WebRTC', 'STT y TTS', 'LangGraph'] }
+      ]
+    }
   ]
 };

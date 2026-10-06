@@ -28,13 +28,17 @@
 
   /* ---------- Modelo: proyectos y sistemas completos en orden ---------- */
 
+  /* series: 'a' para los proyectos en Java y los sistemas completos; 'ia' para los tutoriales de AI Engineering. */
   SD.projectItems = function () {
     var d = SD.data.projects, out = [];
     if (!d) return out;
     d.tracks.forEach(function (t) {
-      t.items.forEach(function (p) { out.push(Object.assign({ track: t }, p)); });
+      t.items.forEach(function (p) { out.push(Object.assign({ track: t, series: 'a' }, p)); });
     });
-    d.capstones.forEach(function (c) { out.push(Object.assign({ track: null, capstone: true }, c)); });
+    d.capstones.forEach(function (c) { out.push(Object.assign({ track: null, capstone: true, series: 'a' }, c)); });
+    (d.aiTracks || []).forEach(function (t) {
+      t.items.forEach(function (p) { out.push(Object.assign({ track: t, series: 'ia' }, p)); });
+    });
     return out;
   };
 

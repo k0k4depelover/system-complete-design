@@ -9,7 +9,7 @@ SD.defineExercise('m23-imagenes', {
       prompt: '¿Qué forma tiene la API de generación?',
       options: [
         'Un POST que espera abierto hasta devolver la imagen, con un timeout de 2 minutos.',
-        'Un job asíncrono: el POST responde 202 con el id; la app sigue el progreso por SSE, los clientes de la API reciben un webhook y todos pueden consultar el estado.',
+        'Un job asíncrono: el POST responde 202 con el id y el estado se sigue aparte.',
         'Un WebSocket por usuario que queda abierto mientras la app está en pantalla.',
         'Un POST que encola y no devuelve nada; la imagen aparece en la galería del usuario cuando esté.'
       ],
@@ -40,9 +40,9 @@ SD.defineExercise('m23-imagenes', {
       id: 'colas', type: 'single',
       prompt: '¿Cómo se ordena la cola?',
       options: [
-        'Una sola cola FIFO para todos.',
-        'Prioridad estricta entre clases (interactiva paga, estándar gratuita, batch) y reparto justo por organización dentro de cada clase, con admisión por plazo.',
-        'Una cola por usuario, atendida en round robin.',
+        'Una sola cola FIFO para todos, que es la más justa porque respeta el orden de llegada.',
+        'Prioridad entre clases y reparto justo por organización dentro de cada una.',
+        'Una cola por usuario, atendida en round robin sin distinguir planes.',
         'Prioridad por cuántas imágenes generó cada usuario en el día: el que menos generó, primero.'
       ],
       answer: 1,
@@ -64,9 +64,9 @@ SD.defineExercise('m23-imagenes', {
       id: 'entrega', type: 'single',
       prompt: '¿Cómo se entregan las imágenes?',
       options: [
-        'Bucket público con nombres aleatorios: nadie los adivina.',
-        'Bucket privado detrás de una CDN, URLs de la CDN firmadas que vencen en minutos y vistas en WebP; los PNG originales se borran a los 30 días si el usuario no los guardó.',
-        'La API devuelve la imagen en base64 dentro del JSON del job.',
+        'Bucket público con nombres aleatorios de 128 bits: nadie los adivina.',
+        'Bucket privado detrás de una CDN, con URLs firmadas que vencen en minutos.',
+        'La API devuelve la imagen en base64 dentro del JSON del job, sin otro salto.',
         'Signed URLs de S3 directas, sin CDN, con vencimiento de un año.'
       ],
       answer: 1,
@@ -76,10 +76,10 @@ SD.defineExercise('m23-imagenes', {
       id: 'cobro', type: 'single',
       prompt: 'Un usuario pago genera 50 imágenes por día con el modelo grande. ¿Qué haces?',
       options: [
-        'Nada: pagó el plan.',
-        'Cerrarle la cuenta por abuso.',
-        'Un tope diario por plan, medido con el evento de uso del job (con el id como clave), y el modelo grande como opción de calidad alta dentro del tope.',
-        'Cobrarle aparte cada imagen sin avisarle.'
+        'Nada: pagó el plan, y el plan dice "ilimitado".',
+        'Pasarlo al modelo destilado sin avisar cuando supera 20 imágenes.',
+        'Un tope diario por plan, medido con el evento de uso de cada job.',
+        'Cobrarle aparte cada imagen del modelo grande sin avisarle antes.'
       ],
       answer: 2,
       explain: '50 por día a 0.022 USD son 33 USD al mes, más que el plan de 20. Los topes del M21 y un evento de uso idempotente por job resuelven el margen sin sorpresas (23.12).'
