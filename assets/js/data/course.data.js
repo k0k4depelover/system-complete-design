@@ -27,12 +27,12 @@ window.SD.course = {
           summary: 'Opcional. Modelos de sistema, detectores de fallas, CAP demostrado, modelos de consistencia en detalle, quórums, relojes, Raft y Paxos, FLP, 2PC, CRDTs, bizantinas y verificación, con siete ejercicios guiados.' },
         { id: 'm07', num: 'M07', title: 'Mensajería asíncrona', short: 'Colas y pub/sub', mins: 70, href: 'modules/m07-mensajeria.html', status: 'ready',
           summary: 'Colas vs logs, pub/sub, particiones, semánticas de entrega, outbox, CDC y DLQ.' },
-        { id: 'm08', num: 'M08', title: 'Resiliencia', short: 'Resiliencia', mins: 70, href: 'modules/m08-resiliencia.html', status: 'ready',
+        { id: 'm08', num: 'M08', title: 'Resiliencia', short: 'Resiliencia', mins: 110, href: 'modules/m08-resiliencia.html', status: 'ready',
           summary: 'Timeouts, retries con jitter, circuit breakers, rate limiting, load shedding y multi-región.' },
         { id: 'm09', num: 'M09', title: 'Almacenamiento de objetos', short: 'Objetos y signed URLs', mins: 50, href: 'modules/m09-objetos.html', status: 'ready',
           summary: 'Arquitectura tipo S3, signed URLs paso a paso, subidas directas y multipart.' },
-        { id: 'm10', num: 'M10', title: 'Seguridad e identidad', short: 'Seguridad', mins: 60, href: 'modules/m10-seguridad.html', status: 'ready',
-          summary: 'OAuth2 y OIDC, JWT vs tokens opacos, API keys, mTLS, KMS y aislamiento multi-tenant.' },
+        { id: 'm10', num: 'M10', title: 'Seguridad e identidad', short: 'Seguridad', mins: 85, href: 'modules/m10-seguridad.html', status: 'ready',
+          summary: 'JWT con estado y revocación, OAuth2/OIDC con PKCE, API keys, mTLS, KMS y borrado criptográfico, multi-tenant, los ataques del OWASP API Top 10 y el log de auditoría.' },
         { id: 'm11', num: 'M11', title: 'Observabilidad y operación', short: 'Observabilidad', mins: 60, href: 'modules/m11-observabilidad.html', status: 'ready',
           summary: 'Logs, métricas y traces, alertas sobre SLOs, despliegues canary y migraciones sin downtime.' },
         { id: 'cpa', num: 'CP-A', kind: 'checkpoint', title: 'Checkpoint A: fundamentos', short: 'Checkpoint A', mins: 90, href: 'modules/checkpoint-a.html', status: 'ready',
@@ -91,6 +91,26 @@ window.SD.course = {
           summary: 'Conexiones persistentes y gateways, registro de sesiones, buzones, grupos, cifrado de extremo a extremo y tu clon en AWS.' },
         { id: 'cpc', num: 'CP-C', kind: 'checkpoint', title: 'Checkpoint C: diseño final', short: 'Checkpoint C', mins: 90, href: 'modules/checkpoint-c.html', status: 'soon',
           summary: 'Diseña la plataforma de pagos por uso para el producto de IA de la Parte II.' }
+      ]
+    },
+    {
+      id: 'p4', label: 'Parte IV', title: 'Ciberseguridad', line: '--line-p4',
+      intro: 'El perímetro, el servidor, la base y la nube, con la premisa de que el atacante ya está probando. De los firewalls al hardening de un servidor Linux, la operación diaria de un SysAdmin, la seguridad de las bases de datos, la criptografía desde cero y las arquitecturas seguras en la nube.',
+      items: [
+        { id: 'm32', num: 'M32', title: 'Firewalls a fondo', short: 'Firewalls', mins: 90, href: 'modules/m32-firewalls.html', status: 'soon',
+          summary: 'Stateless vs stateful, nftables, iptables, UFW y firewalld, filtrado de salida, host vs red, Security Groups y NACLs, NGFW, segmentación, Docker y el firewall, e IPv6.' },
+        { id: 'm33', num: 'M33', title: 'Hardening de servidores Linux', short: 'Hardening Linux', mins: 150, href: 'modules/m33-hardening-linux.html', status: 'soon',
+          summary: 'SSH, sudo, actualizaciones, contraseñas, Fail2Ban y CrowdSec, AIDE, rkhunter, Lynis, sysctl, GRUB y qué asegurar aunque el firewall no alcance; basado en How-To-Secure-A-Linux-Server.' },
+        { id: 'm34', num: 'M34', title: 'Operación y troubleshooting para SysAdmin', short: 'SysAdmin y troubleshooting', mins: 150, href: 'modules/m34-sysadmin.html', status: 'soon',
+          summary: 'Usuarios y permisos, systemd y journald, discos y LVM, backups con pruebas de restauración, diagnóstico de CPU, RAM, disco y red, runbooks y parches.' },
+        { id: 'm35', num: 'M35', title: 'Seguridad en bases de datos', short: 'Seguridad en BD', mins: 120, href: 'modules/m35-seguridad-bd.html', status: 'soon',
+          summary: 'Tablas de bitácora con triggers y pgAudit, CDC, RBAC, ABAC y ACLs, extensión de la row-level security de M05, cifrado de columnas, rotación de credenciales y mínimo privilegio por servicio.' },
+        { id: 'm36', num: 'M36', title: 'Criptografía desde cero', short: 'Criptografía', mins: 120, href: 'modules/m36-criptografia.html', status: 'soon',
+          summary: 'Hash, HMAC, cifrado simétrico (AES-GCM) y asimétrico, firmas, intercambio de claves, certificados y PKI, contraseñas con Argon2, aleatoriedad y los errores más comunes.' },
+        { id: 'm37', num: 'M37', title: 'Arquitecturas seguras en la nube', short: 'Nube segura', mins: 120, href: 'modules/m37-nube-segura.html', status: 'soon',
+          summary: 'IAM y mínimo privilegio, mTLS y SPIFFE, KMS y HSM, gestores de secretos, WAF, VPC y endpoints privados, zero trust, auditoría con CloudTrail, guardrails e respuesta a incidentes.' },
+        { id: 'cpe', num: 'CP-E', kind: 'checkpoint', title: 'Checkpoint E: endurece una plataforma', short: 'Checkpoint E', mins: 90, href: 'modules/checkpoint-e.html', status: 'soon',
+          summary: 'Examen integrador y endurecimiento de una plataforma completa, del firewall a la nube, asumiendo que el atacante ya entró.' }
       ]
     },
     {

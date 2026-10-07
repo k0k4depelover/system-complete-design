@@ -38,7 +38,7 @@
 
       <header class="title-block">
         <h1>Bases de datos</h1>
-        <p class="lead">La base de datos es la pieza más difícil de cambiar de todo el sistema: se elige una vez y se vive con ella años. Este módulo recorre cómo guarda los datos, cómo se buscan con índices, qué garantiza una transacción, cómo te conectas a ella, cómo se replica y en qué orden se escala, hasta llegar al sharding, que es lo último que se hace. Cada mecanismo tiene su animación.</p>
+        <p class="lead">La base de datos es la pieza más difícil de cambiar de todo el sistema: se elige una vez y se vive con ella años. Este módulo recorre cómo guarda los datos, cómo se buscan con índices, qué garantiza una transacción, cómo te conectas a ella, cómo controlas qué fila ve cada conexión, cómo se replica y en qué orden se escala, hasta llegar al sharding, que es lo último que se hace. Cada mecanismo tiene su animación.</p>
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M05</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
@@ -56,6 +56,7 @@
           <li>Normalizar para escribir y desnormalizar para leer, con vistas, vistas materializadas y CQRS.</li>
           <li>Seguir una transacción por sus cinco estados y explicar cómo MVCC da snapshot isolation.</li>
           <li>Conectarte con el driver, el DSN y el tamaño de pool correctos, con la cuenta hecha.</li>
+          <li>Dar a cada rol el mínimo privilegio y aislar tenants con row-level security, sabiendo por qué el dueño la ignora.</li>
           <li>Configurar replicación y quórums sabiendo qué consistencia obtienes, y garantizar read-your-writes.</li>
           <li>Coordinar un cambio entre dos bases con two-phase commit o con una saga.</li>
           <li>Recorrer las fases de escalamiento y explicar por qué el sharding va al final.</li>
@@ -80,7 +81,7 @@
         </table>
       </div>
 
-      <p>Un sistema real combina varios. El patrón habitual es una fuente de verdad transaccional y <b>vistas derivadas</b> (búsqueda, caché, analítica) alimentadas desde su log de cambios: si una vista se corrompe, se reconstruye desde la fuente. Las secciones 5.8 y 5.13 vuelven sobre esta idea.</p>
+      <p>Un sistema real combina varios. El patrón habitual es una fuente de verdad transaccional y <b>vistas derivadas</b> (búsqueda, caché, analítica) alimentadas desde su log de cambios: si una vista se corrompe, se reconstruye desde la fuente. Las secciones 5.8 y 5.14 vuelven sobre esta idea.</p>
 
       <h2 id="almacenamiento"><span class="sec-num">5.2</span>Cómo guarda los datos: páginas, B-tree y LSM</h2>
 
@@ -790,7 +791,7 @@ SELECT transferir(1, 2, 100);   -- una sola ida y vuelta para todas las sentenci
           </tbody>
         </table>
       </div>
-      <p>La regla práctica: procedimientos cortos, cerca de los datos y atómicos (mover saldo, generar un id, mantener un contador), y la lógica de negocio en la aplicación. El generador de ids de Instagram de 5.14 es un buen ejemplo de lo que sí conviene: una función de PL/pgSQL de diez líneas.</p>
+      <p>La regla práctica: procedimientos cortos, cerca de los datos y atómicos (mover saldo, generar un id, mantener un contador), y la lógica de negocio en la aplicación. El generador de ids de Instagram de 5.15 es un buen ejemplo de lo que sí conviene: una función de PL/pgSQL de diez líneas.</p>
 
       <h2 id="conexiones"><span class="sec-num">5.7</span>Conectarse a la base</h2>
 
@@ -1056,11 +1057,71 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
 
       <ul>
         <li><b>El modelo de lectura puede ser otra base:</b> Elasticsearch para la búsqueda, Redis para un contador, una tabla de Cassandra para un timeline. Lo alimentan el CDC o una outbox (M07).</li>
-        <li><b>Siempre va atrasado:</b> de milisegundos a segundos. Quien acaba de escribir necesita read-your-writes, como en el escenario 3; la sección 5.10 trata ese problema en general.</li>
+        <li><b>Siempre va atrasado:</b> de milisegundos a segundos. Quien acaba de escribir necesita read-your-writes, como en el escenario 3; la sección 5.11 trata ese problema en general.</li>
         <li><b>No lo uses por defecto:</b> para un CRUD donde se lee lo mismo que se escribe, CQRS duplica el trabajo sin ganar nada. Empieza con vistas materializadas en la misma base y separa el modelo de lectura cuando una pantalla concreta lo justifique.</li>
       </ul>
 
-      <h2 id="replicacion"><span class="sec-num">5.9</span>Replicación</h2>
+      <h2 id="rls"><span class="sec-num">5.9</span>Permisos dentro de la base: roles, GRANT y row-level security</h2>
+
+      <p>Hasta aquí la base confió en que la aplicación filtrara bien. Pero la aplicación tiene errores, y el error más caro en un SaaS es devolverle a un cliente las filas de otro. La base puede ser la última línea de defensa: con permisos por rol decide <em>qué tablas</em> toca cada conexión, y con <dfn data-term="rls">row-level security</dfn> (RLS) decide <em>qué filas</em> dentro de esas tablas, aunque la consulta olvide el <code>WHERE</code>.</p>
+
+      <h3 id="roles-grant">Roles y GRANT: el mínimo privilegio</h3>
+      <p>Un rol es un usuario de la base. La regla es la misma que en cualquier sistema: cada quien con lo mínimo. La aplicación no se conecta con el rol que creó las tablas (y menos con el superusuario); se conecta con un rol que solo puede leer y escribir lo que necesita.</p>
+<pre data-lang="sql"><code>CREATE ROLE app_rw LOGIN PASSWORD '…';
+GRANT SELECT, INSERT, UPDATE, DELETE ON facturas TO app_rw;
+-- app_rw no puede hacer DROP, ALTER ni TRUNCATE: si lo filtran, el daño está acotado.
+-- Las migraciones corren con otro rol, el dueño de la tabla.</code></pre>
+      <p>Separar el rol de la aplicación del rol dueño no es burocracia: es justo lo que hace que RLS funcione, como se ve enseguida.</p>
+
+      <h3 id="rls-basico">Activar RLS: USING y WITH CHECK</h3>
+      <p>RLS es una política pegada a la tabla. Se activa con <code>ENABLE ROW LEVEL SECURITY</code> y, desde ese momento, <b>sin política no se ve ninguna fila</b> (falla cerrada). La política tiene dos mitades:</p>
+      <ul>
+        <li><b><code>USING</code></b> filtra las filas que <em>ya existen</em>: se aplica a <code>SELECT</code>, <code>UPDATE</code> y <code>DELETE</code>. Una fila que no cumple la condición es, para esa conexión, como si no existiera.</li>
+        <li><b><code>WITH CHECK</code></b> valida las filas <em>nuevas</em>: se aplica a <code>INSERT</code> y a la versión resultante de un <code>UPDATE</code>. Impide que una conexión escriba una fila que luego no podría ver (por ejemplo, marcarla con el tenant de otro).</li>
+      </ul>
+<pre data-lang="sql"><code>ALTER TABLE facturas ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY por_tenant ON facturas
+  USING      (tenant_id = current_setting('app.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON facturas TO app_rw;</code></pre>
+      <p>El segundo argumento <code>true</code> de <code>current_setting</code> es importante: hace que, si nadie fijó <code>app.tenant_id</code>, la función devuelva <code>NULL</code> en vez de dar error. Y como <code>tenant_id = NULL</code> nunca es verdadero, la consulta no devuelve nada. Es la falla segura que quieres: si el código olvida fijar el tenant, no se filtran datos; simplemente no aparece ninguno.</p>
+      <p>Varias políticas sobre la misma tabla se combinan: las <b>permissive</b> (las normales) se suman con OR (basta que una deje pasar la fila), y las <b>restrictive</b> se exigen todas con AND (sirven para poner un tope que ninguna otra política pueda saltar).</p>
+
+      <h3 id="rls-bypass">La trampa: el dueño se salta RLS</h3>
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Activas RLS, pruebas desde la consola y parece funcionar... porque te conectas como superusuario, que <b>ignora siempre</b> las políticas. En producción, si tu aplicación se conecta con el rol que creó las tablas, también las ignora, y RLS no filtra nada <em>sin avisar</em>. El dueño de una tabla se salta sus políticas por defecto.</p>
+      </aside>
+      <p>Dos reglas para no caer en esto:</p>
+      <ul>
+        <li>La aplicación se conecta con un rol <b>que no es dueño</b> de la tabla (como <code>app_rw</code>). A ese rol sí se le aplican las políticas.</li>
+        <li>Si por lo que sea el mismo rol crea y usa la tabla, hace falta <code>ALTER TABLE facturas FORCE ROW LEVEL SECURITY</code>, que obliga también al dueño.</li>
+      </ul>
+      <p>Los superusuarios y los roles con el atributo <code>BYPASSRLS</code> ignoran las políticas incluso con <code>FORCE</code>: existen para las migraciones y para <code>pg_dump</code>, que necesita ver todas las filas. La aplicación nunca debe conectarse así.</p>
+
+      <h3 id="rls-set-local">Fijar el tenant: SET LOCAL, no SET</h3>
+      <p>El tenant de cada request se pasa a la base con una variable de sesión, justo antes de consultar. Tiene que ser <code>SET LOCAL</code>, dentro de una transacción: así el valor dura solo esa transacción y desaparece al terminar.</p>
+<pre data-lang="sql"><code>BEGIN;
+SET LOCAL app.tenant_id = '6f1c…';   -- sale del token verificado, nunca de la request
+SELECT * FROM facturas WHERE id = $1;
+COMMIT;</code></pre>
+      <p>Un <code>SET</code> normal (sin <code>LOCAL</code>) es una bomba de tiempo con un pool de conexiones. Como el pool reutiliza las conexiones entre requests (<a href="#conexiones">5.7</a>), y en modo transacción de PgBouncer una conexión salta de un cliente a otro, el <code>tenant_id</code> de un usuario quedaría pegado a la conexión y lo heredaría el siguiente. <code>SET LOCAL</code> lo evita porque se limpia solo al cerrar la transacción.</p>
+
+      <h3 id="rls-practica">Rendimiento, vistas y otras bases</h3>
+      <ul>
+        <li><b>Índice en <code>tenant_id</code>.</b> La política agrega su condición a cada consulta, como un <code>WHERE</code> más. Sin un índice en <code>tenant_id</code> (o uno compuesto que empiece por él), cada consulta recorre toda la tabla.</li>
+        <li><b>Vistas con <code>security_invoker</code> (PostgreSQL 15+).</b> Por defecto una vista corre con los permisos de quien la creó, así que esquivaría RLS. Desde PG15, <code>CREATE VIEW … WITH (security_invoker = true)</code> hace que la vista aplique las políticas del que la consulta.</li>
+        <li><b>No es exclusivo de PostgreSQL.</b> SQL Server tiene <i>security policies</i> con predicados FILTER y BLOCK; Oracle, <i>Virtual Private Database</i> (<code>DBMS_RLS</code>). MySQL no tiene RLS nativo: se emula con vistas y funciones, con más cuidado. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Supabase</b> apoya todo su modelo de seguridad en RLS: las políticas usan <code>auth.uid()</code> para atar cada fila al usuario autenticado, porque el navegador habla casi directo con PostgreSQL. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+      <p>RLS es la red de seguridad, no el único filtro. La aplicación sigue filtrando por tenant en sus consultas (es más claro y ayuda al planificador); RLS está debajo para el día en que una consulta se olvide. Es la última capa del aislamiento multi-tenant que se diseña en <a href="m10-seguridad.html#multitenant">M10</a>.</p>
+
+      <p>Prueba cómo responde la base según el rol de la conexión, el tenant de la sesión y la consulta:</p>
+      <div data-sim="rls"></div>
+
+      <h2 id="replicacion"><span class="sec-num">5.10</span>Replicación</h2>
 
       <p>Se replica por tres razones: sobrevivir a la caída de una máquina, repartir lecturas y acercar datos a los usuarios. Hay tres arquitecturas:</p>
 
@@ -1182,7 +1243,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
       </div>
       <p>Sin réplicas síncronas configuradas en <code>synchronous_standby_names</code>, <code>on</code> equivale a <code>local</code>. Ese parámetro acepta <code>FIRST 1 (r1, r2)</code> (la primera de la lista que esté sana) o <code>ANY 1 (r1, r2)</code> (cualquiera de las dos), y así una réplica caída no frena las escrituras. Lo habitual es una réplica síncrona en otra zona de la misma región, donde la ida y vuelta cuesta de 1 a 2 ms, y el resto asíncronas. Es el trade-off de latencia contra consistencia de PACELC (M06).</p>
 
-      <h2 id="read-your-writes"><span class="sec-num">5.10</span>Leer lo que escribiste</h2>
+      <h2 id="read-your-writes"><span class="sec-num">5.11</span>Leer lo que escribiste</h2>
 
       <p>En cuanto las lecturas van a réplicas asíncronas, o a un modelo de lectura de CQRS, aparece el <dfn data-term="replication-lag">retraso de replicación</dfn>: el tiempo entre que el líder confirma un cambio y una réplica lo aplica. Suele ser de milisegundos, pero bajo carga, durante un vacuum largo o con una consulta larga en la réplica puede llegar a minutos. El síntoma más visible es la falta de <dfn data-term="read-your-writes">read-your-writes</dfn>: un usuario guarda algo, recarga, y no lo ve (escenario 4 de la animación anterior). Lo que el usuario espera es razonable: <em>sus propias</em> escrituras tienen que verse enseguida, aunque las de los demás tarden un poco. Hay cinco formas de dárselo, y se combinan:</p>
 
@@ -1200,7 +1261,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
       </div>
       <p>Read-your-writes es una de las garantías de sesión que M06 estudia junto con las lecturas monótonas y otras dos. Y alerta sobre el retraso: una réplica una hora atrasada es un incidente, aunque nadie se haya quejado todavía.</p>
 
-      <h2 id="quorum"><span class="sec-num">5.11</span>Quórums</h2>
+      <h2 id="quorum"><span class="sec-num">5.12</span>Quórums</h2>
 
       <p>En la replicación sin líder no hay nadie que ordene las escrituras: el cliente, o un nodo que hace de coordinador, habla directamente con las réplicas. Todo se describe con tres números:</p>
       <dl class="def-rows">
@@ -1304,7 +1365,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
         <p>W + R &gt; N no convierte al sistema en una base con transacciones. Una escritura que falla no se deshace en las réplicas que sí la recibieron (escenario 3). Dos escrituras concurrentes a la misma clave necesitan una regla para elegir, como "gana la última" o relojes vectoriales. Y si el sistema acepta escrituras en réplicas que no son de la clave cuando las suyas no responden (sloppy quorum), la regla deja de valer. M06 explica estos casos y qué hace falta para tener linealizabilidad.</p>
       </aside>
 
-      <h2 id="distribuidas"><span class="sec-num">5.12</span>Transacciones entre bases: 2PC y sagas</h2>
+      <h2 id="distribuidas"><span class="sec-num">5.13</span>Transacciones entre bases: 2PC y sagas</h2>
 
       <p>Todo lo de 5.6 vale dentro de una base. Cuando una operación de negocio toca dos bases (cobrar en la base de pagos y descontar stock en la de inventario, cada una de un servicio distinto), ninguna transacción local cubre las dos. Si el cobro se confirma y el descuento falla, el cliente pagó por algo que no se le va a enviar. Hay dos familias de soluciones.</p>
 
@@ -1351,7 +1412,7 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
         <li><span class="step-title">Estados visibles a propósito</span>Como no hay aislamiento, el pedido existe como <code>PENDIENTE</code> mientras la saga corre, y el resto del sistema lo trata como tal: no se envía, no se factura. Es un "lock semántico".</li>
       </ol>
 
-      <h2 id="escalar"><span class="sec-num">5.13</span>Las fases de escalamiento</h2>
+      <h2 id="escalar"><span class="sec-num">5.14</span>Las fases de escalamiento</h2>
 
       <p>Todo lo anterior se junta en una pregunta práctica: ¿qué haces cuando la base empieza a no dar abasto? La respuesta es una escalera. Cada escalón resuelve más, pero agrega complejidad que vas a operar para siempre, así que se sube <b>un escalón a la vez y solo cuando el anterior ya no alcanza</b>, medido con datos y no por si acaso.</p>
 
@@ -1411,9 +1472,9 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY resumen_clientes_mv;  -- cada 5 minutos, 
             <tr><td><b>1. Pool de conexiones</b></td><td>Un pool por instancia con el tamaño de la cuenta de 5.7 y, si hay muchas instancias, PgBouncer</td><td>Conexiones agotadas, memoria de la base consumida por procesos ociosos</td><td>Un pooler, y sus límites en modo transacción</td></tr>
             <tr><td><b>2. Una máquina más grande</b></td><td>Más núcleos, más memoria (que quepa el conjunto de datos activo) y discos más rápidos</td><td>CPU y E/S. Hoy un solo servidor llega a cientos de núcleos y varios terabytes de memoria</td><td>Una factura más alta. El costo no crece en línea recta con el tamaño</td></tr>
             <tr><td><b>3. Vistas y caché</b></td><td>Vistas materializadas y tablas de resumen para las lecturas pesadas, y una caché delante de lo que más se lee (5.8 y M04). Todavía es <b>una sola base</b>: tablas normalizadas para escribir, estructuras desnormalizadas para leer</td><td>Lecturas caras y repetidas</td><td>Datos atrasados que hay que refrescar, e invalidación de la caché</td></tr>
-            <tr><td><b>4. Primario y réplicas</b></td><td>Réplicas de lectura para los reportes, las búsquedas y las pantallas que toleran segundos de atraso, y una réplica síncrona para el failover (5.9)</td><td>Lecturas que una máquina no alcanza a servir; caídas del primario</td><td>Consistencia eventual: read-your-writes (5.10), monitorear el retraso y elegir en el código a dónde va cada lectura</td></tr>
+            <tr><td><b>4. Primario y réplicas</b></td><td>Réplicas de lectura para los reportes, las búsquedas y las pantallas que toleran segundos de atraso, y una réplica síncrona para el failover (5.10)</td><td>Lecturas que una máquina no alcanza a servir; caídas del primario</td><td>Consistencia eventual: read-your-writes (5.11), monitorear el retraso y elegir en el código a dónde va cada lectura</td></tr>
             <tr><td><b>5. Particionar y separar</b></td><td>Particionado declarativo de las tablas enormes, dentro de la misma base; mover un dominio entero (pagos, notificaciones) a su propia base, que es la partición vertical</td><td>Tablas de miles de millones de filas, vacuum que no termina, un dominio que asfixia a los demás</td><td>Joins entre dominios que ahora cruzan bases y se resuelven en la aplicación</td></tr>
-            <tr><td><b>6. Sharding</b></td><td>Repartir las filas de una misma tabla entre varias bases por una clave (5.14)</td><td>Escrituras o volumen que no caben en el primario más grande que existe</td><td>Joins y transacciones entre shards, ids globales, rebalanceo, migraciones multiplicadas por cada shard</td></tr>
+            <tr><td><b>6. Sharding</b></td><td>Repartir las filas de una misma tabla entre varias bases por una clave (5.15)</td><td>Escrituras o volumen que no caben en el primario más grande que existe</td><td>Joins y transacciones entre shards, ids globales, rebalanceo, migraciones multiplicadas por cada shard</td></tr>
           </tbody>
         </table>
       </div>
@@ -1433,7 +1494,7 @@ DROP TABLE eventos_2025_10;             -- borrar un mes entero: instantáneo</c
       <ul>
         <li><b>OpenAI</b> sirve ChatGPT y su API sobre <b>un solo primario</b> de Azure Database for PostgreSQL Flexible Server, con casi 50 réplicas de lectura en varias regiones y PgBouncer delante. No hace sharding de PostgreSQL: las cargas nuevas con muchas escrituras van a otros sistemas, como Azure Cosmos DB, y el trabajo se concentra en reducir las escrituras del primario <span class="badge badge--doc">Documentado</span>. Es la fase 4 llevada muy lejos.</li>
         <li><b>Figma</b> primero separó grupos de tablas en bases distintas (partición vertical, fase 5) y recién cuando las tablas más grandes no cabían en ninguna máquina hizo sharding horizontal, con una capa propia que enruta las consultas <span class="badge badge--doc">Documentado</span>.</li>
-        <li><b>Notion</b> hizo sharding de su PostgreSQL por espacio de trabajo en 2021: 480 shards lógicos repartidos en 32 bases físicas. En 2023 los redistribuyó en 96 máquinas moviendo shards lógicos enteros, sin cambiar la cantidad de shards <span class="badge badge--doc">Documentado</span>. Es el mismo esquema de Instagram que se explica en 5.14.</li>
+        <li><b>Notion</b> hizo sharding de su PostgreSQL por espacio de trabajo en 2021: 480 shards lógicos repartidos en 32 bases físicas. En 2023 los redistribuyó en 96 máquinas moviendo shards lógicos enteros, sin cambiar la cantidad de shards <span class="badge badge--doc">Documentado</span>. Es el mismo esquema de Instagram que se explica en 5.15.</li>
       </ul>
 
       <aside class="callout callout--tradeoff">
@@ -1441,7 +1502,7 @@ DROP TABLE eventos_2025_10;             -- borrar un mes entero: instantáneo</c
         <p>Subir un escalón antes de tiempo es caro de las dos formas: pagas la complejidad desde el primer día y además eliges la clave de shard sin conocer todavía tus patrones de acceso reales. Quedarte demasiado tiempo también lo es: el sharding se hace mejor con margen que con la base al 95&#8239;% de CPU. La señal para subir es una tendencia medida (la CPU del primario, el tamaño del conjunto de datos activo frente a la memoria, el retraso de las réplicas) que llega al límite en meses, no en años.</p>
       </aside>
 
-      <h2 id="sharding"><span class="sec-num">5.14</span>Sharding</h2>
+      <h2 id="sharding"><span class="sec-num">5.15</span>Sharding</h2>
 
       <p>Cuando ni la máquina más grande ni las réplicas alcanzan, normalmente porque las <em>escrituras</em> no caben en un primario, se reparten las filas entre varias bases con <dfn data-term="sharding">sharding</dfn>. Cada shard es una base completa, con sus réplicas, que tiene una parte de las filas. Todo depende de la <dfn data-term="partition-key">partition key</dfn> (o clave de shard), que decide en qué shard vive cada fila:</p>
       <div class="table-wrap">
@@ -1511,7 +1572,7 @@ DROP TABLE eventos_2025_10;             -- borrar un mes entero: instantáneo</c
       <ul>
         <li><b>Joins distribuidos.</b> Un <dfn data-term="join-distribuido">join distribuido</dfn> junta filas que viven en shards distintos: la consulta viaja por la red, ningún planner ve todo y no hay una transacción común. Se evitan de tres formas: <b>co-ubicar</b>, dando la misma clave de shard a las tablas que se juntan (usuarios y sus pedidos, por <code>user_id</code>), como hace Citus con las tablas "co-located"; <b>copiar a todos los shards</b> las tablas chicas que se leen mucho, como países o planes (las "reference tables" de Citus); y <b>desnormalizar</b>, guardando en el pedido lo que se necesita del producto. Lo que queda se resuelve en la aplicación o en un sistema analítico <span class="badge badge--doc">Documentado</span>.</li>
         <li><b>Scatter-gather.</b> Una consulta sin la clave de shard, como "buscar el usuario por email", tiene que preguntar a todos los shards y juntar las respuestas. Con 64 shards, la consulta tarda lo que tarda el más lento de los 64: la latencia de cola de M00. Para las búsquedas frecuentes se mantiene un índice global, como una tabla <code>email → user_id</code> que vive en un solo lugar.</li>
-        <li><b>Transacciones entre shards.</b> Una transferencia entre dos usuarios de shards distintos ya no es un <code>BEGIN … COMMIT</code>: es un 2PC o una saga (5.12).</li>
+        <li><b>Transacciones entre shards.</b> Una transferencia entre dos usuarios de shards distintos ya no es un <code>BEGIN … COMMIT</code>: es un 2PC o una saga (5.13).</li>
         <li><b>Restricciones globales.</b> Un <code>UNIQUE (email)</code> solo vale dentro de cada shard. La unicidad global necesita la tabla de índice global, con su propia transacción.</li>
         <li><b>Ids.</b> Una secuencia por shard repite valores entre shards. Hace falta un id único global, y conviene que diga en qué shard vive la fila (el caso de Instagram, más abajo).</li>
         <li><b>Operación.</b> Cada migración de esquema se corre N veces, cada backup son N backups y cada shard tiene su propio failover. Herramientas como Vitess (MySQL) o Citus (PostgreSQL) automatizan una parte <span class="badge badge--doc">Documentado</span>.</li>
@@ -1635,7 +1696,7 @@ INSERT INTO shard1341.fotos (user_id, …) VALUES (31341, …) RETURNING id;   -
             </tbody>
           </table>
         </div>
-        <p>Lo esencial no cambia entre una y otra: dos niveles (clave a shard lógico fijo, shard lógico a servidor movible), un mapa chico y crecer moviendo shards lógicos enteros. Notion (5.13) aplicó el mismo patrón con 480 shards lógicos.</p>
+        <p>Lo esencial no cambia entre una y otra: dos niveles (clave a shard lógico fijo, shard lógico a servidor movible), un mapa chico y crecer moviendo shards lógicos enteros. Notion (5.14) aplicó el mismo patrón con 480 shards lógicos.</p>
       </aside>
 
       <h3 id="rebalanceo">Rebalancear sin mover todo</h3>
@@ -1647,21 +1708,21 @@ INSERT INTO shard1341.fotos (user_id, …) VALUES (31341, …) RETURNING id;   -
 
       <div data-sim="ring"></div>
 
-      <h2 id="elegir"><span class="sec-num">5.15</span>Cómo elegir</h2>
+      <h2 id="elegir"><span class="sec-num">5.16</span>Cómo elegir</h2>
 
       <p>Tres preguntas resuelven la mayoría de los casos, en este orden:</p>
       <ol class="steps">
         <li><span class="step-title">¿Qué no puedo perder ni duplicar?</span>Dinero, pedidos, inventario: base transaccional con aislamiento fuerte y replicación síncrona. No se negocia.</li>
         <li><span class="step-title">¿Cómo se accede?</span>Por clave, por rango, por texto, por similitud, por agregación temporal. Cada patrón tiene su almacén.</li>
-        <li><span class="step-title">¿Cuánto y qué tan rápido crece?</span>Si cabe en un PostgreSQL grande con réplicas (y cabe mucho más de lo que se suele creer: terabytes y decenas de miles de transacciones por segundo), empieza por ahí y sube la escalera de 5.13 de a un escalón.</li>
+        <li><span class="step-title">¿Cuánto y qué tan rápido crece?</span>Si cabe en un PostgreSQL grande con réplicas (y cabe mucho más de lo que se suele creer: terabytes y decenas de miles de transacciones por segundo), empieza por ahí y sube la escalera de 5.14 de a un escalón.</li>
       </ol>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
-        <p>Cambiar de base de datos es de los proyectos más caros que existen. Los casos de 5.13 (OpenAI, Figma, Notion) tienen algo en común: empezaron con una base relacional aburrida y la estiraron mucho más allá de lo que parecía razonable antes de repartirla <span class="badge badge--doc">Documentado</span>. Elegir la base aburrida al principio rara vez es un error.</p>
+        <p>Cambiar de base de datos es de los proyectos más caros que existen. Los casos de 5.14 (OpenAI, Figma, Notion) tienen algo en común: empezaron con una base relacional aburrida y la estiraron mucho más allá de lo que parecía razonable antes de repartirla <span class="badge badge--doc">Documentado</span>. Elegir la base aburrida al principio rara vez es un error.</p>
       </aside>
 
-      <h2 id="fallos"><span class="sec-num">5.16</span>Fallos típicos</h2>
+      <h2 id="fallos"><span class="sec-num">5.17</span>Fallos típicos</h2>
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Falla</th><th>Mecanismo</th><th>Defensa</th></tr></thead>
@@ -1671,11 +1732,11 @@ INSERT INTO shard1341.fotos (user_id, …) VALUES (31341, …) RETURNING id;   -
             <tr><td>Pool agotado</td><td>Una transacción que espera a la red retiene su conexión; las demás requests esperan el <code>connectionTimeout</code></td><td>Nada de llamadas externas dentro de la transacción, timeout de espera corto, pools separados (5.7)</td></tr>
             <tr><td>Conexiones agotadas en la base</td><td>1&#8239;000 instancias × 20 conexiones = 20&#8239;000 procesos en PostgreSQL</td><td>Pooler (PgBouncer) en modo transacción</td></tr>
             <tr><td>Split brain</td><td>Una partición de red deja a dos nodos creyéndose líderes</td><td>Consenso para elegir líder (M06) y <dfn data-term="fencing">fencing tokens</dfn></td></tr>
-            <tr><td>Failover que pierde datos</td><td>Réplica asíncrona promovida sin tener los últimos commits</td><td>Réplica síncrona en otra zona (5.9)</td></tr>
-            <tr><td>Réplica atrasada</td><td>Una consulta larga en la réplica o un pico de escrituras: los usuarios no ven lo que acaban de guardar</td><td>Alertas sobre el retraso, read-your-writes con token LSN (5.10), sacar la réplica atrasada del balanceo</td></tr>
+            <tr><td>Failover que pierde datos</td><td>Réplica asíncrona promovida sin tener los últimos commits</td><td>Réplica síncrona en otra zona (5.10)</td></tr>
+            <tr><td>Réplica atrasada</td><td>Una consulta larga en la réplica o un pico de escrituras: los usuarios no ven lo que acaban de guardar</td><td>Alertas sobre el retraso, read-your-writes con token LSN (5.11), sacar la réplica atrasada del balanceo</td></tr>
             <tr><td>Partición caliente</td><td>Una clave monótona o un tenant enorme</td><td>Cambiar la clave, sufijos aleatorios, directorio para tenants grandes</td></tr>
             <tr><td>Transacción eterna</td><td>Una transacción abierta horas impide que el vacuum limpie versiones viejas y la tabla se hincha</td><td><code>idle_in_transaction_session_timeout</code> y alertas sobre la transacción más antigua</td></tr>
-            <tr><td>Coordinador de 2PC caído</td><td>Participantes preparados retienen sus locks hasta que vuelve</td><td>Coordinador replicado con consenso, o una saga en lugar de 2PC (5.12)</td></tr>
+            <tr><td>Coordinador de 2PC caído</td><td>Participantes preparados retienen sus locks hasta que vuelve</td><td>Coordinador replicado con consenso, o una saga en lugar de 2PC (5.13)</td></tr>
             <tr><td>Compensación que falla</td><td>El reembolso de una saga falla y el pedido queda a medias</td><td>Compensaciones idempotentes que se reintentan hasta lograrlo, y una cola de casos para revisión manual</td></tr>
             <tr><td>Migración que bloquea</td><td>Un <code>ALTER TABLE</code> que reescribe la tabla toma un lock exclusivo durante minutos</td><td>Migraciones expand/contract y herramientas en línea (M11); <code>CREATE INDEX CONCURRENTLY</code></td></tr>
           </tbody>
@@ -1720,7 +1781,7 @@ CREATE TABLE pedidos (
   created_at    timestamptz NOT NULL DEFAULT now(),
   UNIQUE (comprador_id, idempotency_key)    -- un reintento no crea otro pedido
 );</code></pre>
-          <p>El <code>UPDATE … WHERE disponible &gt;= 2</code> evita la actualización perdida sin bloqueos explícitos, y el <code>CHECK</code> es la red de seguridad. La reserva de stock y la creación del pedido van en la misma transacción; el pago, que es externo, se coordina con una saga orquestada (5.12 y M27).</p>
+          <p>El <code>UPDATE … WHERE disponible &gt;= 2</code> evita la actualización perdida sin bloqueos explícitos, y el <code>CHECK</code> es la red de seguridad. La reserva de stock y la creación del pedido van en la misma transacción; el pago, que es externo, se coordina con una saga orquestada (5.13 y M27).</p>
         </details>
       </section>
 
@@ -1745,5 +1806,6 @@ CREATE TABLE pedidos (
 <script src="../assets/js/widgets/sim-db.js"></script>
 <script src="../assets/js/widgets/sim-dbflow.js"></script>
 <script src="../assets/js/widgets/sim-dtx.js"></script>
+<script src="../assets/js/widgets/sim-rls.js"></script>
 </body>
 </html>

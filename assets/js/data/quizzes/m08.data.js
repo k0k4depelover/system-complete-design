@@ -3,6 +3,18 @@ SD.defineQuiz('m08', {
   pass: 0.7,
   questions: [
     {
+      id: 'espera', type: 'single',
+      prompt: 'Quieres que cada servicio rechace las requests que esperaron tanto que ya no van a llegar a tiempo. ¿Cómo sabe un servicio cuánto esperó una request?',
+      options: [
+        'Un filtro anota la hora cuando el handler empieza y la compara con el final.',
+        'El gateway anota la llegada en un header, y el servicio la resta de su reloj.',
+        'Se lee la latencia p99 del servicio en el sistema de métricas cada segundo.',
+        'El cliente manda la hora de su dispositivo en cada request, y se usa esa.'
+      ],
+      answer: 1,
+      explain: 'La espera ocurre antes de que el código corra: en la red, en el gateway y en la cola de hilos. Solo el primero que ve la request puede anotar su llegada, por eso el gateway agrega X-Request-Start (y el deadline), y el servicio calcula ahora menos llegada. Un reloj del cliente no es confiable. Ver 8.5, "Saber cuánto esperó una request".'
+    },
+    {
       id: 'timeout', type: 'single',
       prompt: 'Tu servicio llama a una dependencia cuyo p99.9 es 300 ms. El cliente HTTP no tiene timeout configurado. Un día la dependencia se cuelga. ¿Qué le pasa a tu servicio?',
       options: [

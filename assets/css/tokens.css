@@ -101,6 +101,7 @@
   --line-p1: var(--l-service);
   --line-p2: var(--l-gpu);
   --line-p3: var(--l-edge);
+  --line-p4: var(--l-cache);
   --line-f2: var(--l-queue);
 
   /* Métodos HTTP (texto sobre relleno tenue) */

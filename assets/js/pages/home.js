@@ -71,7 +71,7 @@
     var rows = [
       items.filter(function (it) { return it.part.id === 'p1'; }),
       items.filter(function (it) { return it.part.id === 'p2'; }),
-      items.filter(function (it) { return it.part.id === 'p3' || it.part.id === 'f2'; })
+      items.filter(function (it) { return it.part.id !== 'p1' && it.part.id !== 'p2'; })
     ];
     var padX = 96, top = 78, rowGap = 176;
     var H = top + rowGap * (rows.length - 1) + 84;

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M09. Almacenamiento de objetos</title>
-<meta name="description" content="Arquitectura tipo S3, erasure coding, signed URLs paso a paso con el algoritmo SigV4, subidas directas y multipart, claves y metadatos, procesamiento por eventos y fallos típicos.">
+<meta name="description" content="Arquitectura tipo S3, erasure coding, signed URLs paso a paso con el algoritmo SigV4 y sus errores en desarrollo, CDN protegida contra hotlinking, multipart, claves por hash, limpieza de pendientes, procesamiento por eventos y fallos típicos.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -52,10 +52,11 @@
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
           <li>Explicar cómo un almacenamiento de objetos logra 11 nueves de durabilidad.</li>
-          <li>Calcular una URL prefirmada paso a paso y saber qué protege y qué no.</li>
+          <li>Calcular una URL prefirmada paso a paso, saber qué protege y qué no, y diagnosticar sus 403 en desarrollo.</li>
+          <li>Impedir que otros sitios reutilicen las URLs de tu CDN, con vencimientos al estilo de Discord y rotación de claves.</li>
           <li>Diseñar subidas y descargas directas, sin pasar bytes por tu API.</li>
           <li>Manejar archivos grandes con multipart y limpiar lo que queda a medias.</li>
-          <li>Separar metadatos (tu base) de contenido (el bucket) y procesar archivos por eventos.</li>
+          <li>Separar metadatos (tu base) de contenido (el bucket), direccionar objetos por su hash, limpiar los pendientes y procesar archivos por eventos.</li>
         </ul>
       </section>
 
@@ -77,7 +78,8 @@
 
       <h2 id="arquitectura"><span class="sec-num">9.2</span>Arquitectura</h2>
 
-      <p>El mapa muestra la arquitectura completa de los adjuntos de un chat: tu backend (que solo decide y firma), el almacenamiento (front-end, índice de objetos y nodos de almacenamiento), la CDN y un worker que procesa cada archivo por eventos. Los cuatro escenarios cubren subida, procesamiento, descarga y el caso que casi todos olvidan: la subida abandonada.</p>
+      <p>El mapa muestra la arquitectura completa de los adjuntos de un chat: tu backend (que autoriza, firma y lleva la cuenta en PostgreSQL), el job de limpieza que borra los adjuntos que quedaron <code>pending</code>, el almacenamiento (front-end, índice de objetos y nodos de almacenamiento), un worker que procesa cada archivo por eventos, y la CDN con un sitio ajeno que intenta reutilizar tus URLs. Los cinco escenarios cubren la subida, el procesamiento, la descarga, el hotlinking y la limpieza de pendientes.</p>
+      <p>Elige un escenario y avanza paso a paso: el panel de la derecha explica cada paso del sistema (qué viaja, quién decide, qué queda guardado y por qué), con la request, el SQL o el evento real de ese momento. Haz clic en los nombres de los nodos del panel para ver su esquema, sus endpoints y sus fallos.</p>
 
       <div data-map="m09-objetos"></div>
 
@@ -92,7 +94,7 @@
 
       <p>Una <dfn data-term="presigned">URL prefirmada</dfn> resuelve un problema concreto: quieres que un cliente suba o descargue un objeto <em>directamente</em>, sin que los bytes pasen por tus servidores, pero sin darle credenciales. Tu backend calcula una firma <span data-term="hmac">HMAC</span> sobre exactamente la operación permitida (método, objeto, expiración) usando su secreto, y la pone en la URL. El almacenamiento recalcula la firma con su copia del secreto; si coincide y no venció, deja pasar. Nadie más puede fabricar una firma válida sin el secreto.</p>
 
-      <p>Este es el algoritmo real de S3 (SigV4), calculado en tu navegador con credenciales de prueba. Cambia cualquier campo y mira cómo cambia todo, y después prueba a manipular la URL:</p>
+      <p>Este es el algoritmo real de S3 (SigV4), calculado en tu navegador con credenciales de prueba (verificado contra el ejemplo oficial de AWS). Cambia cualquier campo y mira cómo cambia todo. Después elige qué le pasa a la URL y en qué momento se usa: el verificador muestra las comprobaciones que hace S3, la diferencia exacta en la request canónica cuando la firma no coincide, el error que devolvería y la lección para tu código.</p>
 
       <div data-sim="signurl"></div>
 
@@ -101,8 +103,35 @@
         <li><b>Protege</b> contra la manipulación: cambiar el objeto, el método o la expiración invalida la firma.</li>
         <li><b>No protege</b> contra la filtración: quien tenga la URL puede usarla hasta que venza. Se comparte por error, queda en logs, en el historial del navegador o en un header <code>Referer</code>. Por eso: vencimientos cortos (minutos), nunca registrar URLs firmadas en logs y firmar con credenciales temporales.</li>
         <li><b>No se puede revocar</b> una URL puntual: solo rotando las credenciales con las que se firmó, lo que invalida todas.</li>
-        <li><b>Para subidas, limita más</b> que el método y la clave: con un POST policy puedes fijar el tipo de contenido y un rango de tamaños, para que nadie use tu URL de subida de avatares para guardar un video de 5 GB.</li>
+        <li><b>Para subidas, limita más</b> que el método y la clave: firma el <code>Content-Type</code> y el checksum, o usa un POST policy para fijar además un rango de tamaños, para que nadie use tu URL de subida de avatares para guardar un video de 5 GB.</li>
       </ul>
+
+      <h3 id="firmas-desarrollo">Lo que importa al programarlas</h3>
+      <p>Casi todos los problemas con URLs firmadas aparecen en desarrollo como un 403 sin explicación. Estas son las reglas que los evitan:</p>
+      <ol class="steps">
+        <li><span class="step-title">Firma en el servidor, con el SDK</span>Nunca en el cliente (necesitaría el secreto) y nunca a mano: el SDK resuelve la codificación de la ruta y el orden de los parámetros, que es donde fallan las implementaciones caseras.</li>
+        <li><span class="step-title">Decide qué headers firmar</span>Lo que firmas, el cliente lo tiene que mandar idéntico. Firmar <code>Content-Type</code> y <code>x-amz-checksum-sha256</code> en las subidas impide que se suba otra cosa; a cambio, si el navegador agrega <code>; charset=utf-8</code>, la firma falla. Devuelve al cliente la lista exacta de headers junto con la URL.</li>
+        <li><span class="step-title">Vencimientos cortos y credenciales con margen</span>Minutos para subir, minutos u horas para ver. Una URL vale hasta que vence <code>X-Amz-Expires</code> o la credencial temporal con que se firmó, lo que ocurra primero (como máximo 7 días). <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Reloj sincronizado</span>La fecha de firma sale del reloj del servidor. Un contenedor con el reloj atrasado genera URLs que nacen vencidas.</li>
+        <li><span class="step-title">CORS en el bucket para subir desde el navegador</span>Un <code>PUT</code> desde una página web a otro dominio necesita que el bucket permita tu origen, el método y los headers firmados en su configuración CORS. Si falta, el navegador bloquea la subida antes de que S3 vea la firma.</li>
+        <li><span class="step-title">Verifica después de subir</span>Firmar no comprueba nada. Al recibir el <code>complete</code>, haz un <code>HEAD</code> y compara tamaño y checksum con lo que firmaste.</li>
+        <li><span class="step-title">Nunca en logs</span>Una URL firmada es una credencial al portador. Recorta la query string antes de registrar URLs, también en el proxy y en las herramientas de errores.</li>
+        <li><span class="step-title">Depura con el error de S3</span>La respuesta de <code>SignatureDoesNotMatch</code> incluye el <code>StringToSign</code> y la <code>CanonicalRequest</code> que calculó S3: compáralos con los tuyos y la línea distinta te dice qué cambió en el camino. <span class="badge badge--doc">Documentado</span></li>
+      </ol>
+
+<pre data-lang="python"><code># Backend: firma una subida con el tipo y el checksum fijados
+url = s3.generate_presigned_url(
+    "put_object",
+    Params={
+        "Bucket": "chat-adjuntos",
+        "Key": f"conv_42/{upload_id}/original.jpg",   # la clave la decide el servidor
+        "ContentType": "image/jpeg",                    # el cliente debe mandar este header tal cual
+        "ChecksumSHA256": sha256_b64,                   # S3 rechaza bytes distintos (BadDigest)
+    },
+    ExpiresIn=300,
+)
+return {"upload_id": upload_id, "url": url, "method": "PUT",
+        "headers": {"Content-Type": "image/jpeg", "x-amz-checksum-sha256": sha256_b64}}</code></pre>
 
       <aside class="callout callout--tradeoff">
         <p class="callout-label">Trade-off: URL firmada o proxy por tu backend</p>
@@ -113,7 +142,65 @@
         <p class="to-verdict"><b>Regla práctica:</b> URL firmada para todo lo grande o frecuente; proxy solo cuando necesitas inspeccionar o transformar cada byte, o autorizar en el instante exacto del acceso.</p>
       </aside>
 
-      <h2 id="multipart"><span class="sec-num">9.4</span>Archivos grandes: multipart</h2>
+      <h2 id="cdn-protegida"><span class="sec-num">9.4</span>Que nadie use tu CDN desde otro sitio</h2>
+
+      <p>Las URLs de tus adjuntos salen de tu app: alguien las copia y las pega en un foro, en una página con un <code>&lt;img&gt;</code> o en un correo de phishing. Si fueran permanentes, tu CDN pagaría el ancho de banda de otros, tu dominio repartiría contenido que no controlas y un archivo privado quedaría público para siempre. A esto se le llama <dfn data-term="hotlinking">hotlinking</dfn>. No puedes impedir que una URL se copie; puedes decidir cuánto dura, dónde funciona y qué hace el navegador con ella.</p>
+
+      <h3 id="discord">El caso de Discord: URLs que vencen y se renuevan</h3>
+      <p>Durante años, cualquier archivo subido a Discord tenía una URL permanente en <code>cdn.discordapp.com</code>, y esa CDN se volvió un lugar cómodo para alojar malware: un enlace de Discord no levanta sospechas. A fines de 2023, Discord agregó a las URLs de adjuntos tres parámetros: <code>ex</code> (cuándo vence, un timestamp en hexadecimal), <code>is</code> (cuándo se emitió) y <code>hm</code> (una firma). La URL vale 24 horas; después, la CDN responde con un error. Dentro de Discord nadie lo nota, porque el cliente recibe URLs nuevas al mostrar los mensajes, y la API ofrece un endpoint para renovar URLs vencidas. <span class="badge badge--doc">Documentado</span></p>
+      <p>La idea se puede copiar tal cual. La firma cubre la ruta y los dos tiempos, se verifica en el borde sin consultar a nadie, y la clave de caché ignora los parámetros, así que la caché sigue funcionando. El escenario "Alguien copia tu URL" del <a href="#arquitectura">mapa</a> la recorre paso a paso. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<pre data-lang="python"><code># Backend: emitir una URL de CDN que vence en 24 h
+def url_cdn(ruta, ahora, kid="k7"):
+    is_ = format(ahora, "x")                 # 6ac63440
+    ex = format(ahora + 86400, "x")          # 6ac785c0
+    hm = hmac.new(CLAVES[kid], f"{ruta}|{ex}|{is_}".encode(), "sha256").hexdigest()
+    return f"https://media.chat.example{ruta}?ex={ex}&amp;is={is_}&amp;kid={kid}&amp;hm={hm}"
+
+# Función en el borde de la CDN: verificar sin llamar al origen
+def verificar(ruta, ex, is_, kid, hm, ahora):
+    clave = CLAVES_ACEPTADAS.get(kid)        # la activa y la anterior
+    if clave is None:
+        return 403
+    esperado = hmac.new(clave, f"{ruta}|{ex}|{is_}".encode(), "sha256").hexdigest()
+    if not hmac.compare_digest(esperado, hm):   # comparación en tiempo constante
+        return 403
+    if int(ex, 16) &lt; ahora:
+        return 403                           # vencida: la app pide otra
+    return servir(ruta)                      # clave de caché: solo la ruta</code></pre>
+
+      <p>Tres decisiones de diseño que hacen que funcione en producción:</p>
+      <ul>
+        <li><b>Un id de clave en la URL (<code>kid</code>).</b> Para rotar la clave sin cortar a nadie: la CDN empieza a aceptar <code>k8</code>, después el backend firma con <code>k8</code>, y <code>k7</code> se retira cuando vencen sus últimas URLs, 24 horas más tarde. Si una clave se filtra, se retira de inmediato y todas sus URLs mueren; las apps las renuevan solas.</li>
+        <li><b>La renovación autoriza otra vez.</b> El endpoint que renueva URLs vuelve a comprobar que el usuario puede ver esa conversación. Así un usuario que salió de un grupo pierde el acceso a sus archivos en, como mucho, 24 horas: es la revocación que una URL firmada sola no tiene.</li>
+        <li><b>Un dominio aparte para el contenido de usuarios.</b> <code>media.chat.example</code> o, mejor, un dominio registrable distinto (como hace Google con <code>googleusercontent.com</code>). Si alguien logra subir un HTML con un script, no corre con las cookies de tu app.</li>
+      </ul>
+
+      <h3 id="hotlinking-alternativas">Las alternativas y qué frena cada una</h3>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Defensa</th><th>Qué frena</th><th>Qué no frena</th><th>Costo</th></tr></thead>
+          <tbody>
+            <tr><td><b>URL firmada con vencimiento corto</b> (lo de Discord, o las signed URLs de CloudFront y Cloudflare)</td><td>El uso permanente desde cualquier lugar: navegadores, scripts, bots</td><td>El uso dentro de la ventana de validez</td><td>Renovar URLs en el cliente y un endpoint de refresco</td></tr>
+            <tr><td><b>Cookie firmada de la CDN</b> en un subdominio tuyo, con <code>SameSite=Lax</code></td><td>Incrustar en otros sitios: el navegador no manda la cookie en requests de imágenes desde otro sitio</td><td>Alguien que copia la cookie a mano; no sirve para enlaces compartidos a propósito</td><td>Bajo; ideal para video (miles de segmentos con una sola cookie)</td></tr>
+            <tr><td><b><span data-term="corp">Cross-Origin-Resource-Policy</span></b> (<code>same-site</code>) en la respuesta</td><td>Que otro sitio muestre tu imagen o tu video en un navegador moderno</td><td>Descargas con <code>curl</code> o desde apps; enlaces directos que el usuario abre</td><td>Un header</td></tr>
+            <tr><td><b>Lista de <code>Referer</code> o <code>Sec-Fetch-Site</code></b> en el borde</td><td>El hotlinking casual desde páginas web, antes de gastar ancho de banda</td><td>Cualquiera que omita o falsifique el header</td><td>Una regla; da falsos positivos con navegadores que no mandan Referer</td></tr>
+            <tr><td><b>Límite de requests por URL o por IP</b> en el borde</td><td>Que una URL filtrada se use en masa</td><td>El uso moderado</td><td>Afinar umbrales; redes móviles comparten IP</td></tr>
+            <tr><td><b>Atar la firma a la IP del usuario</b></td><td>Que la URL sirva desde otra red</td><td>Nada nuevo frente a una firma corta, y rompe usuarios que cambian de red</td><td>Alto en móviles: no se recomienda</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off: cuánto debe durar una URL de descarga</p>
+        <div class="to-grid">
+          <div class="to-col"><h4>Corta (minutos)</h4><p><b>Ganas:</b> una URL filtrada sirve muy poco y quitar un acceso es casi inmediato.</p><p><b>Pagas:</b> muchas renovaciones, y un video largo o una pestaña abierta se cortan si el cliente no renueva a tiempo.</p></div>
+          <div class="to-col"><h4>Larga (horas o un día)</h4><p><b>Ganas:</b> menos carga en tu API; los enlaces aguantan una sesión entera.</p><p><b>Pagas:</b> una ventana más grande para el hotlinking y para que un usuario expulsado siga viendo archivos.</p></div>
+        </div>
+        <p class="to-verdict"><b>Regla práctica:</b> combina defensas. URL firmada que vence (de 1 a 24 horas, con renovación desde la app), <code>Cross-Origin-Resource-Policy</code> y <code>X-Content-Type-Options: nosniff</code> en todas las respuestas, y el contenido de usuarios en un dominio aparte. Referer y límites por IP, solo como filtros extra.</p>
+      </aside>
+
+      <h2 id="multipart"><span class="sec-num">9.5</span>Archivos grandes: multipart</h2>
 
       <p>Subir un video de 2 GB en un solo PUT por una red móvil es una apuesta: si se corta al 95&#8239;%, se empieza de cero. La <dfn data-term="multipart">subida multipart</dfn> divide el archivo en partes que se suben por separado, en paralelo y con reintentos individuales:</p>
       <ol class="steps">
@@ -124,7 +211,7 @@
       </ol>
       <p>Dos detalles de producción: verifica la integridad con checksums por parte (el almacenamiento calcula y compara), y configura una <dfn data-term="lifecycle">regla de ciclo de vida</dfn> que aborte las subidas multipart incompletas después de unos días, porque sus partes se cobran aunque el objeto nunca llegue a existir.</p>
 
-      <h2 id="claves"><span class="sec-num">9.5</span>Claves y metadatos</h2>
+      <h2 id="claves"><span class="sec-num">9.6</span>Claves y metadatos</h2>
 
       <p>La regla de oro: <b>el bucket guarda contenido; tu base guarda el significado</b>. Quién es el dueño, a qué conversación pertenece, si ya se procesó y si fue borrado son datos de tu dominio y van en tu base de datos (mira el nodo PostgreSQL del mapa). El bucket solo se consulta por clave. Algunas decisiones de diseño de claves:</p>
       <ul>
@@ -134,16 +221,111 @@
         <li><b>Distribución de la carga:</b> S3 escala por prefijo (al menos 3&#8239;500 escrituras y 5&#8239;500 lecturas por segundo por prefijo, y los prefijos crecen en paralelo). Con claves que empiezan por algo variable (un id), la carga se reparte sola. <span class="badge badge--doc">Documentado</span></li>
       </ul>
 
-      <h2 id="eventos"><span class="sec-num">9.6</span>Procesamiento por eventos</h2>
+      <h3 id="claves-hash">Claves calculadas con el hash del contenido</h3>
+      <p>Con el direccionamiento por contenido, la clave no se inventa: se calcula. El SHA-256 de los bytes da un nombre único y estable, y la base guarda dos cosas separadas: el <b>blob</b> (el contenido, uno por hash) y el <b>adjunto</b> (quién lo envió y dónde, que apunta al blob). Prueba a escribir un contenido y mira cómo se arma la clave:</p>
+
+      <div data-calc="hashkey"></div>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">blobs</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Clave: <b>sha256</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>sha256</code><span class="key">PK</span></td><td><code>bytea</code></td><td>32 bytes</td><td>Identifica el contenido y, con él, calcula la clave del objeto</td></tr>
+              <tr><td><code>size</code></td><td><code>bigint</code></td><td>NOT NULL</td><td>Comprobar la subida y cobrar el almacenamiento</td></tr>
+              <tr><td><code>content_type</code></td><td><code>text</code></td><td>NOT NULL</td><td>El tipo real que detectó el worker, no el declarado</td></tr>
+              <tr><td><code>refcount</code></td><td><code>int</code></td><td>&gt;= 0</td><td>Cuántos adjuntos lo usan; en 0, el blob es candidato a borrarse</td></tr>
+              <tr><td><code>created_at</code></td><td><code>timestamptz</code></td><td>NOT NULL</td><td>Para la limpieza de blobs sin referencias</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">attachments</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Partición: <b>conversation_id</b></span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td><code>uuid</code></td><td></td><td>El adjunto dentro de un mensaje</td></tr>
+              <tr><td><code>conversation_id</code></td><td><code>uuid</code></td><td>NOT NULL</td><td>La autorización: quién puede pedir una URL</td></tr>
+              <tr><td><code>blob_sha256</code><span class="key key--fk">FK</span></td><td><code>bytea</code></td><td>→ <code>blobs.sha256</code></td><td>Qué contenido muestra; dos adjuntos iguales apuntan al mismo blob</td></tr>
+              <tr><td><code>status</code></td><td><code>text</code></td><td><code>pending</code>, <code>available</code>, <code>deleting</code></td><td>El ciclo de vida que usa el job de limpieza</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>Así se va a buscar un objeto, desde el id que conoce la app hasta los bytes:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Paso</th><th>Quién</th><th>Qué calcula o busca</th><th>Ejemplo</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>App</td><td>Pide el adjunto por su id</td><td><code>GET /v1/attachments/up_77/url</code></td></tr>
+            <tr><td>2</td><td>API</td><td>Autoriza y lee el hash del blob</td><td><code>SELECT a.blob_sha256 FROM attachments a JOIN members m USING (conversation_id) WHERE a.id = 'up_77' AND m.user_id = $1</code></td></tr>
+            <tr><td>3</td><td>API</td><td>Calcula la clave a partir del hash, sin consultar el bucket</td><td><code>blobs/sha256/f8/f4/f8f4df9d…20ab</code></td></tr>
+            <tr><td>4</td><td>API</td><td>Firma la URL de la CDN para esa clave</td><td><code>…/b/f8/f4/f8f4df9d…20ab.jpg?ex=…&amp;hm=…</code></td></tr>
+            <tr><td>5</td><td>CDN</td><td>Verifica la firma y busca en caché por la ruta</td><td>HIT casi siempre: el contenido nunca cambia bajo esa clave</td></tr>
+            <tr><td>6</td><td>Índice de S3</td><td>Si es MISS, ubica la clave y lee los fragmentos</td><td>Cualquier 6 de los 9 fragmentos</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Y al subir, el hash ahorra trabajo: si <code>blobs</code> ya tiene ese <code>sha256</code>, el backend no firma ninguna subida, crea el adjunto apuntando al blob existente y suma uno a <code>refcount</code>. La URL de subida firma <code>x-amz-checksum-sha256</code>, así que S3 rechaza bytes que no correspondan al hash declarado: nadie puede registrar un hash y subir otro contenido.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p><b>La deduplicación filtra información.</b> Si tu API responde "ya existe, no hace falta subirlo" para cualquier hash, un atacante puede preguntar por el hash de un documento conocido y saber si alguien de tu plataforma lo tiene. Deduplica dentro de un mismo dueño o de una misma organización, o sube igual y deduplica en silencio en el servidor. Y nunca uses el hash como permiso: quien conoce un hash no por eso puede ver el archivo, por eso la CDN sigue exigiendo una URL firmada.</p>
+      </aside>
+
+      <h3 id="limpieza">Limpieza de pendientes</h3>
+      <p>Toda subida directa deja una posibilidad abierta: la app pidió la URL, quizá subió el archivo, y nunca confirmó. La fila quedó en <code>pending</code> y el objeto, si existe, no lo usa nadie. Un job programado (un cron) los busca y los borra. Lo importante está en el orden y en que pueda correr varias veces sin romper nada:</p>
+<pre data-lang="sql"><code>-- Cada 15 minutos. 1. Reclamar un lote: SKIP LOCKED deja correr varias réplicas sin pisarse
+UPDATE attachments SET status = 'deleting'
+WHERE id IN (
+  SELECT id FROM attachments
+  WHERE status = 'pending' AND created_at &lt; now() - interval '24 hours'
+  ORDER BY created_at
+  LIMIT 1000
+  FOR UPDATE SKIP LOCKED)
+RETURNING id, object_key;
+
+-- 2. DeleteObjects con esas claves (hasta 1 000 por request; borrar lo que no existe no es error)
+-- 3. Recién entonces, las filas
+DELETE FROM attachments WHERE id = ANY($1) AND status = 'deleting';
+
+-- Índice parcial: la búsqueda solo recorre los pendientes, no los miles de millones de filas
+CREATE INDEX attachments_pending ON attachments (created_at) WHERE status = 'pending';</code></pre>
+      <ul>
+        <li><b>Marcar, borrar el objeto, borrar la fila.</b> Si el job muere en medio, la próxima corrida retoma las filas en <code>deleting</code>. En el orden inverso, un objeto sin fila queda huérfano para siempre, porque ya nada lo referencia.</li>
+        <li><b>24 horas, no 5 minutos.</b> La URL vence en 5 minutos, pero una subida multipart grande en una red lenta puede tardar horas, y la app reintenta el <code>complete</code> al volver a abrirse.</li>
+        <li><b>El worker no cambia el estado.</b> Las miniaturas se generan igual (el evento llega aunque la app no confirme), pero solo la confirmación pasa el adjunto a <code>available</code>. Si el worker lo marcara, el job nunca encontraría los abandonados.</li>
+        <li><b>Defensas contra un bug que borre de más:</b> versionado en el bucket, un tope de borrados por corrida que dispare una alerta, y métricas de cuántos pendientes se borran por día.</li>
+        <li><b>Lo que el job no ve:</b> las subidas multipart nunca completadas no son objetos. Las limpia la regla de ciclo de vida de la sección <a href="#multipart">9.5</a>.</li>
+      </ul>
+
+      <h2 id="eventos"><span class="sec-num">9.7</span>Procesamiento por eventos</h2>
 
       <p>El almacenamiento puede publicar un evento cada vez que se crea o borra un objeto. Así, el procesamiento (miniaturas, transcodificación de video, antivirus, extracción de texto para búsqueda o para RAG en la Parte II) no depende de que el cliente avise, y escala con la profundidad de la cola. Todo lo del M07 aplica: la entrega es al menos una vez, así que el worker debe ser idempotente. La forma más simple es que cada salida tenga una clave determinística derivada de la entrada (<code>…/thumb_480.jpg</code>): procesar dos veces sobrescribe lo mismo.</p>
 
-      <h2 id="fallos"><span class="sec-num">9.7</span>Fallos típicos</h2>
+      <h2 id="fallos"><span class="sec-num">9.8</span>Fallos típicos</h2>
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Falla</th><th>Síntoma</th><th>Defensa</th></tr></thead>
           <tbody>
-            <tr><td>Objetos huérfanos</td><td>El bucket crece más rápido que los datos útiles</td><td>Estado <code>pending</code> en tu base y limpieza diaria</td></tr>
+            <tr><td>Objetos huérfanos</td><td>El bucket crece más rápido que los datos útiles</td><td>Estado <code>pending</code> en tu base y un job de limpieza que marca, borra el objeto y después la fila</td></tr>
+            <tr><td>403 en URLs recién firmadas</td><td><code>SignatureDoesNotMatch</code> o <code>Request has expired</code> en desarrollo</td><td>Mandar los headers firmados tal cual, reloj sincronizado, credenciales con margen; comparar el <code>CanonicalRequest</code> del error</td></tr>
+            <tr><td>Hotlinking</td><td>Ancho de banda de la CDN que no viene de tu app; tu dominio aloja contenido ajeno</td><td>URLs que vencen y se renuevan, <code>Cross-Origin-Resource-Policy</code>, dominio aparte para el contenido de usuarios</td></tr>
             <tr><td>Multipart incompletas</td><td>Costo de almacenamiento sin objetos visibles</td><td>Regla de ciclo de vida que las aborta</td></tr>
             <tr><td>URL firmada filtrada</td><td>Accesos desde lugares inesperados</td><td>Vencimientos cortos, credenciales temporales, rotación</td></tr>
             <tr><td>Bucket público por error</td><td>Datos privados indexados por buscadores</td><td>Bloqueo de acceso público a nivel de cuenta; acceso solo por la CDN y el backend</td></tr>

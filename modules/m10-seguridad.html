@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M10. Seguridad e identidad</title>
-<meta name="description" content="Autenticación y autorización, sesiones, JWT y tokens opacos (laboratorio interactivo), OAuth 2.0 y OIDC con PKCE, API keys, mTLS, secretos, KMS y envelope encryption, aislamiento multi-tenant y ataques típicos.">
+<meta name="description" content="Autenticación y autorización, sesiones, JWT y tokens opacos (laboratorio interactivo), JWT con estado y revocación, OAuth 2.0 y OIDC con PKCE paso a paso, API keys, mTLS, secretos, KMS y envelope encryption con borrado criptográfico, aislamiento multi-tenant, los ataques del OWASP API Top 10 en detalle y el log de auditoría.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
 <link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
 </head>
 <body data-root="../" data-module="m10">
 <a class="skip-link" href="#contenido">Saltar al contenido</a>
@@ -50,11 +51,11 @@
 <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
-          <li>Elegir entre sesiones, tokens opacos y JWT, y verificar un JWT correctamente.</li>
-          <li>Explicar el flujo de OAuth 2.0 con PKCE y la diferencia entre OAuth y OpenID Connect.</li>
+          <li>Elegir entre sesiones, tokens opacos y JWT, verificar un JWT y revocarlo al instante con una arquitectura con estado.</li>
+          <li>Explicar paso a paso OAuth 2.0 con PKCE, la rotación de refresh tokens y la diferencia entre OAuth y OpenID Connect.</li>
           <li>Diseñar API keys, identidad entre servicios con mTLS y la gestión de secretos.</li>
-          <li>Cifrar datos con envelope encryption y aislar tenants en un SaaS.</li>
-          <li>Reconocer BOLA, SSRF y otros ataques frecuentes contra APIs.</li>
+          <li>Cifrar datos con envelope encryption y usar el borrado criptográfico para cumplir pedidos de borrado.</li>
+          <li>Reconocer y mitigar los ataques del OWASP API Top 10 (BOLA, SSRF, inyección y los demás) y registrar un log de auditoría.</li>
         </ul>
       </section>
 
@@ -89,6 +90,78 @@
         <p>El patrón habitual combina lo mejor de ambos mundos: un <b>access token</b> JWT corto (5 a 15 minutos) que las APIs verifican localmente, y un <b>refresh token</b> opaco de larga duración, guardado de forma segura, que solo el servidor de autorización acepta y que se puede revocar. Los refresh tokens se rotan en cada uso: si uno aparece dos veces, alguien lo robó, y se revoca toda la familia. Las claves de firma se rotan publicando las públicas en un JWKS con un <code>kid</code> por clave, así las APIs aceptan la vieja y la nueva durante la transición.</p>
       </aside>
 
+      <h3 id="jwt-stateful">JWT con estado: revocar sin esperar al <code>exp</code></h3>
+
+      <p>El JWT puro tiene un problema que el callout anterior nombró: no se puede revocar antes de que venza. Un access token corto lo acota a minutos, pero "minutos" sigue siendo demasiado para un despido, un robo o un "cerrar sesión en todos los dispositivos". La solución habitual no es abandonar el JWT, sino darle un poco de estado: el token sigue trayendo un identificador de sesión (<code>sid</code>) y, en cada request, se comprueba contra un almacén que se puede borrar al instante. Para no pagar una consulta a la base en cada request, ese almacén es una caché en memoria (Redis).</p>
+
+      <p>El peso de autenticar recae en un único punto de entrada, el <dfn data-term="api-gateway">API gateway</dfn> (M03): verifica la firma del JWT localmente —rápido, sin red— y, además, mira en Redis si la sesión sigue viva. Detrás, un servicio de identidad es el único que emite tokens, los rota y los revoca, con su propia base. Explora el flujo completo: el inicio de sesión, una request normal, qué pasa si Redis cae, la renovación con el refresh token, el robo de un refresh token y el cierre de todas las sesiones.</p>
+
+      <div data-map="m10-identidad"></div>
+
+      <p>Las dos piezas de estado tienen trabajos distintos. El <b>access token</b> es un JWT de 10 minutos que viaja en cada request y se verifica sin consultar a nadie; lo único con estado es el chequeo del <code>sid</code> en Redis. El <dfn data-term="refresh-token">refresh token</dfn> es un identificador opaco de larga vida que solo el servicio de identidad acepta, y solo en <code>/auth/refresh</code>: sirve para pedir un access token nuevo cuando el viejo vence, nunca para llamar a una API. Se guarda de forma que el JavaScript de la página no pueda leerlo (una cookie <code>HttpOnly</code> en la web, el llavero del sistema en el móvil) y en la base vive solo su hash.</p>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">sessions</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td>text</td><td>El <code>sid</code> que lleva el JWT. Es la "familia" de todos los refresh tokens de esta sesión.</td></tr>
+              <tr><td><code>user_id</code><span class="key key--fk">FK</span></td><td>uuid</td><td>De quién es la sesión.</td></tr>
+              <tr><td><code>tenant_id</code></td><td>uuid</td><td>Para fijar el tenant río abajo.</td></tr>
+              <tr><td><code>ip</code>, <code>user_agent</code></td><td>inet, text</td><td>Para mostrarle al usuario sus sesiones y detectar anomalías.</td></tr>
+              <tr><td><code>revoked_at</code></td><td>timestamptz</td><td>NULL mientras está activa. Al revocar, la fecha; es lo que convierte la sesión en inválida.</td></tr>
+              <tr><td><code>revoke_reason</code></td><td>text</td><td><code>logout</code>, <code>refresh_reuse</code>, <code>admin</code>: para el log de auditoría.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">refresh_tokens</code>
+          <span class="schema-chip">PostgreSQL</span>
+          <span class="schema-chip">Rotación con detección de reuso</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td>uuid</td><td>Identifica este refresh token concreto.</td></tr>
+              <tr><td><code>session_id</code><span class="key key--fk">FK</span></td><td>text</td><td>La sesión (familia). Revocar la familia revoca todos sus tokens de golpe.</td></tr>
+              <tr><td><code>parent_id</code><span class="key key--fk">FK</span></td><td>uuid</td><td>El token que se canjeó por este. Dibuja la cadena de rotaciones.</td></tr>
+              <tr><td><code>token_hash</code></td><td>bytea <span class="key">UNIQUE</span></td><td>SHA-256 del token. Nunca se guarda el token en claro; como es largo y aleatorio, basta el hash.</td></tr>
+              <tr><td><code>used_at</code></td><td>timestamptz</td><td>Cuándo se canjeó. Si llega un segundo canje con este token, <code>used_at</code> ya no es NULL: eso delata una copia robada.</td></tr>
+              <tr><td><code>revoked_at</code>, <code>expires_at</code></td><td>timestamptz</td><td>Revocado y vencimiento (30 días).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <p>El truco de la rotación con detección de reuso: cada vez que se usa un refresh token, el servidor emite uno nuevo y marca el viejo como usado, sin borrarlo. Si un token ya usado vuelve a aparecer, hay dos copias en circulación —una es del atacante— y el servidor no puede saber cuál es la legítima. La única respuesta segura es revocar la sesión entera. Víctima y atacante quedan fuera; la víctima vuelve a entrar con su contraseña y su segundo factor, el atacante no. Es la recomendación de la <a href="https://www.rfc-editor.org/rfc/rfc9700.html">RFC 9700</a>, la guía de seguridad vigente de OAuth 2.0: los refresh tokens de clientes públicos tienen que estar atados al cliente (<i>sender-constrained</i>) o rotarse. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Cada pieza guarda lo justo, y eso define cuánto duele perderla:</p>
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde</th><th>Qué guarda</th><th>Cómo se revoca</th><th>Si se filtra</th></tr></thead>
+          <tbody>
+            <tr><td><b>El token (cliente)</b></td><td>Los claims firmados: <code>sub</code>, <code>tid</code>, <code>sid</code>, <code>scope</code>, <code>exp</code></td><td>No se revoca; se espera a <code>exp</code> (10 min)</td><td>Vale hasta 10 minutos contra las APIs</td></tr>
+            <tr><td><b>Redis</b></td><td>Una entrada por sesión: activa o "lápida" revocada</td><td>Se borra o se marca revocada al instante</td><td>Solo <code>sid</code> y tenant; no permite autenticarse</td></tr>
+            <tr><td><b>PostgreSQL (identidad)</b></td><td>La verdad: <code>sessions</code> y <code>refresh_tokens</code> (hashes)</td><td>Es la fuente; Redis la refleja</td><td>Hashes, no tokens: no sirven directamente</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Darle estado al JWT recupera la revocación inmediata, pero reintroduce justo lo que el JWT puro evitaba: una dependencia en cada request (Redis) y un servicio de identidad que es ahora un punto crítico. La ganancia es que la dependencia es una caché en memoria de sub-milisegundo, no la base, y que si Redis cae tienes margen para decidir entre fallar cerrado (seguro) o fallar abierto en rutas de solo lectura (disponible), como muestra el escenario "Redis no responde". Si tu caso no necesita revocar en segundos, el JWT puro con access tokens cortos es más simple y más barato: no todo sistema necesita esta máquina.</p>
+      </aside>
+
       <h2 id="oauth"><span class="sec-num">10.3</span>OAuth 2.0 y OpenID Connect</h2>
 
       <p><dfn data-term="oauth">OAuth 2.0</dfn> resuelve la delegación: que una aplicación actúe sobre tus recursos en otro servicio, con permisos limitados (scopes), sin conocer tu contraseña. <dfn data-term="oidc">OpenID Connect</dfn> le agrega identidad: además del access token, un ID token que dice quién eres. Hay cuatro roles: el usuario (dueño de los recursos), el cliente (la app), el servidor de autorización (emite tokens) y el resource server (la API).</p>
@@ -97,7 +170,7 @@
 
       <figure class="figure">
         <div class="figure-frame">
-<svg viewBox="0 0 770 444" role="img" aria-labelledby="f101t f101d">
+<svg viewBox="0 0 770 492" role="img" aria-labelledby="f101t f101d">
 <title id="f101t">OAuth 2.0 authorization code con PKCE</title>
 <desc id="f101d">La app genera un verificador secreto y envía su hash al servidor de autorización. El usuario inicia sesión y da su consentimiento; el navegador vuelve a la app con un código. La app canjea el código enviando el verificador original; el servidor compara el hash y entrega los tokens. Con el access token, la app llama a la API.</desc>
 <defs><marker id="f101-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f101-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f101-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f101-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
@@ -141,10 +214,39 @@
 <path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 378 L75.0 378" marker-end="url(#f101-r)"/>
 <rect x="256.9" y="361" width="256.2" height="15" fill="var(--paper)" opacity="0.85"/>
 <text class="dg-tiny" x="385.0" y="372" text-anchor="middle">200: verifica firma, exp, aud y scope</text>
+<text class="dg-tiny" x="16" y="406" style="fill:var(--label-3)">Quién es cada uno en el ejemplo "entrar con Google":</text>
+<rect class="dg-box dg-box--em" x="8.0" y="446" width="124" height="38" rx="4"/>
+<text class="dg-small" x="70.0" y="462" text-anchor="middle" style="font-weight:700">MiApp.ia</text>
+<text class="dg-tiny" x="70.0" y="477" text-anchor="middle">la app que pides</text>
+<rect class="dg-box dg-box--em" x="218.0" y="446" width="124" height="38" rx="4"/>
+<text class="dg-small" x="280.0" y="462" text-anchor="middle" style="font-weight:700">Chrome de Ana</text>
+<text class="dg-tiny" x="280.0" y="477" text-anchor="middle">tú y tu navegador</text>
+<rect class="dg-box dg-box--em" x="428.0" y="446" width="124" height="38" rx="4"/>
+<text class="dg-small" x="490.0" y="462" text-anchor="middle" style="font-weight:700">Google</text>
+<text class="dg-tiny" x="490.0" y="477" text-anchor="middle">accounts.google.com</text>
+<rect class="dg-box dg-box--em" x="638.0" y="446" width="124" height="38" rx="4"/>
+<text class="dg-small" x="700.0" y="462" text-anchor="middle" style="font-weight:700">Google Calendar</text>
+<text class="dg-tiny" x="700.0" y="477" text-anchor="middle">la API que lees</text>
 </svg>
         </div>
         <figcaption><b>Figura 10.1.</b> La contraseña del usuario solo la ve el servidor de autorización. El parámetro <code>state</code> evita que un atacante inyecte su propio código (CSRF), y PKCE evita que un código interceptado sirva para algo.</figcaption>
       </figure>
+
+      <p>El diagrama usa nombres genéricos porque el patrón es siempre el mismo, pero cuesta seguirlo sin caras concretas. Las cajas de abajo muestran quién es quién en dos casos reales:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Rol en OAuth</th><th>"Entrar con Google" para leer tu calendario</th><th>El login propio de MiApp.ia</th></tr></thead>
+          <tbody>
+            <tr><td><b>Usuario</b> (dueño de los recursos)</td><td>Ana, que tiene la cuenta de Google</td><td>Ana, que tiene la cuenta de MiApp.ia</td></tr>
+            <tr><td><b>Cliente</b> (la app)</td><td>MiApp.ia, que quiere leer su calendario</td><td>La propia app web o móvil de MiApp.ia</td></tr>
+            <tr><td><b>Servidor de autorización</b> (emite tokens)</td><td>Google, en <code>accounts.google.com</code></td><td>Tu servicio de identidad: Keycloak, Auth0, Cognito u Okta, en <code>auth.miapp.ia</code></td></tr>
+            <tr><td><b>Resource server</b> (la API)</td><td>Google Calendar API</td><td><code>api.miapp.ia</code>, el servicio de facturas del mapa de 10.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>En los dos casos, tu app nunca ve la contraseña: la escribe el usuario en el servidor de autorización. Lo que tu app recibe es un access token con permisos limitados. La única diferencia es si el servidor de autorización es de otra empresa (Google) o tuyo (el del mapa de 10.2).</p>
 
       <p>Otros flujos y errores a conocer:</p>
       <ul>
@@ -152,6 +254,32 @@
         <li><b>El flujo implícito está en desuso:</b> entregaba el token en la URL, donde se filtra en historiales y logs.</li>
         <li><b>Validar las redirect URI exactas:</b> aceptar cualquier URL "que empiece con" la registrada permite que un atacante reciba el código.</li>
       </ul>
+
+      <h3 id="pkce">PKCE paso a paso: el secreto que nunca viaja</h3>
+
+      <p>El paso delicado del flujo es el canje del código. El código vuelve a tu app por el navegador, y el navegador es un lugar con fugas: el código queda en el historial, en los logs del servidor, y en el móvil puede llegar a otra app que registró el mismo esquema de URL (<code>miapp://callback</code>). Si un atacante intercepta ese código, ¿qué le impide canjearlo por los tokens? Eso es lo que resuelve <dfn data-term="pkce">PKCE</dfn> (se pronuncia "pixy").</p>
+
+      <p>Es un algoritmo automático, definido en la <a href="https://www.rfc-editor.org/rfc/rfc7636.html">RFC 7636</a>, y el usuario no ve nada de él. <span class="badge badge--doc">Documentado</span> Tu app hace tres cosas:</p>
+      <ol class="steps">
+        <li><span class="step-title">Antes de empezar: genera un secreto</span>El <code>code_verifier</code>, 43 a 128 caracteres aleatorios, que se queda en la memoria de la app. Calcula su hash, el <code>code_challenge</code> = <code>BASE64URL(SHA256(verifier))</code>.</li>
+        <li><span class="step-title">Al pedir el código: manda el hash</span>En la URL de <code>/authorize</code> va el <code>code_challenge</code>, nunca el verifier. El servidor de autorización lo guarda junto al código que va a emitir. Del hash no se puede volver al verifier.</li>
+        <li><span class="step-title">Al canjear el código: manda el secreto original</span>En el <code>POST /token</code>, tu app envía el <code>code_verifier</code>. El servidor le aplica SHA-256 y compara con el challenge que guardó. Si coinciden, entrega los tokens. Un atacante que interceptó el código no tiene el verifier —nunca salió de la memoria de tu app— y no puede reconstruirlo desde el challenge, porque un hash no se invierte.</li>
+      </ol>
+
+      <p>Pruébalo: genera un verifier, mira su challenge, y después intenta canjear el código como la app (que tiene el verifier) o como un atacante (que robó el código pero no el verifier, o que solo vio el challenge).</p>
+
+      <div data-calc="pkce"></div>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Esto no es lo mismo que…</p>
+        <p class="def-term">El código que confirmas en el teléfono</p>
+        <p class="def-one">PKCE es automático y ocurre entre máquinas; lo que confirmas tú a mano son otros dos mecanismos, y conviene no confundirlos.</p>
+        <dl class="def-rows">
+          <div><dt>PKCE</dt><dd>Un hash que tu app calcula y el servidor comprueba. El usuario no participa. Protege el canje del código en OAuth.</dd></div>
+          <div><dt>Number matching en el MFA push</dt><dd>Cuando apruebas un inicio de sesión en la app del teléfono, te muestra un número que viste en la pantalla y te pide elegirlo o escribirlo. Evita que apruebes sin mirar una avalancha de notificaciones (el ataque de "fatiga de MFA"). Microsoft y Google lo activaron por defecto en 2023. <span class="badge badge--doc">Documentado</span></dd></div>
+          <div><dt>Device Authorization Grant</dt><dd>El código que escribes en otra pantalla para iniciar sesión en un televisor o una consola (YouTube muestra uno y te manda a <code>google.com/device</code>). Es otro flujo de OAuth (<a href="https://www.rfc-editor.org/rfc/rfc8628.html">RFC 8628</a>), para dispositivos sin teclado cómodo. <span class="badge badge--doc">Documentado</span></dd></div>
+        </dl>
+      </aside>
 
       <h2 id="api-keys"><span class="sec-num">10.4</span>API keys</h2>
 
@@ -170,8 +298,10 @@
 
       <p>Los secretos (contraseñas de bases, claves de APIs de terceros, claves de firma) no van en el código, ni en el repositorio, ni en variables de entorno que terminan en logs. Van en un gestor de secretos, se entregan a cada servicio con su identidad, se rotan y cada acceso queda auditado.</p>
 
-      <p>Para cifrar datos en reposo a gran escala se usa <dfn data-term="envelope">envelope encryption</dfn> con un <dfn data-term="kms">KMS</dfn>:</p>
+      <p>Para cifrar datos en reposo a gran escala se usa <dfn data-term="envelope">envelope encryption</dfn> con un <dfn data-term="kms">KMS</dfn>. La primera vez cuesta entenderlo, así que hay dos versiones de lo mismo: el diagrama tal cual, y una explicación desde cero con una analogía y más detalle. Empieza por la que te sirva.</p>
 
+      <div class="tabs" data-tabs="Envelope encryption: diagrama o explicación">
+      <section data-tab="Diagrama">
       <figure class="figure">
         <div class="figure-frame">
 <svg viewBox="0 0 770 300" role="img" aria-labelledby="f102t f102d">
@@ -197,8 +327,106 @@
         </div>
         <figcaption><b>Figura 10.2.</b> La clave maestra nunca sale del KMS; cada dato tiene su propia clave de datos, que viaja cifrada junto a él.</figcaption>
       </figure>
+      </section>
+      <section data-tab="Explicado desde cero">
 
-      <p>Un efecto útil: si cada usuario tiene su propia DEK, borrarla vuelve ilegibles todos sus datos, incluidas las copias en backups que no puedes modificar. Esa técnica, llamada <em>crypto-shredding</em>, es una forma práctica de cumplir con pedidos de borrado como los del GDPR.</p>
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Piensa en un banco. La <b>bóveda</b> es el KMS: nunca se mueve y casi nadie entra. Dentro hay una <b>llave maestra</b> (la KEK) que jamás sale de la bóveda. Cada documento que guardas va en un <b>sobre cerrado con su propio candado</b> (la DEK: una llave distinta por documento). ¿Dónde guardas la llave de cada candado? No en tu bolsillo: la metes en una <b>cajita</b> que solo la bóveda sabe abrir, y guardas la cajita <em>junto</em> al sobre. Para leer un documento, le llevas la cajita a la bóveda, que te devuelve la llave del candado; abres el sobre, lees, y tiras la llave. Nunca sacaste la llave maestra, y aun así cifraste millones de documentos sin molestar a la bóveda más que con una cajita diminuta cada vez.</p>
+      </aside>
+
+      <p>Traducido: la <b>DEK</b> (clave de datos) cifra el dato; la <b>KEK</b> (clave maestra) cifra la DEK. Se guarda el dato cifrado junto a la DEK cifrada. Esto resuelve dos problemas a la vez. Primero, el KMS nunca ve tus datos: solo cifra y descifra claves de 32 bytes. Segundo, puedes cifrar un archivo de un gigabyte sin mandarlo a ningún lado.</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Cifrar</span>Tu servicio le pide al KMS una DEK nueva (<code>GenerateDataKey</code>). El KMS devuelve dos copias: la DEK en claro y la DEK cifrada con la KEK. Tu servicio cifra el dato con la DEK en claro, en su propia CPU, borra la DEK en claro de memoria, y guarda el dato cifrado junto a la DEK cifrada.</li>
+        <li><span class="step-title">Leer</span>Tu servicio lee el dato cifrado y la DEK cifrada. Manda al KMS <b>solo la DEK cifrada</b> (<code>Decrypt</code>); el KMS la desenvuelve dentro de su hardware y la devuelve en claro. Con ella, tu servicio descifra el dato localmente. Cada <code>Decrypt</code> queda registrado: quién, cuándo, para qué.</li>
+        <li><span class="step-title">Rotar la clave maestra</span>Cuando toca cambiar la KEK, el KMS crea una versión nueva y conserva la vieja. Lo nuevo se envuelve con la versión nueva; lo viejo se sigue abriendo con la versión vieja. <b>No se recifran los datos.</b> Si hay que retirar del todo una versión vieja, se recifran las DEK (unos cientos de bytes por fila), nunca los datos.</li>
+        <li><span class="step-title">Borrar criptográficamente</span>Si destruyes una KEK, todas las DEK que envolvió quedan imposibles de abrir, y con ellas todos los datos, en todas las copias a la vez. Es la base del borrado criptográfico que viene abajo.</li>
+      </ol>
+
+      <p>Pruébalo en las cuatro escenas: cifrar, leer, rotar la clave maestra y el borrado criptográfico.</p>
+
+      <div data-sim="envelope"></div>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Dos detalles que no se ven en el dibujo</p>
+        <dl class="def-rows">
+          <div><dt>El nonce</dt><dd>AES-GCM necesita, además de la clave, un número que no se repita (el nonce, 12 bytes aleatorios). Se guarda junto al dato cifrado, en claro: no es secreto, pero <b>repetir un nonce con la misma clave rompe el cifrado</b>. Por eso una DEK por dato, o un nonce aleatorio por mensaje, evita el problema.</dd></div>
+          <div><dt>El contexto de cifrado (AAD)</dt><dd>Al pedir el <code>Decrypt</code> se puede exigir un "contexto" (por ejemplo, <code>{tenant: acme, tabla: facturas}</code>). El KMS solo desenvuelve la DEK si el contexto coincide con el del cifrado. Así una DEK cifrada para una fila no sirve para otra, aunque alguien la copie en la base.</dd></div>
+        </dl>
+      </aside>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>¿Por qué no cifrar todo directamente con la KEK y ahorrarse las DEK? Porque el KMS no está hecho para eso. <code>Encrypt</code> de AWS KMS acepta como máximo 4 KB de datos, cada llamada es una ida y vuelta por la red y cada una se cobra (del orden de 0.03 USD por cada 10 000 requests). <span class="badge badge--doc">Documentado</span> Cifrar un video llamando al KMS sería imposible y carísimo. Con envelope encryption, el KMS solo toca la DEK —32 bytes— una vez al cifrar y una al leer, y el trabajo pesado (AES sobre gigabytes) lo hace tu CPU, que es gratis y rápida.</p>
+      </aside>
+      </section>
+      </div>
+
+      <h3 id="crypto-shredding">Borrado criptográfico: borrar lo que no puedes alcanzar</h3>
+
+      <p>Un pedido de borrado del <dfn data-term="gdpr">GDPR</dfn> ("borren todos mis datos") tiene una parte fácil y una difícil. La fácil es el <code>DELETE</code> en la base. La difícil son las copias que no puedes editar: los <b>backups</b> de los últimos 30 días, que a propósito son inmutables (si un backup se pudiera editar, no serviría para recuperarse de un ataque). No puedes entrar a cada backup a borrar unas filas.</p>
+
+      <p>El <dfn data-term="crypto-shredding">borrado criptográfico</dfn> (<i>crypto-shredding</i>) le da la vuelta al problema: si el dato está cifrado y destruyes la clave, el dato queda ilegible en todos lados a la vez, aunque no puedas tocarlo. La idea es dar a cada usuario (o a cada tenant) <b>su propia clave</b>, en una jerarquía:</p>
+
+      <ul>
+        <li><b>Una KEK por tenant o por usuario</b> en el KMS. Los datos de cada uno se cifran con DEK envueltas por <em>su</em> KEK.</li>
+        <li>Para borrar a un usuario: <code>DELETE</code> en la base <b>y</b> programar la destrucción de su KEK en el KMS.</li>
+        <li>Cuando el KMS destruye la KEK, las DEK de ese usuario que quedaron en los backups ya no se pueden desenvolver. Los datos cifrados siguen ahí, pero son ruido.</li>
+      </ul>
+
+      <p>La clave del diseño: hay que destruir algo que <b>no</b> esté en los backups. Si la KEK del usuario estuviera guardada en tu base y esa base se respalda, restaurar un backup viejo la traería de vuelta. Por eso la KEK vive en el KMS, no en tu base. Dos formas de hacerlo:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde vive la clave a destruir</th><th>Cómo se destruye</th><th>Cuidado con</th></tr></thead>
+          <tbody>
+            <tr><td>Una KEK por usuario en el KMS</td><td><code>ScheduleKeyDeletion</code>: AWS KMS obliga a esperar de 7 a 30 días antes de destruirla, por si fue un error. <span class="badge badge--doc">Documentado</span></td><td>Cada KEK cuesta (del orden de 1 USD al mes); millones de usuarios con una KEK cada uno se vuelve caro. Sirve mejor por tenant.</td></tr>
+            <tr><td>Una tabla de claves sin backups (o con retención corta)</td><td>Un <code>DELETE</code> normal: como la tabla no se respalda, no reaparece al restaurar.</td><td>Esa tabla es ahora un punto único de pérdida: si la pierdes, pierdes todos los datos. Necesita su propia protección.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre data-lang="python"><code>from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import os
+
+# Cifrar un mensaje con la clave del usuario (envelope encryption)
+dek_claro, dek_cifrada = kms.generate_data_key(KeyId=kek_de(user_id), KeySpec="AES_256")
+nonce = os.urandom(12)
+ciphertext = AESGCM(dek_claro).encrypt(nonce, mensaje, aad=f"user:{user_id}".encode())
+del dek_claro                                    # fuera de memoria cuanto antes
+db.insert(mensajes, user_id=user_id, nonce=nonce, dek_cifrada=dek_cifrada, ciphertext=ciphertext)
+
+# Borrado criptográfico: el usuario ejerce su derecho al olvido
+db.delete(mensajes, user_id=user_id)             # la parte fácil
+kms.schedule_key_deletion(KeyId=kek_de(user_id), PendingWindowInDays=7)   # la parte que alcanza a los backups
+audit.log(actor="system", action="user.crypto_shred", target=user_id, result="ok")   # sin PII
+</code></pre>
+
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">user_keys</code>
+          <span class="schema-chip">Mapa de usuario a KEK</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>user_id</code><span class="key">PK</span></td><td>uuid</td><td>El usuario.</td></tr>
+              <tr><td><code>kek_arn</code></td><td>text</td><td>El identificador de su KEK en el KMS. La clave vive allá, no aquí.</td></tr>
+              <tr><td><code>shredded_at</code></td><td>timestamptz</td><td>Cuándo se pidió la destrucción. La "lápida" que queda tras borrar.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué derrota al borrado criptográfico</p>
+        <p>El borrado solo vale si el dato en claro no se escapó por otro lado antes. Cada una de estas copias sobrevive a destruir la clave: los <b>logs</b> donde se registró el contenido, los <b>índices de búsqueda</b>, las <b>cachés</b>, los almacenes de <b>analítica</b>, los <b>embeddings</b> de un RAG y la propia DEK si quedó <b>cacheada en memoria</b> de un servicio. El borrado criptográfico es la última línea, no la única: hay que recolectar poco, no escribir datos personales en los logs (10.8) y tener un proceso de borrado que llegue a todas esas copias.</p>
+      </aside>
+
+      <p>Honestidad: el GDPR no nombra esta técnica. Habla de "borrado" y de "seudonimización"; el borrado criptográfico es una forma de ingeniería, aceptada en la práctica, de cumplir el derecho al olvido cuando el borrado físico no alcanza. <span class="badge badge--ref">Diseño de referencia</span> Se registra en el log de auditoría una lápida sin datos personales: qué usuario, cuándo y que se destruyó la clave.</p>
 
       <h2 id="multitenant"><span class="sec-num">10.7</span>Aislamiento multi-tenant</h2>
 
@@ -206,7 +434,7 @@
       <ul>
         <li><b>El tenant sale del token, nunca de la request:</b> el cliente no puede elegir su tenant enviando un parámetro.</li>
         <li><b>Filtro obligatorio en la capa de datos:</b> un repositorio que agrega <code>tenant_id</code> a toda consulta, y pruebas que verifican que ninguna consulta lo omite.</li>
-        <li><b><dfn data-term="rls">Row-level security</dfn></b> en PostgreSQL como red de seguridad: aunque el código olvide el filtro, la base no devuelve filas de otro tenant.</li>
+        <li><b><dfn data-term="rls">Row-level security</dfn></b> en PostgreSQL como red de seguridad: aunque el código olvide el filtro, la base no devuelve filas de otro tenant. Es una política de la propia base, y se explica a fondo —con sus trampas— en <a href="m05-bases-de-datos.html#rls">M05</a>.</li>
       </ul>
 <pre data-lang="sql"><code>ALTER TABLE facturas ENABLE ROW LEVEL SECURITY;
 
@@ -219,6 +447,9 @@ SELECT * FROM facturas WHERE id = $1;   -- una factura de otro tenant simplement
       <p>El otro eje del aislamiento es la capacidad: límites por tenant (M08) para que un cliente ruidoso no degrade a los demás, y en clientes muy grandes, su propia base o su propia celda.</p>
 
       <h2 id="ataques"><span class="sec-num">10.8</span>Ataques frecuentes y datos personales</h2>
+
+      <p>Esta es la tabla de referencia; debajo, cada ataque con cómo funciona, un caso real donde lo hay, cómo se mitiga y cómo se detecta. La lista sigue el <a href="https://owasp.org/API-Security/editions/2023/en/0x11-t10/">OWASP API Security Top 10 (edición 2023)</a>, el consenso de la industria sobre lo que más se explota en APIs. <span class="badge badge--doc">Documentado</span></p>
+
       <div class="table-wrap">
         <table class="t">
           <thead><tr><th>Ataque</th><th>Cómo funciona</th><th>Defensa</th></tr></thead>
@@ -239,7 +470,90 @@ SELECT * FROM facturas WHERE id = $1;   -- una factura de otro tenant simplement
         <p>En 2019, una vulnerabilidad SSRF en un firewall de aplicaciones mal configurado permitió a una atacante pedir credenciales al servicio de metadatos de AWS desde dentro de la infraestructura de Capital One, y con ellas leer datos de más de 100 millones de personas. <span class="badge badge--doc">Documentado</span> A raíz de casos así, AWS lanzó IMDSv2, que exige un token de sesión obtenido con un PUT y no se puede disparar con un simple GET redirigido.</p>
       </aside>
 
-      <p>Sobre los datos personales (PII): recolectar solo lo necesario, cifrarlo, no escribirlo en logs (los logs se copian a muchos más lugares que la base), definir cuánto tiempo se retiene y tener un proceso de borrado que llegue también a réplicas, cachés, índices de búsqueda y backups. Y registrar en un log de auditoría inmutable quién accedió a qué.</p>
+      <h3 id="bola-detalle">BOLA: pedir el objeto de otro</h3>
+      <p><b>Cómo funciona.</b> La API comprueba que estás autenticado, pero no que el objeto que pides sea tuyo. Tienes la factura 123 y pides la 124: si el código hace <code>SELECT * FROM facturas WHERE id = 124</code> sin mirar el dueño, te la entrega. Es el riesgo número uno del OWASP API Top 10 y el más común en las filtraciones de datos entre usuarios.</p>
+      <p><b>Mitigación.</b> Autorizar por objeto, no solo por sesión, y en la capa de datos. El tenant y el usuario salen del token (10.2); la consulta siempre los incluye; row-level security (10.7, M05) es la red de seguridad.</p>
+<pre data-lang="sql"><code>-- Vulnerable: confía en el id que mandó el cliente
+SELECT * FROM facturas WHERE id = $1;
+
+-- Correcto: ata el objeto al dueño verificado por el token
+SELECT * FROM facturas WHERE id = $1 AND tenant_id = $2;   -- $2 sale del token, no de la request</code></pre>
+      <p><b>Cómo detectarlo.</b> Un pico de respuestas 403 o 404 por una cuenta que prueba ids secuenciales; un usuario que accede a muchos objetos de tenants distintos. Pruebas automáticas que, para cada endpoint con id, repiten la request con el token de otro usuario y esperan un 404.</p>
+
+      <h3 id="bfla-detalle">BFLA y asignación masiva: hacer de más</h3>
+      <p><b>Cómo funciona.</b> Dos primos de BOLA. En <dfn data-term="bfla">BFLA</dfn> (autorización de función rota) el objeto es tuyo, pero la acción no debería serlo: llamas a <code>DELETE /usuarios/88</code> o <code>POST /admin/reembolsos</code> siendo un usuario normal, y la API no comprueba el rol. En la <dfn data-term="mass-assignment">asignación masiva</dfn>, la API vuelca el JSON que mandas directo sobre el objeto, y agregas un campo que no deberías poder tocar: <code>{"email": "...", "role": "admin"}</code> en un endpoint de editar perfil.</p>
+      <p><b>Mitigación.</b> Para BFLA, comprobar el permiso de la acción en cada endpoint que cambia estado, no solo en la UI que lo esconde. Para la asignación masiva, una lista explícita de campos aceptados (un DTO), nunca "guarda todo lo que vino".</p>
+<pre data-lang="python"><code># Vulnerable: escribe cualquier campo que venga en el cuerpo
+usuario.update(**request.json)              # el cliente manda "role": "admin"
+
+# Correcto: solo los campos permitidos para esta acción
+usuario.nombre = datos.nombre
+usuario.avatar = datos.avatar               # "role" no está en la lista: se ignora</code></pre>
+      <p><b>Cómo detectarlo.</b> Registrar los cambios de campos sensibles (rol, permisos, estado de pago) en el log de auditoría; alertar si cambian fuera del flujo de administración.</p>
+
+      <h3 id="sqli-detalle">Inyección SQL</h3>
+      <p><b>Cómo funciona.</b> Datos del usuario concatenados dentro de una consulta. Un campo de búsqueda con <code>'; DROP TABLE…</code> o con una subconsulta cambia lo que la base ejecuta. En 2015, una atacante usó inyección SQL para leer los datos de 156 959 clientes de TalkTalk; el regulador británico multó a la empresa con 400 000 libras porque la misma vulnerabilidad ya había sido explotada meses antes y la habían ignorado. <span class="badge badge--doc">Documentado</span></p>
+      <p><b>Mitigación.</b> Consultas parametrizadas, siempre: el dato viaja como parámetro, nunca como texto de la consulta. Es gratis y cierra la clase entera de ataques.</p>
+<pre data-lang="python"><code># Vulnerable: el nombre se vuelve parte del SQL
+cursor.execute("SELECT * FROM clientes WHERE nombre = '" + nombre + "'")
+
+# Correcto: el nombre es un parámetro, nunca código
+cursor.execute("SELECT * FROM clientes WHERE nombre = %s", (nombre,))</code></pre>
+      <p><b>Cómo detectarlo.</b> Errores de SQL en los logs con fragmentos de entrada del usuario; un WAF que marca patrones de inyección; revisiones que prohíben construir SQL con concatenación de cadenas.</p>
+
+      <h3 id="xss-csrf-detalle">XSS y CSRF: atacar por el navegador de la víctima</h3>
+      <p><b>Cómo funcionan.</b> En el <b>XSS</b> (cross-site scripting), el atacante logra que su JavaScript corra en tu página, en el navegador de la víctima: así lee tokens, cookies accesibles o lo que el usuario escribe. Hay tres tipos: <i>almacenado</i> (el script queda guardado, por ejemplo en un comentario, y se sirve a todos), <i>reflejado</i> (viaja en un parámetro de la URL que la página devuelve sin escapar) y de <i>DOM</i> (el propio JavaScript de la página mete datos no confiables en el HTML). En el <b>CSRF</b> (cross-site request forgery), otro sitio hace que el navegador de la víctima dispare una acción en el tuyo aprovechando que sus cookies viajan solas.</p>
+      <p><b>Mitigación.</b> Contra XSS: escapar todo lo que se pinta en la página según el contexto (el framework moderno lo hace si no lo esquivas), una <code>Content-Security-Policy</code> que limite qué scripts corren, y cookies <code>HttpOnly</code> para que un XSS no lea la sesión. Contra CSRF: cookies <code>SameSite=Lax</code> o <code>Strict</code>, y un token anti-CSRF en los formularios.</p>
+      <p><b>Cómo detectarlo.</b> Reportes de violación de la CSP (llegan a un endpoint que tú defines), picos de requests con payloads sospechosos en los parámetros, y revisiones que prohíben insertar HTML sin escapar.</p>
+
+      <h3 id="jwt-detalle">Ataques al propio JWT</h3>
+      <p><b>Cómo funcionan.</b> Tres clásicos, todos por confiar en lo que dice el token en vez de en lo que fija el servidor. <code>alg: none</code>: el atacante quita la firma y pone el algoritmo en "none"; si la librería le cree, acepta un token sin firmar. Confusión de algoritmo (<code>RS256</code> a <code>HS256</code>): el atacante firma con la clave <em>pública</em> (que es, justamente, pública) tratándola como secreto de HMAC; si el servidor no fija el algoritmo, verifica con ella y pasa. <code>kid</code> malicioso: el campo que elige la clave apunta a un archivo o a una inyección que el atacante controla.</p>
+      <p><b>Mitigación.</b> El servidor fija el algoritmo y la clave; nunca los lee del token. El laboratorio de 10.2 deja probar <code>alg: none</code> y ver por qué se rechaza.</p>
+<pre data-lang="python"><code># Vulnerable: confía en el header del token
+jwt.decode(token, clave, algorithms=jwt.get_unverified_header(token)["alg"])
+
+# Correcto: el algoritmo lo decide el servidor
+jwt.decode(token, clave_publica, algorithms=["ES256"], audience="api.miapp.ia", issuer="https://auth.miapp.ia")</code></pre>
+      <p><b>Cómo detectarlo.</b> Alertar sobre tokens que llegan con <code>alg</code> inesperado o <code>kid</code> desconocido; contar los 401 por firma inválida.</p>
+
+      <h3 id="credenciales-detalle">Relleno de credenciales y robo de sesión</h3>
+      <p><b>Cómo funcionan.</b> En el <b>relleno de credenciales</b>, el atacante prueba masivamente usuarios y contraseñas filtrados de <em>otros</em> sitios, apostando a que la gente las reutiliza. En 2023, un ataque así sobre unas 14 000 cuentas de 23andMe (clientes que reusaron contraseñas y no tenían segundo factor) terminó exponiendo datos de 6.9 millones de personas, porque esas cuentas estaban conectadas a muchas otras. <span class="badge badge--doc">Documentado</span> El <b>robo de sesión o de refresh token</b> salta la contraseña del todo: en 2023, un malware en la laptop de un ingeniero de CircleCI robó una cookie de sesión con el segundo factor ya resuelto, y con ella el atacante llegó a producción. <span class="badge badge--doc">Documentado</span></p>
+      <p><b>Mitigación.</b> Contra el relleno: límites de tasa por cuenta y por IP (M08), segundo factor, y comparar contra listas de contraseñas filtradas al registrarse. Contra el robo de sesión: tokens de acceso cortos, rotación de refresh tokens con detección de reuso (10.2), y atar la sesión al dispositivo cuando el riesgo lo amerita.</p>
+      <p><b>Cómo detectarlo.</b> Una tasa de fallos de login altísima con muchas IPs y pocas contraseñas por cuenta; un refresh token presentado dos veces (lo que dispara la revocación de la familia, 10.2); una sesión que aparece de golpe en otro país o con otro navegador.</p>
+
+      <h3 id="audit-log">El log de auditoría</h3>
+      <p>Un <dfn data-term="audit-log">log de auditoría</dfn> responde, después de un incidente, la pregunta que siempre llega: ¿quién hizo qué, cuándo y desde dónde? No es lo mismo que los logs de la aplicación. Los logs de aplicación son para depurar, son ruidosos y se rotan en días; el de auditoría registra solo acciones sensibles, es la fuente para una investigación o una obligación legal, y se guarda mucho más tiempo. Cada entrada anota el actor, la acción, el objeto, el momento, el origen y el resultado, y para los cambios, el antes y el después.</p>
+      <ul>
+        <li><b>Solo-añadir (append-only) y aparte:</b> en un almacén separado que ni siquiera la aplicación pueda editar o borrar, como S3 con Object Lock (el mismo mecanismo que el ledger de pagos de <a href="m27-pagos-stripe.html">M27</a>). Si el atacante entra, no puede borrar sus huellas.</li>
+        <li><b>Encadenado por hash:</b> cada entrada incluye el hash de la anterior, así cualquier borrado o cambio en medio se nota (la misma idea de una cadena de bloques, sin la parte distribuida).</li>
+        <li><b>Sin secretos ni datos personales de más:</b> se registra "el usuario u_42 leyó la factura 7", no el contenido de la factura. El log se copia a muchos lugares; meterle datos sensibles los esparce.</li>
+        <li><b>Con retención definida:</b> por obligación legal suelen ser años, y se decide antes, no después.</li>
+      </ul>
+      <figure class="schema">
+        <figcaption class="schema-head">
+          <code class="schema-name">audit_events</code>
+          <span class="schema-chip">Append-only</span>
+          <span class="badge badge--ref">Diseño de referencia</span>
+        </figcaption>
+        <div class="table-wrap">
+          <table class="t t--schema">
+            <thead><tr><th>Campo</th><th>Tipo</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>id</code><span class="key">PK</span></td><td>bigint</td><td>Secuencial, para ordenar.</td></tr>
+              <tr><td><code>at</code></td><td>timestamptz</td><td>Cuándo pasó.</td></tr>
+              <tr><td><code>actor</code></td><td>text</td><td>Quién: usuario, servicio o <code>system</code>.</td></tr>
+              <tr><td><code>action</code></td><td>text</td><td>Qué: <code>factura.leida</code>, <code>session.revoked.refresh_reuse</code>, <code>user.crypto_shred</code>.</td></tr>
+              <tr><td><code>target</code></td><td>text</td><td>Sobre qué objeto.</td></tr>
+              <tr><td><code>ip</code>, <code>user_agent</code></td><td>inet, text</td><td>Desde dónde.</td></tr>
+              <tr><td><code>result</code></td><td>text</td><td><code>ok</code> o el motivo del rechazo.</td></tr>
+              <tr><td><code>prev_hash</code></td><td>bytea</td><td>Hash de la entrada anterior: encadena el log.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </figure>
+      <p class="more-link">Las tablas de bitácora dentro de la base (triggers, pgAudit) se tratan en el módulo de seguridad en bases de datos (M35), de la Parte IV.</p>
+
+      <p>Sobre los datos personales (PII): recolectar solo lo necesario, cifrarlo, no escribirlo en logs (los logs se copian a muchos más lugares que la base), definir cuánto tiempo se retiene y tener un proceso de borrado que llegue también a réplicas, cachés, índices de búsqueda y backups (el borrado criptográfico de 10.6 ayuda con lo que no puedes alcanzar). Y registrar en el log de auditoría quién accedió a qué.</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 
@@ -275,11 +589,16 @@ SELECT * FROM facturas WHERE id = $1;   -- una factura de otro tenant simplement
 <script src="../assets/js/data/course.data.js"></script>
 <script src="../assets/js/data/glossary.data.js"></script>
 <script src="../assets/js/data/quizzes/m10.data.js"></script>
+<script src="../assets/js/data/maps/m10-identidad.data.js"></script>
 <script src="../assets/js/core/progress.js"></script>
 <script src="../assets/js/core/nav.js"></script>
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
 <script src="../assets/js/widgets/sim-signurl.js"></script>
 <script src="../assets/js/widgets/sim-jwt.js"></script>
+<script src="../assets/js/widgets/sim-dbflow.js"></script>
+<script src="../assets/js/widgets/sim-envelope.js"></script>
 </body>
 </html>

@@ -68,6 +68,166 @@
         <li><b>Los <span data-term="deadline">deadlines</span> se propagan:</b> si el usuario tiene 2 s y ya se gastaron 1.6 s, la llamada siguiente recibe 400 ms, y si ya no queda nada, ni se hace. gRPC lo hace automáticamente con su deadline.</li>
       </ul>
 
+      <h3 id="deadline-viaje">Cómo viaja un deadline</h3>
+
+      <p>Un timeout es local: "yo espero 500 ms a mi dependencia". Un deadline es de la request entera: "esta request no sirve después de las 12:00:02.000". La diferencia importa en cuanto hay más de un salto. Con timeouts sueltos, el gateway espera 2 s, A espera 2 s a B y B espera 2 s a la base: si la base tarda, B sigue esperando cuando el gateway ya contestó un error y el usuario ya se fue. Todo el trabajo de abajo se hace para nadie.</p>
+
+      <p>Para que un deadline viaje hacen falta tres piezas:</p>
+      <ol class="steps">
+        <li><span class="step-title">Alguien lo fija, una vez, en la entrada</span>El gateway, o el primer servicio que recibe la request, decide el presupuesto total: 2 s para una página, 30 s para un reporte. Ningún servicio de más abajo lo agranda.</li>
+        <li><span class="step-title">Viaja en cada llamada, en un header</span>Hay dos formas. <b>Relativo:</b> "te quedan 1 600 ms". Es lo que hace gRPC con el header <code>grpc-timeout: 1600m</code>, y cada salto lo recalcula antes de llamar al siguiente. <span class="badge badge--doc">Documentado</span> Envoy hace algo parecido con <code>x-envoy-expected-rq-timeout-ms</code>, que le dice al servicio de atrás cuánto va a esperar el proxy. <span class="badge badge--doc">Documentado</span> <b>Absoluto:</b> "vence a las 12:00:02.000", en milisegundos desde 1970, en un header propio como <code>X-Request-Deadline</code>. HTTP no tiene uno estándar, así que cada empresa elige el suyo.</li>
+        <li><span class="step-title">Cada salto lo usa</span>Al recibir: lee el header y calcula cuánto queda; si ya no queda nada, responde 504 sin trabajar. Al llamar: le resta su propio trabajo y un margen para armar la respuesta, y usa eso como timeout de la llamada y como header para el siguiente. Dentro del proceso, el deadline va en el contexto de la request: <code>context.Context</code> en Go, el <code>Context</code> de gRPC en Java o <code>asyncio.timeout</code> en Python.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 350" role="img" aria-labelledby="f8dlt f8dld">
+<title id="f8dlt">Un deadline que viaja de salto en salto</title>
+<desc id="f8dld">Línea de tiempo de 0 a 2000 ms con cuatro filas: gateway, servicio A, servicio B y PostgreSQL. El gateway recibe la request y pone un header con el deadline absoluto, llegada más 2000 ms. A recibe la request a los 50 ms, le quedan 1950 ms, trabaja 300 ms y llama a B. B recibe a los 360 ms, le quedan 1640, trabaja 40 ms y consulta la base con un statement_timeout de 1550 ms. La consulta tardaría 5 s, pero la base la cancela a los 1950 ms. B devuelve 504, A responde algo degradado y el gateway contesta antes de los 2000 ms.</desc>
+<defs><marker id="f8dla" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8dlf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="10" y="36" width="120" height="34" rx="6"/>
+<text class="dg-small" x="70" y="57" text-anchor="middle">Gateway</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="106" width="120" height="34" rx="6"/>
+<text class="dg-small" x="70" y="127" text-anchor="middle">Servicio A</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="10" y="176" width="120" height="34" rx="6"/>
+<text class="dg-small" x="70" y="197" text-anchor="middle">Servicio B</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="246" width="120" height="34" rx="6"/>
+<text class="dg-small" x="70" y="267" text-anchor="middle">PostgreSQL</text>
+<line class="sim-grid" x1="165.0" x2="165.0" y1="24" y2="290"/>
+<text class="sim-axis" x="165.0" y="312" text-anchor="middle">0 ms</text>
+<line class="sim-grid" x1="295.0" x2="295.0" y1="24" y2="290"/>
+<text class="sim-axis" x="295.0" y="312" text-anchor="middle">500 ms</text>
+<line class="sim-grid" x1="425.0" x2="425.0" y1="24" y2="290"/>
+<text class="sim-axis" x="425.0" y="312" text-anchor="middle">1&#8239;000 ms</text>
+<line class="sim-grid" x1="555.0" x2="555.0" y1="24" y2="290"/>
+<text class="sim-axis" x="555.0" y="312" text-anchor="middle">1&#8239;500 ms</text>
+<line class="sim-grid" x1="685.0" x2="685.0" y1="24" y2="290"/>
+<text class="sim-axis" x="685.0" y="312" text-anchor="middle">2&#8239;000 ms</text>
+<line x1="685.0" x2="685.0" y1="18" y2="290" stroke="var(--fail)" stroke-width="2" stroke-dasharray="6 4"/>
+<text class="dg-small dg-fail-text" x="691.0" y="30" text-anchor="start">deadline</text>
+<text class="dg-tiny" x="691.0" y="46" text-anchor="start">del</text>
+<text class="dg-tiny" x="691.0" y="60" text-anchor="start">usuario</text>
+<rect class="dg-box" x="165.0" y="42" width="516.1" height="20" rx="4"/>
+<rect class="hb-a" x="165.0" y="42" width="13.0" height="20" rx="4"/>
+<text class="dg-tiny" x="180.6" y="36" text-anchor="start">pone X-Request-Deadline = llegada + 2 000 ms</text>
+<rect class="dg-box" x="178.0" y="112" width="500.5" height="20" rx="4"/>
+<rect class="hb-a" x="178.0" y="112" width="78.0" height="20" rx="4"/>
+<text class="dg-tiny" x="186.0" y="106" text-anchor="start">le quedan 1 950 ms; trabaja 300</text>
+<path class="dg-edge" d="M178.0 64 V108" marker-end="url(#f8dla)"/>
+<rect class="dg-box" x="258.6" y="182" width="416.0" height="20" rx="4"/>
+<rect class="hb-a" x="258.6" y="182" width="10.399999999999977" height="20" rx="4"/>
+<text class="dg-tiny" x="266.6" y="176" text-anchor="start">le quedan 1 640 ms</text>
+<path class="dg-edge" d="M256.0 134 L258.6 178" marker-end="url(#f8dla)"/>
+<rect class="dg-warnbox" x="269.0" y="252" width="403.0" height="20" rx="4"/>
+<path class="dg-edge" d="M269.0 204 V248" marker-end="url(#f8dla)"/>
+<text class="dg-tiny" x="277.0" y="246" text-anchor="start">statement_timeout = 1 640 − 40 de trabajo − 50 de margen = 1 550 ms</text>
+<text class="dg-tiny" x="471.8" y="266" text-anchor="middle">la consulta tardaría 5 s</text>
+<text class="dg-small dg-fail-text" x="666.0" y="288" text-anchor="end">la base la cancela</text>
+<path class="dg-edge" d="M672.0 250 L674.6 206" marker-end="url(#f8dlf)"/>
+<path class="dg-edge" d="M674.6 180 L678.5 136" marker-end="url(#f8dlf)"/>
+<path class="dg-edge" d="M678.5 110 L681.1 66" marker-end="url(#f8dlf)"/>
+<text class="dg-tiny" x="669.4" y="160" text-anchor="end">B: 504</text>
+<text class="dg-tiny" x="674.6" y="92" text-anchor="end">A: respuesta degradada</text>
+<rect class="hb-a" x="560" y="330" width="14" height="10" rx="2"/>
+<text class="dg-tiny" x="580" y="339" text-anchor="start">trabajo propio</text>
+<rect class="dg-box" x="660" y="330" width="14" height="10" rx="2"/>
+<text class="dg-tiny" x="680" y="339" text-anchor="start">esperando</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.1.</b> Cada salto lee cuánto queda, le resta su trabajo y un margen, y le pasa el resto al siguiente. Sin el deadline, B esperaría los 5&#8239;s de la consulta mientras el usuario ya se fue a los 2&#8239;s.</figcaption>
+      </figure>
+
+<pre data-lang="python"><code># El mismo cálculo en cualquier salto, en cualquier lenguaje.
+MARGEN_MS = 50
+
+def presupuesto(headers, ahora_ms):
+    deadline = int(headers.get("X-Request-Deadline", ahora_ms + 2000))
+    return deadline - ahora_ms                  # lo que le queda a esta request
+
+def llamar_a_b(headers, ahora_ms):
+    queda = presupuesto(headers, ahora_ms) - MARGEN_MS
+    if queda &lt;= 0:
+        raise Vencida()                         # ni lo intentes: nadie espera la respuesta
+    return http.get("http://b/precio", timeout=queda / 1000,
+                    headers={"X-Request-Deadline": headers["X-Request-Deadline"]})</code></pre>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Un deadline absoluto se calcula una sola vez y no se deforma en cada salto, pero supone que los relojes de las máquinas coinciden. Dentro de un datacenter, con NTP, la diferencia suele ser de milisegundos y alcanza. Entre empresas no se puede suponer, y por eso gRPC manda el tiempo relativo: cada salto lo convierte en absoluto con su propio reloj apenas lo recibe. Un buen arreglo: absoluto dentro de tu sistema, relativo en el borde.</p>
+      </aside>
+
+      <h3 id="cancelacion">Cancelar: el deadline que vence antes de tiempo</h3>
+
+      <p>Que el deadline llegue no alcanza: cuando vence, o cuando el usuario se va, el trabajo de abajo tiene que <b>detenerse</b>, no solo dejar de esperarse. Una cancelación es un deadline que vence ahora. Cada salto la recibe por un mecanismo distinto:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde</th><th>Cómo llega la señal</th><th>Qué hay que hacer</th></tr></thead>
+          <tbody>
+            <tr><td>Entre el navegador y el servidor</td><td>Se cierra la conexión, o en HTTP/2 se cierra solo ese stream con <code>RST_STREAM</code></td><td>Que el servidor web avise al código de la request, no solo que falle la próxima escritura</td></tr>
+            <tr><td>Entre servicios con gRPC</td><td>El cliente cancela la llamada y el servidor ve su contexto cancelado <span class="badge badge--doc">Documentado</span></td><td>Revisar el contexto en los bucles largos y pasarlo a cada llamada</td></tr>
+            <tr><td>Entre servicios con HTTP</td><td>El cliente cierra la conexión al vencer su timeout</td><td>Lo mismo que en el primer caso: el servidor de abajo tiene que notarlo</td></tr>
+            <tr><td>Dentro del proceso</td><td><code>context.Context</code> en Go, <code>CancellationToken</code> en .NET, <code>Task.cancel()</code> en Python, <code>Future.cancel(true)</code> en Java</td><td>Pasar el contexto a todo lo que espere: la base, la red, las colas</td></tr>
+            <tr><td>En la base</td><td><code>statement_timeout</code> de PostgreSQL, o <code>pg_cancel_backend</code> desde otra conexión <span class="badge badge--doc">Documentado</span></td><td>Poner el timeout por consulta desde el presupuesto que queda</td></tr>
+            <tr><td>En un motor de LLM</td><td>vLLM aborta la request cuando se cierra su conexión HTTP (<a href="m17-api-streaming.html#cancelacion">M17</a>)</td><td>Que cada salto anterior cierre la suya</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>El ejemplo que más se nota es un LLM. Una request web normal cuesta milisegundos de CPU; una generación ocupa durante decenas de segundos un lugar en el batch de una GPU y una parte de su memoria para el KV cache (<a href="m15-motores-inferencia.html">M15</a>). Es un agujero negro de recursos: lo que entra se queda mucho tiempo, y si nadie lo saca, sigue consumiendo aunque ya nadie mire.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f8cxt f8cxd">
+<title id="f8cxt">La cancelación de una generación, salto por salto</title>
+<desc id="f8cxd">Arriba, cuatro cajas: el usuario cierra la pestaña, el gateway cierra hacia atrás, el servidor de la API llama a abort con el id de la request y el motor libera el KV cache. Las señales entre ellos son RST_STREAM o FIN, la conexión cerrada y el abort. Abajo, un lugar en el batch de la GPU entre 0 y 20 s. Sin propagar la cancelación, de los 2 a los 20 s la GPU genera 900 tokens para nadie. Propagándola, a los 2.2 s el lugar lo toma la siguiente request de la cola.</desc>
+<defs><marker id="f8cxa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8cxf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="20" width="160" height="54" rx="6"/>
+<text class="dg-label" x="100" y="43" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="100" y="62" text-anchor="middle">cierra la pestaña</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="210" y="20" width="160" height="54" rx="6"/>
+<text class="dg-label" x="290" y="43" text-anchor="middle">Gateway</text>
+<text class="dg-tiny" x="290" y="62" text-anchor="middle">cierra hacia atrás</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="400" y="20" width="160" height="54" rx="6"/>
+<text class="dg-label" x="480" y="43" text-anchor="middle">Servidor de la API</text>
+<text class="dg-tiny" x="480" y="62" text-anchor="middle">llama a abort(id)</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="590" y="20" width="160" height="54" rx="6"/>
+<text class="dg-label" x="670" y="43" text-anchor="middle">Motor en la GPU</text>
+<text class="dg-tiny" x="670" y="62" text-anchor="middle">libera el KV cache</text>
+<path class="dg-edge" d="M182 47 H208" marker-end="url(#f8cxf)"/>
+<text class="dg-tiny" x="195.0" y="92" text-anchor="middle">RST_STREAM o FIN</text>
+<path class="dg-edge" d="M372 47 H398" marker-end="url(#f8cxf)"/>
+<text class="dg-tiny" x="385.0" y="92" text-anchor="middle">conexión cerrada</text>
+<path class="dg-edge" d="M562 47 H588" marker-end="url(#f8cxf)"/>
+<text class="dg-tiny" x="575.0" y="92" text-anchor="middle">abort de la request</text>
+<line class="sim-grid" x1="200" x2="200" y1="120" y2="268"/>
+<text class="sim-axis" x="200" y="286" text-anchor="middle">0 s</text>
+<line class="sim-grid" x1="330" x2="330" y1="120" y2="268"/>
+<text class="sim-axis" x="330" y="286" text-anchor="middle">5 s</text>
+<line class="sim-grid" x1="460" x2="460" y1="120" y2="268"/>
+<text class="sim-axis" x="460" y="286" text-anchor="middle">10 s</text>
+<line class="sim-grid" x1="590" x2="590" y1="120" y2="268"/>
+<text class="sim-axis" x="590" y="286" text-anchor="middle">15 s</text>
+<line class="sim-grid" x1="720" x2="720" y1="120" y2="268"/>
+<text class="sim-axis" x="720" y="286" text-anchor="middle">20 s</text>
+<text class="sim-axis" x="200" y="114" text-anchor="start">un lugar en el batch de la GPU, de 0 a 20 s</text>
+<text class="dg-small" x="190" y="156" text-anchor="end">Sin propagar</text>
+<rect class="dg-ok" x="200" y="138" width="52" height="26" rx="4"/>
+<rect class="dg-bad" x="252" y="138" width="468" height="26" rx="4"/>
+<text class="dg-small dg-fail-text" x="486.0" y="156" text-anchor="middle">genera para nadie: 900 tokens, 18 s de GPU</text>
+<text class="dg-small" x="190" y="222" text-anchor="end">Propagando</text>
+<rect class="dg-ok" x="200" y="204" width="52" height="26" rx="4"/>
+<rect class="hb-a" x="257.2" y="204" width="462.8" height="26" rx="4"/>
+<text class="dg-small" x="488.6" y="222" text-anchor="middle">entra la siguiente request de la cola</text>
+<line x1="252" x2="252" y1="124" y2="250" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5 4"/>
+<text class="dg-tiny" x="258" y="252" text-anchor="start">a los 2 s el usuario pulsa Detener</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.2.</b> Una respuesta de 1&#8239;000 tokens a 50 tokens por segundo ocupa su lugar 20&#8239;s. Si el usuario se va a los 2&#8239;s y nadie avisa, la GPU trabaja 18&#8239;s para nadie, y la request que esperaba en la cola sigue esperando. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <p>Con 100 usuarios por minuto que pulsan "Detener" a los 2 s de una respuesta de 20 s, una flota que no propaga la cancelación gasta 100 × 18 = 1 800 segundos de lugar en el batch por minuto en nada: 30 lugares ocupados todo el tiempo por respuestas que nadie lee. Si cada GPU atiende 32 a la vez, es casi una GPU entera. <span class="badge badge--ref">Diseño de referencia</span> El recorrido salto por salto, con lo que puede fallar en cada uno, está en <a href="m17-api-streaming.html#cancelacion">M17</a>; aquí importa la regla general: <b>cada salto que espera también tiene que poder cancelar</b>.</p>
+
       <h2 id="reintentos"><span class="sec-num">8.2</span>Reintentos sin tormentas</h2>
 
       <p>Reintentar convierte fallas transitorias en éxitos invisibles. Mal hecho, convierte un incidente de 5 minutos en uno de una hora. Las condiciones para reintentar:</p>
@@ -79,7 +239,109 @@
         <li><span class="step-title">En una sola capa</span>Si el gateway, el servicio A y el servicio B reintentan 3 veces, C recibe hasta 27 requests por cada una del usuario (M03).</li>
       </ol>
 
-      <p>Mira qué pasa cuando un servicio pierde el 75&#8239;% de su capacidad durante 5 segundos. Empieza con "Reintento inmediato" y el servidor FIFO; después prueba el presupuesto de reintentos y, por último, un servidor que descarta las requests cuyo cliente ya se fue.</p>
+      <h3 id="por-que-27">Por qué 3 reintentos se vuelven 27</h3>
+
+      <p>Un reintento en una capa es un bucle alrededor de la llamada. Si la capa de abajo también reintenta, su bucle está <b>adentro</b> del de arriba, y los bucles anidados se multiplican, no se suman:</p>
+
+<pre data-lang="python"><code>for intento_gateway in range(3):        # el gateway reintenta a A
+    for intento_a in range(3):          # cada llamada a A reintenta a B
+        for intento_b in range(3):      # cada llamada a B reintenta a la base
+            consultar_base()            # 3 × 3 × 3 = 27 veces si la base no responde</code></pre>
+
+      <p>Con <i>r</i> intentos por capa y <i>n</i> capas que reintentan, a la última llegan <i>r</i><sup><i>n</i></sup> intentos por cada request del usuario. Es una potencia: cada capa que se suma multiplica todo lo de abajo por <i>r</i>. Con 3 intentos, una capa da 3, dos dan 9, tres dan 27 y cuatro dan 81. El dibujo de las llamadas, intento por intento, está en <a href="m03-balanceo-gateways.html#reintentos">M03</a>.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f8amt f8amd">
+<title id="f8amt">Intentos que llegan a la base según cuántas capas reintentan</title>
+<desc id="f8amd">Barras para 1, 2, 3 y 4 capas que reintentan. Con 2 intentos por capa llegan 2, 4, 8 y 16 intentos a la base; con 3 intentos por capa, 3, 9, 27 y 81.</desc>
+<defs><marker id="f8ama" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8amf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="110" y="244.8" width="50" height="5.2" rx="3"/>
+<rect class="dg-bad" x="166" y="242.2" width="50" height="7.800000000000001" rx="3"/>
+<text class="sim-val" x="135" y="238.8" text-anchor="middle">2</text>
+<text class="sim-val" x="191" y="236.2" text-anchor="middle">3</text>
+<text class="dg-tiny" x="163" y="270" text-anchor="middle">1 capa que reintenta</text>
+<text class="dg-tiny" x="163" y="286" text-anchor="middle">2<tspan baseline-shift="super" font-size="9">1</tspan> y 3<tspan baseline-shift="super" font-size="9">1</tspan></text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="270" y="239.6" width="50" height="10.4" rx="3"/>
+<rect class="dg-bad" x="326" y="226.6" width="50" height="23.400000000000002" rx="3"/>
+<text class="sim-val" x="295" y="233.6" text-anchor="middle">4</text>
+<text class="sim-val" x="351" y="220.6" text-anchor="middle">9</text>
+<text class="dg-tiny" x="323" y="270" text-anchor="middle">2 capas que reintentan</text>
+<text class="dg-tiny" x="323" y="286" text-anchor="middle">2<tspan baseline-shift="super" font-size="9">2</tspan> y 3<tspan baseline-shift="super" font-size="9">2</tspan></text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="430" y="229.2" width="50" height="20.8" rx="3"/>
+<rect class="dg-bad" x="486" y="179.8" width="50" height="70.2" rx="3"/>
+<text class="sim-val" x="455" y="223.2" text-anchor="middle">8</text>
+<text class="sim-val" x="511" y="173.8" text-anchor="middle">27</text>
+<text class="dg-tiny" x="483" y="270" text-anchor="middle">3 capas que reintentan</text>
+<text class="dg-tiny" x="483" y="286" text-anchor="middle">2<tspan baseline-shift="super" font-size="9">3</tspan> y 3<tspan baseline-shift="super" font-size="9">3</tspan></text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="590" y="208.4" width="50" height="41.6" rx="3"/>
+<rect class="dg-bad" x="646" y="39.400000000000006" width="50" height="210.6" rx="3"/>
+<text class="sim-val" x="615" y="202.4" text-anchor="middle">16</text>
+<text class="sim-val" x="671" y="33.400000000000006" text-anchor="middle">81</text>
+<text class="dg-tiny" x="643" y="270" text-anchor="middle">4 capas que reintentan</text>
+<text class="dg-tiny" x="643" y="286" text-anchor="middle">2<tspan baseline-shift="super" font-size="9">4</tspan> y 3<tspan baseline-shift="super" font-size="9">4</tspan></text>
+<line class="sim-axis" x1="90" x2="740" y1="250" y2="250" stroke="var(--ink-3)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="90" y="16" width="14" height="10" rx="2"/>
+<text class="dg-tiny" x="110" y="25" text-anchor="start">2 intentos por capa</text>
+<rect class="dg-bad" x="240" y="16" width="14" height="10" rx="2"/>
+<text class="dg-tiny" x="260" y="25" text-anchor="start">3 intentos por capa</text>
+<text class="sim-axis" x="90" y="46" text-anchor="start">intentos que llegan a la base por cada click del usuario, si la base no responde</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.3.</b> Cada capa que reintenta multiplica por su número de intentos. Sumar una capa no suma 3: multiplica por 3. Por eso crece como una potencia.</figcaption>
+      </figure>
+
+      <p>Lo grave es cuándo pasa. Los reintentos se disparan cuando la base ya está mal, que es justo cuando menos aguanta. Con 1 000 requests por segundo de usuarios y tres capas que reintentan, una base lenta recibe 27 000 intentos por segundo. Y la latencia también se multiplica: si cada intento espera 1 s, el gateway puede tardar 27 s en rendirse, y en todo ese tiempo retiene un hilo por request. Las salidas:</p>
+      <ul>
+        <li><b>Reintentar en una sola capa</b>, la más cercana al usuario o la que sabe si la operación es idempotente. Las demás fallan rápido y devuelven el error hacia arriba.</li>
+        <li><b>Decir "no reintentes"</b> en la respuesta: un 503 con <code>Retry-After</code>, o un header propio que la capa de arriba respete. gRPC tiene <code>grpc-retry-pushback-ms</code> para que el servidor le diga al cliente cuánto esperar o que no reintente. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Un presupuesto de reintentos por capa</b>: aunque todas reintenten, ninguna suma más del 10&#8239;% al tráfico normal, y <i>r</i> se acerca a 1.1 en lugar de 3: 1.1<sup>3</sup> = 1.33.</li>
+      </ul>
+
+      <h3 id="tormenta">La tormenta, paso a paso</h3>
+
+      <p>Una tormenta de reintentos no necesita tres capas: alcanza con una sola, si los clientes reintentan cuando el servidor está saturado. El mecanismo es un ciclo:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f8cyt f8cyd">
+<title id="f8cyt">El ciclo de una tormenta de reintentos</title>
+<desc id="f8cyd">Cinco cajas en ciclo. La capacidad baja. La cola crece y la espera pasa del timeout de 1 s. Los clientes se van y vuelven a intentar. Entra más carga, nuevas más reintentos. El servidor atiende a quien ya se fue: trabajo perdido, y la cola crece otra vez. Debajo: se rompe con un presupuesto de reintentos, descartando lo vencido o rechazando en la entrada.</desc>
+<defs><marker id="f8cya" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8cyf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-warnbox" x="275" y="14" width="220" height="52" rx="10"/>
+<text class="dg-label" x="385" y="36" text-anchor="middle">La capacidad baja</text>
+<text class="dg-tiny" x="385" y="54" text-anchor="middle">un nodo menos, una dependencia lenta</text>
+<rect class="dg-box" x="530" y="104" width="220" height="52" rx="10"/>
+<text class="dg-label" x="640" y="126" text-anchor="middle">La cola crece</text>
+<text class="dg-tiny" x="640" y="144" text-anchor="middle">la espera pasa del timeout de 1 s</text>
+<rect class="dg-box" x="450" y="224" width="220" height="52" rx="10"/>
+<text class="dg-label" x="560" y="246" text-anchor="middle">Los clientes se van</text>
+<text class="dg-tiny" x="560" y="264" text-anchor="middle">y vuelven a intentar</text>
+<rect class="dg-box" x="100" y="224" width="220" height="52" rx="10"/>
+<text class="dg-label" x="210" y="246" text-anchor="middle">Entra más carga</text>
+<text class="dg-tiny" x="210" y="264" text-anchor="middle">nuevas + reintentos</text>
+<rect class="dg-box" x="20" y="104" width="220" height="52" rx="10"/>
+<text class="dg-label" x="130" y="126" text-anchor="middle">Trabajo perdido</text>
+<text class="dg-tiny" x="130" y="144" text-anchor="middle">atiende a quien ya se fue</text>
+<path class="dg-edge" d="M480 60 C 560 70, 610 90, 630 102" marker-end="url(#f8cyf)"/>
+<path class="dg-edge" d="M640 158 C 640 190, 620 210, 600 222" marker-end="url(#f8cyf)"/>
+<path class="dg-edge" d="M448 252 H324" marker-end="url(#f8cyf)"/>
+<path class="dg-edge" d="M160 222 C 130 200, 125 180, 128 158" marker-end="url(#f8cyf)"/>
+<path class="dg-edge" d="M240 130 C 380 130, 470 130, 528 130" marker-end="url(#f8cyf)"/>
+<text class="dg-small dg-fail-text" x="385" y="122" text-anchor="middle">la cola nunca se vacía</text>
+<text class="dg-small" x="385" y="316" text-anchor="middle">Se rompe desde afuera: presupuesto de reintentos, descartar lo vencido, rechazar en la entrada</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.4.</b> Las cuatro cajas de abajo y la de la derecha forman un ciclo que se alimenta solo. La caja de arriba lo arranca, pero cuando el incidente termina el ciclo sigue: eso es una falla metaestable.</figcaption>
+      </figure>
+
+      <p>El simulador lo muestra con números. Un servidor atiende 1 000 requests por segundo y recibe 800. Entre los 10 y los 15 s un incidente le deja el 25&#8239;% de su capacidad. Cada cliente espera 1 s; si no recibe respuesta, se va y reintenta, pero su request sigue en la cola del servidor. Cómo leerlo:</p>
+      <ul>
+        <li><b>El gráfico de arriba</b> muestra, por segundo, lo que <b>llega</b> (requests nuevas más reintentos), lo que se <b>atiende a tiempo</b> y lo que se atiende <b>tarde</b>, cuando el cliente ya se fue: CPU gastada en nada.</li>
+        <li><b>El gráfico de abajo</b> muestra cuánto lleva esperando la request que el servidor atiende. Mientras esa espera pase de 1 s, todo lo que se atiende es trabajo perdido, aunque el servidor esté al 100&#8239;%.</li>
+        <li><b>El deslizador</b> elige un segundo y muestra las cuentas de ese momento.</li>
+      </ul>
+      <p>Empieza con "Reintento inmediato" y el servidor FIFO, y lleva el deslizador a los 20 s: el incidente ya terminó, el servidor trabaja al máximo y casi nada sale a tiempo. Después prueba el presupuesto de reintentos y, por último, un servidor que descarta las requests cuyo cliente ya se fue.</p>
 
       <div data-sim="retry"></div>
 
@@ -125,7 +387,7 @@
 <path class="dg-edge" d="M640 78 C 600 10, 160 10, 125 78" marker-end="url(#f81a)"/><text class="dg-tiny" x="385" y="26" text-anchor="middle">las pruebas funcionan</text>
 </svg>
         </div>
-        <figcaption><b>Figura 8.1.</b> Los umbrales típicos: abrir si más del 50&#8239;% de las llamadas de los últimos 10 s fallaron (con un mínimo de 20 llamadas), quedarse abierto 5 a 30 s, y probar con unas pocas llamadas antes de cerrar.</figcaption>
+        <figcaption><b>Figura 8.5.</b> Los umbrales típicos: abrir si más del 50&#8239;% de las llamadas de los últimos 10 s fallaron (con un mínimo de 20 llamadas), quedarse abierto 5 a 30 s, y probar con unas pocas llamadas antes de cerrar.</figcaption>
       </figure>
 
       <p>Un <dfn data-term="bulkhead">bulkhead</dfn> ataca el mismo problema desde los recursos: en lugar de un pool de 200 hilos compartido por todas las dependencias, cada una tiene su límite de concurrencia (por ejemplo 50). Si una se pone lenta, agota solo su compartimento. La misma idea aplicada a clientes (un límite por tenant) evita que un cliente ruidoso tumbe a los demás.</p>
@@ -152,7 +414,9 @@
 
       <h2 id="shedding"><span class="sec-num">8.5</span>Load shedding y admission control</h2>
 
-      <p>Todo sistema tiene un punto a partir del cual aceptar más trabajo empeora todo. La razón es la teoría de colas:</p>
+      <p>Todo sistema tiene un punto a partir del cual aceptar más trabajo empeora todo. La razón es la teoría de colas.</p>
+
+      <h3 id="colas">Por qué la espera se dispara cerca del 100&#8239;%</h3>
 
       <figure class="figure">
         <div class="figure-frame">
@@ -179,8 +443,66 @@
 <text class="sim-axis" x="680" y="258" text-anchor="end">utilización</text>
 </svg>
         </div>
-        <figcaption><b>Figura 8.2.</b> En una cola simple, el tiempo en el sistema es el tiempo de servicio dividido por (1 − utilización). La curva no es lineal: del 80&#8239;% al 95&#8239;% la latencia se cuadruplica.</figcaption>
+        <figcaption><b>Figura 8.6.</b> En una cola simple, el tiempo en el sistema es el tiempo de servicio dividido por (1 − utilización). La curva no es lineal: del 80&#8239;% al 95&#8239;% la latencia se cuadruplica.</figcaption>
       </figure>
+
+      <p>La curva no es exponencial, aunque lo parezca: es 1 / (1 − ρ), donde ρ es la utilización. Crece despacio al principio y se va a infinito al acercarse al 100&#8239;%. La razón está en dos cosas que pasan a la vez:</p>
+      <ul>
+        <li><b>Las llegadas vienen en ráfagas.</b> Aunque el promedio sea de 900 por segundo, en algún momento llegan 20 juntas, y en otro, ninguna. Esas ráfagas forman cola aunque el promedio quepa de sobra.</li>
+        <li><b>La cola se vacía con lo que sobra.</b> Un servidor al 90&#8239;% tiene libre el 10&#8239;% de su tiempo, y solo con ese 10&#8239;% puede atender lo que se acumuló. Una ráfaga de 10 requests de más se va en 10 / 0.1 = 100 tiempos de servicio. Al 50&#8239;%, la misma ráfaga se va en 10 / 0.5 = 20.</li>
+      </ul>
+      <p>Pasar del 90&#8239;% al 95&#8239;% suena a un 5&#8239;% más de carga, pero deja la mitad de capacidad libre para vaciar la cola: de 0.1 a 0.05. Por eso la espera se duplica. Y del 95&#8239;% al 99&#8239;%, la capacidad libre baja a la quinta parte, y la espera se multiplica por cinco.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 324" role="img" aria-labelledby="f8qt f8qd">
+<title id="f8qt">La cola al 50 y al 90 por ciento de utilización</title>
+<desc id="f8qd">Dos gráficos de la cantidad de requests en el sistema a lo largo de 120 tiempos de servicio, con llegadas y duraciones al azar. Al 50 % la cola sube a 2 o 3 y se vacía enseguida. Al 90 % las mismas ráfagas apilan más de 10 requests y tardan mucho en vaciarse, porque solo sobra un 10 % de capacidad para drenarlas.</desc>
+<defs><marker id="f8qa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8qf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<line class="sim-grid" x1="90" x2="740" y1="154" y2="154"/>
+<line class="sim-grid" x1="90" x2="740" y1="134" y2="134"/>
+<text class="sim-axis" x="84" y="138" text-anchor="end">5</text>
+<line class="sim-grid" x1="90" x2="740" y1="114" y2="114"/>
+<text class="sim-axis" x="84" y="118" text-anchor="end">10</text>
+<line class="sim-grid" x1="90" x2="740" y1="94" y2="94"/>
+<text class="sim-axis" x="84" y="98" text-anchor="end">15</text>
+<line class="sim-grid" x1="90" x2="740" y1="74" y2="74"/>
+<text class="sim-axis" x="84" y="78" text-anchor="end">20</text>
+<path d="M94.0 154.0 L94.0 150.0 L94.5 150.0 L94.5 154.0 L103.3 154.0 L103.3 150.0 L106.7 150.0 L106.7 146.0 L111.2 146.0 L111.2 150.0 L116.5 150.0 L116.5 154.0 L124.5 154.0 L124.5 150.0 L131.4 150.0 L131.4 146.0 L133.8 146.0 L133.8 150.0 L135.1 150.0 L135.1 154.0 L135.7 154.0 L135.7 150.0 L149.8 150.0 L149.8 154.0 L160.3 154.0 L160.3 150.0 L163.6 150.0 L163.6 154.0 L177.4 154.0 L177.4 150.0 L184.1 150.0 L184.1 154.0 L198.6 154.0 L198.6 150.0 L199.3 150.0 L199.3 154.0 L210.5 154.0 L210.5 150.0 L212.7 150.0 L212.7 146.0 L218.1 146.0 L218.1 142.0 L221.1 142.0 L221.1 138.0 L221.6 138.0 L221.6 142.0 L238.1 142.0 L238.1 138.0 L238.2 138.0 L238.2 134.0 L239.2 134.0 L239.2 138.0 L243.1 138.0 L243.1 142.0 L248.1 142.0 L248.1 146.0 L248.4 146.0 L248.4 150.0 L254.4 150.0 L254.4 154.0 L255.2 154.0 L255.2 150.0 L257.1 150.0 L257.1 146.0 L261.1 146.0 L261.1 142.0 L261.4 142.0 L261.4 146.0 L271.0 146.0 L271.0 150.0 L271.8 150.0 L271.8 146.0 L279.4 146.0 L279.4 150.0 L280.9 150.0 L280.9 154.0 L284.0 154.0 L284.0 150.0 L291.8 150.0 L291.8 146.0 L292.2 146.0 L292.2 150.0 L297.2 150.0 L297.2 154.0 L300.6 154.0 L300.6 150.0 L301.1 150.0 L301.1 154.0 L310.2 154.0 L310.2 150.0 L310.5 150.0 L310.5 154.0 L320.2 154.0 L320.2 150.0 L321.1 150.0 L321.1 154.0 L321.4 154.0 L321.4 150.0 L322.1 150.0 L322.1 154.0 L325.3 154.0 L325.3 150.0 L325.5 150.0 L325.5 146.0 L329.6 146.0 L329.6 150.0 L333.6 150.0 L333.6 154.0 L334.6 154.0 L334.6 150.0 L338.4 150.0 L338.4 146.0 L341.2 146.0 L341.2 150.0 L341.4 150.0 L341.4 146.0 L344.8 146.0 L344.8 142.0 L345.2 142.0 L345.2 146.0 L349.4 146.0 L349.4 150.0 L353.8 150.0 L353.8 154.0 L375.5 154.0 L375.5 150.0 L375.9 150.0 L375.9 154.0 L377.0 154.0 L377.0 150.0 L380.7 150.0 L380.7 154.0 L402.2 154.0 L402.2 150.0 L406.3 150.0 L406.3 154.0 L427.5 154.0 L427.5 150.0 L428.7 150.0 L428.7 154.0 L430.0 154.0 L430.0 150.0 L431.2 150.0 L431.2 154.0 L449.1 154.0 L449.1 150.0 L451.5 150.0 L451.5 146.0 L462.7 146.0 L462.7 142.0 L464.2 142.0 L464.2 138.0 L465.5 138.0 L465.5 142.0 L468.3 142.0 L468.3 138.0 L468.5 138.0 L468.5 142.0 L468.9 142.0 L468.9 146.0 L469.6 146.0 L469.6 150.0 L474.3 150.0 L474.3 154.0 L475.7 154.0 L475.7 150.0 L480.8 150.0 L480.8 146.0 L489.5 146.0 L489.5 150.0 L490.5 150.0 L490.5 154.0 L499.7 154.0 L499.7 150.0 L505.6 150.0 L505.6 154.0 L511.0 154.0 L511.0 150.0 L511.4 150.0 L511.4 146.0 L515.5 146.0 L515.5 150.0 L518.9 150.0 L518.9 154.0 L520.2 154.0 L520.2 150.0 L521.2 150.0 L521.2 146.0 L522.8 146.0 L522.8 150.0 L523.3 150.0 L523.3 146.0 L524.1 146.0 L524.1 150.0 L525.7 150.0 L525.7 154.0 L528.7 154.0 L528.7 150.0 L529.7 150.0 L529.7 154.0 L532.8 154.0 L532.8 150.0 L541.3 150.0 L541.3 154.0 L541.6 154.0 L541.6 150.0 L545.7 150.0 L545.7 154.0 L585.8 154.0 L585.8 150.0 L602.2 150.0 L602.2 146.0 L606.9 146.0 L606.9 150.0 L610.7 150.0 L610.7 146.0 L616.9 146.0 L616.9 150.0 L620.1 150.0 L620.1 154.0 L630.5 154.0 L630.5 150.0 L632.5 150.0 L632.5 146.0 L646.2 146.0 L646.2 142.0 L655.6 142.0 L655.6 146.0 L664.2 146.0 L664.2 150.0 L672.3 150.0 L672.3 154.0 L684.8 154.0 L684.8 150.0 L691.1 150.0 L691.1 154.0 L715.6 154.0 L715.6 150.0 L717.9 150.0 L717.9 154.0 L723.3 154.0 L723.3 150.0 L733.1 150.0 L733.1 146.0 L738.3 146.0 L738.3 142.0" fill="none" stroke="var(--link)" stroke-width="1.8"/>
+<text class="dg-small" x="90" y="48" text-anchor="start">Utilización del 50 %: la misma forma de llegadas, más juntas</text>
+<line class="sim-grid" x1="90" x2="740" y1="304" y2="304"/>
+<line class="sim-grid" x1="90" x2="740" y1="284" y2="284"/>
+<text class="sim-axis" x="84" y="288" text-anchor="end">5</text>
+<line class="sim-grid" x1="90" x2="740" y1="264" y2="264"/>
+<text class="sim-axis" x="84" y="268" text-anchor="end">10</text>
+<line class="sim-grid" x1="90" x2="740" y1="244" y2="244"/>
+<text class="sim-axis" x="84" y="248" text-anchor="end">15</text>
+<line class="sim-grid" x1="90" x2="740" y1="224" y2="224"/>
+<text class="sim-axis" x="84" y="228" text-anchor="end">20</text>
+<path d="M92.2 304.0 L92.2 300.0 L92.7 300.0 L92.7 304.0 L97.4 304.0 L97.4 300.0 L99.3 300.0 L99.3 296.0 L105.2 296.0 L105.2 300.0 L109.2 300.0 L109.2 296.0 L110.6 296.0 L110.6 300.0 L113.0 300.0 L113.0 296.0 L115.4 296.0 L115.4 292.0 L119.8 292.0 L119.8 296.0 L121.1 296.0 L121.1 300.0 L129.1 300.0 L129.1 296.0 L135.2 296.0 L135.2 300.0 L138.5 300.0 L138.5 304.0 L138.5 304.0 L138.5 300.0 L145.3 300.0 L145.3 304.0 L150.4 304.0 L150.4 300.0 L151.0 300.0 L151.0 304.0 L157.0 304.0 L157.0 300.0 L158.2 300.0 L158.2 296.0 L161.2 296.0 L161.2 292.0 L162.8 292.0 L162.8 288.0 L168.1 288.0 L168.1 292.0 L172.3 292.0 L172.3 288.0 L172.4 288.0 L172.4 284.0 L181.8 284.0 L181.8 280.0 L182.9 280.0 L182.9 276.0 L185.1 276.0 L185.1 272.0 L185.7 272.0 L185.7 276.0 L189.5 276.0 L189.5 280.0 L191.0 280.0 L191.0 276.0 L194.5 276.0 L194.5 280.0 L194.9 280.0 L194.9 284.0 L197.8 284.0 L197.8 280.0 L200.9 280.0 L200.9 284.0 L202.1 284.0 L202.1 280.0 L207.0 280.0 L207.0 276.0 L207.1 276.0 L207.1 280.0 L212.3 280.0 L212.3 276.0 L216.6 276.0 L216.6 280.0 L217.9 280.0 L217.9 276.0 L218.6 276.0 L218.6 272.0 L220.7 272.0 L220.7 268.0 L220.8 268.0 L220.8 264.0 L225.1 264.0 L225.1 268.0 L225.9 268.0 L225.9 264.0 L226.6 264.0 L226.6 268.0 L228.0 268.0 L228.0 264.0 L229.6 264.0 L229.6 260.0 L231.6 260.0 L231.6 256.0 L234.8 256.0 L234.8 260.0 L239.8 260.0 L239.8 264.0 L240.4 264.0 L240.4 268.0 L240.6 268.0 L240.6 272.0 L241.5 272.0 L241.5 276.0 L242.2 276.0 L242.2 280.0 L246.5 280.0 L246.5 284.0 L248.6 284.0 L248.6 280.0 L249.5 280.0 L249.5 276.0 L250.5 276.0 L250.5 280.0 L257.2 280.0 L257.2 284.0 L261.1 284.0 L261.1 288.0 L263.4 288.0 L263.4 284.0 L265.3 284.0 L265.3 288.0 L269.7 288.0 L269.7 292.0 L270.1 292.0 L270.1 296.0 L273.8 296.0 L273.8 300.0 L277.5 300.0 L277.5 296.0 L278.0 296.0 L278.0 300.0 L278.9 300.0 L278.9 296.0 L279.2 296.0 L279.2 300.0 L280.5 300.0 L280.5 304.0 L289.5 304.0 L289.5 300.0 L290.8 300.0 L290.8 296.0 L297.1 296.0 L297.1 292.0 L297.9 292.0 L297.9 288.0 L300.2 288.0 L300.2 284.0 L304.3 284.0 L304.3 280.0 L305.9 280.0 L305.9 284.0 L307.1 284.0 L307.1 280.0 L308.9 280.0 L308.9 284.0 L309.2 284.0 L309.2 288.0 L309.9 288.0 L309.9 292.0 L314.6 292.0 L314.6 296.0 L317.6 296.0 L317.6 292.0 L323.9 292.0 L323.9 288.0 L324.1 288.0 L324.1 284.0 L328.4 284.0 L328.4 288.0 L329.0 288.0 L329.0 284.0 L329.5 284.0 L329.5 288.0 L329.6 288.0 L329.6 284.0 L330.7 284.0 L330.7 280.0 L333.7 280.0 L333.7 276.0 L335.4 276.0 L335.4 280.0 L336.0 280.0 L336.0 276.0 L339.9 276.0 L339.9 280.0 L340.9 280.0 L340.9 276.0 L343.3 276.0 L343.3 280.0 L345.9 280.0 L345.9 284.0 L347.2 284.0 L347.2 288.0 L348.8 288.0 L348.8 292.0 L349.9 292.0 L349.9 296.0 L358.4 296.0 L358.4 300.0 L362.6 300.0 L362.6 304.0 L365.5 304.0 L365.5 300.0 L374.5 300.0 L374.5 296.0 L379.3 296.0 L379.3 292.0 L386.5 292.0 L386.5 296.0 L390.3 296.0 L390.3 292.0 L391.4 292.0 L391.4 288.0 L396.5 288.0 L396.5 292.0 L399.0 292.0 L399.0 288.0 L399.8 288.0 L399.8 292.0 L420.4 292.0 L420.4 288.0 L424.8 288.0 L424.8 292.0 L433.5 292.0 L433.5 296.0 L437.6 296.0 L437.6 292.0 L441.6 292.0 L441.6 296.0 L441.9 296.0 L441.9 292.0 L447.3 292.0 L447.3 288.0 L447.9 288.0 L447.9 292.0 L450.2 292.0 L450.2 288.0 L450.2 288.0 L450.2 292.0 L453.7 292.0 L453.7 288.0 L481.0 288.0 L481.0 284.0 L481.8 284.0 L481.8 280.0 L482.0 280.0 L482.0 284.0 L486.1 284.0 L486.1 288.0 L487.2 288.0 L487.2 292.0 L490.2 292.0 L490.2 296.0 L493.5 296.0 L493.5 292.0 L495.0 292.0 L495.0 288.0 L499.9 288.0 L499.9 284.0 L501.7 284.0 L501.7 288.0 L504.7 288.0 L504.7 284.0 L505.0 284.0 L505.0 280.0 L508.9 280.0 L508.9 276.0 L509.0 276.0 L509.0 272.0 L526.2 272.0 L526.2 268.0 L530.5 268.0 L530.5 272.0 L534.2 272.0 L534.2 276.0 L536.2 276.0 L536.2 280.0 L541.3 280.0 L541.3 284.0 L543.0 284.0 L543.0 280.0 L548.2 280.0 L548.2 276.0 L553.3 276.0 L553.3 280.0 L553.7 280.0 L553.7 284.0 L557.0 284.0 L557.0 280.0 L560.6 280.0 L560.6 284.0 L564.9 284.0 L564.9 280.0 L566.3 280.0 L566.3 276.0 L566.7 276.0 L566.7 272.0 L569.5 272.0 L569.5 268.0 L571.6 268.0 L571.6 272.0 L572.8 272.0 L572.8 268.0 L576.9 268.0 L576.9 264.0 L577.5 264.0 L577.5 268.0 L583.6 268.0 L583.6 264.0 L592.2 264.0 L592.2 260.0 L592.5 260.0 L592.5 264.0 L596.9 264.0 L596.9 268.0 L597.2 268.0 L597.2 264.0 L597.2 264.0 L597.2 260.0 L599.6 260.0 L599.6 264.0 L599.7 264.0 L599.7 260.0 L605.6 260.0 L605.6 256.0 L618.9 256.0 L618.9 252.0 L619.0 252.0 L619.0 248.0 L621.8 248.0 L621.8 252.0 L626.7 252.0 L626.7 248.0 L630.6 248.0 L630.6 244.0 L631.9 244.0 L631.9 248.0 L633.1 248.0 L633.1 244.0 L633.2 244.0 L633.2 248.0 L633.8 248.0 L633.8 252.0 L640.8 252.0 L640.8 256.0 L645.3 256.0 L645.3 252.0 L646.6 252.0 L646.6 256.0 L647.4 256.0 L647.4 252.0 L648.9 252.0 L648.9 256.0 L649.0 256.0 L649.0 252.0 L649.4 252.0 L649.4 256.0 L653.8 256.0 L653.8 252.0 L657.7 252.0 L657.7 256.0 L659.8 256.0 L659.8 260.0 L660.1 260.0 L660.1 256.0 L661.2 256.0 L661.2 252.0 L665.6 252.0 L665.6 248.0 L665.8 248.0 L665.8 252.0 L667.5 252.0 L667.5 248.0 L670.7 248.0 L670.7 252.0 L675.3 252.0 L675.3 256.0 L676.3 256.0 L676.3 252.0 L676.7 252.0 L676.7 248.0 L688.0 248.0 L688.0 244.0 L692.0 244.0 L692.0 240.0 L693.3 240.0 L693.3 236.0 L695.7 236.0 L695.7 232.0 L699.6 232.0 L699.6 236.0 L703.4 236.0 L703.4 232.0 L707.9 232.0 L707.9 228.0 L708.6 228.0 L708.6 224.0 L709.6 224.0 L709.6 220.0 L710.0 220.0 L710.0 216.0 L710.6 216.0 L710.6 220.0 L714.6 220.0 L714.6 216.0 L717.4 216.0 L717.4 220.0 L721.6 220.0 L721.6 216.0 L722.3 216.0 L722.3 220.0 L722.3 220.0 L722.3 216.0 L731.2 216.0 L731.2 220.0 L733.3 220.0 L733.3 216.0 L738.1 216.0 L738.1 220.0 L738.2 220.0 L738.2 216.0 L739.3 216.0 L739.3 220.0" fill="none" stroke="var(--link)" stroke-width="1.8"/>
+<text class="dg-small" x="90" y="198" text-anchor="start">Utilización del 90 %: la misma forma de llegadas, más juntas</text>
+<text class="sim-axis" x="740" y="312" text-anchor="end">tiempo, en tiempos de servicio promedio</text>
+<text class="sim-axis" x="60" y="16" text-anchor="start">requests en el sistema</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.7.</b> Simulación de una cola con llegadas y tiempos de servicio al azar (exponenciales, como en la fórmula), con la misma semilla en los dos gráficos. En esta corrida, una request pasó en promedio 2.0 y 10.2 tiempos de servicio en el sistema; la fórmula dice 2 y 10. Arriba sobra la mitad de la capacidad y cada ráfaga se drena enseguida; abajo sobra el 10&#8239;% y cada ráfaga tarda unas cinco veces más en irse.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Utilización</th><th>Capacidad libre</th><th>Requests en el sistema, en promedio</th><th>Tiempo en el sistema, con un servicio de 10 ms</th></tr></thead>
+          <tbody>
+            <tr><td>50&#8239;%</td><td class="r">0.50</td><td class="r">1</td><td class="r">20 ms</td></tr>
+            <tr><td>80&#8239;%</td><td class="r">0.20</td><td class="r">4</td><td class="r">50 ms</td></tr>
+            <tr><td>90&#8239;%</td><td class="r">0.10</td><td class="r">9</td><td class="r">100 ms</td></tr>
+            <tr><td>95&#8239;%</td><td class="r">0.05</td><td class="r">19</td><td class="r">200 ms</td></tr>
+            <tr><td>99&#8239;%</td><td class="r">0.01</td><td class="r">99</td><td class="r">1 000 ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Las requests en el sistema son ρ / (1 − ρ), y el tiempo, 10 ms / (1 − ρ), en una cola M/M/1. En la vida real, con tiempos de servicio más parejos, la espera es algo menor; con tiempos más dispares (unas requests de 5 ms y otras de 2 s), es mayor. La forma de la curva no cambia. Por eso las flotas se dimensionan con margen en el pico, y por eso el load shedding corta antes de llegar al codo.</p>
+
+      <h3 id="shedding-tecnicas">Rechazar a tiempo</h3>
 
       <p>El <span data-term="load-shedding">load shedding</span> rechaza trabajo a propósito antes de llegar a ese punto. Rechazar rápido con un 503 es un favor: el cliente puede reintentar en otra instancia o más tarde, y el resto de las requests se atiende bien. Las técnicas:</p>
       <ul>
@@ -189,11 +511,139 @@
         <li><b>Prioridades:</b> ante sobrecarga, primero se descarta lo que no es crítico (analítica, precargas, requests de bots) y al final el checkout.</li>
       </ul>
 
-      <h2 id="degradacion"><span class="sec-num">8.6</span>Degradación elegante</h2>
+      <h3 id="llegada">Saber cuánto esperó una request</h3>
+
+      <p>Para descartar lo vencido, el servidor tiene que saber cuánto lleva esperando cada request, y eso no lo ve por sí solo. Antes de que su código corra, la request pasó por la red, por el gateway, por la cola de conexiones del sistema operativo y por la cola de hilos del servidor web. Un filtro que anota la hora al empezar solo mide desde ahí. La solución es que la hora la anote <b>el primero que ve la request</b>, el gateway, en un header:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f8stt f8std">
+<title id="f8stt">Medir la espera de una request con un header del gateway</title>
+<desc id="f8std">Una línea de tiempo con tres tramos: red y gateway, esperando un hilo libre, y el handler trabajando. En t0 el gateway anota la llegada en X-Request-Start y el deadline en X-Request-Deadline. En t1 el filtro de la aplicación lee el reloj. t1 menos t0 es la espera antes de trabajar; D menos t1 es lo que queda para decidir si vale la pena empezar.</desc>
+<defs><marker id="f8sta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8stf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-box" x="40" y="110" width="160" height="40" rx="5"/>
+<text class="dg-small" x="120.0" y="135" text-anchor="middle">red y gateway</text>
+<rect class="dg-warnbox" x="200" y="110" width="270" height="40" rx="5"/>
+<text class="dg-small" x="335.0" y="135" text-anchor="middle">esperando un hilo libre</text>
+<rect class="hb-a" x="470" y="110" width="150" height="40" rx="5"/>
+<text class="dg-small" x="545.0" y="135" text-anchor="middle">el handler trabaja</text>
+<line x1="60" x2="60" y1="70" y2="170" stroke="var(--ink-2)" stroke-width="2"/>
+<text class="dg-label" x="60" y="60" text-anchor="middle">t0</text>
+<text class="dg-tiny" x="60" y="188" text-anchor="middle">el gateway anota</text>
+<line x1="470" x2="470" y1="70" y2="170" stroke="var(--ink-2)" stroke-width="2"/>
+<text class="dg-label" x="470" y="60" text-anchor="middle">t1</text>
+<text class="dg-tiny" x="470" y="188" text-anchor="middle">el filtro de la app lee el reloj</text>
+<line x1="700" x2="700" y1="70" y2="170" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5 4"/>
+<text class="dg-label" x="700" y="60" text-anchor="middle">D</text>
+<text class="dg-tiny" x="700" y="188" text-anchor="middle">deadline = t0 + 2 000 ms</text>
+<text class="dg-small" x="40" y="30" text-anchor="start">Headers que agrega el gateway:  X-Request-Start: t=1759766400123   X-Request-Deadline: 1759766402123</text>
+<path class="dg-feedback" d="M60 220 H470" marker-start="url(#f8sta)" marker-end="url(#f8sta)"/>
+<text class="dg-tiny" x="265" y="240" text-anchor="middle">t1 − t0 = espera antes de trabajar: la métrica</text>
+<path class="dg-feedback" d="M470 262 H700" marker-start="url(#f8sta)" marker-end="url(#f8sta)"/>
+<text class="dg-tiny" x="585" y="282" text-anchor="middle">D − t1 = lo que queda: ¿alcanza para trabajar?</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.8.</b> La app no ve el tramo amarillo por sí sola: la request todavía no llegó a su código. Por eso la llegada la anota el gateway, que es el primero que la ve.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b><code>X-Request-Start</code></b> es una convención vieja: Heroku lo agrega en su router con los milisegundos desde 1970, y herramientas como New Relic lo leen para mostrar el "tiempo en cola" de cada request. <span class="badge badge--doc">Documentado</span> En NGINX es una línea: <code>proxy_set_header X-Request-Start "t=${msec}";</code>, donde <code>$msec</code> es la hora en segundos con milisegundos. <span class="badge badge--doc">Documentado</span></li>
+        <li><b><code>X-Request-Deadline</code></b> es el deadline absoluto de la sección <a href="#deadline-viaje">8.1</a>: llegada más el presupuesto de la ruta.</li>
+      </ul>
+
+      <p>Con esos dos headers, un filtro al principio de cada servicio hace tres cosas: mide, decide y deja la métrica.</p>
+
+<pre data-lang="python"><code>def filtro_de_entrada(request, siguiente):
+    ahora = reloj_ms()
+    llegada = int(request.headers["X-Request-Start"].removeprefix("t=").replace(".", ""))
+    espera = ahora - llegada
+    metricas.histograma("request_queue_wait_ms").observe(espera)    # la métrica: cuánto esperó
+
+    deadline = int(request.headers["X-Request-Deadline"])
+    if deadline - ahora &lt; TIEMPO_MINIMO_DE_SERVICIO_MS:              # ya no alcanza para trabajar
+        metricas.contador("request_shed_total", motivo="vencida").inc()
+        return Respuesta(503, headers={"Retry-After": "1"})        # rechazar cuesta casi nada
+    return siguiente(request)</code></pre>
+
+      <p>El histograma de <code>request_queue_wait_ms</code> es una de las mejores alarmas tempranas de saturación: sube antes que la CPU llegue al 100&#8239;% y antes que el p99 total, porque mide justo el tramo que la teoría de colas dice que explota. El contador de rechazos por motivo dice cuánto se está descartando y por qué. Dos cuidados: la cuenta compara el reloj del gateway con el del servicio, así que necesita relojes sincronizados con NTP; y el rechazo tiene que ser barato, sin tocar la base ni deserializar el cuerpo.</p>
+
+      <h2 id="arranque"><span class="sec-num">8.6</span>Volver sin caerse otra vez</h2>
+
+      <p>Un servicio que se cayó y vuelve es el momento más frágil de un incidente. Llega frío: la JVM todavía no compiló lo caliente, los pools de conexiones están vacíos y las cachés también (<a href="m03-balanceo-gateways.html#slow-start">M03</a>). Y del otro lado hay una pila de trabajo esperando: clientes que reintentan, colas que se llenaron y breakers listos para probar. Si todo eso le cae junto en el primer segundo, se vuelve a caer, y el ciclo de la figura 8.4 arranca otra vez.</p>
+
+      <p>No hay un solo lugar donde se resuelva: es código, es despliegue y es el balanceador, y cada uno hace una parte.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 296" role="img" aria-labelledby="f8rvt f8rvd">
+<title id="f8rvt">Quién hace qué cuando un servicio vuelve</title>
+<desc id="f8rvd">Cuatro carriles en una línea de tiempo de 0 a 90 s. El código arranca y precalienta durante 20 s y después sube su límite de concurrencia de 2 a 20 hasta los 80 s. Kubernetes espera con la startupProbe hasta los 20 s y después, con la readinessProbe aprobada, mete el pod en el Service. Un balanceador con slow start sube su peso del 10 al 100 por ciento. Quien lo llama tiene el breaker abierto hasta los 30 s, semiabierto con 5 llamadas de prueba hasta los 35 y después cerrado, con reintentos que esperan con jitter.</desc>
+<defs><marker id="f8rva" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8rvf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<line class="sim-grid" x1="190" x2="190" y1="28" y2="262"/>
+<text class="sim-axis" x="190" y="282" text-anchor="middle">0 s</text>
+<line class="sim-grid" x1="280" x2="280" y1="28" y2="262"/>
+<text class="sim-axis" x="280" y="282" text-anchor="middle">15 s</text>
+<line class="sim-grid" x1="370" x2="370" y1="28" y2="262"/>
+<text class="sim-axis" x="370" y="282" text-anchor="middle">30 s</text>
+<line class="sim-grid" x1="460" x2="460" y1="28" y2="262"/>
+<text class="sim-axis" x="460" y="282" text-anchor="middle">45 s</text>
+<line class="sim-grid" x1="550" x2="550" y1="28" y2="262"/>
+<text class="sim-axis" x="550" y="282" text-anchor="middle">60 s</text>
+<line class="sim-grid" x1="640" x2="640" y1="28" y2="262"/>
+<text class="sim-axis" x="640" y="282" text-anchor="middle">75 s</text>
+<line class="sim-grid" x1="730" x2="730" y1="28" y2="262"/>
+<text class="sim-axis" x="730" y="282" text-anchor="middle">90 s</text>
+<text class="dg-small" x="176" y="55" text-anchor="end">El código</text>
+<text class="dg-small" x="176" y="110" text-anchor="end">Kubernetes</text>
+<text class="dg-small" x="176" y="165" text-anchor="end">El balanceador</text>
+<text class="dg-small" x="176" y="220" text-anchor="end">Quien lo llama</text>
+<rect class="dg-box" x="190" y="36" width="120" height="28" rx="4"/>
+<text class="dg-tiny" x="250.0" y="54" text-anchor="middle">arranca y precalienta</text>
+<rect class="hb-a" x="310" y="36" width="360" height="28" rx="4"/>
+<text class="dg-tiny" x="490.0" y="54" text-anchor="middle">su límite de concurrencia sube de 2 a 20</text>
+<rect class="dg-warnbox" x="190" y="91" width="120" height="28" rx="4"/>
+<text class="dg-tiny" x="250.0" y="109" text-anchor="middle">startupProbe</text>
+<rect class="dg-ok" x="310" y="91" width="420" height="28" rx="4"/>
+<text class="dg-tiny" x="520.0" y="109" text-anchor="middle">readinessProbe OK: el pod entra al Service</text>
+<path d="M310 174 L670 146 L730 146 L730 174 Z" fill="var(--link)" opacity="0.35"/>
+<text class="dg-tiny" x="322" y="140" text-anchor="start">con un balanceador con slow start: el peso sube del 10 % al 100 %</text>
+<rect class="dg-bad" x="190" y="201" width="180" height="28" rx="4"/>
+<text class="dg-tiny" x="280.0" y="219" text-anchor="middle">breaker abierto</text>
+<rect class="dg-warnbox" x="370" y="201" width="30" height="28" rx="4"/>
+<rect class="dg-ok" x="400" y="201" width="330" height="28" rx="4"/>
+<text class="dg-tiny" x="385.0" y="246" text-anchor="middle">semiabierto: 5 de prueba</text>
+<text class="dg-tiny" x="565.0" y="219" text-anchor="middle">cerrado; los reintentos esperan con jitter</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.9.</b> Ninguna capa sola alcanza. Kubernetes decide cuándo entra el pod, pero no cuánto le llega; el balanceador puede subirlo de a poco; el código se defiende con un límite propio; y quien llama no lo inunda de golpe. Los tiempos son de ejemplo. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Dónde</th><th>Qué hace</th><th>Con qué</th></tr></thead>
+          <tbody>
+            <tr><td><b>El código del servicio</b></td><td>No se declara listo hasta haber precalentado. Después, admite pocas requests a la vez y sube el límite de a poco; lo que no entra recibe 503 al instante.</td><td>Un endpoint de readiness que espera el precalentamiento; un límite de concurrencia que crece con el tiempo, o uno adaptativo que se ajusta solo a la latencia</td></tr>
+            <tr><td><b>El orquestador</b></td><td>No le manda tráfico hasta que responde, no lo mata mientras arranca y no reemplaza toda la flota a la vez.</td><td>En Kubernetes: <code>startupProbe</code>, que apaga los otros chequeos hasta que el arranque termina; <code>readinessProbe</code>; <code>maxSurge</code> y <code>maxUnavailable</code> en el rolling update; <code>minReadySeconds</code> <span class="badge badge--doc">Documentado</span></td></tr>
+            <tr><td><b>El balanceador</b></td><td>Le da un peso chico que crece durante una ventana.</td><td><code>slow_start_config</code> en Envoy, <code>slow_start.duration_seconds</code> en un ALB (<a href="m03-balanceo-gateways.html#slow-start">M03</a>)</td></tr>
+            <tr><td><b>Quien lo llama</b></td><td>No lo inunda en cuanto vuelve: el breaker deja pasar unas pocas llamadas de prueba, y los reintentos esperan con backoff y jitter para no llegar todos en el mismo milisegundo.</td><td>El estado semiabierto de la <a href="#breaker">figura 8.5</a>; full jitter de la <a href="#reintentos">8.2</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Tres respuestas a la pregunta de siempre, "¿siempre hay que arrancar al 10&#8239;%?":</p>
+      <ul>
+        <li><b>No siempre.</b> El arranque gradual importa cuando la instancia llega fría y la carga la espera de golpe. Una instancia nueva en una flota sana, con slow start en el balanceador, ya entra de a poco. El caso peligroso es el que este módulo describe: un servicio entero que vuelve después de una caída, con todo el tráfico acumulado.</li>
+        <li><b>El Service de Kubernetes no hace slow start.</b> kube-proxy reparte las conexiones por igual entre los pods listos. Sin un service mesh o un balanceador que lo haga, el límite de concurrencia que crece tiene que estar en el código. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>El ritmo lo dan los datos.</b> Cuánto tarda en calentarse la JVM, cuánto tarda en llenarse la caché y cuánta cola hay acumulada se miden en un ensayo, no se adivinan. En el laboratorio de <a href="../proyectos/a10-circuit-breaker.html#p3">A10</a> lo haces con k6 y un servicio que matas a propósito.</li>
+      </ul>
+
+      <h2 id="degradacion"><span class="sec-num">8.7</span>Degradación elegante</h2>
 
       <p>La <dfn data-term="graceful-degradation">degradación elegante</dfn> diseña de antemano una versión reducida del producto para cuando algo falla. Una tienda sin el servicio de recomendaciones muestra los más vendidos (precalculados); sin el de reseñas, oculta la sección; sin el de inventario en tiempo real, muestra "disponible" con una verificación al pagar. Se implementa con fallbacks por dependencia y con interruptores (feature flags) que el equipo de guardia puede apagar en segundos para quitar carga. La clave es decidirlo antes del incidente: a las 3 de la mañana nadie diseña bien.</p>
 
-      <h2 id="multiregion"><span class="sec-num">8.7</span>Multi-región y células</h2>
+      <h2 id="multiregion"><span class="sec-num">8.8</span>Multi-región y células</h2>
+
+      <p>Todo lo anterior protege a un servicio dentro de una región. Pero una región entera también falla: un corte de energía, un error en la red de un proveedor o un deploy del plano de control. La respuesta es tener el sistema en más de una región, y hay dos formas de hacerlo:</p>
 
       <div class="table-wrap">
         <table class="t">
@@ -207,14 +657,145 @@
         </table>
       </div>
 
-      <p>Una idea más fina que "una región entera de repuesto" es la <dfn data-term="cell-architecture">arquitectura celular</dfn>: el sistema se divide en celdas completas e independientes, cada una con una parte de los clientes. Un deploy defectuoso o una falla afecta a una celda, no a todos. AWS combina celdas con <em>shuffle sharding</em>: cada cliente se asigna a una combinación pseudoaleatoria de nodos, de modo que dos clientes casi nunca comparten exactamente los mismos, y un cliente que envía tráfico dañino solo afecta a quienes comparten toda su combinación. <span class="badge badge--doc">Documentado</span></p>
+      <h3 id="failover">Qué pasa durante un failover</h3>
+
+      <p>Un failover activo-pasivo no es un botón: es una secuencia, y cada paso tarda. Supón una región A que atiende y una región B con una réplica de la base y unos pocos servidores encendidos:</p>
+      <ol class="steps">
+        <li><span class="step-title">Detectar</span>Health checks desde fuera de la región A. Route 53 los hace cada 30 s, o cada 10 s con el intervalo rápido, y marca el endpoint caído después de 3 fallos seguidos. <span class="badge badge--doc">Documentado</span> Con 10 s × 3, son 30 s.</li>
+        <li><span class="step-title">Decidir</span>¿Es una falla de la región o un chequeo que falla por otra cosa? Si un humano confirma, minutos. Si es automático, segundos, con el riesgo de saltar por una falsa alarma y, peor, de que las dos regiones se crean primarias.</li>
+        <li><span class="step-title">Promover la base</span>La réplica de B pasa a primaria. Lo que A escribió y no se replicó se pierde: es el RPO. Con replicación asíncrona y un retraso de 1 s, se pierde aproximadamente el último segundo de escrituras. Y A tiene que quedar aislada para que no vuelva a escribir si revive (fencing, <a href="m061-teoria-distribuida-a-fondo.html">M06.1</a>).</li>
+        <li><span class="step-title">Mover el tráfico</span>Cambiar el DNS para que apunte a B. Los resolvers respetan el TTL, de 60 s por ejemplo, y algunos clientes lo ignoran y siguen yendo a A un rato. Con anycast o un balanceador global el corte es más rápido, porque la dirección no cambia (<a href="m01-viaje-request.html">M01</a>).</li>
+        <li><span class="step-title">Escalar</span>B tenía pocos servidores; ahora recibe todo. Si su capacidad se agrega en este momento, los primeros minutos atiende mal o se cae por sobrecarga, la misma historia de la sección <a href="#arranque">8.6</a>.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 316" role="img" aria-labelledby="f8fot f8fod">
+<title id="f8fot">La línea de tiempo de un failover activo-pasivo</title>
+<desc id="f8fod">Una línea de tiempo de 0 a 400 s desde que cae la región A, con un paso por fila. Detectar: 3 chequeos de 10 s, hasta los 30 s. Decidir: una alarma y alguien que confirma, hasta los 150 s. Promover la base: la réplica pasa a primaria, hasta los 210 s. Mover el tráfico: el TTL del DNS de 60 s, hasta los 270 s. Escalar la región B, hasta los 390 s. El RTO, el tiempo sin servicio, es de unos 4.5 minutos. El RPO es lo que A escribió y no llegó a B antes de caer.</desc>
+<defs><marker id="f8foa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8fof" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<line class="sim-grid" x1="230.0" x2="230.0" y1="40" y2="226"/>
+<text class="sim-axis" x="230.0" y="244" text-anchor="middle">0 s</text>
+<line class="sim-grid" x1="296.0" x2="296.0" y1="40" y2="226"/>
+<text class="sim-axis" x="296.0" y="244" text-anchor="middle">60 s</text>
+<line class="sim-grid" x1="362.0" x2="362.0" y1="40" y2="226"/>
+<text class="sim-axis" x="362.0" y="244" text-anchor="middle">120 s</text>
+<line class="sim-grid" x1="428.0" x2="428.0" y1="40" y2="226"/>
+<text class="sim-axis" x="428.0" y="244" text-anchor="middle">180 s</text>
+<line class="sim-grid" x1="494.0" x2="494.0" y1="40" y2="226"/>
+<text class="sim-axis" x="494.0" y="244" text-anchor="middle">240 s</text>
+<line class="sim-grid" x1="560.0" x2="560.0" y1="40" y2="226"/>
+<text class="sim-axis" x="560.0" y="244" text-anchor="middle">300 s</text>
+<line class="sim-grid" x1="626.0" x2="626.0" y1="40" y2="226"/>
+<text class="sim-axis" x="626.0" y="244" text-anchor="middle">360 s</text>
+<text class="dg-small" x="220" y="66" text-anchor="end">Detectar</text>
+<rect class="dg-warnbox" x="230.0" y="48" width="33.0" height="26" rx="4"/>
+<text class="dg-tiny" x="269.0" y="65" text-anchor="start">3 chequeos × 10 s</text>
+<text class="dg-small" x="220" y="102" text-anchor="end">Decidir</text>
+<rect class="dg-box" x="263.0" y="84" width="132.0" height="26" rx="4"/>
+<text class="dg-tiny" x="401.0" y="101" text-anchor="start">una alarma; alguien confirma</text>
+<text class="dg-small" x="220" y="138" text-anchor="end">Promover la base</text>
+<rect class="hb-a" x="395.0" y="120" width="66.0" height="26" rx="4"/>
+<text class="dg-tiny" x="467.0" y="137" text-anchor="start">la réplica pasa a primaria</text>
+<text class="dg-small" x="220" y="174" text-anchor="end">Mover el tráfico</text>
+<rect class="hb-a" x="461.0" y="156" width="66.0" height="26" rx="4"/>
+<text class="dg-tiny" x="533.0" y="173" text-anchor="start">TTL del DNS de 60 s</text>
+<text class="dg-small" x="220" y="210" text-anchor="end">Escalar la región B</text>
+<rect class="dg-box" x="527.0" y="192" width="132.0" height="26" rx="4"/>
+<text class="dg-tiny" x="665.0" y="209" text-anchor="start">más servidores</text>
+<line x1="230.0" x2="230.0" y1="28" y2="226" stroke="var(--fail)" stroke-width="2"/>
+<text class="dg-small dg-fail-text" x="236.0" y="30" text-anchor="start">cae la región A</text>
+<path class="dg-feedback" d="M230.0 266 H527.0" marker-start="url(#f8foa)" marker-end="url(#f8foa)"/>
+<text class="dg-small" x="378.5" y="284" text-anchor="middle">RTO: unos 4.5 minutos sin servicio</text>
+<text class="dg-tiny" x="20" y="304" text-anchor="start">RPO: lo que A escribió y no llegó a B antes de caer; con 1 s de retraso de replicación, cerca de 1 s de escrituras</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.10.</b> El RTO es la suma de los tramos, y el más largo casi nunca es técnico: es decidir. Escalar sigue después de mover el tráfico; si la región B no tenía capacidad de sobra, los primeros minutos atiende mal. Los tiempos son de ejemplo. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <h3 id="celulas">Células: que una falla toque a pocos</h3>
+
+      <p>Una idea más fina que "una región entera de repuesto" es la <dfn data-term="cell-architecture">arquitectura celular</dfn>: el sistema se divide en celdas completas e independientes, cada una con una parte de los clientes. Un deploy defectuoso o una falla afecta a una celda, no a todos.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 336" role="img" aria-labelledby="f8cet f8ced">
+<title id="f8cet">Una arquitectura de células</title>
+<desc id="f8ced">Un router de células arriba, con una tabla que asigna cada cliente a una célula. Debajo, cuatro células completas, cada una con su gateway, sus servicios y su base. Un deploy malo en la célula 2 afecta al 25 % de los clientes; las otras tres siguen intactas.</desc>
+<defs><marker id="f8cea" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f8cef" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="235" y="16" width="300" height="56" rx="8"/>
+<text class="dg-label" x="385" y="40" text-anchor="middle">Router de células</text>
+<text class="dg-tiny" x="385" y="60" text-anchor="middle">cliente 4127 → célula 2 (una tabla, sin lógica)</text>
+<rect class="dg-frame" x="20" y="112" width="172" height="190" rx="10"/>
+<text class="dg-group" x="106" y="132" text-anchor="middle">Célula 1</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="36" y="146" width="140" height="34" rx="5"/>
+<text class="dg-small" x="106" y="168" text-anchor="middle">gateway</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="36" y="192" width="140" height="34" rx="5"/>
+<text class="dg-small" x="106" y="214" text-anchor="middle">servicios</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="36" y="238" width="140" height="34" rx="5"/>
+<text class="dg-small" x="106" y="260" text-anchor="middle">base</text>
+<path class="dg-edge" d="M385 74 L106 110" marker-end="url(#f8cea)"/>
+<rect class="dg-frame" x="208" y="112" width="172" height="190" rx="10" style="stroke: var(--fail)"/>
+<text class="dg-group" x="294" y="132" text-anchor="middle">Célula 2</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="224" y="146" width="140" height="34" rx="5"/>
+<text class="dg-small" x="294" y="168" text-anchor="middle">gateway</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="224" y="192" width="140" height="34" rx="5"/>
+<text class="dg-small" x="294" y="214" text-anchor="middle">servicios</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="224" y="238" width="140" height="34" rx="5"/>
+<text class="dg-small" x="294" y="260" text-anchor="middle">base</text>
+<path class="dg-edge" d="M385 74 L294 110" marker-end="url(#f8cef)"/>
+<rect class="dg-frame" x="396" y="112" width="172" height="190" rx="10"/>
+<text class="dg-group" x="482" y="132" text-anchor="middle">Célula 3</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="412" y="146" width="140" height="34" rx="5"/>
+<text class="dg-small" x="482" y="168" text-anchor="middle">gateway</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="412" y="192" width="140" height="34" rx="5"/>
+<text class="dg-small" x="482" y="214" text-anchor="middle">servicios</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="412" y="238" width="140" height="34" rx="5"/>
+<text class="dg-small" x="482" y="260" text-anchor="middle">base</text>
+<path class="dg-edge" d="M385 74 L482 110" marker-end="url(#f8cea)"/>
+<rect class="dg-frame" x="584" y="112" width="172" height="190" rx="10"/>
+<text class="dg-group" x="670" y="132" text-anchor="middle">Célula 4</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="600" y="146" width="140" height="34" rx="5"/>
+<text class="dg-small" x="670" y="168" text-anchor="middle">gateway</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="600" y="192" width="140" height="34" rx="5"/>
+<text class="dg-small" x="670" y="214" text-anchor="middle">servicios</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="600" y="238" width="140" height="34" rx="5"/>
+<text class="dg-small" x="670" y="260" text-anchor="middle">base</text>
+<path class="dg-edge" d="M385 74 L670 110" marker-end="url(#f8cea)"/>
+<text class="dg-small dg-fail-text" x="294" y="322" text-anchor="middle">un deploy malo: 25 % de los clientes</text>
+<text class="dg-tiny" x="670" y="322" text-anchor="middle">las otras tres, intactas</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 8.11.</b> Cada célula es una copia completa del sistema con una parte de los clientes. El router es lo único compartido, y por eso se hace tan simple como se pueda: una tabla, sin dependencias.</figcaption>
+      </figure>
+
+      <ul>
+        <li><b>El router es lo único compartido</b>, y por eso es lo más simple del sistema: una tabla de cliente a célula, guardada en memoria, que sigue funcionando aunque el servicio que la actualiza caiga.</li>
+        <li><b>Los deploys van de a una célula.</b> Primero una, se mira una hora, y después las demás. Un error llega al 25&#8239;% de los clientes en lugar de al 100&#8239;%, y si se detecta en la primera, a menos.</li>
+        <li><b>Una célula tiene un tamaño máximo.</b> Cuando se llena, se crea otra. Así, la capacidad de una célula se prueba una vez y no crece sin control.</li>
+        <li><b>Mover un cliente es una migración</b>: sus datos viven en la base de su célula. Se hace poco y con cuidado.</li>
+      </ul>
+
+      <p>AWS combina celdas con <dfn data-term="shuffle-sharding">shuffle sharding</dfn>: cada cliente se asigna a una combinación pseudoaleatoria de nodos, de modo que dos clientes casi nunca comparten exactamente los mismos, y un cliente que envía tráfico dañino solo afecta a quienes comparten toda su combinación. <span class="badge badge--doc">Documentado</span> La cuenta: con 8 nodos y 2 por cliente hay 8 × 7 / 2 = 28 combinaciones. Un cliente que tumba sus 2 nodos afecta del todo solo a quienes tienen esa misma combinación, 1 de cada 28; los que comparten un nodo pierden la mitad de su capacidad, pero siguen atendidos por el otro.</p>
+
+      <h3 id="disenar-failover">Cómo se diseña un failover</h3>
+
+      <p>Las reglas que separan un failover que funciona de uno que solo existe en un documento:</p>
+      <ol class="steps">
+        <li><span class="step-title">Capacidad reservada antes, no pedida durante</span>En activo-activo con dos regiones, cada una trabaja como máximo al 50&#8239;% de lo que aguanta, para poder absorber a la otra. Con tres, al 66&#8239;%: si cae una, las otras dos reciben la mitad de su carga cada una. Pedir servidores en medio del incidente es apostar a que el proveedor tenga, justo cuando todos piden lo mismo.</li>
+        <li><span class="step-title">El failover usa el plano de datos, no el de control</span>Mover el tráfico no debería requerir crear recursos, ni llamar a la API que está en la región caída. AWS llama a esto <span data-term="estabilidad-estatica">estabilidad estática</span>: lo que hace falta para sobrevivir ya está corriendo antes de la falla (<a href="m19-router-flota.html#planos">M19</a>). <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Una sola autoridad para decidir quién es primario</span>Un lease, un quórum o una persona, pero uno. Si cada región decide sola, una partición de red produce dos primarias que aceptan escrituras distintas (split brain, <a href="m061-teoria-distribuida-a-fondo.html">M06.1</a>).</li>
+        <li><span class="step-title">Elegir el RPO por dato, no para todo</span>Los pagos pueden necesitar replicación síncrona entre regiones (RPO cero, más latencia en cada escritura); el historial de navegación puede perder un minuto.</li>
+        <li><span class="step-title">Pensar la vuelta</span>El failback, volver a A, es otro failover, con la base de A atrasada que hay que poner al día. Muchos equipos se quedan en B y A pasa a ser la de repuesto.</li>
+        <li><span class="step-title">Ensayarlo con tráfico real</span>Mover una fracción del tráfico a B cada semana, o sacar A entera en un game day. Lo que no se ensaya se rompe en silencio.</li>
+      </ol>
 
       <aside class="callout callout--fail">
         <p class="callout-label">Qué pasa si el failover nunca se probó</p>
         <p>Casi nunca funciona. La región de repuesto no tiene capacidad suficiente, un certificado venció, un servicio auxiliar solo existía en la región principal, o el procedimiento depende del plano de control que acaba de caer. La única forma de saber que un failover funciona es hacerlo regularmente, con tráfico real.</p>
       </aside>
 
-      <h2 id="caos"><span class="sec-num">8.8</span>Chaos engineering</h2>
+      <h2 id="caos"><span class="sec-num">8.9</span>Chaos engineering</h2>
       <p>El <dfn data-term="chaos">chaos engineering</dfn> convierte las suposiciones de este módulo en experimentos. Netflix lo popularizó con Chaos Monkey, que apaga instancias al azar en producción durante el horario laboral, cuando los ingenieros están despiertos. <span class="badge badge--doc">Documentado</span> El método: formular una hipótesis ("si muere una instancia de pagos, el p99 no pasa de 800 ms"), limitar el radio de impacto (un porcentaje del tráfico, una celda), inyectar la falla (matar, agregar latencia, cortar una zona), medir y aprender. Los game days hacen lo mismo con el equipo: se simula un incidente y se practica la respuesta.</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>

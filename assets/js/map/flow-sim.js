@@ -124,7 +124,7 @@
   };
 
   MapView.prototype.go = function (i, animate) {
-    var self = this, sc = this.scen, n = sc.steps.length;
+    var self = this, sc = this.scen, n = sc.steps.length, def = this.def;
     i = Math.max(-1, Math.min(n - 1, i));
     this.idx = i;
     this.animToken++;
@@ -151,6 +151,7 @@
     this.btnNext.disabled = i >= n - 1;
 
     this.stepEl.innerHTML = '';
+    if (def.stepPanel) this.renderStepPanel();
     if (i < 0) {
       var total2 = sc.steps.reduce(function (a, st) { return a + (st.ms || 0); }, 0);
       this.stepEl.appendChild(h('p', { class: 'sdm-step-n', text: n + ' pasos, ' + fmtMs(total2) + ' en total' }));
@@ -163,9 +164,13 @@
     var st = sc.steps[i];
     this.stepEl.appendChild(h('p', { class: 'sdm-step-n', text: 'Paso ' + (i + 1) + ' de ' + n + (st.ms ? ', ' + fmtMs(st.ms) : '') }));
     this.stepEl.appendChild(h('p', { class: 'sdm-step-title', text: st.title }));
-    if (st.text) this.stepEl.appendChild(h('p', { class: 'sdm-step-text', html: st.text }));
-    if (SD.autolink) SD.autolink(this.stepEl);
-    if (st.code) {
+    if (def.stepPanel) {
+      this.stepEl.appendChild(h('p', { class: 'sdm-step-text muted', text: 'La explicación completa de este paso está en el panel del mapa.' }));
+    } else {
+      if (st.text) this.stepEl.appendChild(h('p', { class: 'sdm-step-text', html: st.text }));
+      if (SD.autolink) SD.autolink(this.stepEl);
+    }
+    if (st.code && !def.stepPanel) {
       var pre = h('pre', { 'data-lang': st.lang || 'json' }, [h('code', { text: st.code })]);
       this.stepEl.appendChild(pre);
       SD.highlight(this.stepEl);
@@ -188,6 +193,73 @@
     A.el.classList.add('is-active'); B.el.classList.add('is-active');
     this.ensureVisible([[A.def.x, A.def.y], [B.def.x, B.def.y]]);
     return this.packet(found.e.path, found.rev, st, animate);
+  };
+
+  /* Con def.stepPanel, el panel lateral explica el escenario y el paso actual en lugar de la ayuda del mapa */
+  MapView.prototype.renderStepPanel = function () {
+    var self = this, sc = this.scen, i = this.idx, n = sc.steps.length;
+    if (this.selected) { this.nodes[this.selected].el.classList.remove('is-selected'); this.selected = null; }
+    var inner = h('div', { class: 'sdm-panel-inner sdm-steppanel' });
+    inner.appendChild(h('p', { class: 'sdm-plabel', style: '--c: var(--accent)', text: 'Escenario: ' + sc.title }));
+
+    function nodeBtn(id) {
+      var nd = self.nodes[id];
+      if (!nd) return null;
+      var b = h('button', { type: 'button', class: 'chip-btn sdm-sp-node', text: nd.def.label });
+      b.addEventListener('click', function () { self.pause(); self.select(id, true); });
+      return b;
+    }
+
+    if (i < 0) {
+      inner.appendChild(h('h3', { text: sc.title }));
+      if (sc.desc) inner.appendChild(h('p', { html: sc.desc }));
+      inner.appendChild(h('p', { class: 'muted', text: 'Pulsa Reproducir o elige un paso. Cada paso explica qué viaja, quién decide y qué queda guardado.' }));
+    } else {
+      var st = sc.steps[i];
+      inner.appendChild(h('p', { class: 'sdm-step-n', text: 'Paso ' + (i + 1) + ' de ' + n + (st.ms ? ', ' + fmtMs(st.ms) : '') }));
+      inner.appendChild(h('h3', { text: st.title }));
+      var route = h('p', { class: 'sdm-sp-route' });
+      if (st.at) { route.appendChild(document.createTextNode('Ocurre en ')); route.appendChild(nodeBtn(st.at)); }
+      else {
+        route.appendChild(nodeBtn(st.from));
+        route.appendChild(h('span', { class: 'sdm-sp-arrow', 'aria-label': 'hacia', text: st.kind === 'async' ? '⇢' : '→' }));
+        route.appendChild(nodeBtn(st.to));
+        if (st.tag) route.appendChild(h('code', { class: 'sdm-sp-tag', text: st.tag }));
+      }
+      inner.appendChild(route);
+      if (st.text) inner.appendChild(h('p', { html: st.text }));
+      if (st.code) inner.appendChild(h('pre', { 'data-lang': st.lang || 'json' }, [h('code', { text: st.code })]));
+    }
+
+    inner.appendChild(h('h4', { text: 'El flujo completo' }));
+    var ol = h('ol', { class: 'sdm-sp-list' });
+    sc.steps.forEach(function (st, j) {
+      var b = h('button', { type: 'button', class: 'sdm-sp-item k-' + (st.kind || 'req') + (j === i ? ' is-now' : j < i ? ' is-past' : ''), 'aria-current': j === i ? 'step' : null }, [
+        h('span', { class: 'sdm-sp-num', text: String(j + 1) }), h('span', { text: st.title })
+      ]);
+      b.addEventListener('click', function () { self.pause(); self.go(j, true); });
+      ol.appendChild(h('li', {}, [b]));
+    });
+    inner.appendChild(ol);
+
+    var help = h('details', { class: 'sdm-sp-help' }, [h('summary', { text: 'Cómo usar el mapa' })]);
+    var tmp = { def: this.def, panel: h('div') };
+    baseDefaultPanel.call(tmp);
+    var hp = tmp.panel.firstChild;
+    if (hp) { var t = hp.querySelector('h3'); if (t) t.remove(); help.appendChild(hp); }
+    inner.appendChild(help);
+
+    this.panel.innerHTML = '';
+    this.panel.appendChild(inner);
+    SD.highlight(inner);
+    if (SD.autolink) SD.autolink(inner);
+    this.panel.scrollTop = 0;
+  };
+
+  var baseDefaultPanel = MapView.prototype.showDefaultPanel;
+  MapView.prototype.showDefaultPanel = function () {
+    if (this.def.stepPanel && this.scen) return this.renderStepPanel();
+    return baseDefaultPanel.call(this);
   };
 
   MapView.prototype.pulse = function (n, animate) {

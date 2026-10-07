@@ -309,7 +309,7 @@ SD.defineGlossary([
     deep: 'm09#signed-urls',
     short: 'Firma calculada con una función hash y un secreto compartido. Quien conoce el secreto puede verificar que el mensaje no fue alterado y que lo generó alguien con ese secreto.' },
   { id: 'deadline', term: 'Deadline', en: 'Deadline propagation', cat: 'resiliencia', mods: ['m02', 'm08'],
-    deep: 'm08#timeouts',
+    deep: 'm08#deadline-viaje',
     short: 'Momento absoluto en que una request deja de tener sentido. Se propaga a cada llamada interna para que nadie siga trabajando en una respuesta que el usuario ya abandonó.' }
 ]);
 
@@ -726,13 +726,13 @@ SD.defineGlossary([
     deep: 'm08#rate-limiting', aliases: ['cubeta de tokens'],
     short: 'Algoritmo de rate limiting: un balde se recarga con tokens a ritmo fijo hasta una capacidad máxima, y cada request consume uno. Permite ráfagas cortas y limita el promedio.' },
   { id: 'metastable', term: 'Falla metaestable', en: 'Metastable failure', cat: 'resiliencia', mods: ['m08'],
-    deep: 'm08#reintentos', aliases: ['fallas metaestables', 'metaestable', 'metaestables', 'metastable failure'],
+    deep: 'm08#tormenta', aliases: ['fallas metaestables', 'metaestable', 'metaestables', 'metastable failure'],
     short: 'Estado en el que un sistema sigue caído aunque la causa original ya desapareció, porque un ciclo de realimentación (reintentos, trabajo desperdiciado, cachés frías) lo mantiene sobrecargado.' },
   { id: 'graceful-degradation', term: 'Degradación elegante', en: 'Graceful degradation', cat: 'resiliencia', mods: ['m08'],
     deep: 'm08#degradacion', aliases: ['graceful degradation'],
     short: 'Seguir ofreciendo una versión reducida del servicio cuando algo falla: recomendaciones genéricas en lugar de personalizadas, datos en caché en lugar de frescos.' },
   { id: 'cell-architecture', term: 'Arquitectura celular', en: 'Cell-based architecture', cat: 'resiliencia', mods: ['m08'],
-    deep: 'm08#multiregion', aliases: ['arquitectura de células', 'cell-based architecture'],
+    deep: 'm08#celulas', aliases: ['arquitectura de células', 'cell-based architecture'],
     short: 'Dividir el sistema en copias completas e independientes (celdas), cada una atendiendo a una parte de los clientes, para que una falla o un mal deploy afecte solo a una celda.' },
   { id: 'chaos', term: 'Chaos engineering', en: 'Chaos engineering', cat: 'resiliencia', mods: ['m08'],
     deep: 'm08#caos', aliases: ['ingeniería del caos'],
@@ -756,7 +756,15 @@ SD.defineGlossary([
     short: 'Usar el hash del contenido como clave del objeto. Dos archivos idénticos ocupan un solo objeto (deduplicación) y el contenido nunca cambia bajo una misma clave.' },
   { id: 'lifecycle', term: 'Reglas de ciclo de vida', en: 'Lifecycle rules', cat: 'datos', mods: ['m09'],
     deep: 'm09#multipart', aliases: ['lifecycle rules', 'lifecycle'],
-    short: 'Reglas del bucket que mueven objetos a clases más baratas con el tiempo, los borran, o abortan subidas multipart incompletas, sin código propio.' }
+    short: 'Reglas del bucket que mueven objetos a clases más baratas con el tiempo, los borran, o abortan subidas multipart incompletas, sin código propio.' },
+  { id: 'hotlinking', term: 'Hotlinking', en: 'Hotlinking', cat: 'edge', mods: ['m09'],
+    deep: 'm09#cdn-protegida', aliases: ['hotlink'],
+    short: 'Usar desde otro sitio, o fuera de tu app, las URLs de archivos servidos por tu CDN. Tú pagas el ancho de banda y tu dominio reparte contenido que no controlas. Se frena con URLs firmadas que vencen y con headers como Cross-Origin-Resource-Policy.',
+    related: ['presigned', 'cdn'] },
+  { id: 'corp', term: 'Cross-Origin-Resource-Policy', en: 'Cross-Origin-Resource-Policy (CORP)', cat: 'seguridad', mods: ['m09'],
+    deep: 'm09#hotlinking-alternativas', aliases: ['CORP'],
+    short: 'Header de respuesta que le dice al navegador desde qué sitios se puede cargar un recurso (same-origin, same-site o cross-origin). Con same-site, una página ajena no puede mostrar tu imagen; no afecta a scripts ni a apps que no son navegadores.',
+    related: ['hotlinking'] }
 ]);
 
 /* ---------- M10: seguridad e identidad ---------- */
@@ -777,8 +785,11 @@ SD.defineGlossary([
     deep: 'm10#oauth', aliases: ['OIDC'],
     short: 'Capa de identidad sobre OAuth 2.0: además del access token, entrega un ID token (un JWT) que dice quién es el usuario. Es lo que hay detrás de "Iniciar sesión con Google".' },
   { id: 'pkce', term: 'PKCE', en: 'Proof Key for Code Exchange', cat: 'seguridad', mods: ['m10'],
-    deep: 'm10#oauth',
-    short: 'Extensión de OAuth en la que el cliente demuestra, al canjear el código, que es el mismo que lo pidió, enviando el secreto cuyo hash mandó al principio. Evita que un código interceptado sirva de algo.' },
+    deep: 'm10#pkce',
+    short: 'Extensión de OAuth en la que el cliente demuestra, al canjear el código, que es el mismo que lo pidió: manda el hash de un secreto al principio (code_challenge) y el secreto original (code_verifier) al canjear. Algoritmo automático de la RFC 7636; evita que un código interceptado sirva de algo.' },
+  { id: 'refresh-token', term: 'Refresh token', en: 'Refresh token', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#jwt-stateful', aliases: ['refresh tokens'],
+    short: 'Credencial de larga vida que solo el servidor de autorización acepta y que sirve para pedir access tokens nuevos cuando vencen. Se guarda de forma segura, se rota en cada uso y, si uno ya usado reaparece, se revoca toda la sesión por sospecha de robo.' },
   { id: 'mtls', term: 'mTLS', en: 'Mutual TLS', cat: 'seguridad', mods: ['m10'],
     deep: 'm10#servicios',
     short: 'TLS en el que ambos extremos presentan un certificado, así el servidor también sabe con certeza qué servicio lo llama. Es la base de la identidad entre servicios.' },
@@ -788,15 +799,30 @@ SD.defineGlossary([
   { id: 'envelope', term: 'Envelope encryption', en: 'Envelope encryption', cat: 'seguridad', mods: ['m10'],
     deep: 'm10#cifrado', aliases: ['cifrado de sobre', 'cifrado envolvente'],
     short: 'Cifrar cada dato con una clave de datos propia (DEK) y guardar esa clave cifrada con una clave maestra del KMS (KEK). Permite cifrar volúmenes enormes sin mandarlos al KMS.' },
-  { id: 'rls', term: 'Row-level security', en: 'RLS', cat: 'seguridad', mods: ['m10'],
-    deep: 'm10#multitenant', aliases: ['RLS'],
+  { id: 'rls', term: 'Row-level security', en: 'RLS', cat: 'seguridad', mods: ['m05', 'm10'],
+    deep: 'm05#rls', aliases: ['RLS'],
     short: 'Política de la base de datos que filtra automáticamente las filas que cada sesión puede ver o modificar (por ejemplo, solo las de su tenant), aunque la consulta olvide el filtro.' },
   { id: 'bola', term: 'BOLA / IDOR', en: 'Broken Object Level Authorization', cat: 'seguridad', mods: ['m10'],
     deep: 'm10#multitenant', aliases: ['BOLA', 'IDOR'],
     short: 'Vulnerabilidad en la que la API verifica que estás autenticado pero no que el objeto pedido (/facturas/123) sea tuyo. Es el riesgo número uno del OWASP API Top 10.' },
   { id: 'ssrf', term: 'SSRF', en: 'Server-Side Request Forgery', cat: 'seguridad', mods: ['m10'],
     deep: 'm10#ataques',
-    short: 'Engañar a un servidor para que haga requests a destinos internos (por ejemplo, el endpoint de metadatos de la nube, que entrega credenciales) usando una URL que el atacante controla.' }
+    short: 'Engañar a un servidor para que haga requests a destinos internos (por ejemplo, el endpoint de metadatos de la nube, que entrega credenciales) usando una URL que el atacante controla.' },
+  { id: 'bfla', term: 'BFLA', en: 'Broken Function Level Authorization', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#bfla-detalle',
+    short: 'Vulnerabilidad en la que el objeto es tuyo pero la acción no debería serlo: llamas a un endpoint de administración o de borrado y la API no comprueba tu rol. Primo de BOLA, que falla sobre el objeto; BFLA falla sobre la función.' },
+  { id: 'mass-assignment', term: 'Asignación masiva', en: 'Mass assignment', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#bfla-detalle', aliases: ['mass assignment'],
+    short: 'La API vuelca el JSON recibido directo sobre el objeto, y el atacante agrega un campo que no debería poder tocar (por ejemplo "role": "admin"). Se evita con una lista explícita de campos aceptados.' },
+  { id: 'crypto-shredding', term: 'Borrado criptográfico', en: 'Crypto-shredding', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#crypto-shredding', aliases: ['crypto-shredding', 'crypto shredding'],
+    short: 'Borrar datos que no puedes alcanzar (backups inmutables) destruyendo la clave con que se cifraron: si cada usuario tiene su propia clave, destruirla vuelve ilegibles todas sus copias a la vez.' },
+  { id: 'gdpr', term: 'GDPR', en: 'General Data Protection Regulation', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#crypto-shredding', aliases: ['RGPD'],
+    short: 'Reglamento europeo de protección de datos. Da a las personas derechos sobre sus datos personales, entre ellos el derecho al borrado ("derecho al olvido"), que obliga a diseñar un proceso de borrado que llegue a todas las copias.' },
+  { id: 'audit-log', term: 'Log de auditoría', en: 'Audit log', cat: 'seguridad', mods: ['m10'],
+    deep: 'm10#audit-log', aliases: ['registro de auditoría', 'log de auditoría'],
+    short: 'Registro solo-añadir de quién hizo qué, cuándo y desde dónde, guardado aparte y a prueba de manipulación (encadenado por hash, en almacenamiento inmutable). Distinto de los logs de aplicación: menos ruido, más retención y para investigar, no para depurar.' }
 ]);
 
 /* ---------- M11: observabilidad y operación ---------- */
@@ -1844,5 +1870,14 @@ SD.defineGlossary([
   { id: 'compactacion', term: 'Compactación', en: 'Compaction', cat: 'ia', mods: ['m25'],
     deep: 'm25#contexto', aliases: ['compactar'],
     short: 'Cuando el contexto se acerca al límite, el modelo lo resume y la tarea sigue con el resumen como nuevo comienzo. Puede perder detalles: lo que tiene efectos vive en el estado de la tarea, no en el resumen.',
-    related: ['context-window', 'subagente'] }
+    related: ['context-window', 'subagente'] },
+  /* ---------- M08: ampliación (deadlines, colas, failover) ---------- */
+  { id: 'shuffle-sharding', term: 'Shuffle sharding', en: 'Shuffle sharding', cat: 'resiliencia', mods: ['m08'],
+    deep: 'm08#celulas', aliases: [],
+    short: 'Asignar a cada cliente una combinación pseudoaleatoria de pocos nodos de un grupo grande. Un cliente dañino tumba solo sus nodos, y solo quien comparte toda su combinación se queda sin servicio.',
+    related: ['cell-architecture', 'bulkhead'] },
+  { id: 'queue-time', term: 'Tiempo en cola', en: 'Request queue time', cat: 'resiliencia', mods: ['m08'],
+    deep: 'm08#llegada', aliases: ['X-Request-Start'], noauto: true,
+    short: 'Cuánto esperó una request antes de que el código la empezara a atender. Lo mide el servicio restando la hora de llegada que anotó el gateway en un header, como X-Request-Start.',
+    related: ['load-shedding', 'deadline', 'ley-little'] }
 ]);

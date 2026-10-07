@@ -88,6 +88,18 @@ SD.defineQuiz('m09', {
       options: ['Con RAID 0 en cada servidor, que reparte los bloques entre varios discos.', 'Con erasure coding: fragmentos de datos y de paridad repartidos entre zonas.', 'Con una caché en memoria replicada que reconstruye el disco si falla.', 'Guardando todo en una sola zona con discos de grado empresarial.'],
       answer: 1,
       explain: 'Con, por ejemplo, 6 fragmentos de datos y 3 de paridad, el objeto sobrevive a la pérdida de cualquier 3 fragmentos (una zona entera) ocupando 1.5 veces su tamaño, frente a 3 veces con réplicas.'
+    },
+    {
+      id: 'hotlink', type: 'single',
+      prompt: 'Las URLs de tu CDN aparecen incrustadas en foros ajenos y también las descargan bots. ¿Qué defensa sirve contra los dos casos?',
+      options: [
+        'Una lista de Referer permitidos en el borde, que rechaza las páginas que no son tuyas.',
+        'URLs firmadas que vencen en horas, renovadas por tu app cuando hace falta.',
+        'El header Cross-Origin-Resource-Policy, que bloquea cualquier uso fuera de tu sitio.',
+        'Atar cada URL a la IP del usuario que la pidió, para que no sirva en otra red.'
+      ],
+      answer: 1,
+      explain: 'El vencimiento funciona sin importar quién hace la request: navegador, script o bot. El Referer se omite o se falsifica, CORP solo lo respetan los navegadores, y atar a la IP rompe a usuarios móviles que cambian de red. Es lo que hizo Discord en 2023 (sección 9.4).'
     }
   ]
 });

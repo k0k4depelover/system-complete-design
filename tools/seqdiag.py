@@ -1,29 +1,32 @@
 # Generador de diagramas de secuencia en SVG con las clases del curso.
-# seq(id, titulo, desc, actores, mensajes, ancho=770)
+# seq(id, titulo, desc, actores, mensajes, ancho=770, footer=None)
 #   actores: [("cli", "Cliente"), ...]
 #   mensajes: ("cli", "api", "POST /pagos", "req")  kind: req | res | fail | async
 #             ("note", "api", "texto")               nota junto a un actor
 #             ("cut", "texto")                          separador horizontal (p. ej. "la red se corta")
+#   footer: dict {actor_id: "ejemplo"} o {actor_id: ("Nombre", "aclaración")}; dibuja una caja de ejemplo
+#           bajo cada lifeline ("quién es quién"). Solo para los actores que aparezcan en el dict.
 from html import escape
 
-def seq(sid, title, desc, actors, msgs, width=770, row=34, top=64):
+def seq(sid, title, desc, actors, msgs, width=770, row=34, top=64, footer=None):
     n = len(actors)
     margin = 70
     xs = {a: margin + i * (width - 2 * margin) / (n - 1) for i, (a, _) in enumerate(actors)}
     step = (width - 2 * margin) / (n - 1) if n > 1 else 124
     bw = min(124, step - 8)                     # con muchos actores, las cajas se angostan para no pisarse
-    height = top + row * len(msgs) + 40
+    height = top + row * len(msgs) + (40 if not footer else 100)
     out = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-labelledby="{sid}t {sid}d">',
            f'<title id="{sid}t">{escape(title)}</title>', f'<desc id="{sid}d">{escape(desc)}</desc>',
            f'<defs><marker id="{sid}-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker>'
            f'<marker id="{sid}-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker>'
            f'<marker id="{sid}-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker>'
            f'<marker id="{sid}-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>']
+    ll_end = height - 10 if not footer else height - 58
     for a, label in actors:
         x = xs[a]
         out.append(f'<rect class="dg-box" x="{x - bw / 2}" y="8" width="{bw}" height="32" rx="4"/>')
         out.append(f'<text class="dg-label" x="{x}" y="29" text-anchor="middle" style="font-size:13.5px">{escape(label)}</text>')
-        out.append(f'<path class="dg-frame" d="M{x} 40 V{height - 10}"/>')
+        out.append(f'<path class="dg-frame" d="M{x} 40 V{ll_end}"/>')
     y = top
     for m in msgs:
         if m[0] == 'cut':
@@ -55,5 +58,19 @@ def seq(sid, title, desc, actors, msgs, width=770, row=34, top=64):
                 out.append(f'<rect x="{lx - (len(label) * 3.3 + 6)}" y="{y - 9}" width="{len(label) * 6.6 + 12}" height="15" fill="var(--paper)" opacity="0.85"/>')
                 out.append(f'<text class="dg-tiny" x="{lx}" y="{y + 2}" text-anchor="middle">{escape(label)}</text>')
         y += row
+    if footer:
+        fy = height - 46
+        for a, _ in actors:
+            if a not in footer:
+                continue
+            x = xs[a]
+            val = footer[a]
+            line1, line2 = (val, None) if isinstance(val, str) else (val[0], val[1])
+            out.append(f'<rect class="dg-box dg-box--em" x="{x - bw / 2}" y="{fy}" width="{bw}" height="38" rx="4"/>')
+            if line2:
+                out.append(f'<text class="dg-small" x="{x}" y="{fy + 16}" text-anchor="middle" style="font-weight:700">{escape(line1)}</text>')
+                out.append(f'<text class="dg-tiny" x="{x}" y="{fy + 31}" text-anchor="middle">{escape(line2)}</text>')
+            else:
+                out.append(f'<text class="dg-small" x="{x}" y="{fy + 23}" text-anchor="middle" style="font-weight:700">{escape(line1)}</text>')
     out.append('</svg>')
     return '\n'.join(out)

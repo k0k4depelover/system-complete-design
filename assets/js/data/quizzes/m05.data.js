@@ -197,7 +197,7 @@ SD.defineQuiz('m05', {
         'El cliente recibe un error, porque el commit no se completó en la réplica.'
       ],
       answer: 0,
-      explain: 'En la asíncrona el OK sale cuando el WAL está en el disco del líder, antes de viajar. Con una réplica síncrona (synchronous_commit = on) el commit espera su fsync y el failover no pierde nada. Repasa 5.9.'
+      explain: 'En la asíncrona el OK sale cuando el WAL está en el disco del líder, antes de viajar. Con una réplica síncrona (synchronous_commit = on) el commit espera su fsync y el failover no pierde nada. Repasa 5.10.'
     },
     {
       id: 'saga', type: 'single',
@@ -209,7 +209,7 @@ SD.defineQuiz('m05', {
         'Despachar igual y reintentar el cobro después.'
       ],
       answer: 0,
-      explain: 'Cada paso de una saga es una transacción local ya confirmada: no hay rollback común. Se deshace con su compensación, en orden inverso. Esperar con locks es el problema de 2PC. Repasa 5.12.'
+      explain: 'Cada paso de una saga es una transacción local ya confirmada: no hay rollback común. Se deshace con su compensación, en orden inverso. Esperar con locks es el problema de 2PC. Repasa 5.13.'
     },
     {
       id: 'instagram', type: 'single',
@@ -221,7 +221,31 @@ SD.defineQuiz('m05', {
         'Hay que reescribir el id de cada foto, porque lleva adentro el número del servidor físico.'
       ],
       answer: 0,
-      explain: 'Hay dos niveles: la clave al shard lógico nunca cambia, y el shard lógico al servidor es un mapa chico que sí cambia. El id lleva el shard lógico, no el servidor, así que sigue siendo válido. Repasa 5.14, "El esquema de Instagram".'
+      explain: 'Hay dos niveles: la clave al shard lógico nunca cambia, y el shard lógico al servidor es un mapa chico que sí cambia. El id lleva el shard lógico, no el servidor, así que sigue siendo válido. Repasa 5.15, "El esquema de Instagram".'
+    },
+    {
+      id: 'rls-owner', type: 'single',
+      prompt: 'Activas row-level security en <code>facturas</code>, pruebas desde la consola como superusuario y ves solo tus filas. En producción, con el rol que creó la tabla, se filtran datos de otros tenants. ¿Por qué?',
+      options: [
+        'El superusuario y el dueño de la tabla se saltan las políticas salvo que se use FORCE ROW LEVEL SECURITY.',
+        'La política se escribió con USING en lugar de WITH CHECK, que es la que filtra los SELECT.',
+        'RLS solo filtra INSERT y UPDATE; para el SELECT hace falta una vista aparte.',
+        'Faltó un índice en tenant_id y sin él PostgreSQL desactiva la política por rendimiento.'
+      ],
+      answer: 0,
+      explain: 'El dueño de la tabla ignora sus propias políticas por defecto, y el superusuario siempre. La app debe conectarse con un rol que no sea dueño (app_rw); si no, hace falta FORCE. Repasa 5.9, "La trampa: el dueño se salta RLS".'
+    },
+    {
+      id: 'rls-setlocal', type: 'single',
+      prompt: 'Fijas el tenant con <code>SET app.tenant_id = …</code> (sin LOCAL) y usas un pool en modo transacción (PgBouncer). ¿Qué puede pasar?',
+      options: [
+        'Nada: la variable se limpia sola al terminar cada consulta.',
+        'La base rechaza el SET porque fuera de una transacción no se permite.',
+        'El valor queda pegado a la conexión y lo hereda el siguiente usuario que la reutilice.',
+        'El pool abre una conexión nueva por cada SET, agotando el límite de la base.'
+      ],
+      answer: 2,
+      explain: 'Sin LOCAL, la variable dura toda la sesión de la conexión, y el pool reparte esa conexión entre clientes distintos. SET LOCAL la limita a la transacción y se limpia al COMMIT. Repasa 5.9, "Fijar el tenant", y 5.7 sobre pools.'
     }
   ]
 });

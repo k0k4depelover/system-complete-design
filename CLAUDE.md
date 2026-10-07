@@ -9,6 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
+- **Parte IV:** ciberseguridad (M32–M37 y el Checkpoint E): firewalls, hardening de Linux, operación de SysAdmin, seguridad en bases de datos, criptografía y nube segura. Hoy solo existe el esqueleto (rutas `soon`); los módulos se escriben uno por pedido. Cuenta para el progreso. Currículo en `PLAN.md`.
 - **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo, y al final de la página los tutoriales de AI Engineering, en Python (IA01, IA02…). Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos" y "De los tutoriales de AI Engineering".
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
@@ -266,7 +267,7 @@ La tarjeta de definición completa (`callout--def`) suma `p.def-term` (con `span
   - texto: `dg-label`, `dg-small`, `dg-tiny`, `dg-num`, `dg-group`, `dg-big`, `dg-in`, `dg-fail-text`;
   - líneas: `dg-edge`, `dg-feedback` (punteada; también sirve de guía entre una etiqueta y su flecha), `dg-frame`, `dg-arrow`;
   - gráficos: `sim-axis`, `sim-grid`, `sim-label`, `sim-val`.
-- Los diagramas de secuencia se generan con `tools/seqdiag.py`: `seq(id, titulo, desc, actores, mensajes)`, con mensajes de tipo `req`, `res`, `fail` o `async`, notas y cortes. Con más de cinco actores, las cajas se angostan solas.
+- Los diagramas de secuencia se generan con `tools/seqdiag.py`: `seq(id, titulo, desc, actores, mensajes)`, con mensajes de tipo `req`, `res`, `fail` o `async`, notas y cortes. Con más de cinco actores, las cajas se angostan solas. El parámetro opcional `footer={actor_id: "ejemplo"}` o `{actor_id: ("Nombre", "aclaración")}` dibuja cajas de "quién es quién" al pie de cada lifeline (así está la figura 10.1).
 - Deja al menos 12 px entre cajas y textos. Una etiqueta lejos de su flecha lleva una guía `dg-feedback`.
 
 ### Pasos, pestañas, ADR
@@ -366,6 +367,7 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
   - cada nodo tiene cinco pestañas: `info.resp`, `info.api`, `info.data`, `info.fail` e `info.nums`;
   - `scenarios` con `steps` de la forma `{from, to | at, kind, tag, ms, title, text, code, lang, down, up}`;
   - enlaces directos: `#node=<id>&scenario=<id>&step=<n>`.
+  - `stepPanel: true` en la definición hace que el panel lateral explique el escenario y el paso actual (ruta entre nodos, texto, payload y la lista de pasos) en lugar de la ayuda del mapa; abajo queda solo el título del paso. Lo usan M09 (`m09-objetos`) y M10 (`m10-identidad`).
 - Deja pasillos de unos 150 px entre columnas de nodos para que las etiquetas de las aristas no se pisen.
 
 ### Widgets (calculadoras y simuladores)
@@ -388,8 +390,10 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="consist"`, `"replat"` | `widgets/sim-consist.js` | Una historia con cinco veredictos (linealizable, secuencial, causal, de sesión y eventual), y la latencia de una escritura según a cuántas de N réplicas espera, con una réplica lenta (M06.1) |
 | `data-sim="kafka"` | `widgets/sim-kafka.js` | Particiones, consumer group, lag y rebalanceo (M07) |
 | `data-sim="bucket"`, `"retry"` | `widgets/sim-resil.js` | Token bucket y tormenta de reintentos (M08) |
-| `data-sim="signurl"` | `widgets/sim-signurl.js` | URL firmada SigV4; expone `SD.crypto` (SHA-256 y HMAC en JS puro) (M09) |
-| `data-sim="jwt"` | `widgets/sim-jwt.js` | Laboratorio de JWT; necesita `sim-signurl.js` (M10) |
+| `data-sim="signurl"`, `data-calc="hashkey"` | `widgets/sim-signurl.js` | URL firmada SigV4 con verificador en tiempo simulado (siete casos: manipulación, vencimiento, reloj atrasado, credencial temporal, Content-Type) y clave calculada con el hash del contenido; expone `SD.crypto` (SHA-256, HMAC y `presign` con headers firmados) (M09) |
+| `data-sim="jwt"`, `data-calc="pkce"` | `widgets/sim-jwt.js` | Laboratorio de JWT, y PKCE paso a paso (genera el verifier, calcula el challenge y canjea el código como app o como atacante; vector RFC 7636); necesita `sim-signurl.js` (M10) |
+| `data-sim="envelope"` | `widgets/sim-envelope.js` | Envelope encryption en cuatro escenas (cifrar, leer, rotar la KEK y borrado criptográfico) sobre `SD.flowAnim`; necesita `sim-dbflow.js` (M10) |
+| `data-sim="rls"` | `widgets/sim-rls.js` | Row-level security de PostgreSQL: una tabla de facturas con dos tenants; chips de rol de la conexión, tenant de la sesión y consulta, y qué filas devuelve la base y por qué (M05) |
 | `data-sim="trace"`, `"burnrate"` | `widgets/sim-obs.js` | Waterfall de traces y alertas por burn rate (M11) |
 | `data-sim="tokenizer"`, `"kvcache"` | `widgets/sim-llm.js` | Tokenizer y generación con KV cache (M12); usa `data/llm.data.js` |
 | `data-calc="gpusizing"`, `data-sim="roofline"` | `widgets/sim-gpu.js` | Sizing de GPUs y roofline (M13) |

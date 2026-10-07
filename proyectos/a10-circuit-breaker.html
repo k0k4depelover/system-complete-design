@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>A10. Cuando Redis se cae</title>
-<meta name="description" content="Un catálogo en Spring Boot con cache-aside en Redis y una caché local de Caffeine, sobre un k3s de tres nodos. A mitad de una prueba de k6 a 30 requests por segundo se apaga el nodo de Redis, y se agregan una a una las defensas: timeouts cortos, circuit breaker con Resilience4j, una compuerta que rechaza lo que la base no alcanza y la copia local vieja. Después, un master y una réplica con tres Sentinels, y el failover medido con la misma carga.">
+<meta name="description" content="Un catálogo en Spring Boot con cache-aside en Redis y una caché local de Caffeine, sobre un k3s de tres nodos. A mitad de una prueba de k6 a 30 requests por segundo se apaga el nodo de Redis, y se agregan una a una las defensas: timeouts cortos, circuit breaker con Resilience4j, una compuerta que rechaza lo que la base no alcanza y la copia local vieja. Después, un master y una réplica con tres Sentinels, y el failover medido con la misma carga. En la parte 3, un gateway con token bucket en Lua sobre Redis y dos servicios, uno que se cae y otro que se defiende con deadlines propagados, reintentos con jitter, breaker y bulkheads, medidos con k6 en k3s.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -39,11 +39,11 @@
 
       <header class="title-block">
         <h1>Cuando Redis se cae</h1>
-        <p class="lead">Redis es una caché: si se cae, la app debería seguir, solo que más lenta. Casi nunca pasa así. Vas a apagar el nodo de Redis en medio de una prueba de carga y ver cómo un servicio sin defensas se cuelga entero, y cómo cada defensa le quita un pedazo al daño: timeouts cortos, circuit breaker, load shedding y una caché local que sirve lo viejo. Después lo repites con un master y una réplica, donde lo que importa son los segundos que tardan los Sentinels en promover a la réplica, y lo que la app hace mientras tanto.</p>
+        <p class="lead">Redis es una caché: si se cae, la app debería seguir, solo que más lenta. Casi nunca pasa así. Vas a apagar el nodo de Redis en medio de una prueba de carga y ver cómo un servicio sin defensas se cuelga entero, y cómo cada defensa le quita un pedazo al daño: timeouts cortos, circuit breaker, load shedding y una caché local que sirve lo viejo. Después lo repites con un master y una réplica, donde lo que importa son los segundos que tardan los Sentinels en promover a la réplica, y lo que la app hace mientras tanto. En la parte 3, sin caché: un servicio depende de otro que se pone lento, falla o se cae, y practicas el deadline que viaja de un servicio a otro hasta la base, los reintentos con backoff y jitter, el breaker, los bulkheads y la vuelta en frío.</p>
         <dl class="tb-grid">
           <div><dt>Proyecto</dt><dd>A10</dd></div>
           <div><dt>Plan</dt><dd>Bloque 3</dd></div>
-          <div><dt>Tiempo estimado</dt><dd>6 a 8 h</dd></div>
+          <div><dt>Tiempo estimado</dt><dd>6 a 8 h, y 6 a 8 h más la parte 3</dd></div>
           <div><dt>Módulos</dt><dd>M04, M05, M08</dd></div>
           <div><dt>Estado</dt><dd data-project-status="a10">Sin empezar</dd></div>
         </dl>
@@ -56,6 +56,7 @@
           <li>Agregar una defensa a la vez (timeouts cortos, circuit breaker, una compuerta delante de la base y la copia local vieja) y medir con k6 qué cambia cada una.</li>
           <li>Montar un master y una réplica de Redis con tres Sentinels en Kubernetes, y medir la ventana de un failover planeado, de un nodo apagado y de un nodo congelado.</li>
           <li>Encontrar las copias viejas que dejan una invalidación perdida y la replicación asíncrona, y reponerlas.</li>
+          <li>En la parte 3, propagar un deadline del gateway a la base, limitar a cada cliente con un token bucket en Lua, y medir con k6 qué hacen los reintentos, el breaker, los bulkheads y el arranque en frío cuando un servicio se rompe.</li>
         </ul>
       </section>
 
@@ -3317,6 +3318,3610 @@ scripts/experimento.sh p2-congelado-e5 congelar-master</code></pre>
         <p>Al descongelar, durante un momento hay dos masters: el viejo despierta creyendo que lo sigue siendo, hasta que Sentinel lo convierte. Lo que reciba en ese momento se pierde cuando se sincroniza con el nuevo. Para una caché es una copia vieja más, que repone <code>pending</code> o vence a los 60&#8239;s; para datos que importan, es el split-brain de A05 y M06, y Redis tiene <code>min-replicas-to-write</code> para que un master que no ve a sus réplicas deje de aceptar escrituras.</p>
       </aside>
 
+      <h2 id="p3">Parte 3. Dos servicios que se caen y vuelven</h2>
+
+      <p>Las partes 1 y 2 rompen una caché. Esta rompe un servicio del que otro depende, sin caché de por medio, y practica las defensas de <a href="../modules/m08-resiliencia.html">M08</a> que no entraron arriba: el deadline que viaja de un servicio a otro, los reintentos con backoff y jitter, el breaker que deja descansar al que cayó, el bulkhead entre llamadas y entre contenedores, y la vuelta en frío. Es un proyecto aparte, en su propia carpeta, con su propio clúster: no necesitas haber hecho las partes 1 y 2, aunque reutiliza su forma de trabajar.</p>
+
+      <p>Son cinco piezas. Un <b>gateway</b> por el que entra todo, que limita a cada cliente con un token bucket en Redis y sella cada request con la hora de llegada y su deadline. <b>pedidos</b>, el servicio sano, que para crear un pedido le pide una reserva a <b>inventario</b>, el servicio que se rompe. Una sola <b>base</b> PostgreSQL para los dos, cada uno en su esquema. Y <b>Redis</b>, solo para los baldes. k6 manda la carga desde adentro del clúster.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="fa10p3t fa10p3d">
+<title id="fa10p3t">El laboratorio de la parte 3</title>
+<desc id="fa10p3d">k6 corre como un Job y le manda 60 requests por segundo al gateway. El gateway, con dos pods, sella cada request con X-Request-Start y X-Request-Deadline, descuenta un token del balde del cliente con un script de Lua en Redis y la reenvía a pedidos. pedidos, con dos pods, tiene un bulkhead de 20 lugares, tres intentos con backoff y jitter, un breaker por intento y un timeout que sale del deadline. inventario, con dos pods, tiene una compuerta cuyo límite sube de 1 a 5 en 30 segundos, un calentamiento antes de declararse listo y un statement_timeout que sale del deadline. pedidos e inventario usan la misma base PostgreSQL, cada uno en su esquema. Cada pod tiene un techo de CPU y de memoria.</desc>
+<defs><marker id="fa10p3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="385" y="24" text-anchor="middle">Todo entra por el gateway, que sella cada request con X-Request-Start y X-Request-Deadline</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="40" width="90" height="130" rx="8"/>
+<text class="dg-label" x="65" y="66" text-anchor="middle">k6</text>
+<text class="dg-small" x="65" y="84" text-anchor="middle">un Job</text>
+<text class="dg-tiny" x="65" y="108" text-anchor="middle">60 req/s</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="160" y="40" width="170" height="130" rx="8"/>
+<text class="dg-label" x="245" y="66" text-anchor="middle">gateway</text>
+<text class="dg-small" x="245" y="84" text-anchor="middle">2 pods</text>
+<text class="dg-tiny" x="245" y="108" text-anchor="middle">sella llegada y deadline</text>
+<text class="dg-tiny" x="245" y="126" text-anchor="middle">balde por cliente (Lua)</text>
+<text class="dg-tiny" x="245" y="144" text-anchor="middle">deja pasar sin Redis</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="40" width="170" height="130" rx="8"/>
+<text class="dg-label" x="465" y="66" text-anchor="middle">pedidos</text>
+<text class="dg-small" x="465" y="84" text-anchor="middle">2 pods</text>
+<text class="dg-tiny" x="465" y="108" text-anchor="middle">bulkhead: 20 lugares</text>
+<text class="dg-tiny" x="465" y="126" text-anchor="middle">3 intentos con jitter</text>
+<text class="dg-tiny" x="465" y="144" text-anchor="middle">breaker por intento</text>
+<text class="dg-tiny" x="465" y="162" text-anchor="middle">timeout = lo que queda</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="590" y="40" width="170" height="130" rx="8"/>
+<text class="dg-label" x="675" y="66" text-anchor="middle">inventario</text>
+<text class="dg-small" x="675" y="84" text-anchor="middle">2 pods</text>
+<text class="dg-tiny" x="675" y="108" text-anchor="middle">compuerta de 1 a 5</text>
+<text class="dg-tiny" x="675" y="126" text-anchor="middle">en 30 s (la rampa)</text>
+<text class="dg-tiny" x="675" y="144" text-anchor="middle">calentar antes de listo</text>
+<text class="dg-tiny" x="675" y="162" text-anchor="middle">statement_timeout</text>
+<path class="dg-edge" d="M110 105 H158" marker-end="url(#fa10p3a)"/>
+<path class="dg-edge" d="M330 105 H378" marker-end="url(#fa10p3a)"/>
+<path class="dg-edge" d="M550 105 H588" marker-end="url(#fa10p3a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="175" y="250" width="140" height="44" rx="8"/>
+<text class="dg-label" x="245" y="277" text-anchor="middle">Redis</text>
+<path class="dg-edge" d="M245 170 V248" marker-end="url(#fa10p3a)"/>
+<text class="dg-tiny" x="253" y="214">EVAL del balde</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="420" y="250" width="300" height="44" rx="8"/>
+<text class="dg-label" x="570" y="270" text-anchor="middle">PostgreSQL, una sola base</text>
+<text class="dg-tiny" x="570" y="286" text-anchor="middle">esquemas pedidos e inventario</text>
+<path class="dg-edge" d="M465 170 V248" marker-end="url(#fa10p3a)"/>
+<path class="dg-edge" d="M675 170 V248" marker-end="url(#fa10p3a)"/>
+<text class="dg-tiny" x="473" y="214">JDBC</text>
+<text class="dg-tiny" x="683" y="214">JDBC</text>
+<text class="dg-small" x="385" y="320" text-anchor="middle">Cada pod tiene requests y limits de CPU y memoria: el bulkhead entre contenedores</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.4.</b> El laboratorio de la parte 3. Cada defensa vive en un lugar distinto: el límite por cliente en el borde, las del que llama (bulkhead, reintentos, breaker y timeout) en pedidos, y las del que es llamado (compuerta, rampa y calentamiento) en inventario. El deadline las une: lo pone el gateway y llega hasta la base.</figcaption>
+      </figure>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Qué vas a ver</p>
+        <p>Cinco preguntas, cada una con su experimento: qué le pasa a pedidos cuando inventario se pone lento y no hay defensas; cuánto multiplican la carga los reintentos y cómo se frenan; cómo el breaker deja descansar a inventario mientras las lecturas siguen rápidas; cuánto trabajo inútil se ahorra con el deadline; y qué pasa cuando inventario vuelve en frío, con y sin rampa. Los números los mides tú: la guía dice qué comando correr, dónde mirar y qué cuenta hacer.</p>
+      </aside>
+
+      <h3 id="p3-kubernetes">Kubernetes en diez minutos</h3>
+
+      <p>Si es la primera vez que usas Kubernetes, lee esto antes de seguir. Si ya hiciste A07, sáltalo. Kubernetes es un programa que recibe una descripción de lo que quieres que corra (en archivos YAML) y se encarga de que eso exista y siga existiendo: si un contenedor muere, lo vuelve a crear; si cambias la descripción, cambia lo que corre. <b>k3s</b> es una distribución de Kubernetes en un solo binario, pensada para máquinas chicas <span class="badge badge--doc">Documentado</span>; aquí corre adentro de un contenedor de Docker, así que no instalas nada más que <code>kubectl</code>.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Qué es</th><th>Dónde aparece aquí</th></tr></thead>
+          <tbody>
+            <tr><td>Nodo</td><td>Una máquina del clúster. Aquí hay una sola: el contenedor <code>k3s-server</code>.</td><td><code>cluster/compose.yaml</code></td></tr>
+            <tr><td>Pod</td><td>Uno o más contenedores que viven y mueren juntos, con una IP propia. Es la unidad que Kubernetes crea y mata.</td><td>Cada copia de gateway, pedidos e inventario</td></tr>
+            <tr><td>Deployment</td><td>"Quiero 2 pods con esta imagen y esta configuración". Si uno muere, crea otro; si cambias la configuración, reemplaza los pods de a uno.</td><td><code>k8s/gateway.yaml</code>, <code>pedidos.yaml</code>, <code>inventario.yaml</code></td></tr>
+            <tr><td>Service</td><td>Un nombre estable (<code>inventario</code>) que reparte las conexiones entre los pods listos de un Deployment. Los pods cambian de IP; el Service, no.</td><td>Al final de cada YAML de servicio</td></tr>
+            <tr><td>Probes</td><td>Preguntas que Kubernetes le hace al pod. <i>Startup</i>: ¿ya arrancaste? <i>Readiness</i>: ¿te mando tráfico? <i>Liveness</i>: ¿sigues vivo, o te reinicio?</td><td><code>startupProbe</code>, <code>readinessProbe</code>, <code>livenessProbe</code></td></tr>
+            <tr><td>StatefulSet</td><td>Como un Deployment, pero cada pod tiene un nombre fijo (<code>db-0</code>) y su propio disco, que sobrevive si el pod se recrea. <span class="badge badge--doc">Documentado</span></td><td>La base, en <code>k8s/base.yaml</code></td></tr>
+            <tr><td>Secret y ConfigMap</td><td>Datos que se le pasan a los pods: el Secret para contraseñas, el ConfigMap para archivos de configuración.</td><td>La clave de la base; el script de k6</td></tr>
+            <tr><td>Job</td><td>Un pod que corre hasta terminar, y no se vuelve a crear.</td><td>La prueba de k6, en <code>k8s/carga.yaml</code></td></tr>
+            <tr><td>Namespace</td><td>Una carpeta para agrupar todo. Aquí, <code>lab</code>.</td><td>Primer bloque de <code>k8s/base.yaml</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con <code>kubectl</code> hablas con el clúster. Estos son los comandos que vas a usar, y conviene tenerlos a mano cuando algo no arranca:</p>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/base.yaml                 # crea o actualiza lo que describe el archivo
+kubectl -n lab get pods                        # los pods, su estado y cuántas veces se reiniciaron
+kubectl -n lab get pods -w                     # lo mismo, y sigue mirando (Ctrl+C para salir)
+kubectl -n lab describe pod &lt;nombre&gt;           # los eventos: por qué no arranca, qué probe falló
+kubectl -n lab logs &lt;nombre&gt;                   # lo que imprimió la app; -f para seguir, --previous para el anterior
+kubectl -n lab logs deploy/pedidos             # los logs de un pod cualquiera del Deployment
+kubectl -n lab rollout status deploy/pedidos   # espera a que el Deployment tenga todos sus pods listos
+kubectl -n lab scale deploy/inventario --replicas=0   # cambia cuántos pods quieres
+kubectl -n lab set env deploy/pedidos BREAKER=false   # cambia una variable: Kubernetes recrea los pods
+kubectl -n lab top pods                        # CPU y memoria de cada pod, ahora
+kubectl -n lab port-forward svc/gateway 8080:8080     # un túnel desde tu máquina al Service</code></pre>
+
+      <p>Cuando un pod no queda en <code>Running</code> con <code>1/1</code> en <code>READY</code>, el estado dice por dónde buscar. <code>ImagePullBackOff</code>: no pudo bajar la imagen (¿la subiste al registro?). <code>CrashLoopBackOff</code>: la app arranca y se cae; mira <code>logs --previous</code>. <code>Running</code> con <code>0/1</code>: la app corre pero la readiness no pasa; mira <code>describe</code>. <code>Pending</code>: no hay lugar en el nodo para lo que pide en <code>requests</code>; mira los eventos en <code>describe</code>.</p>
+
+      <p>k6 también es nuevo aquí si no hiciste A10. Es un generador de carga que corre un script de JavaScript <span class="badge badge--doc">Documentado</span>: cada <i>VU</i> (usuario virtual) ejecuta la función una y otra vez. Con el ejecutor <code>constant-arrival-rate</code>, k6 empieza N iteraciones por segundo aunque las anteriores no hayan terminado, como usuarios que no se enteran de que el servicio anda lento; si se queda sin VUs libres, cuenta las que no pudo empezar en <code>dropped_iterations</code>. Los <code>thresholds</code> son los objetivos: si alguno no se cumple, k6 sale con código 99.</p>
+
+      <h3 id="p3-endpoints">Los endpoints</h3>
+
+      <p>Desde afuera solo hay dos, y los dos entran por el gateway. Los otros dos son internos: el gateway nunca los reenvía.</p>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/api/pedidos</code>
+        </div>
+        <p class="ep-desc">Crea un pedido. pedidos le pide la reserva a inventario y, si la consigue, guarda el pedido. Pasa por el balde del cliente que diga <code>X-Cliente</code>.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /api/pedidos HTTP/1.1
+Content-Type: application/json
+X-Cliente: tienda
+
+{"productoId": 7, "cantidad": 1}</code></pre>
+          <p class="ep-sec">Respuesta 201</p>
+<pre data-lang="json"><code>{"id": "5b0c…", "productoId": 7, "cantidad": 1}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">201</span><span>Reservado y guardado.</span></li>
+            <li><span class="st st--4xx">409</span><span>No hay stock.</span></li>
+            <li><span class="st st--4xx">429</span><span>El cliente se quedó sin tokens. Lo contesta el gateway, con <code>Retry-After</code>.</span></li>
+            <li><span class="st st--5xx">503</span><span>Inventario no está disponible: el breaker está abierto, el bulkhead está lleno o no contestó en tres intentos. Rápido, con <code>Retry-After</code>.</span></li>
+            <li><span class="st st--5xx">504</span><span>Se acabó el presupuesto de 2&#8239;s. Lo contesta el gateway.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="GET">GET</span>
+          <code class="ep-path">/api/pedidos/{id}</code>
+        </div>
+        <p class="ep-desc">Lee un pedido. Solo va a la base, nunca a inventario: es la operación que tiene que seguir rápida aunque inventario esté caído.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span>El pedido, con <code>creado</code>.</span></li>
+            <li><span class="st st--4xx">404</span><span>No existe.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/reservas</code>
+        </div>
+        <p class="ep-desc">Interno: lo llama pedidos. Descuenta stock una sola vez por <code>pedidoId</code>, aunque llegue repetido.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /reservas HTTP/1.1
+Content-Type: application/json
+X-Request-Start: t=1759766400123
+X-Request-Deadline: 1759766400923
+
+{"pedidoId": "5b0c…", "productoId": 7, "cantidad": 1}</code></pre>
+          <p class="ep-sec">Códigos de respuesta</p>
+          <ul class="ep-responses">
+            <li><span class="st st--2xx">200</span><span><code>{"pedidoId": "…", "nueva": true}</code>; con <code>false</code> si ya estaba hecha.</span></li>
+            <li><span class="st st--4xx">409</span><span>No hay stock.</span></li>
+            <li><span class="st st--5xx">503</span><span>La compuerta está llena. Con <code>Retry-After: 1</code>.</span></li>
+            <li><span class="st st--5xx">504</span><span>Llegó vencida, no alcanza a terminar, o la base la canceló al vencer el deadline.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="ep-head">
+          <span class="ep-method" data-m="POST">POST</span>
+          <code class="ep-path">/admin/falla</code>
+        </div>
+        <p class="ep-desc">Interno: provoca una falla en un pod de inventario. Lo llama <code>scripts/falla.sh</code> a través del API server de Kubernetes.</p>
+        <div class="ep-body">
+          <p class="ep-sec">Request</p>
+<pre data-lang="json"><code>{"lentoMs": 1500, "errores": 0, "cpuMs": 0}</code></pre>
+        </div>
+      </div>
+
+      <h3 id="p3-proyecto">El proyecto y sus dependencias</h3>
+
+      <p>Una carpeta nueva, <code>a10-parte3</code>, con un <code>pom.xml</code> que agrupa a los tres servicios. Cada servicio es un proyecto de Spring Boot con su propio <code>pom.xml</code> y su <code>Dockerfile</code>. El wrapper de Maven (<code>mvnw</code> y <code>.mvn/</code>) va en la raíz: cópialo de un proyecto anterior o genéralo con <code>mvn -N wrapper:wrapper</code>.</p>
+
+<pre data-lang="bash"><code>a10-parte3/
+├── pom.xml, mvnw, .mvn/, .gitignore
+├── gateway/        pom.xml, Dockerfile, src/…
+├── pedidos/        pom.xml, Dockerfile, src/…
+├── inventario/     pom.xml, Dockerfile, src/…
+├── cluster/        compose.yaml, registries.yaml
+├── k8s/            base.yaml, gateway.yaml, pedidos.yaml, inventario.yaml, carga.yaml
+├── k6/             carga.js
+└── scripts/        imagenes.sh, modo.sh, falla.sh, experimento.sh, mira.sh, psql.sh</code></pre>
+
+<pre data-lang="xml" data-file="a10-parte3/pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!-- Solo agrupa los tres servicios: ./mvnw package los construye a los tres desde la raíz.
+     Cada servicio hereda de Spring Boot, no de este pom. --&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;a10-parte3&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+  &lt;packaging&gt;pom&lt;/packaging&gt;
+
+  &lt;modules&gt;
+    &lt;module&gt;gateway&lt;/module&gt;
+    &lt;module&gt;pedidos&lt;/module&gt;
+    &lt;module&gt;inventario&lt;/module&gt;
+  &lt;/modules&gt;
+&lt;/project&gt;</code></pre>
+<pre data-lang="ini" data-file="a10-parte3/.gitignore"><code>target/
+cluster/kube/
+resultados/</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Servicio</th><th>Dependencias</th><th>Para qué</th></tr></thead>
+          <tbody>
+            <tr><td>gateway</td><td><code>spring-boot-starter-webmvc</code>, <code>spring-boot-starter-actuator</code>, <code>spring-boot-starter-data-redis</code></td><td>Un controlador que reenvía con el <code>HttpClient</code> del JDK, las probes, y el script de Lua con <code>StringRedisTemplate</code>.</td></tr>
+            <tr><td>pedidos</td><td>Lo de arriba sin Redis, más <code>spring-boot-starter-validation</code>, <code>spring-boot-starter-jdbc</code>, <code>spring-boot-starter-flyway</code>, <code>flyway-database-postgresql</code>, <code>postgresql</code>, y <code>resilience4j-circuitbreaker</code> y <code>resilience4j-bulkhead</code> 2.4.0</td><td>El breaker y el bulkhead, sin anotaciones, como en las partes 1 y 2. Los reintentos no son de Resilience4j: son un bucle de veinte líneas, para que veas cada decisión.</td></tr>
+            <tr><td>inventario</td><td>Lo mismo que pedidos, sin Resilience4j</td><td>La compuerta es propia: Resilience4j no tiene un límite que suba solo con el tiempo.</td></tr>
+            <tr><td>Pruebas</td><td><code>spring-boot-starter-webmvc-test</code>; <code>testcontainers</code> en gateway; <code>spring-boot-testcontainers</code> y <code>testcontainers-postgresql</code> en inventario</td><td>Veintidós pruebas: el script de Lua contra un Redis 8.10, el cliente de pedidos contra un inventario falso, y las reservas contra un PostgreSQL 18.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver los tres pom.xml</summary>
+        <div class="solution-body">
+<pre data-lang="xml" data-file="a10-parte3/gateway/pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;gateway&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;!-- El balde de cada cliente vive en Redis, y lo descuenta un script de Lua. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-data-redis&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;!-- Un Redis de verdad para probar el script de Lua. La versión la fija Spring Boot. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+<pre data-lang="xml" data-file="a10-parte3/pedidos/pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;pedidos&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+    &lt;!-- Spring Boot no gestiona Resilience4j: la versión va fija aquí. --&gt;
+    &lt;resilience4j.version&gt;2.4.0&lt;/resilience4j.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;!-- El breaker y el bulkhead delante de inventario. Solo los módulos, sin anotaciones. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.github.resilience4j&lt;/groupId&gt;
+      &lt;artifactId&gt;resilience4j-circuitbreaker&lt;/artifactId&gt;
+      &lt;version&gt;${resilience4j.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;io.github.resilience4j&lt;/groupId&gt;
+      &lt;artifactId&gt;resilience4j-bulkhead&lt;/artifactId&gt;
+      &lt;version&gt;${resilience4j.version}&lt;/version&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+<pre data-lang="xml" data-file="a10-parte3/inventario/pom.xml"><code>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+  &lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;4.1.1&lt;/version&gt;
+    &lt;relativePath/&gt;
+  &lt;/parent&gt;
+
+  &lt;groupId&gt;lab&lt;/groupId&gt;
+  &lt;artifactId&gt;inventario&lt;/artifactId&gt;
+  &lt;version&gt;0.1.0&lt;/version&gt;
+
+  &lt;properties&gt;
+    &lt;java.version&gt;25&lt;/java.version&gt;
+  &lt;/properties&gt;
+
+  &lt;dependencies&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-jdbc&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-flyway&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+      &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+      &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;runtime&lt;/scope&gt;
+    &lt;/dependency&gt;
+
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-starter-webmvc-test&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;!-- Un PostgreSQL 18 de verdad para las reservas: idempotencia y statement_timeout. --&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+      &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+      &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+      &lt;artifactId&gt;testcontainers-postgresql&lt;/artifactId&gt;
+      &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+  &lt;/dependencies&gt;
+
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;</code></pre>
+        </div>
+      </details>
+
+      <h3 id="p3-cluster">Paso 1. Un clúster de un nodo</h3>
+
+      <p>Si el clúster de las partes 1 y 2 está prendido, apágalo: usa los mismos puertos. En su carpeta, <code>docker compose -f cluster/compose.yaml down</code>. Este clúster tiene un solo nodo, porque aquí no se apagan máquinas: se rompen servicios.</p>
+
+<pre data-lang="yaml" data-file="a10-parte3/cluster/compose.yaml"><code># Un clúster de k3s de un solo nodo, en un contenedor, más un registro de imágenes local.
+# Un nodo alcanza: en esta parte no se apagan máquinas, se rompen servicios.
+services:
+  server:
+    image: rancher/k3s:v1.36.5-k3s1
+    hostname: k3s-server
+    privileged: true
+    tmpfs:
+      - /run
+      - /var/run
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+    restart: unless-stopped
+    # Sin Traefik: nadie entra desde afuera, k6 corre adentro. metrics-server queda: kubectl top lo usa.
+    command: ["server", "--tls-san=127.0.0.1", "--disable=traefik"]
+    environment:
+      K3S_TOKEN: un-secreto-solo-para-el-lab
+      K3S_KUBECONFIG_OUTPUT: /output/kubeconfig.yaml
+      K3S_KUBECONFIG_MODE: "666"
+    volumes:
+      - ./registries.yaml:/etc/rancher/k3s/registries.yaml:ro
+      - ./kube:/output
+    ports:
+      - "6443:6443"   # API de Kubernetes
+
+  # Registro de imágenes: docker push localhost:5000/pedidos:1 desde tu máquina,
+  # y el nodo la baja de registry:5000 (ver registries.yaml).
+  registry:
+    image: registry:3
+    ports:
+      - "5000:5000"</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/cluster/registries.yaml"><code>mirrors:
+  "localhost:5000":
+    endpoint:
+      - "http://registry:5000"</code></pre>
+
+<pre data-lang="bash"><code>cd cluster
+mkdir -p kube
+docker compose up -d
+# En Git Bash, kubectl.exe necesita la ruta de Windows: pwd -W la da, y en Linux o macOS se usa pwd.
+export KUBECONFIG="$(pwd -W 2&gt;/dev/null || pwd)/kube/kubeconfig.yaml"
+until [ -f kube/kubeconfig.yaml ] &amp;&amp; kubectl get nodes 2&gt;/dev/null | grep -q ' Ready'; do sleep 2; done
+kubectl get nodes
+kubectl -n kube-system get pods
+cd ..</code></pre>
+
+      <p>Tiene que aparecer un nodo, <code>k3s-server</code>, en <code>Ready</code>. En <code>kube-system</code> están los pods que trae k3s: CoreDNS (los nombres como <code>inventario</code>), el aprovisionador de discos <code>local-path-provisioner</code> y <code>metrics-server</code>, que le da los números a <code>kubectl top</code> <span class="badge badge--doc">Documentado</span>. Espera a que estén en <code>Running</code>. El <code>export KUBECONFIG</code> vale para esa terminal: en cada terminal nueva, vuelve a correrlo desde <code>cluster/</code>.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un nodo y un registro local. El nodo es un contenedor con el mismo binario de k3s que instalarías en una máquina; el registro guarda las imágenes que armas, y <code>registries.yaml</code> le dice al nodo que <code>localhost:5000</code> se baja de <code>http://registry:5000</code>, porque dentro del nodo <code>localhost</code> es el propio nodo.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Los tres nodos de la parte 1: sirven para apagar una máquina, y aquí cuesta memoria sin enseñar nada nuevo. Y kind o minikube: funcionan igual de bien, pero k3s es lo que usan las partes 1 y 2 y A07.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>"port is already allocated": el 6443 o el 5000 están tomados por otro clúster. Apágalo. Y <code>kubectl</code> que contesta "connection refused" a <code>localhost:8080</code>: no exportaste <code>KUBECONFIG</code> en esa terminal.</dd></div>
+      </dl>
+
+      <h3 id="p3-base">Paso 2. La base y Redis</h3>
+
+<pre data-lang="yaml" data-file="a10-parte3/k8s/base.yaml"><code># El namespace del laboratorio, la base y Redis.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lab
+---
+# Usuario y contraseña de la base. Un Secret guarda texto en base64, no cifrado: en un clúster real se protege con RBAC.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db
+  namespace: lab
+stringData:
+  usuario: lab
+  clave: lab-solo-local
+---
+# Un Service sin IP propia (headless): el nombre "db" apunta directo al pod db-0.
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  namespace: lab
+spec:
+  clusterIP: None
+  selector:
+    app: db
+  ports:
+    - name: pg
+      port: 5432
+---
+# La única base del laboratorio. Un StatefulSet le da un nombre fijo (db-0) y un disco que sobrevive al pod.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: lab
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db
+  template:
+    metadata:
+      labels:
+        app: db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18
+          ports:
+            - name: pg
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: lab
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: db, key: usuario }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db, key: clave }
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "lab", "-d", "lab"]
+            periodSeconds: 2
+          volumeMounts:
+            # Desde PostgreSQL 18, la imagen guarda los datos debajo de /var/lib/postgresql.
+            - name: datos
+              mountPath: /var/lib/postgresql
+  volumeClaimTemplates:
+    - metadata:
+        name: datos
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.10
+          # Solo baldes de tokens: si Redis se reinicia, todos empiezan con el balde lleno. Sin disco.
+          args: ["--save", "", "--appendonly", "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: lab
+spec:
+  selector:
+    app: redis
+  ports:
+    - name: redis
+      port: 6379</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/base.yaml
+kubectl -n lab rollout status statefulset/db --timeout=180s
+kubectl -n lab rollout status deploy/redis --timeout=120s
+kubectl -n lab get pods,pvc
+scripts/psql.sh -c "SELECT version()"</code></pre>
+
+<pre data-lang="bash" data-file="a10-parte3/scripts/psql.sh"><code>#!/usr/bin/env bash
+# psql dentro del pod de la base.
+# Uso: scripts/psql.sh -c "SELECT count(*) FROM inventario.reservas"
+exec kubectl -n lab exec -i db-0 -- psql -U lab -d lab -X -v ON_ERROR_STOP=1 "$@"</code></pre>
+
+      <p>Tienen que aparecer <code>db-0</code> y un pod <code>redis-…</code> en <code>Running</code> y <code>1/1</code>, y un PVC <code>datos-db-0</code> en <code>Bound</code>: el disco que el aprovisionador creó para la base. <code>psql.sh</code> tiene que imprimir la versión de PostgreSQL 18. Los esquemas los crea Flyway cuando arranque cada servicio.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Una sola base con un esquema por servicio. Cada servicio es dueño de sus tablas y nadie lee las del otro: si mañana se separan en dos bases, no cambia el código. La base es un StatefulSet porque necesita su disco y un nombre fijo, y Redis es un Deployment sin disco porque un balde perdido se rehace solo, lleno.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>CloudNativePG, como en las partes 1 y 2: con un operador, failover y PgBouncer, es lo que pondrías en serio, pero aquí la base no se rompe y un StatefulSet se lee de una vez. Y una base por servicio: es lo correcto a la larga, pero el pedido era una sola, y lo que importa aquí es que compartirla obliga a que ninguno de los dos la sature (el pool de 5 conexiones y la compuerta de inventario).</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que <code>db-0</code> se reinicie con un error sobre el directorio de datos: con PostgreSQL 18, la imagen oficial guarda los datos en <code>/var/lib/postgresql/18/docker</code> y espera el volumen en <code>/var/lib/postgresql</code>, no en <code>/var/lib/postgresql/data</code> como antes. <span class="badge badge--doc">Documentado</span> Si copiaste un manifiesto viejo, cámbialo.</dd></div>
+      </dl>
+
+      <h3 id="p3-gateway">Paso 3. El gateway: el balde y el sello</h3>
+
+      <p>El gateway hace tres cosas con cada request, en este orden: la sella, le cobra un token y la reenvía. El token bucket es el de <a href="../modules/m08-resiliencia.html#rate-limiting">M08</a>: cada cliente tiene un balde de 100 tokens que se recarga a 50 por segundo; cada request gasta uno, y sin token, 429. El balde vive en Redis para que los dos pods del gateway compartan la cuenta, y lo descuenta un script de Lua porque Redis corre cada script entero, sin intercalar otros comandos <span class="badge badge--doc">Documentado</span>: dos gateways que cobran a la vez no pueden gastar el mismo token.</p>
+
+<pre data-lang="lua" data-file="a10-parte3/gateway/src/main/resources/token_bucket.lua"><code>-- Token bucket de un cliente, en un solo paso atómico: Redis corre el script entero sin intercalar
+-- otros comandos, así que dos gateways que descuentan a la vez no pueden gastar el mismo token.
+-- KEYS[1]  la clave del balde, por ejemplo balde:web
+-- ARGV[1]  capacidad: cuántos tokens caben (la ráfaga máxima)
+-- ARGV[2]  recarga: tokens por segundo
+-- ARGV[3]  costo de esta request, normalmente 1
+-- Devuelve {1 si pasa o 0 si no, tokens que quedan, milisegundos hasta que alcance}
+local capacidad = tonumber(ARGV[1])
+local recarga = tonumber(ARGV[2])
+local costo = tonumber(ARGV[3])
+
+-- La hora la da Redis, no el gateway: así todos los gateways usan el mismo reloj.
+local t = redis.call('TIME')
+local ahora = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+
+local balde = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(balde[1])
+local antes = tonumber(balde[2])
+if tokens == nil then
+  -- Un cliente nuevo empieza con el balde lleno.
+  tokens = capacidad
+  antes = ahora
+end
+
+-- Recargar lo que corresponde al tiempo que pasó, sin pasar de la capacidad.
+tokens = math.min(capacidad, tokens + (ahora - antes) * recarga / 1000)
+
+local pasa = 0
+local espera = 0
+if tokens &gt;= costo then
+  tokens = tokens - costo
+  pasa = 1
+else
+  espera = math.ceil((costo - tokens) * 1000 / recarga)
+end
+
+redis.call('HSET', KEYS[1], 'tokens', tostring(tokens), 'ts', tostring(ahora))
+-- Un balde que se llenaría solo no hace falta guardarlo: vence cuando ya estaría lleno.
+redis.call('PEXPIRE', KEYS[1], math.ceil(capacidad * 1000 / recarga) + 1000)
+
+return { pasa, math.floor(tokens), espera }</code></pre>
+
+      <p>El balde no guarda una cola ni un contador por segundo: guarda dos números, los tokens que quedaban y cuándo se miró por última vez. Al llegar una request, suma lo que se recargó en el tiempo que pasó (<code>(ahora - antes) · recarga / 1000</code>), sin pasar de la capacidad, y resta uno. La hora la pone Redis con <code>TIME</code>: si la pusiera cada gateway, dos relojes desfasados harían que el balde se recargue de más o de menos.</p>
+
+<pre data-lang="java" data-file="a10-parte3/gateway/src/main/java/lab/gateway/TokenBucket.java"><code>package lab.gateway;
+
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+
+/**
+ * Un balde de tokens por cliente, guardado en Redis y descontado por token_bucket.lua.
+ * Si Redis no contesta a tiempo, la request pasa: el límite es una protección, no una dependencia
+ * de la que cuelgue todo el tráfico (fail-open).
+ */
+public class TokenBucket {
+
+    private static final Logger log = LoggerFactory.getLogger(TokenBucket.class);
+
+    /** pasa: si hay token; quedan: los tokens que siguen en el balde; esperaMs: cuánto falta para el próximo. */
+    public record Resultado(boolean pasa, long quedan, long esperaMs) {
+    }
+
+    @SuppressWarnings("rawtypes")
+    private static final RedisScript&lt;List&gt; SCRIPT =
+            RedisScript.of(new ClassPathResource("token_bucket.lua"), List.class);
+
+    private final StringRedisTemplate redis;
+    private final int capacidad;
+    private final double recargaPorSegundo;
+    private final Tablero tablero;
+
+    public TokenBucket(StringRedisTemplate redis, int capacidad, double recargaPorSegundo, Tablero tablero) {
+        this.redis = redis;
+        this.capacidad = capacidad;
+        this.recargaPorSegundo = recargaPorSegundo;
+        this.tablero = tablero;
+    }
+
+    public Resultado tomar(String cliente) {
+        try {
+            List&lt;?&gt; r = redis.execute(SCRIPT, List.of("balde:" + cliente),
+                    Integer.toString(capacidad), Double.toString(recargaPorSegundo), "1");
+            boolean pasa = ((Number) r.get(0)).longValue() == 1;
+            Resultado resultado = new Resultado(pasa, ((Number) r.get(1)).longValue(), ((Number) r.get(2)).longValue());
+            if (pasa) {
+                tablero.pasa();
+            } else {
+                tablero.rechazada();
+            }
+            return resultado;
+        } catch (RuntimeException e) {
+            // Redis caído o lento: se deja pasar y se cuenta. Sin balde, el resto de las defensas sigue en pie.
+            tablero.sinRedis();
+            if (log.isDebugEnabled()) {
+                log.debug("balde sin Redis: {}", e.toString());
+            }
+            return new Resultado(true, -1, 0);
+        }
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/gateway/src/main/java/lab/gateway/ProxyController.java"><code>package lab.gateway;
+
+import java.io.IOException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpRequest.BodyPublishers;
+import java.net.http.HttpResponse;
+import java.net.http.HttpResponse.BodyHandlers;
+import java.net.http.HttpTimeoutException;
+import java.time.Duration;
+import java.util.List;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * La puerta de entrada: todo lo que llega a /api/** pasa por aquí.
+ * 1. Sella la request: cuándo llegó (X-Request-Start) y hasta cuándo tiene (X-Request-Deadline).
+ * 2. Descuenta un token del balde del cliente; sin token, 429 con Retry-After.
+ * 3. La reenvía a pedidos con lo que queda del presupuesto como timeout.
+ */
+@RestController
+public class ProxyController {
+
+    /** Las cabeceras del cliente que siguen viaje. Las de tiempo no: esas las pone el gateway. */
+    private static final List&lt;String&gt; COPIAR = List.of("Content-Type", "Accept", "X-Cliente");
+
+    private final HttpClient http = HttpClient.newBuilder()
+            // HTTP/1.1 a secas: sin el intento de pasar a HTTP/2 que el cliente del JDK hace por defecto.
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofMillis(500))
+            .build();
+    private final TokenBucket balde;
+    private final GatewayApplication.Props props;
+    private final Tablero tablero;
+
+    public ProxyController(TokenBucket balde, GatewayApplication.Props props, Tablero tablero) {
+        this.balde = balde;
+        this.props = props;
+        this.tablero = tablero;
+    }
+
+    @RequestMapping("/api/**")
+    public ResponseEntity&lt;?&gt; reenviar(HttpServletRequest req, @RequestBody(required = false) byte[] cuerpo)
+            throws InterruptedException {
+        // 1. El sello. Si el cliente mandó estas cabeceras, se pisan: el deadline lo decide el borde, no el cliente.
+        long llegada = System.currentTimeMillis();
+        long vence = llegada + props.presupuesto().toMillis();
+
+        // 2. El balde. El cliente sale de X-Cliente; en un sistema real, de la API key o del token (M10).
+        String cliente = req.getHeader("X-Cliente") == null ? "anonimo" : req.getHeader("X-Cliente");
+        TokenBucket.Resultado token = balde.tomar(cliente);
+        if (!token.pasa()) {
+            return problema(HttpStatus.TOO_MANY_REQUESTS, "Superaste la cuota de " + cliente, token.esperaMs());
+        }
+
+        // 3. Reenviar a pedidos.
+        String ruta = req.getRequestURI() + (req.getQueryString() == null ? "" : "?" + req.getQueryString());
+        HttpRequest.Builder b = HttpRequest.newBuilder(props.destino().resolve(ruta))
+                .timeout(Duration.ofMillis(Math.max(1, vence - System.currentTimeMillis())))
+                .method(req.getMethod(), cuerpo == null ? BodyPublishers.noBody() : BodyPublishers.ofByteArray(cuerpo))
+                .header("X-Request-Start", "t=" + llegada)
+                .header("X-Request-Deadline", Long.toString(vence));
+        for (String h : COPIAR) {
+            String v = req.getHeader(h);
+            if (v != null) {
+                b.header(h, v);
+            }
+        }
+        try {
+            HttpResponse&lt;byte[]&gt; r = http.send(b.build(), BodyHandlers.ofByteArray());
+            ResponseEntity.BodyBuilder out = ResponseEntity.status(r.statusCode());
+            r.headers().firstValue("Content-Type").ifPresent(v -&gt; out.header("Content-Type", v));
+            r.headers().firstValue("Retry-After").ifPresent(v -&gt; out.header("Retry-After", v));
+            return out.body(r.body());
+        } catch (HttpTimeoutException e) {
+            tablero.agotada();
+            return problema(HttpStatus.GATEWAY_TIMEOUT, "Se acabó el presupuesto de la request", 0);
+        } catch (IOException e) {
+            return problema(HttpStatus.BAD_GATEWAY, "pedidos no contesta: " + e.getClass().getSimpleName(), 1000);
+        }
+    }
+
+    /** Un error con ProblemDetail; con Retry-After en segundos enteros, redondeado hacia arriba, si reintentarEnMs &gt; 0. */
+    private static ResponseEntity&lt;ProblemDetail&gt; problema(HttpStatus status, String detalle, long reintentarEnMs) {
+        ResponseEntity.BodyBuilder b = ResponseEntity.status(status);
+        if (reintentarEnMs &gt; 0) {
+            b.header("Retry-After", Long.toString(Math.max(1, (reintentarEnMs + 999) / 1000)));
+        }
+        return b.body(ProblemDetail.forStatusAndDetail(status, detalle));
+    }
+}</code></pre>
+
+      <p>El sello son dos cabeceras, las de <a href="../modules/m08-resiliencia.html#llegada">M08. Saber cuánto esperó una request</a>: <code>X-Request-Start</code>, con la hora de llegada, y <code>X-Request-Deadline</code>, con la hora en que la respuesta deja de servir, las dos en milisegundos desde 1970. El deadline es absoluto, no "te quedan 2 segundos": así cada servicio calcula lo que le queda con su reloj, sin restar lo que tardó la red. Funciona si los relojes están sincronizados; aquí todos los pods corren en la misma máquina, y en un clúster real lo hace NTP.</p>
+
+<pre data-lang="java" data-file="a10-parte3/gateway/src/main/java/lab/gateway/GatewayApplication.java"><code>package lab.gateway;
+
+import java.net.URI;
+import java.time.Duration;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.annotation.Bean;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class GatewayApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(GatewayApplication.class, args);
+    }
+
+    /** Lo que está bajo "lab" en application.yaml. */
+    @ConfigurationProperties("lab")
+    public record Props(URI destino, Duration presupuesto, Balde balde) {
+        public record Balde(int capacidad, double recargaPorSegundo) {
+        }
+    }
+
+    @Bean
+    Tablero tablero() {
+        return new Tablero();
+    }
+
+    @Bean
+    TokenBucket tokenBucket(StringRedisTemplate redis, Props props, Tablero tablero) {
+        return new TokenBucket(redis, props.balde().capacidad(), props.balde().recargaPorSegundo(), tablero);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/gateway/src/main/java/lab/gateway/Tablero.java"><code>package lab.gateway;
+
+import java.util.concurrent.atomic.LongAdder;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+
+/** Una línea por segundo con lo que pasó en ese segundo. scripts/mira.sh junta las de todos los pods. */
+public class Tablero {
+
+    private static final Logger log = LoggerFactory.getLogger(Tablero.class);
+
+    private final LongAdder pasan = new LongAdder();
+    private final LongAdder rechazadas = new LongAdder();
+    private final LongAdder sinRedis = new LongAdder();
+    private final LongAdder agotadas = new LongAdder();
+
+    public void pasa() {
+        pasan.increment();
+    }
+
+    public void rechazada() {
+        rechazadas.increment();
+    }
+
+    public void sinRedis() {
+        sinRedis.increment();
+    }
+
+    /** Una request a la que se le acabó el presupuesto esperando a pedidos. */
+    public void agotada() {
+        agotadas.increment();
+    }
+
+    @Scheduled(fixedRate = 1000)
+    void imprimir() {
+        long p = pasan.sumThenReset();
+        long r = rechazadas.sumThenReset();
+        long s = sinRedis.sumThenReset();
+        long a = agotadas.sumThenReset();
+        if (p + r + s + a &gt; 0) {
+            log.info("tablero pasan={} cuota={} sin_redis={} 504={}", p, r, s, a);
+        }
+    }
+}</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/gateway/src/main/resources/application.yaml"><code>spring:
+  application:
+    name: gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      # El balde no puede frenar a todas las requests: si Redis tarda más de 50 ms, se deja pasar (fail-open).
+      timeout: ${REDIS_TIMEOUT:50ms}
+      connect-timeout: 200ms
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+lab:
+  # Adónde reenvía todo lo que llega a /api/**.
+  destino: ${DESTINO:http://pedidos:8080}
+  # Cuánto tiene cada request, desde que llega al gateway. Con esto se calcula X-Request-Deadline.
+  presupuesto: ${PRESUPUESTO:2s}
+  balde:
+    # Hasta 100 requests de golpe por cliente, y 50 por segundo sostenidas.
+    capacidad: ${BALDE_CAPACIDAD:100}
+    recarga-por-segundo: ${BALDE_RECARGA:50}</code></pre>
+<pre data-lang="dockerfile" data-file="a10-parte3/gateway/Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/gateway-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM recibe el SIGTERM de Kubernetes directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Fail-open: si Redis no contesta en 50&#8239;ms, la request pasa sin cobrar. El balde protege a los servicios de un cliente que abusa; si su caída frenara todo el tráfico, Redis pasaría a ser una dependencia de la que cuelga el sistema entero. Y el deadline se pisa: lo que mande el cliente en <code>X-Request-Deadline</code> no cuenta, porque un cliente podría pedirse 10 minutos.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Spring Cloud Gateway con su <code>RequestRateLimiter</code>, que usa un token bucket en Redis parecido. <span class="badge badge--doc">Documentado</span> Funciona, pero esconde el script y el sello, que son lo que vienes a ver. Y un límite en memoria en cada pod del gateway: con 2 pods, cada cliente tendría el doble de cuota, y cambiaría con cada pod que agregues.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que el cliente se identifique solo con una cabecera que él mismo pone: aquí sirve para separar a "tienda" del "abusador", pero en serio sale de la API key o del token (<a href="../modules/m10-seguridad.html">M10</a>). Y que el reloj del gateway vaya adelantado respecto del de pedidos: pedidos creería que le queda menos de lo que le queda, y rechazaría requests sanas.</dd></div>
+      </dl>
+
+      <h3 id="p3-deadline">Paso 4. El deadline, de un servicio a otro</h3>
+
+      <p>pedidos e inventario tienen el mismo filtro, el primero de la cadena: lee las dos cabeceras, anota cuánto esperó la request antes de llegar, y si el deadline ya venció, contesta 504 sin hacer nada. Si no, lo deja en la request para el código que sigue. Los tres archivos son iguales en los dos servicios: copia la carpeta <code>deadline/</code> y cambia el <code>package</code> a <code>lab.inventario.deadline</code>.</p>
+
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/deadline/Deadline.java"><code>package lab.pedidos.deadline;
+
+import jakarta.servlet.http.HttpServletRequest;
+
+/** Hasta cuándo tiene la request, en milisegundos desde 1970, según el reloj del gateway. */
+public record Deadline(long venceEpochMs) {
+
+    /** Sin deadline: cuando la request no trae uno o el modo está apagado. */
+    public static final Deadline SIN = new Deadline(Long.MAX_VALUE);
+
+    static final String ATRIBUTO = Deadline.class.getName();
+
+    public long restanteMs() {
+        return venceEpochMs == Long.MAX_VALUE ? Long.MAX_VALUE : venceEpochMs - System.currentTimeMillis();
+    }
+
+    public boolean vencido() {
+        return restanteMs() &lt;= 0;
+    }
+
+    /** El deadline que dejó DeadlineFilter en la request. */
+    public static Deadline de(HttpServletRequest req) {
+        return req.getAttribute(ATRIBUTO) instanceof Deadline d ? d : SIN;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/deadline/Contador.java"><code>package lab.pedidos.deadline;
+
+/** Lo que DeadlineFilter cuenta. Lo implementa el Tablero de cada servicio. */
+public interface Contador {
+
+    /** Una request que llegó con el deadline vencido y se rechazó sin trabajar. */
+    void vencida();
+
+    /** Cuánto esperó una request entre el gateway y el primer filtro de este servicio. */
+    void espera(long ms);
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/deadline/DeadlineFilter.java"><code>package lab.pedidos.deadline;
+
+import java.io.IOException;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+/**
+ * El primer filtro de la cadena. Lee las dos cabeceras que puso el gateway:
+ * - X-Request-Start: cuánto esperó la request antes de llegar aquí (va al tablero).
+ * - X-Request-Deadline: si ya venció, se contesta 504 sin hacer nada; si no, queda en la request para los demás.
+ */
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class DeadlineFilter extends OncePerRequestFilter {
+
+    private final boolean activo;
+    private final Contador contador;
+
+    public DeadlineFilter(@Value("${lab.deadline:true}") boolean activo, Contador contador) {
+        this.activo = activo;
+        this.contador = contador;
+    }
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest req) {
+        // Las probes y las métricas no traen deadline y no se cuentan.
+        return req.getRequestURI().startsWith("/actuator");
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+            throws ServletException, IOException {
+        long ahora = System.currentTimeMillis();
+        Long inicio = numero(req.getHeader("X-Request-Start"));
+        if (inicio != null) {
+            contador.espera(ahora - inicio);
+        }
+
+        Deadline deadline = Deadline.SIN;
+        Long vence = numero(req.getHeader("X-Request-Deadline"));
+        if (activo &amp;&amp; vence != null) {
+            deadline = new Deadline(vence);
+            if (deadline.vencido()) {
+                // Nadie espera esta respuesta: el gateway ya contestó 504 o está por hacerlo.
+                contador.vencida();
+                res.setStatus(HttpServletResponse.SC_GATEWAY_TIMEOUT);
+                res.setContentType("application/problem+json");
+                res.getWriter().write("{\"status\":504,\"detail\":\"La request llegó con el deadline vencido\"}");
+                return;
+            }
+        }
+        req.setAttribute(Deadline.ATRIBUTO, deadline);
+        chain.doFilter(req, res);
+    }
+
+    /** "t=1759766400123" o "1759766400123" a un número; null si no viene o no se entiende. */
+    private static Long numero(String cabecera) {
+        if (cabecera == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(cabecera.startsWith("t=") ? cabecera.substring(2) : cabecera);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}</code></pre>
+
+      <p>El deadline no viaja igual en cada salto. Del gateway a pedidos va el de la request: 2&#8239;s desde la llegada. De pedidos a inventario va el de cada intento, que puede ser más corto: si pedidos le da 800&#8239;ms a un intento y después deja de escuchar, inventario tiene que saber que a los 800&#8239;ms nadie espera su respuesta, aunque a la request le quede más. Y de inventario a la base va como <code>statement_timeout</code>, para que PostgreSQL cancele la consulta que ya no sirve y suelte la conexión. Es la cadena de <a href="../modules/m08-resiliencia.html#deadline-viaje">M08. Cómo viaja un deadline</a>, con la cancelación de <a href="../modules/m08-resiliencia.html#cancelacion">M08. Cancelar</a> en el último salto.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa10p3dt fa10p3dd">
+<title id="fa10p3dt">Tres intentos dentro de un deadline de 2 segundos</title>
+<desc id="fa10p3dd">Una línea de tiempo de 0 a 2000 milisegundos. El gateway da 2000 ms. pedidos guarda 100 ms de margen. El primer intento dura 800 ms, su tope, y vence. Pausa de 50 ms. El segundo intento empieza en 850 y dura 800 ms, hasta 1650. Pausa de 100 ms. El tercero empieza en 1750; quedan 250 ms menos 100 de margen, así que su timeout es 150 ms y termina en 1900. pedidos contesta 503 en 1900, antes de que venza el deadline del gateway en 2000. Cada intento le pasa a inventario su propio deadline, y inventario lo convierte en statement_timeout.</desc>
+<text class="dg-small" x="20" y="26">Si inventario no contesta nunca: tres intentos con las pausas en su máximo</text>
+<text class="dg-small" x="160" y="69" text-anchor="end">gateway</text>
+<rect class="dg-box" x="170.0" y="50" width="560.0" height="28" rx="4"/>
+<text class="dg-tiny" x="450.0" y="69" text-anchor="middle">presupuesto de 2000 ms</text>
+<text class="dg-small" x="160" y="113" text-anchor="end">intento 1</text>
+<rect class="dg-bad" x="170.0" y="94" width="224.0" height="28" rx="4"/>
+<text class="dg-tiny" x="282.0" y="113" text-anchor="middle">800 ms: su tope</text>
+<text class="dg-small" x="160" y="157" text-anchor="end">intento 2</text>
+<rect class="dg-bad" x="408.0" y="138" width="224.0" height="28" rx="4"/>
+<text class="dg-tiny" x="520.0" y="157" text-anchor="middle">800 ms: su tope</text>
+<text class="dg-small" x="160" y="201" text-anchor="end">intento 3</text>
+<rect class="dg-bad" x="660.0" y="182" width="42.0" height="28" rx="4"/>
+<text class="dg-tiny" x="652.0" y="201" text-anchor="end">250 ms - 100 de margen = 150 ms</text>
+<text class="dg-tiny" x="401.0" y="140" text-anchor="middle">50</text>
+<text class="dg-tiny" x="646.0" y="184" text-anchor="middle">100</text>
+<path class="sim-axis" d="M170 232 H730"/>
+<path class="sim-axis" d="M170 228 V236"/>
+<text class="sim-label" x="170" y="250" text-anchor="middle">0 ms</text>
+<path class="sim-axis" d="M310 228 V236"/>
+<text class="sim-label" x="310" y="250" text-anchor="middle">500 ms</text>
+<path class="sim-axis" d="M450 228 V236"/>
+<text class="sim-label" x="450" y="250" text-anchor="middle">1000 ms</text>
+<path class="sim-axis" d="M590 228 V236"/>
+<text class="sim-label" x="590" y="250" text-anchor="middle">1500 ms</text>
+<path class="sim-axis" d="M730 228 V236"/>
+<text class="sim-label" x="730" y="250" text-anchor="middle">2000 ms</text>
+<path class="dg-feedback" d="M702.0 44 V232"/>
+<text class="dg-tiny" x="696.0" y="272" text-anchor="end">1900: pedidos contesta 503</text>
+<path class="dg-feedback" d="M730.0 44 V258"/>
+<text class="dg-fail-text dg-tiny" x="730.0" y="290" text-anchor="end">2000: vence el deadline</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.5.</b> Una request con 2&#8239;s de presupuesto cuando inventario no contesta nunca, con las pausas en su máximo (50 y 100&#8239;ms). Es la cuenta que hace <code>InventarioClient</code>: cada intento tiene su tope de 800&#8239;ms o lo que quede menos 100&#8239;ms de margen, lo que sea menor, y un reintento solo sale si su pausa y el margen caben en lo que queda. pedidos contesta 503 antes de que venza el deadline del gateway: el gateway nunca tiene que cortar por timeout.</figcaption>
+      </figure>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un deadline absoluto en una cabecera propia, en milisegundos. Lo lee un filtro, que lo deja en un atributo de la request, y el código que llama a otro servicio lo pasa a mano. Un 504 inmediato para lo que llega vencido: el gateway ya contestó, y todo trabajo sobre esa request es para nadie.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un timeout relativo, como <code>grpc-timeout</code>, que cada salto reescribe restando lo que tardó: no depende de los relojes, pero se va corriendo con cada salto que olvida restar. Y la propagación automática de un framework, como el <code>Context</code> de gRPC: en HTTP con Spring no viene sola, y escribirla a mano deja ver cada salto.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Un servicio en el medio que no reenvía la cabecera: desde ahí para adentro, nadie sabe cuándo vence. Por eso <code>InventarioClient</code> la pone siempre que el modo esté encendido, y la prueba <code>pasaElDeadlineDelIntentoAInventario</code> lo revisa.</dd></div>
+      </dl>
+
+      <h3 id="p3-pedidos">Paso 5. pedidos: bulkhead, reintentos y breaker</h3>
+
+      <p>Todo lo que va a inventario pasa por <code>InventarioClient</code>, que pone las defensas en capas, de afuera hacia adentro. Primero el <b>bulkhead</b>: a lo sumo 20 llamadas esperando a inventario; la 21.ª se rechaza en el acto. Dentro, los <b>reintentos</b>: hasta tres intentos. Dentro de cada intento, el <b>breaker</b>: con el breaker abierto, el intento ni sale. Y en la llamada, el <b>timeout</b> que sale del deadline.</p>
+
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/inventario/InventarioClient.java"><code>package lab.pedidos.inventario;
+
+import java.io.IOException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
+import java.time.Duration;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import lab.pedidos.PedidosApplication.Props;
+import lab.pedidos.Tablero;
+import lab.pedidos.deadline.Deadline;
+
+/**
+ * Todo lo que va a inventario pasa por aquí, en este orden, de afuera hacia adentro:
+ * 1. El bulkhead: a lo sumo 20 hilos esperando a inventario; el resto se rechaza en el acto.
+ * 2. Los reintentos: hasta 3 intentos, con backoff exponencial, jitter y un presupuesto del 10 %.
+ * 3. El breaker, en cada intento: con el breaker abierto, el intento ni sale.
+ * 4. La llamada, con un timeout que sale del deadline y con el deadline del intento en una cabecera.
+ */
+public class InventarioClient {
+
+    public enum Respuesta { RESERVADA, SIN_STOCK }
+
+    /** Una falla que vale la pena reintentar: timeout, conexión rechazada, 500, 502 o 503. */
+    static class Reintentable extends RuntimeException {
+        Reintentable(String motivo) {
+            super(motivo, null, false, false);
+        }
+    }
+
+    private final HttpClient http = HttpClient.newBuilder()
+            // HTTP/1.1 a secas: sin el intento de pasar a HTTP/2 que el cliente del JDK hace por defecto.
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofMillis(300))
+            .build();
+    private final Props props;
+    private final CircuitBreaker breaker;
+    private final Bulkhead bulkhead;
+    private final Tablero tablero;
+    private final PresupuestoReintentos presupuesto;
+
+    public InventarioClient(Props props, CircuitBreaker breaker, Bulkhead bulkhead, Tablero tablero) {
+        this.props = props;
+        this.breaker = breaker;
+        this.bulkhead = bulkhead;
+        this.tablero = tablero;
+        // Tope de 10 reintentos acumulados.
+        this.presupuesto = new PresupuestoReintentos(props.reintentos().presupuesto(), 10);
+        tablero.mirarBreaker(() -&gt; props.breaker().enabled() ? breaker.getState().name() : "APAGADO");
+    }
+
+    public Respuesta reservar(UUID pedido, long producto, int cantidad, Deadline deadline) {
+        if (!props.bulkhead().enabled()) {
+            return conReintentos(pedido, producto, cantidad, deadline);
+        }
+        if (!bulkhead.tryAcquirePermission()) {
+            tablero.llena();
+            throw new NoDisponible("Hay demasiadas reservas esperando a inventario", 1000);
+        }
+        try {
+            return conReintentos(pedido, producto, cantidad, deadline);
+        } finally {
+            bulkhead.onComplete();
+        }
+    }
+
+    private Respuesta conReintentos(UUID pedido, long producto, int cantidad, Deadline deadline) {
+        Props.Reintentos r = props.reintentos();
+        int intentos = "off".equals(r.modo()) ? 1 : r.intentos();
+        presupuesto.request();
+        for (int intento = 0; ; intento++) {
+            try {
+                return intentar(pedido, producto, cantidad, deadline);
+            } catch (Reintentable e) {
+                if (intento + 1 &gt;= intentos) {
+                    throw new NoDisponible("Inventario no contestó en " + intentos + " intentos: " + e.getMessage(), 1000);
+                }
+                long pausa = 0;
+                if ("jitter".equals(r.modo())) {
+                    // Full jitter: un número al azar entre 0 y base · 2^intento, sin pasar del tope.
+                    long techo = Math.min(r.tope().toMillis(), r.base().toMillis() &lt;&lt; intento);
+                    pausa = ThreadLocalRandom.current().nextLong(techo + 1);
+                    if (!presupuesto.gastar()) {
+                        tablero.sinPresupuesto();
+                        throw new NoDisponible("Sin presupuesto de reintentos: " + e.getMessage(), 1000);
+                    }
+                }
+                // No reintentes lo que no alcanza a terminar: la pausa más el margen tienen que caber en el deadline.
+                if (props.deadline() &amp;&amp; deadline.restanteMs() &lt; pausa + props.inventario().margen().toMillis()) {
+                    throw new NoDisponible("No alcanza el deadline para otro intento", 1000);
+                }
+                tablero.reintento();
+                dormir(pausa);
+            }
+        }
+    }
+
+    private Respuesta intentar(UUID pedido, long producto, int cantidad, Deadline deadline) {
+        if (!props.breaker().enabled()) {
+            return llamar(pedido, producto, cantidad, deadline);
+        }
+        if (!breaker.tryAcquirePermission()) {
+            // Abierto: ni se intenta, y no se reintenta. Inventario descansa.
+            tablero.cortada();
+            throw new NoDisponible("El breaker hacia inventario está abierto", props.breaker().openFor().toMillis());
+        }
+        long t0 = System.nanoTime();
+        try {
+            Respuesta respuesta = llamar(pedido, producto, cantidad, deadline);
+            breaker.onSuccess(System.nanoTime() - t0, TimeUnit.NANOSECONDS);
+            return respuesta;
+        } catch (Reintentable e) {
+            breaker.onError(System.nanoTime() - t0, TimeUnit.NANOSECONDS, e);
+            throw e;
+        } catch (RuntimeException e) {
+            // No fue culpa de inventario (por ejemplo, el deadline se acabó antes de salir): no cuenta.
+            breaker.releasePermission();
+            throw e;
+        }
+    }
+
+    private Respuesta llamar(UUID pedido, long producto, int cantidad, Deadline deadline) {
+        long timeout = props.inventario().porIntento().toMillis();
+        HttpRequest.Builder b = HttpRequest.newBuilder(props.inventario().url().resolve("/reservas"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        "{\"pedidoId\":\"%s\",\"productoId\":%d,\"cantidad\":%d}".formatted(pedido, producto, cantidad)));
+        if (props.deadline() &amp;&amp; deadline != Deadline.SIN) {
+            long queda = deadline.restanteMs() - props.inventario().margen().toMillis();
+            if (queda &lt;= 0) {
+                throw new NoDisponible("Se acabó el deadline antes de llamar a inventario", 1000);
+            }
+            // El intento tiene lo que quede, o su tope si es menos. Y a inventario le pasa el deadline del intento,
+            // no el de la request: cuando este intento venza, pedidos deja de escuchar, aunque la request siga viva.
+            timeout = Math.min(timeout, queda);
+            b.header("X-Request-Deadline", Long.toString(System.currentTimeMillis() + timeout));
+        }
+        b.timeout(Duration.ofMillis(timeout));
+        tablero.llamada();
+        try {
+            HttpResponse&lt;Void&gt; res = http.send(b.build(), HttpResponse.BodyHandlers.discarding());
+            return switch (res.statusCode()) {
+                case 200 -&gt; Respuesta.RESERVADA;
+                case 409 -&gt; Respuesta.SIN_STOCK;
+                case 500, 502, 503 -&gt; throw new Reintentable("inventario contestó " + res.statusCode());
+                // 504: inventario recibió la request con el deadline vencido. Reintentar no sirve.
+                case 504 -&gt; throw new NoDisponible("Inventario recibió la request vencida", 1000);
+                default -&gt; throw new IllegalStateException("inventario contestó " + res.statusCode());
+            };
+        } catch (HttpTimeoutException e) {
+            throw new Reintentable("timeout de " + timeout + " ms");
+        } catch (IOException e) {
+            throw new Reintentable(e.getClass().getSimpleName());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NoDisponible("Interrumpido", 1000);
+        }
+    }
+
+    private static void dormir(long ms) {
+        if (ms &lt;= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NoDisponible("Interrumpido", 1000);
+        }
+    }
+}</code></pre>
+
+      <p>El orden importa. El bulkhead va afuera de los reintentos porque una llamada que reintenta sigue ocupando su hilo: si fuera al revés, cada intento pediría un lugar nuevo y tres intentos podrían ocupar tres lugares. El breaker va adentro, en cada intento, porque cada intento es una llamada que inventario atiende o no: si el breaker viera solo el resultado final, tres fallas contarían como una, y tardaría el triple en abrirse.</p>
+
+      <p>Los reintentos tienen tres modos, para comparar. <code>ingenuo</code> reintenta en el acto, sin pausa: es el que amplifica, como en <a href="../modules/m08-resiliencia.html#por-que-27">M08. Por qué 27</a>. <code>jitter</code> espera un tiempo al azar entre 0 y <code>50 · 2^intento</code> milisegundos, con tope en 400 (el "full jitter"), y además pide permiso al presupuesto: los reintentos no pueden pasar del 10&#8239;% de las requests. Y no reintenta lo que no tiene sentido: un 409 es una respuesta, no una falla; un 504 de inventario quiere decir que el deadline ya se acabó; y con el breaker abierto, el próximo intento también lo encontraría abierto.</p>
+
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/inventario/PresupuestoReintentos.java"><code>package lab.pedidos.inventario;
+
+/**
+ * Los reintentos no pueden pasar de una proporción de las requests. Cada request suma "proporcion" al saldo
+ * (0.1 con un presupuesto del 10 %), y cada reintento gasta 1. El saldo tiene tope: después de un rato
+ * tranquilo no se acumulan cientos de reintentos para gastar de golpe en la próxima falla.
+ */
+public class PresupuestoReintentos {
+
+    private final double proporcion;
+    private final double tope;
+    private double saldo;
+
+    public PresupuestoReintentos(double proporcion, double tope) {
+        this.proporcion = proporcion;
+        this.tope = tope;
+        this.saldo = tope;
+    }
+
+    public synchronized void request() {
+        saldo = Math.min(tope, saldo + proporcion);
+    }
+
+    public synchronized boolean gastar() {
+        if (saldo &lt; 1) {
+            return false;
+        }
+        saldo -= 1;
+        return true;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/inventario/NoDisponible.java"><code>package lab.pedidos.inventario;
+
+/** Inventario no pudo contestar a tiempo, o una defensa decidió no preguntarle. Se contesta 503. */
+public class NoDisponible extends RuntimeException {
+
+    private final long reintentarEnMs;
+
+    public NoDisponible(String motivo, long reintentarEnMs) {
+        super(motivo, null, false, false);
+        this.reintentarEnMs = reintentarEnMs;
+    }
+
+    /** Lo que va en Retry-After: cuándo vale la pena que el cliente vuelva a probar. */
+    public long reintentarEnMs() {
+        return reintentarEnMs;
+    }
+}</code></pre>
+
+      <p>Los reintentos solo son seguros porque la reserva es idempotente. Si el primer intento llegó a inventario, descontó stock y la respuesta se perdió por timeout, el segundo intento llega con el mismo <code>pedidoId</code>, y inventario no descuenta otra vez (paso 6). Por eso el id del pedido se genera en pedidos, antes de llamar, y no en inventario.</p>
+
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/PedidoController.java"><code>package lab.pedidos;
+
+import java.net.URI;
+import java.util.Map;
+import java.util.UUID;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Positive;
+import lab.pedidos.deadline.Deadline;
+import lab.pedidos.inventario.InventarioClient;
+import lab.pedidos.inventario.NoDisponible;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class PedidoController {
+
+    public record NuevoPedido(@Positive long productoId, @Min(1) @Max(10) int cantidad) {
+    }
+
+    private final InventarioClient inventario;
+    private final JdbcClient jdbc;
+
+    public PedidoController(InventarioClient inventario, JdbcClient jdbc) {
+        this.inventario = inventario;
+        this.jdbc = jdbc;
+    }
+
+    /** Crear un pedido: reservar en inventario y, si se pudo, guardar el pedido. */
+    @PostMapping("/api/pedidos")
+    public ResponseEntity&lt;?&gt; crear(@Valid @RequestBody NuevoPedido nuevo, HttpServletRequest req) {
+        // El id sale aquí, antes de llamar: es la clave de idempotencia de la reserva.
+        // Si un reintento llega dos veces a inventario, la segunda vez no descuenta nada.
+        UUID id = UUID.randomUUID();
+        try {
+            InventarioClient.Respuesta r = inventario.reservar(id, nuevo.productoId(), nuevo.cantidad(), Deadline.de(req));
+            if (r == InventarioClient.Respuesta.SIN_STOCK) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "No hay stock"));
+            }
+        } catch (NoDisponible e) {
+            // Rápido y con Retry-After: el cliente sabe que no fue su culpa y cuándo volver.
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", Long.toString(Math.max(1, (e.reintentarEnMs() + 999) / 1000)))
+                    .body(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage()));
+        }
+        jdbc.sql("INSERT INTO pedidos (id, producto_id, cantidad) VALUES (?, ?, ?)")
+                .params(id, nuevo.productoId(), nuevo.cantidad())
+                .update();
+        return ResponseEntity.created(URI.create("/api/pedidos/" + id))
+                .body(Map.of("id", id, "productoId", nuevo.productoId(), "cantidad", nuevo.cantidad()));
+    }
+
+    /** Leer un pedido: solo la base, nunca inventario. Tiene que seguir rápido aunque inventario esté caído. */
+    @GetMapping("/api/pedidos/{id}")
+    public ResponseEntity&lt;?&gt; leer(@PathVariable UUID id) {
+        return jdbc.sql("SELECT id, producto_id, cantidad, creado FROM pedidos WHERE id = ?")
+                .param(id)
+                .query()
+                .listOfRows()
+                .stream()
+                .findFirst()
+                .&lt;ResponseEntity&lt;?&gt;&gt;map(ResponseEntity::ok)
+                .orElseGet(() -&gt; ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, "No existe el pedido " + id)));
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/PedidosApplication.java"><code>package lab.pedidos;
+
+import java.net.URI;
+import java.time.Duration;
+
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
+import lab.pedidos.inventario.InventarioClient;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class PedidosApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(PedidosApplication.class, args);
+    }
+
+    /** Lo que está bajo "lab" en application.yaml. */
+    @ConfigurationProperties("lab")
+    public record Props(boolean deadline, Inventario inventario, Reintentos reintentos, Breaker breaker, Bulk bulkhead) {
+        public record Inventario(URI url, Duration porIntento, Duration margen) {
+        }
+
+        public record Reintentos(String modo, int intentos, Duration base, Duration tope, double presupuesto) {
+        }
+
+        public record Breaker(boolean enabled, int window, int minimumCalls, float failureRate,
+                              Duration slowCall, Duration openFor, int halfOpenCalls) {
+        }
+
+        public record Bulk(boolean enabled, int maxConcurrent) {
+        }
+    }
+
+    @Bean
+    Tablero tablero() {
+        return new Tablero();
+    }
+
+    @Bean
+    CircuitBreaker inventarioBreaker(Props props) {
+        Props.Breaker b = props.breaker();
+        return CircuitBreaker.of("inventario", CircuitBreakerConfig.custom()
+                .slidingWindowType(SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(b.window())
+                .minimumNumberOfCalls(b.minimumCalls())
+                // Se abre si falla la mitad de las últimas 20, o si la mitad tarda más de 500 ms.
+                .failureRateThreshold(b.failureRate())
+                .slowCallDurationThreshold(b.slowCall())
+                .slowCallRateThreshold(b.failureRate())
+                // Abierto 5 s: inventario no recibe nada de este pod y tiene tiempo de recuperarse.
+                .waitDurationInOpenState(b.openFor())
+                .permittedNumberOfCallsInHalfOpenState(b.halfOpenCalls())
+                .build());
+    }
+
+    @Bean
+    Bulkhead inventarioBulkhead(Props props) {
+        return Bulkhead.of("inventario", BulkheadConfig.custom()
+                .maxConcurrentCalls(props.bulkhead().maxConcurrent())
+                // Sin espera: si los 20 lugares están ocupados, se rechaza en el acto.
+                .maxWaitDuration(Duration.ZERO)
+                .build());
+    }
+
+    @Bean
+    InventarioClient inventarioClient(Props props, CircuitBreaker inventarioBreaker, Bulkhead inventarioBulkhead,
+                                      Tablero tablero) {
+        return new InventarioClient(props, inventarioBreaker, inventarioBulkhead, tablero);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/main/java/lab/pedidos/Tablero.java"><code>package lab.pedidos;
+
+import java.util.concurrent.atomic.LongAccumulator;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Supplier;
+
+import lab.pedidos.deadline.Contador;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+
+/** Una línea por segundo con lo que pasó en ese segundo. scripts/mira.sh junta las de todos los pods. */
+public class Tablero implements Contador {
+
+    private static final Logger log = LoggerFactory.getLogger(Tablero.class);
+
+    private final LongAdder llamadas = new LongAdder();
+    private final LongAdder reintentos = new LongAdder();
+    private final LongAdder sinPresupuesto = new LongAdder();
+    private final LongAdder cortadas = new LongAdder();
+    private final LongAdder llenas = new LongAdder();
+    private final LongAdder vencidas = new LongAdder();
+    private final LongAccumulator esperaMax = new LongAccumulator(Long::max, 0);
+    private Supplier&lt;String&gt; breaker = () -&gt; "-";
+
+    /** Un intento que salió hacia inventario. */
+    public void llamada() {
+        llamadas.increment();
+    }
+
+    public void reintento() {
+        reintentos.increment();
+    }
+
+    /** Un reintento que no se hizo porque se acabó el presupuesto de reintentos. */
+    public void sinPresupuesto() {
+        sinPresupuesto.increment();
+    }
+
+    /** Una llamada que el breaker abierto no dejó salir. */
+    public void cortada() {
+        cortadas.increment();
+    }
+
+    /** Una llamada que el bulkhead rechazó porque sus 20 lugares estaban ocupados. */
+    public void llena() {
+        llenas.increment();
+    }
+
+    @Override
+    public void vencida() {
+        vencidas.increment();
+    }
+
+    @Override
+    public void espera(long ms) {
+        esperaMax.accumulate(ms);
+    }
+
+    public void mirarBreaker(Supplier&lt;String&gt; estado) {
+        this.breaker = estado;
+    }
+
+    @Scheduled(fixedRate = 1000)
+    void imprimir() {
+        long l = llamadas.sumThenReset();
+        long r = reintentos.sumThenReset();
+        long p = sinPresupuesto.sumThenReset();
+        long c = cortadas.sumThenReset();
+        long b = llenas.sumThenReset();
+        long v = vencidas.sumThenReset();
+        long e = esperaMax.getThenReset();
+        if (l + r + p + c + b + v &gt; 0) {
+            log.info("tablero breaker={} llamadas={} reintentos={} sin_presupuesto={} cortadas={} bulkhead_lleno={} vencidas={} espera_max_ms={}",
+                    breaker.get(), l, r, p, c, b, v, e);
+        }
+    }
+}</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/pedidos/src/main/resources/application.yaml"><code>spring:
+  application:
+    name: pedidos
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/lab}
+    username: ${DB_USER:lab}
+    password: ${DB_PASSWORD:lab}
+    hikari:
+      # Las consultas sin esquema van a pedidos.
+      schema: pedidos
+      maximum-pool-size: 5
+      connection-timeout: 1000
+  flyway:
+    # Cada servicio tiene su esquema en la misma base: sus tablas y su historial de Flyway no se pisan.
+    schemas: pedidos
+    default-schema: pedidos
+
+server:
+  shutdown: graceful
+  tomcat:
+    threads:
+      # 40 hilos para todo el pod. El bulkhead deja que a lo sumo 20 esperen a inventario.
+      max: 40
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+lab:
+  # Si es false, pedidos ignora X-Request-Deadline y no lo manda a inventario.
+  deadline: ${DEADLINE:true}
+  inventario:
+    url: ${INVENTARIO_URL:http://inventario:8080}
+    # El tope de cada intento. Con deadline, el intento tiene lo que quede, si es menos.
+    por-intento: ${POR_INTENTO:800ms}
+    # Lo que se guarda para después de la llamada: escribir el pedido y contestar.
+    margen: 100ms
+  reintentos:
+    # off: un intento. ingenuo: tres seguidos, sin pausa. jitter: tres, con backoff exponencial, jitter y presupuesto.
+    modo: ${REINTENTOS:jitter}
+    intentos: 3
+    base: 50ms
+    tope: 400ms
+    # Los reintentos pueden ser a lo sumo el 10 % de las requests.
+    presupuesto: 0.1
+  breaker:
+    enabled: ${BREAKER:true}
+    window: 20
+    minimum-calls: 10
+    failure-rate: 50
+    slow-call: 500ms
+    open-for: 5s
+    half-open-calls: 3
+  bulkhead:
+    enabled: ${BULKHEAD:true}
+    max-concurrent: 20</code></pre>
+<pre data-lang="sql" data-file="a10-parte3/pedidos/src/main/resources/db/migration/V1__pedidos.sql"><code>CREATE TABLE pedidos (
+    id          uuid PRIMARY KEY,
+    producto_id bigint      NOT NULL,
+    cantidad    int         NOT NULL CHECK (cantidad &gt; 0),
+    creado      timestamptz NOT NULL DEFAULT now()
+);</code></pre>
+<pre data-lang="dockerfile" data-file="a10-parte3/pedidos/Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/pedidos-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM recibe el SIGTERM de Kubernetes directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <p>La cuenta del bulkhead sale de la ley de Little. Tomcat tiene 40 hilos por pod. Si inventario tarda 2&#8239;s y llegan 20 pedidos por segundo a cada pod, harían falta 20 · 2 = 40 hilos solo para esperar a inventario: todos. Las lecturas, que no tocan inventario, se quedarían sin hilo. Con el bulkhead en 20, a lo sumo la mitad de los hilos espera a inventario, y la otra mitad atiende lo demás.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Un breaker y un bulkhead por dependencia, contados por llamadas, sin anotaciones. El breaker se abre si la mitad de las últimas 20 llamadas falla o tarda más de 500&#8239;ms, y queda abierto 5&#8239;s: es el tiempo que inventario tiene para recuperarse sin recibir nada de este pod. Los reintentos, a mano, con presupuesto. Y la readiness de pedidos no mira a inventario: si lo hiciera, la caída de inventario sacaría a pedidos del Service, y con él a las lecturas.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>El <code>Retry</code> de Resilience4j: tiene backoff exponencial con jitter, pero no un presupuesto compartido entre requests ni el chequeo contra el deadline, y hay que componerlo con el breaker en el orden correcto. <span class="badge badge--doc">Documentado</span> Y un bulkhead con cola (<code>maxWaitDuration</code> mayor que 0): esperar un lugar es esperar a un inventario que ya está lento.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que la reserva salga bien y el <code>INSERT</code> del pedido falle: queda stock reservado para un pedido que no existe. Aquí se acepta; en serio, el pedido se guarda primero como pendiente y una saga lo cierra o lo compensa (<a href="../modules/m05-bases-de-datos.html">M05</a>). Y que el bulkhead esté lleno por un inventario lento: los 503 de pedidos suben aunque inventario no rechace nada. Es lo que tiene que pasar.</dd></div>
+      </dl>
+
+      <h3 id="p3-inventario">Paso 6. inventario: la compuerta, la base y el arranque</h3>
+
+      <p>inventario se defiende de lo que le llega. La <b>compuerta</b> deja adentro a lo sumo 5 reservas a la vez, tantas como conexiones tiene su pool, y rechaza el resto con 503 en el acto: el load shedding de <a href="../modules/m08-resiliencia.html#shedding">M08</a>, como la compuerta de la parte 1. La diferencia es que su límite no arranca en 5: arranca en 1 cuando el pod pasa a listo, y sube en línea recta hasta 5 en 30&#8239;s. Es el slow start de <a href="../modules/m08-resiliencia.html#arranque">M08. Volver sin caerse otra vez</a>, hecho en el código.</p>
+
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Compuerta.java"><code>package lab.inventario;
+
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
+
+import org.springframework.boot.availability.AvailabilityChangeEvent;
+import org.springframework.boot.availability.ReadinessState;
+import org.springframework.context.event.EventListener;
+
+/**
+ * Cuántas reservas pueden estar adentro a la vez. Lo que no entra se rechaza en el acto con 503 (load shedding).
+ * El límite no arranca en el máximo: cuando el pod pasa a listo, empieza en "inicial" y sube en línea recta
+ * hasta "maximo" en lo que dure la rampa. Es el slow start del pod, hecho en el código.
+ */
+public class Compuerta {
+
+    private final boolean activa;
+    private final int inicial;
+    private final int maximo;
+    private final long rampaMs;
+    private final LongSupplier reloj;
+    private final AtomicInteger adentro = new AtomicInteger();
+    /** Cuándo el pod pasó a listo. Hasta entonces, el límite es el inicial. */
+    private volatile long desde = Long.MAX_VALUE;
+
+    public Compuerta(boolean activa, int inicial, int maximo, long rampaMs, LongSupplier reloj) {
+        this.activa = activa;
+        this.inicial = inicial;
+        this.maximo = maximo;
+        this.rampaMs = rampaMs;
+        this.reloj = reloj;
+    }
+
+    /** Spring Boot avisa cuando el pod acepta tráfico: ahí empieza la rampa. */
+    @EventListener
+    public void alCambiar(AvailabilityChangeEvent&lt;ReadinessState&gt; evento) {
+        if (evento.getState() == ReadinessState.ACCEPTING_TRAFFIC) {
+            abrir();
+        }
+    }
+
+    public void abrir() {
+        desde = reloj.getAsLong();
+    }
+
+    public int limite() {
+        if (rampaMs &lt;= 0) {
+            return maximo;
+        }
+        long t = reloj.getAsLong() - desde;
+        if (t &lt;= 0) {
+            return inicial;
+        }
+        return (int) Math.min(maximo, inicial + (maximo - inicial) * t / rampaMs);
+    }
+
+    public int adentro() {
+        return adentro.get();
+    }
+
+    /** true si entró; quien entra tiene que llamar a salir() en un finally. */
+    public boolean entrar() {
+        if (!activa) {
+            adentro.incrementAndGet();
+            return true;
+        }
+        while (true) {
+            int n = adentro.get();
+            if (n &gt;= limite()) {
+                return false;
+            }
+            if (adentro.compareAndSet(n, n + 1)) {
+                return true;
+            }
+        }
+    }
+
+    public void salir() {
+        adentro.decrementAndGet();
+    }
+}</code></pre>
+
+      <p>¿Por qué una rampa? Un pod recién nacido es más lento que uno que lleva un rato: la JVM interpreta el código antes de compilarlo, el pool abre conexiones y las cachés locales están vacías. En un laboratorio chico eso dura poco y no se ve, así que <code>Frio</code> lo simula con un número: cada una de las primeras 200 reservas paga un extra en la base, que baja de 300&#8239;ms a 0. Es una simulación, y está dicho en el código; el calentamiento y la rampa se escriben igual para un frío de verdad.</p>
+
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Frio.java"><code>package lab.inventario;
+
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * Un pod recién nacido es lento: la JVM interpreta antes de compilar, el pool abre conexiones y las cachés
+ * locales están vacías. Aquí se simula con un número: cada una de las primeras N reservas paga un extra
+ * que baja en línea recta desde "costo" hasta 0. Es una simulación, para que el arranque en frío se vea
+ * en un laboratorio chico; el calentamiento y la rampa se escriben igual para un frío de verdad.
+ */
+public class Frio {
+
+    private final long costoMs;
+    private final long requests;
+    private final AtomicLong hechas = new AtomicLong();
+
+    public Frio(long costoMs, int requests) {
+        this.costoMs = costoMs;
+        this.requests = requests;
+    }
+
+    /** El extra de la próxima request, en milisegundos. Llamarlo la cuenta como hecha. */
+    public long tomarExtraMs() {
+        long n = hechas.getAndIncrement();
+        if (n &gt;= requests || costoMs &lt;= 0) {
+            return 0;
+        }
+        return costoMs * (requests - n) / requests;
+    }
+
+    /** El extra que pagaría la próxima, sin contarla: para el tablero. */
+    public long extraMs() {
+        long n = hechas.get();
+        return n &gt;= requests || costoMs &lt;= 0 ? 0 : costoMs * (requests - n) / requests;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Calentamiento.java"><code>package lab.inventario;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.stereotype.Component;
+
+/**
+ * Antes de recibir tráfico, el pod se calienta solo: 200 consultas, de a 5 a la vez (las conexiones del pool).
+ * Spring Boot no marca la readiness como lista hasta que terminan los ApplicationRunner, así que mientras
+ * esto corre, Kubernetes no le manda nada al pod.
+ */
+@Component
+public class Calentamiento implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(Calentamiento.class);
+
+    private final Reservas reservas;
+    private final InventarioApplication.Props props;
+
+    public Calentamiento(Reservas reservas, InventarioApplication.Props props) {
+        this.reservas = reservas;
+        this.props = props;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        if (!props.calentar().enabled()) {
+            log.info("calentamiento apagado: el pod va a recibir tráfico en frío");
+            return;
+        }
+        long t0 = System.currentTimeMillis();
+        try (ExecutorService hilos = Executors.newFixedThreadPool(5)) {
+            IntStream.range(0, props.calentar().consultas())
+                    .forEach(i -&gt; hilos.submit(() -&gt; reservas.consultar(1 + i % 100)));
+        }
+        log.info("calentamiento listo en {} ms", System.currentTimeMillis() - t0);
+    }
+}</code></pre>
+
+      <p>El <b>calentamiento</b> hace que el pod pague su frío antes de recibir tráfico: 200 consultas, de a 5. Funciona porque Spring Boot no marca la readiness como lista hasta que terminan los <code>ApplicationRunner</code> <span class="badge badge--doc">Documentado</span>: mientras calienta, la readiness contesta que no, y el Service no le manda nada. La rampa cuida lo que el calentamiento no alcanza a cubrir, y los dos juntos son las dos primeras capas de la figura de M08: el código y Kubernetes.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="fa10p3vt fa10p3vd">
+<title id="fa10p3vt">Cómo vuelve inventario</title>
+<desc id="fa10p3vd">Tres filas, sin escala de tiempo. Kubernetes: crea el pod, la startupProbe pasa cuando la JVM y Spring arrancan, y la readinessProbe pasa recién después del calentamiento; ahí el Service le manda tráfico. inventario: arranca, corre Flyway, hace 200 consultas de calentamiento y, al quedar listo, su compuerta empieza en 1 y sube hasta 5 en 30 segundos. pedidos: su breaker está abierto; después de 5 segundos deja pasar 3 pruebas, y si salen bien, se cierra.</desc>
+<text class="dg-small" x="150" y="70" text-anchor="end">Kubernetes</text>
+<text class="dg-small" x="150" y="140" text-anchor="end">inventario</text>
+<text class="dg-small" x="150" y="210" text-anchor="end">pedidos</text>
+<rect class="dg-box" x="170" y="48" width="200" height="34" rx="4"/>
+<text class="dg-tiny" x="270" y="70" text-anchor="middle">startupProbe esperando</text>
+<rect class="dg-box" x="370" y="48" width="120" height="34" rx="4"/>
+<text class="dg-tiny" x="430" y="70" text-anchor="middle">no está listo</text>
+<rect class="dg-ok" x="490" y="48" width="250" height="34" rx="4"/>
+<text class="dg-tiny" x="615" y="70" text-anchor="middle">listo: el Service lo usa</text>
+<rect class="dg-box" x="170" y="118" width="100" height="34" rx="4"/>
+<text class="dg-tiny" x="220" y="140" text-anchor="middle">arranca la JVM</text>
+<rect class="dg-box" x="270" y="118" width="100" height="34" rx="4"/>
+<text class="dg-tiny" x="320" y="140" text-anchor="middle">Spring y Flyway</text>
+<rect class="dg-box" x="370" y="118" width="120" height="34" rx="4"/>
+<text class="dg-tiny" x="430" y="140" text-anchor="middle">calienta</text>
+<path class="dg-frame" d="M490 152 H740"/>
+<path class="dg-edge" d="M490 146 L640 122 H740"/>
+<text class="dg-tiny" x="496" y="166">límite 1</text>
+<text class="dg-tiny" x="644" y="114">límite 5</text>
+<text class="dg-tiny" x="565" y="166" text-anchor="start">la rampa: 30 s</text>
+<rect class="dg-bad" x="170" y="188" width="320" height="34" rx="4"/>
+<text class="dg-tiny" x="330" y="210" text-anchor="middle">breaker abierto: 503 en el acto</text>
+<rect class="dg-warnbox" x="490" y="188" width="80" height="34" rx="4"/>
+<text class="dg-tiny" x="530" y="210" text-anchor="middle">3 pruebas</text>
+<rect class="dg-ok" x="570" y="188" width="170" height="34" rx="4"/>
+<text class="dg-tiny" x="655" y="210" text-anchor="middle">cerrado</text>
+<path class="dg-feedback" d="M490 40 V230"/>
+<text class="dg-tiny" x="490" y="252" text-anchor="middle">readiness ok</text>
+<text class="dg-small" x="170" y="284">Sin escala: cada etapa dura lo que tarde en tu máquina, y eso es lo que vas a medir.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura A10.6.</b> La vuelta de inventario después de escalar de 0 a 2 réplicas. Kubernetes no le manda tráfico hasta que la readiness pasa, y la readiness pasa después del calentamiento. Desde ahí, la compuerta sube de 1 a 5 en 30&#8239;s. Mientras tanto, el breaker de pedidos estaba abierto: cada 5&#8239;s deja pasar 3 pruebas, que fallan mientras no haya pods listos; la primera tanda que encuentra a inventario listo lo cierra.</figcaption>
+      </figure>
+
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Reservas.java"><code>package lab.inventario;
+
+import java.sql.SQLException;
+import java.util.UUID;
+
+import lab.inventario.deadline.Deadline;
+
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class Reservas {
+
+    /** No alcanza el stock: la transacción se deshace, con la reserva que se había anotado. */
+    public static class SinStock extends RuntimeException {
+        SinStock() {
+            super("sin stock", null, false, false);
+        }
+    }
+
+    private final JdbcClient jdbc;
+    private final Falla falla;
+    private final Frio frio;
+
+    public Reservas(JdbcClient jdbc, Falla falla, Frio frio) {
+        this.jdbc = jdbc;
+        this.falla = falla;
+        this.frio = frio;
+    }
+
+    /** Reserva el stock de un pedido. true si es nueva; false si ya estaba hecha (un reintento). */
+    @Transactional
+    public boolean reservar(UUID pedido, long producto, int cantidad, Deadline deadline) {
+        limitar(deadline);
+        esperar(falla.actual().lentoMs() + frio.tomarExtraMs());
+
+        int nueva = jdbc.sql("""
+                        INSERT INTO reservas (pedido_id, producto_id, cantidad) VALUES (?, ?, ?)
+                        ON CONFLICT (pedido_id) DO NOTHING""")
+                .params(pedido, producto, cantidad)
+                .update();
+        if (nueva == 0) {
+            // Ya estaba: un reintento de algo que se hizo. Se contesta igual que la primera vez, sin descontar.
+            return false;
+        }
+        int descontadas = jdbc.sql("UPDATE productos SET stock = stock - ? WHERE id = ? AND stock &gt;= ?")
+                .params(cantidad, producto, cantidad)
+                .update();
+        if (descontadas == 0) {
+            throw new SinStock();
+        }
+        return true;
+    }
+
+    /** Lo que hace el calentamiento: paga el frío y lee un producto, sin escribir nada. */
+    @Transactional(readOnly = true)
+    public int consultar(long producto) {
+        esperar(frio.tomarExtraMs());
+        return jdbc.sql("SELECT stock FROM productos WHERE id = ?").param(producto).query(Integer.class).single();
+    }
+
+    /**
+     * El deadline llega hasta la base: SET LOCAL statement_timeout con lo que queda.
+     * Si una consulta tarda más, PostgreSQL la cancela y libera la conexión; nadie iba a leer el resultado.
+     */
+    private void limitar(Deadline deadline) {
+        if (deadline == Deadline.SIN) {
+            return;
+        }
+        long queda = Math.max(1, deadline.restanteMs());
+        // set_config(..., true) es SET LOCAL: vale solo hasta el final de esta transacción.
+        jdbc.sql("SELECT set_config('statement_timeout', ?, true)").param(queda + "ms").query(String.class).single();
+    }
+
+    private void esperar(long ms) {
+        if (ms &gt; 0) {
+            jdbc.sql("SELECT 1 FROM pg_sleep(?)").param(ms / 1000.0).query(Integer.class).single();
+        }
+    }
+
+    /** true si la base canceló la consulta por statement_timeout (SQLSTATE 57014). */
+    public static boolean cancelada(DataAccessException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sql &amp;&amp; "57014".equals(sql.getSQLState())) {
+                return true;
+            }
+        }
+        return false;
+    }
+}</code></pre>
+
+      <p>La reserva es una transacción de tres pasos. Primero, el deadline: <code>set_config('statement_timeout', …, true)</code> es lo mismo que <code>SET LOCAL statement_timeout</code> <span class="badge badge--doc">Documentado</span>, y vale solo hasta el final de la transacción, así que no queda pegado en la conexión del pool. Si una sentencia tarda más que lo que queda, PostgreSQL la cancela con el error <code>57014</code> (<code>query_canceled</code>) <span class="badge badge--doc">Documentado</span> y la conexión vuelve libre. Segundo, la reserva con <code>ON CONFLICT DO NOTHING</code>: si el pedido ya estaba, no descuenta. Tercero, el descuento, con <code>stock &gt;= ?</code> en el <code>WHERE</code> para no vender lo que no hay.</p>
+
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/ReservaController.java"><code>package lab.inventario;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import lab.inventario.deadline.Deadline;
+
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class ReservaController {
+
+    public record Pedida(@NotNull UUID pedidoId, @Positive long productoId, @Positive int cantidad) {
+    }
+
+    private final Reservas reservas;
+    private final Compuerta compuerta;
+    private final Falla falla;
+    private final Tablero tablero;
+    private final long trabajoMinimoMs;
+
+    public ReservaController(Reservas reservas, Compuerta compuerta, Falla falla, Tablero tablero,
+                             InventarioApplication.Props props) {
+        this.reservas = reservas;
+        this.compuerta = compuerta;
+        this.falla = falla;
+        this.tablero = tablero;
+        this.trabajoMinimoMs = props.trabajoMinimo().toMillis();
+    }
+
+    @PostMapping("/reservas")
+    public ResponseEntity&lt;?&gt; reservar(@Valid @RequestBody Pedida p, HttpServletRequest req) {
+        // 1. La compuerta: si ya hay tantas adentro como el límite de ahora, 503 en el acto.
+        if (!compuerta.entrar()) {
+            tablero.llena();
+            return problema(HttpStatus.SERVICE_UNAVAILABLE, "Inventario está lleno", true);
+        }
+        try {
+            // 2. No empezar lo que no alcanza a terminar.
+            Deadline deadline = Deadline.de(req);
+            if (deadline.restanteMs() &lt; trabajoMinimoMs) {
+                tablero.vencida();
+                return problema(HttpStatus.GATEWAY_TIMEOUT, "No alcanza el deadline para reservar", false);
+            }
+            // 3. Las fallas provocadas.
+            Falla.Config f = falla.actual();
+            if (f.errores() &gt; 0 &amp;&amp; ThreadLocalRandom.current().nextDouble() &lt; f.errores()) {
+                tablero.error();
+                return problema(HttpStatus.INTERNAL_SERVER_ERROR, "Falla provocada", false);
+            }
+            quemar(f.cpuMs());
+            // 4. La reserva.
+            try {
+                boolean nueva = reservas.reservar(p.pedidoId(), p.productoId(), p.cantidad(), deadline);
+                tablero.atendida();
+                return ResponseEntity.ok(Map.of("pedidoId", p.pedidoId(), "nueva", nueva));
+            } catch (Reservas.SinStock e) {
+                return problema(HttpStatus.CONFLICT, "No hay stock del producto " + p.productoId(), false);
+            } catch (DataAccessException e) {
+                if (Reservas.cancelada(e)) {
+                    tablero.cancelada();
+                    return problema(HttpStatus.GATEWAY_TIMEOUT, "La base canceló la reserva al vencer el deadline", false);
+                }
+                throw e;
+            }
+        } finally {
+            compuerta.salir();
+        }
+    }
+
+    /** Quema CPU de verdad durante ms milisegundos: un bucle que no duerme. */
+    private static void quemar(long ms) {
+        long hasta = System.nanoTime() + ms * 1_000_000;
+        long x = 0;
+        while (System.nanoTime() &lt; hasta) {
+            x += System.nanoTime() % 7;
+        }
+        if (x == 42) {
+            // Para que el compilador no borre el bucle.
+            System.out.print("");
+        }
+    }
+
+    private static ResponseEntity&lt;ProblemDetail&gt; problema(HttpStatus status, String detalle, boolean reintentable) {
+        ResponseEntity.BodyBuilder b = ResponseEntity.status(status);
+        if (reintentable) {
+            b.header("Retry-After", "1");
+        }
+        return b.body(ProblemDetail.forStatusAndDetail(status, detalle));
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Falla.java"><code>package lab.inventario;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Las fallas que provoca scripts/falla.sh, una por pod:
+ * - lentoMs: cada reserva hace esperar a la base esos milisegundos más (pg_sleep), con la conexión tomada.
+ * - errores: esa fracción de las reservas contesta 500 sin hacer nada.
+ * - cpuMs: cada reserva quema esos milisegundos de CPU antes de empezar.
+ * Este endpoint no pasa por el gateway: solo se llega por el API server de Kubernetes.
+ */
+@RestController
+public class Falla {
+
+    private static final Logger log = LoggerFactory.getLogger(Falla.class);
+
+    public record Config(long lentoMs, double errores, long cpuMs) {
+    }
+
+    private volatile Config actual = new Config(0, 0, 0);
+
+    public Config actual() {
+        return actual;
+    }
+
+    @PostMapping("/admin/falla")
+    public Config cambiar(@RequestBody Config nueva) {
+        actual = nueva;
+        log.warn("falla {}", nueva);
+        return nueva;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/InventarioApplication.java"><code>package lab.inventario;
+
+import java.time.Duration;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan
+@EnableScheduling
+public class InventarioApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(InventarioApplication.class, args);
+    }
+
+    /** Lo que está bajo "lab" en application.yaml. */
+    @ConfigurationProperties("lab")
+    public record Props(Duration trabajoMinimo, Puerta compuerta, Frio frio, Calentar calentar) {
+        public record Puerta(boolean enabled, int maximo, int inicial, Duration rampa) {
+        }
+
+        public record Frio(Duration costo, int requests) {
+        }
+
+        public record Calentar(boolean enabled, int consultas) {
+        }
+    }
+
+    @Bean
+    Tablero tablero() {
+        return new Tablero();
+    }
+
+    @Bean
+    Compuerta compuerta(Props props, Tablero tablero) {
+        Props.Puerta p = props.compuerta();
+        Compuerta c = new Compuerta(p.enabled(), p.inicial(), p.maximo(), p.rampa().toMillis(), System::currentTimeMillis);
+        tablero.mirarCompuerta(c);
+        return c;
+    }
+
+    @Bean
+    Frio frio(Props props, Tablero tablero) {
+        Frio f = new Frio(props.frio().costo().toMillis(), props.frio().requests());
+        tablero.mirarFrio(f);
+        return f;
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/main/java/lab/inventario/Tablero.java"><code>package lab.inventario;
+
+import java.util.concurrent.atomic.LongAccumulator;
+import java.util.concurrent.atomic.LongAdder;
+
+import lab.inventario.deadline.Contador;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+
+/** Una línea por segundo con lo que pasó en ese segundo. scripts/mira.sh junta las de todos los pods. */
+public class Tablero implements Contador {
+
+    private static final Logger log = LoggerFactory.getLogger(Tablero.class);
+
+    private final LongAdder atendidas = new LongAdder();
+    private final LongAdder llenas = new LongAdder();
+    private final LongAdder vencidas = new LongAdder();
+    private final LongAdder canceladas = new LongAdder();
+    private final LongAdder errores = new LongAdder();
+    private final LongAccumulator esperaMax = new LongAccumulator(Long::max, 0);
+    private Compuerta compuerta;
+    private Frio frio;
+
+    public void atendida() {
+        atendidas.increment();
+    }
+
+    /** Rechazada por la compuerta: 503. */
+    public void llena() {
+        llenas.increment();
+    }
+
+    /** Llegó vencida, o con tan poco deadline que no alcanzaba a terminar: 504. */
+    @Override
+    public void vencida() {
+        vencidas.increment();
+    }
+
+    /** PostgreSQL la canceló porque venció el statement_timeout que puso el deadline: 504. */
+    public void cancelada() {
+        canceladas.increment();
+    }
+
+    /** Una falla provocada con scripts/falla.sh errores: 500. */
+    public void error() {
+        errores.increment();
+    }
+
+    @Override
+    public void espera(long ms) {
+        esperaMax.accumulate(ms);
+    }
+
+    void mirarCompuerta(Compuerta c) {
+        this.compuerta = c;
+    }
+
+    void mirarFrio(Frio f) {
+        this.frio = f;
+    }
+
+    @Scheduled(fixedRate = 1000)
+    void imprimir() {
+        long a = atendidas.sumThenReset();
+        long l = llenas.sumThenReset();
+        long v = vencidas.sumThenReset();
+        long c = canceladas.sumThenReset();
+        long e = errores.sumThenReset();
+        long w = esperaMax.getThenReset();
+        if (a + l + v + c + e &gt; 0) {
+            log.info("tablero limite={} adentro={} frio_ms={} atendidas={} 503={} vencidas={} canceladas={} 500={} espera_max_ms={}",
+                    compuerta.limite(), compuerta.adentro(), frio.extraMs(), a, l, v, c, e, w);
+        }
+    }
+}</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/inventario/src/main/resources/application.yaml"><code>spring:
+  application:
+    name: inventario
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/lab}
+    username: ${DB_USER:lab}
+    password: ${DB_PASSWORD:lab}
+    hikari:
+      # Las consultas sin esquema van a inventario.
+      schema: inventario
+      maximum-pool-size: 5
+      connection-timeout: 1000
+  flyway:
+    schemas: inventario
+    default-schema: inventario
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+lab:
+  # Si es false, inventario ignora X-Request-Deadline: atiende todo, aunque nadie espere la respuesta.
+  deadline: ${DEADLINE:true}
+  # Si al deadline le queda menos que esto, la reserva no empieza: no alcanzaría a terminar.
+  trabajo-minimo: 50ms
+  compuerta:
+    enabled: ${SHED:true}
+    # Tantas reservas a la vez como conexiones tiene el pool.
+    maximo: 5
+    # Al arrancar, empieza con 1 y sube hasta 5 en lo que dure la rampa. Con 0s, empieza en 5.
+    inicial: 1
+    rampa: ${RAMPA:30s}
+  frio:
+    # Simula lo que cuesta un pod recién nacido: cachés vacías y JIT sin compilar. Cada una de las
+    # primeras 200 reservas paga un extra que baja de 300 ms a 0.
+    costo: ${FRIO_COSTO:300ms}
+    requests: 200
+  calentar:
+    # Antes de declararse listo, el pod paga el frío él mismo con 200 consultas.
+    enabled: ${CALENTAR:true}
+    consultas: 200</code></pre>
+<pre data-lang="sql" data-file="a10-parte3/inventario/src/main/resources/db/migration/V1__inventario.sql"><code>CREATE TABLE productos (
+    id    bigint PRIMARY KEY,
+    stock int    NOT NULL CHECK (stock &gt;= 0)
+);
+
+-- Una reserva por pedido: la clave primaria es la clave de idempotencia.
+-- Si el mismo pedido llega dos veces (un reintento), el segundo INSERT no hace nada.
+CREATE TABLE reservas (
+    pedido_id   uuid PRIMARY KEY,
+    producto_id bigint      NOT NULL REFERENCES productos (id),
+    cantidad    int         NOT NULL CHECK (cantidad &gt; 0),
+    creada      timestamptz NOT NULL DEFAULT now()
+);
+
+-- 100 productos con stock de sobra: el laboratorio mide resiliencia, no ventas agotadas.
+INSERT INTO productos (id, stock)
+SELECT g, 1000000 FROM generate_series(1, 100) AS g;</code></pre>
+<pre data-lang="dockerfile" data-file="a10-parte3/inventario/Dockerfile"><code>FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY target/inventario-0.1.0.jar app.jar
+EXPOSE 8080
+# exec: la JVM recibe el SIGTERM de Kubernetes directamente, sin un shell en medio.
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Tres puntos de rechazo, del más barato al más caro: el filtro rechaza lo vencido antes de tocar nada, la compuerta rechaza lo que no cabe antes de pedir una conexión, y <code>trabajoMinimo</code> rechaza lo que no alcanza a terminar (menos de 50&#8239;ms de deadline). Lo que pasa los tres todavía puede cancelarlo la base.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Un límite adaptativo, como el algoritmo de Netflix que ajusta la concurrencia según la latencia que ve: es lo que harías en serio, pero sus números cambian solos y aquí quieres ver una rampa que se puede dibujar. Y el slow start del balanceador: el Service de Kubernetes reparte sin rampa, así que la rampa tiene que vivir en el pod (o en un proxy como Envoy o NGINX Plus, que la traen).</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que la startupProbe se agote antes de que termine el calentamiento: 60 · 2&#8239;s son 2 minutos, y con la base lenta, 200 consultas pueden tardar más. El pod se reinicia y vuelve a empezar, una y otra vez. <code>kubectl describe pod</code> lo muestra en los eventos. Y una compuerta más ancha que el pool: las reservas que entran sin conexión esperan en HikariCP hasta 1&#8239;s, adentro, en lugar de salir rechazadas.</dd></div>
+      </dl>
+
+      <h3 id="p3-desplegar">Paso 7. Las imágenes y el despliegue</h3>
+
+      <p>Primero las pruebas (la sección siguiente tiene el código), después las imágenes:</p>
+
+<pre data-lang="bash"><code>./mvnw verify
+chmod +x scripts/*.sh
+scripts/imagenes.sh</code></pre>
+
+<pre data-lang="bash" data-file="a10-parte3/scripts/imagenes.sh"><code>#!/usr/bin/env bash
+# Compila los tres servicios, arma sus imágenes y las sube al registro local.
+# Uso: scripts/imagenes.sh            compila sin pruebas (corre ./mvnw verify antes, una vez)
+#      scripts/imagenes.sh pedidos    solo uno
+set -euo pipefail
+cd "$(dirname "$0")/.."
+SERVICIOS=${1:-"gateway pedidos inventario"}
+./mvnw -q package -DskipTests
+for S in $SERVICIOS; do
+  docker build -q -t "localhost:5000/$S:1" "$S"
+  docker push -q "localhost:5000/$S:1"
+  echo "localhost:5000/$S:1 subida"
+done</code></pre>
+
+      <p><code>./mvnw verify</code> tiene que terminar con <code>BUILD SUCCESS</code> y 22 pruebas: 4 en gateway, 9 en pedidos y 9 en inventario. Necesita Docker prendido, por los contenedores de las pruebas. <code>imagenes.sh</code> tiene que imprimir tres líneas, una por imagen subida. Ahora los tres manifiestos, empezando por el de inventario, que tiene los comentarios:</p>
+
+<pre data-lang="yaml" data-file="a10-parte3/k8s/inventario.yaml"><code># inventario: dos pods detrás de un Service. Es el servicio que se rompe.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventario
+  namespace: lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: inventario
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Al cambiar algo, primero nace un pod nuevo y recién cuando está listo se va uno viejo.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: inventario
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: inventario
+          image: localhost:5000/inventario:1
+          # Always: cada pod nuevo pregunta al registro si hay una imagen nueva con la misma etiqueta.
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DB_URL
+              value: jdbc:postgresql://db:5432/lab
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: db, key: usuario }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db, key: clave }
+            # Las defensas. scripts/modo.sh las cambia para cada experimento.
+            - name: DEADLINE
+              value: "true"
+            - name: SHED
+              value: "true"
+            - name: RAMPA
+              value: 30s
+            - name: CALENTAR
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          # El bulkhead entre contenedores. requests: lo que el nodo le reserva. limits: el techo.
+          # Con cpu: "1", el kernel no le deja usar más de un núcleo aunque el nodo tenga libres:
+          # un inventario que se vuelve loco no le quita CPU a pedidos.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # Mientras la app arranca, solo mira esta. Hasta 60 · 2 s = 2 minutos.
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # Lista para recibir tráfico: recién después del calentamiento.
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          # Viva: si deja de contestar 1 minuto, Kubernetes la reinicia.
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          lifecycle:
+            # Al apagarse, espera 5 s antes del SIGTERM: el Service ya dejó de mandarle requests nuevas.
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventario
+  namespace: lab
+spec:
+  selector:
+    app: inventario
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+      <p>Los <code>resources</code> son el bulkhead entre contenedores. <code>requests</code> es lo que el nodo le reserva al pod: Kubernetes no lo pone en un nodo que no tenga ese tanto libre. <code>limits</code> es el techo: con <code>cpu: "1"</code>, el kernel no le deja usar más de un núcleo aunque el nodo tenga libres, y si lo intenta, lo frena (<i>throttling</i>); con <code>memory: 512Mi</code>, si pasa del techo, el kernel lo mata y Kubernetes lo reinicia (<code>OOMKilled</code>). <span class="badge badge--doc">Documentado</span> Así, un inventario que quema CPU no le quita CPU a pedidos, y uno que pierde memoria no tumba al nodo. <code>-XX:MaxRAMPercentage=75</code> le dice a la JVM que use el 75&#8239;% del techo de memoria para el heap, y deje el resto para lo demás.</p>
+
+<pre data-lang="yaml" data-file="a10-parte3/k8s/pedidos.yaml"><code># pedidos: dos pods. Es el servicio sano, el que tiene que seguir atendiendo cuando inventario cae.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pedidos
+  namespace: lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pedidos
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: pedidos
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: pedidos
+          image: localhost:5000/pedidos:1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DB_URL
+              value: jdbc:postgresql://db:5432/lab
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: db, key: usuario }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: db, key: clave }
+            - name: INVENTARIO_URL
+              value: http://inventario:8080
+            # Las defensas. scripts/modo.sh las cambia para cada experimento.
+            - name: DEADLINE
+              value: "true"
+            - name: BREAKER
+              value: "true"
+            - name: BULKHEAD
+              value: "true"
+            - name: REINTENTOS
+              value: jitter
+            - name: POR_INTENTO
+              value: 800ms
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # La readiness no mira a inventario: si inventario cae, pedidos sigue recibiendo tráfico
+          # y contesta lo que puede (las lecturas, y 503 rápidos en las escrituras).
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pedidos
+  namespace: lab
+spec:
+  selector:
+    app: pedidos
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/k8s/gateway.yaml"><code># El gateway: dos pods que comparten los baldes en Redis. Todo el tráfico entra por aquí.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: lab
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: gateway
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: localhost:5000/gateway:1
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DESTINO
+              value: http://pedidos:8080
+            - name: REDIS_HOST
+              value: redis
+            # Cuánto tiene cada request desde que entra: el deadline que viaja hacia adentro.
+            - name: PRESUPUESTO
+              value: 2s
+            - name: BALDE_CAPACIDAD
+              value: "100"
+            - name: BALDE_RECARGA
+              value: "50"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 384Mi
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          # Tampoco mira a Redis: sin Redis, el gateway deja pasar todo (fail-open).
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: lab
+spec:
+  selector:
+    app: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http</code></pre>
+
+<pre data-lang="bash"><code>kubectl apply -f k8s/inventario.yaml -f k8s/pedidos.yaml -f k8s/gateway.yaml
+kubectl -n lab rollout status deploy/inventario --timeout=300s
+kubectl -n lab rollout status deploy/pedidos --timeout=300s
+kubectl -n lab rollout status deploy/gateway --timeout=300s
+kubectl -n lab get pods
+kubectl -n lab logs deploy/inventario | grep calentamiento</code></pre>
+
+      <p>Tienen que quedar ocho pods en <code>Running</code> y <code>1/1</code>: <code>db-0</code>, Redis y dos de cada servicio. El último comando tiene que mostrar "calentamiento listo en … ms" con el tiempo que tardó en tu máquina: anótalo. Ahora pruébalo a mano. Abre un túnel en otra terminal (con su propio <code>export KUBECONFIG</code>):</p>
+
+<pre data-lang="bash"><code>kubectl -n lab port-forward svc/gateway 8080:8080     # en otra terminal; Ctrl+C lo cierra</code></pre>
+
+<pre data-lang="bash"><code>curl -si localhost:8080/api/pedidos -H 'Content-Type: application/json' -H 'X-Cliente: yo' \
+  -d '{"productoId": 7, "cantidad": 1}'
+curl -si localhost:8080/api/pedidos/&lt;el id que devolvió&gt;
+scripts/psql.sh -c "SELECT stock FROM inventario.productos WHERE id = 7"
+scripts/psql.sh -c "SELECT count(*) FROM inventario.reservas"
+for i in $(seq 1 120); do
+  curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/pedidos/00000000-0000-0000-0000-000000000000 -H 'X-Cliente: rafaga'
+done | sort | uniq -c</code></pre>
+
+      <p>El primero tiene que devolver <code>201</code> con el id, y el segundo, <code>200</code> con el mismo pedido. El stock del producto 7 tiene que ser 999&#8239;999. El último bucle manda 120 lecturas de un pedido que no existe, como el cliente "rafaga", lo más rápido que puede curl: las primeras 100 pasan (404, porque el pedido no existe) y, si curl va más rápido que 50 por segundo, una parte de las siguientes recibe 429. Cuántas depende de cuánto tarde cada curl en tu máquina: anota el reparto.</p>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd><code>imagePullPolicy: Always</code> con la etiqueta <code>:1</code> fija: cada pod nuevo le pregunta al registro si la imagen cambió <span class="badge badge--doc">Documentado</span>, así que después de <code>imagenes.sh</code> alcanza con <code>kubectl -n lab rollout restart deploy/pedidos</code>. Con un registro local, la pregunta es barata.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Una etiqueta nueva por cada cambio (<code>:2</code>, <code>:3</code>), como en la parte 1: es lo correcto en producción, porque cada versión queda identificada y se puede volver atrás, pero obliga a editar los YAML en cada vuelta. Y <code>latest</code>: hace lo mismo que <code>Always</code> sin decirlo.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que un pod quede en <code>0/1</code> para siempre: mira <code>kubectl -n lab describe pod</code>. Si la readiness falla con "connection refused", la app no arrancó: mira <code>logs</code>. Si inventario se reinicia con <code>OOMKilled</code> en <code>describe</code>, el techo de 512&#8239;Mi es chico para tu JVM: súbelo a 768&#8239;Mi en los tres servicios.</dd></div>
+      </dl>
+
+      <h3 id="p3-carga">Paso 8. La carga y los experimentos</h3>
+
+      <p>Cada experimento es lo mismo: elegir un modo (qué defensas están puestas), correr la carga de 150&#8239;s y romper algo a los 30&#8239;s. La carga son 40 pedidos por segundo del cliente "tienda" y 20 lecturas por segundo del cliente "app", los dos por debajo de su cuota de 50.</p>
+
+<pre data-lang="javascript" data-file="a10-parte3/k6/carga.js"><code>// La carga del laboratorio, durante 150 s y a ritmo fijo, todo por el gateway:
+// - escribe: 40 pedidos por segundo del cliente "tienda" (POST /api/pedidos, que llama a inventario).
+// - lee: 20 lecturas por segundo del cliente "app" (GET /api/pedidos/{id}, que solo va a la base).
+// - abusa: si ABUSO &gt; 0, el cliente "abusador" manda ABUSO pedidos por segundo entre los 30 y los 90 s.
+// Las métricas se separan en tres fases: antes (0 a 30 s), durante (30 a 90 s) y después (90 a 150 s).
+import http from 'k6/http';
+import exec from 'k6/execution';
+import { sleep } from 'k6';
+import { Counter } from 'k6/metrics';
+
+const BASE = __ENV.BASE || 'http://gateway:8080';
+const ABUSO = Number(__ENV.ABUSO || 0);
+const FASES = ['antes', 'durante', 'despues'];
+
+// Las respuestas que importan, contadas por fase y por escenario.
+const cuota = new Counter('cuota_429');
+const rechazos = new Counter('rechazos_503');
+const vencidas = new Counter('vencidas_504');
+
+const thresholds = {};
+for (const fase of FASES) {
+  // Las lecturas no tocan inventario: tienen que seguir rápidas pase lo que pase.
+  thresholds[`http_req_duration{fase:${fase},scenario:lee}`] = ['p(95)&lt;200'];
+  thresholds[`http_req_failed{fase:${fase},scenario:lee}`] = ['rate&lt;0.01'];
+  // Las escrituras dependen de inventario: el umbral se cumple solo si nada se rompe.
+  thresholds[`http_req_duration{fase:${fase},scenario:escribe}`] = ['p(95)&lt;500'];
+  thresholds[`http_req_failed{fase:${fase},scenario:escribe}`] = ['rate&lt;0.01'];
+  // Umbrales que siempre se cumplen: están para que el resumen muestre cada contador por fase.
+  for (const c of ['cuota_429', 'rechazos_503', 'vencidas_504']) {
+    thresholds[`${c}{fase:${fase}}`] = ['count&gt;=0'];
+  }
+}
+
+const scenarios = {
+  escribe: {
+    executor: 'constant-arrival-rate',
+    exec: 'escribe',
+    rate: 40,
+    timeUnit: '1s',
+    duration: '150s',
+    // Ley de Little: 40 por segundo que tardan hasta 2 s (el presupuesto del gateway) son 80 a la vez.
+    preAllocatedVUs: 80,
+    maxVUs: 80,
+  },
+  lee: {
+    executor: 'constant-arrival-rate',
+    exec: 'lee',
+    rate: 20,
+    timeUnit: '1s',
+    duration: '150s',
+    preAllocatedVUs: 40,
+    maxVUs: 40,
+  },
+};
+if (ABUSO &gt; 0) {
+  scenarios.abusa = {
+    executor: 'constant-arrival-rate',
+    exec: 'abusa',
+    rate: ABUSO,
+    timeUnit: '1s',
+    startTime: '30s',
+    duration: '60s',
+    // Casi todas sus requests son 429 rápidos: con 50 VUs alcanza.
+    preAllocatedVUs: 50,
+    maxVUs: 50,
+  };
+}
+
+export const options = {
+  scenarios,
+  thresholds,
+  setupTimeout: '180s',
+  summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
+};
+
+// Las fases cuentan desde que terminó setup(), igual para los tres escenarios.
+function fase(datos) {
+  const s = (Date.now() - datos.inicio) / 1000;
+  return s &lt; 30 ? 'antes' : s &lt; 90 ? 'durante' : 'despues';
+}
+
+function contar(res, f) {
+  if (res.status === 429) cuota.add(1, { fase: f });
+  if (res.status === 503) rechazos.add(1, { fase: f });
+  if (res.status === 504) vencidas.add(1, { fase: f });
+}
+
+function pedir(cliente, f) {
+  return http.post(`${BASE}/api/pedidos`,
+    JSON.stringify({ productoId: 1 + Math.floor(Math.random() * 100), cantidad: 1 }), {
+      headers: { 'Content-Type': 'application/json', 'X-Cliente': cliente },
+      timeout: '10s',
+      tags: { fase: f, name: 'POST /api/pedidos' },
+    });
+}
+
+// Antes de medir: esperar a que todo conteste y crear un pedido para las lecturas.
+export function setup() {
+  for (let i = 0; i &lt; 60; i++) {
+    const res = pedir('preparar', 'preparar');
+    if (res.status === 201) {
+      console.log('calentamiento listo');
+      return { id: res.json('id'), inicio: Date.now() };
+    }
+    console.log(`todavía no: ${res.status}`);
+    sleep(1);
+  }
+  exec.test.abort('Después de 60 intentos, POST /api/pedidos no devolvió 201: ¿están listos los tres servicios?');
+}
+
+export function escribe(datos) {
+  const f = fase(datos);
+  contar(pedir('tienda', f), f);
+}
+
+export function lee(datos) {
+  const f = fase(datos);
+  const res = http.get(`${BASE}/api/pedidos/${datos.id}`, {
+    headers: { 'X-Cliente': 'app' },
+    timeout: '10s',
+    tags: { fase: f, name: 'GET /api/pedidos/{id}' },
+  });
+  contar(res, f);
+}
+
+export function abusa(datos) {
+  const f = fase(datos);
+  contar(pedir('abusador', f), f);
+}</code></pre>
+<pre data-lang="yaml" data-file="a10-parte3/k8s/carga.yaml"><code># La prueba de carga como un Job: k6 corre dentro del clúster y le pega al Service del gateway.
+# El script está en el ConfigMap carga, que crea scripts/experimento.sh a partir de k6/carga.js.
+# __ABUSO__ lo reemplaza experimento.sh: 0, o las requests por segundo del cliente abusador.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: carga
+  namespace: lab
+spec:
+  # Sin reintentos: si k6 sale con error (un umbral no se cumplió, código 99), el Job queda Failed y se lee.
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:2.3.0
+          args: ["run", "/scripts/carga.js"]
+          env:
+            - name: BASE
+              value: http://gateway:8080
+            - name: ABUSO
+              value: "__ABUSO__"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: carga</code></pre>
+
+      <p>Los VUs salen de la ley de Little: 40 pedidos por segundo que pueden tardar hasta 2&#8239;s, el presupuesto del gateway, son 40 · 2 = 80 a la vez. Si tardan más, porque nadie corta, k6 se queda sin VUs y lo cuenta en <code>dropped_iterations</code>. Los umbrales están puestos para que fallen cuando algo se rompe: los de las escrituras se cumplen solo si nada se rompió, y los de las lecturas son la pregunta del laboratorio, que es si las lecturas siguen rápidas mientras inventario está mal.</p>
+
+<pre data-lang="bash" data-file="a10-parte3/scripts/modo.sh"><code>#!/usr/bin/env bash
+# Cambia las defensas de pedidos e inventario y espera a que los pods nuevos estén listos.
+# Uso: scripts/modo.sh &lt;sin|reintentos|breaker|deadline|todo|frio&gt;
+#   sin         sin defensas: reintentos ingenuos, timeout de 5 s por intento, sin deadline, sin compuerta
+#   reintentos  sin más reintentos con backoff exponencial, jitter y presupuesto, y 800 ms por intento
+#   breaker     reintentos más el circuit breaker y el bulkhead en pedidos
+#   deadline    breaker más el deadline propagado y la compuerta de inventario (load shedding)
+#   todo        deadline más el arranque cuidado de inventario: calentamiento y rampa de 30 s
+#   frio        todo menos el arranque cuidado: inventario entra en frío y sin rampa
+set -euo pipefail
+case "${1:?Uso: scripts/modo.sh &lt;sin|reintentos|breaker|deadline|todo|frio&gt;}" in
+  sin)        P="REINTENTOS=ingenuo POR_INTENTO=5s BREAKER=false BULKHEAD=false DEADLINE=false"
+              I="DEADLINE=false SHED=false RAMPA=0s CALENTAR=false" ;;
+  reintentos) P="REINTENTOS=jitter POR_INTENTO=800ms BREAKER=false BULKHEAD=false DEADLINE=false"
+              I="DEADLINE=false SHED=false RAMPA=0s CALENTAR=false" ;;
+  breaker)    P="REINTENTOS=jitter POR_INTENTO=800ms BREAKER=true BULKHEAD=true DEADLINE=false"
+              I="DEADLINE=false SHED=false RAMPA=0s CALENTAR=false" ;;
+  deadline)   P="REINTENTOS=jitter POR_INTENTO=800ms BREAKER=true BULKHEAD=true DEADLINE=true"
+              I="DEADLINE=true SHED=true RAMPA=0s CALENTAR=false" ;;
+  todo)       P="REINTENTOS=jitter POR_INTENTO=800ms BREAKER=true BULKHEAD=true DEADLINE=true"
+              I="DEADLINE=true SHED=true RAMPA=30s CALENTAR=true" ;;
+  frio)       P="REINTENTOS=jitter POR_INTENTO=800ms BREAKER=true BULKHEAD=true DEADLINE=true"
+              I="DEADLINE=true SHED=true RAMPA=0s CALENTAR=false" ;;
+  *) echo "Modo desconocido: $1"; exit 1 ;;
+esac
+# MODO_DESDE cambia siempre: obliga a recrear los pods aunque el modo sea el mismo,
+# así cada experimento empieza con el breaker cerrado, sin fallas provocadas y con inventario recién nacido.
+DESDE=$(date +%s)
+# shellcheck disable=SC2086
+kubectl -n lab set env deploy/pedidos $P MODO="$1" MODO_DESDE="$DESDE" &gt; /dev/null
+# shellcheck disable=SC2086
+kubectl -n lab set env deploy/inventario $I MODO="$1" MODO_DESDE="$DESDE" &gt; /dev/null
+kubectl -n lab rollout status deploy/pedidos --timeout=300s
+kubectl -n lab rollout status deploy/inventario --timeout=300s</code></pre>
+<pre data-lang="bash" data-file="a10-parte3/scripts/falla.sh"><code>#!/usr/bin/env bash
+# Provoca una falla en todos los pods de inventario, o la quita.
+# Uso: scripts/falla.sh lento &lt;ms&gt;       cada reserva hace esperar a la base &lt;ms&gt; más
+#      scripts/falla.sh errores &lt;0 a 1&gt;  esa fracción de las reservas contesta 500
+#      scripts/falla.sh cpu &lt;ms&gt;         cada reserva quema &lt;ms&gt; de CPU
+#      scripts/falla.sh ok               sin falla
+# Le pega a POST /admin/falla de cada pod a través del API server de Kubernetes: no pasa por el gateway.
+set -euo pipefail
+export MSYS_NO_PATHCONV=1
+LENTO=0; ERRORES=0; CPU=0
+case "${1:?Uso: scripts/falla.sh &lt;lento ms|errores fraccion|cpu ms|ok&gt;}" in
+  lento)   LENTO=${2:?Falta cuántos ms} ;;
+  errores) ERRORES=${2:?Falta la fracción, por ejemplo 0.3} ;;
+  cpu)     CPU=${2:?Falta cuántos ms} ;;
+  ok)      ;;
+  *) echo "Falla desconocida: $1"; exit 1 ;;
+esac
+CUERPO="{\"lentoMs\":$LENTO,\"errores\":$ERRORES,\"cpuMs\":$CPU}"
+for P in $(kubectl -n lab get pods -l app=inventario -o jsonpath='{.items[*].metadata.name}'); do
+  echo "$CUERPO" | kubectl create --raw "/api/v1/namespaces/lab/pods/$P:8080/proxy/admin/falla" -f - &gt; /dev/null
+  echo "$P: $CUERPO"
+done</code></pre>
+<pre data-lang="bash" data-file="a10-parte3/scripts/experimento.sh"><code>#!/usr/bin/env bash
+# Corre la carga de 150 s y, a los 30 s, rompe algo; a los 90 s lo arregla. Al final, el resumen de k6,
+# que también queda en resultados/&lt;nombre&gt;.txt.
+# Uso: scripts/experimento.sh &lt;nombre&gt; &lt;falla&gt;
+#   ninguna     sin falla: la línea de base
+#   lento       inventario tarda 1.5 s más en cada reserva
+#   errores     el 30 % de las reservas contesta 500
+#   cpu         cada reserva quema 80 ms de CPU
+#   cae         inventario se va a 0 réplicas; a los 90 s vuelve a 2, en frío
+#   redis       Redis se va a 0 réplicas; a los 90 s vuelve
+#   abuso       el cliente abusador manda 150 pedidos por segundo entre los 30 y los 90 s
+# Las horas van en UTC, como las de los logs.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export MSYS_NO_PATHCONV=1
+NOMBRE=${1:?Uso: scripts/experimento.sh &lt;nombre&gt; &lt;ninguna|lento|errores|cpu|cae|redis|abuso&gt;}
+FALLA=${2:?Falta la falla: ninguna, lento, errores, cpu, cae, redis o abuso}
+NS=lab
+mkdir -p resultados
+hora() { date -u +%T; }
+# Espera hasta que pasen N segundos desde que empezó la carga: cada comando también tarda.
+hasta() { while [ "$SECONDS" -lt "$1" ]; do sleep 0.2; done; }
+
+# 0. Sin fallas de un experimento anterior.
+scripts/falla.sh ok &gt; /dev/null
+ABUSO=0
+[ "$FALLA" = abuso ] &amp;&amp; ABUSO=150
+
+# 1. La prueba desde cero: el script de k6 en un ConfigMap y el Job que lo corre.
+kubectl -n $NS delete job carga --ignore-not-found --wait=true &gt; /dev/null
+kubectl -n $NS create configmap carga --from-file=k6/carga.js --dry-run=client -o yaml | kubectl apply -f - &gt; /dev/null
+sed "s/__ABUSO__/$ABUSO/" k8s/carga.yaml | kubectl apply -f - &gt; /dev/null
+echo "$(hora) k6 prepara: espera el primer pedido que salga bien"
+
+# 2. El reloj de las fases empieza cuando k6 termina de preparar.
+until kubectl -n $NS logs job/carga 2&gt;/dev/null | grep -q 'calentamiento listo'; do sleep 1; done
+SECONDS=0
+echo "$(hora) Empieza la carga: 30 s antes, 60 s durante, 60 s después"
+
+# 3. A los 30 s, la falla. A los 90 s, la vuelta.
+hasta 30
+case "$FALLA" in
+  ninguna) echo "$(hora) Sin falla" ;;
+  abuso)   echo "$(hora) El abusador empieza (lo manda k6)" ;;
+  lento|errores|cpu)
+    case "$FALLA" in
+      lento) scripts/falla.sh lento 1500 &gt; /dev/null ;;
+      errores) scripts/falla.sh errores 0.3 &gt; /dev/null ;;
+      cpu) scripts/falla.sh cpu 80 &gt; /dev/null ;;
+    esac
+    echo "$(hora) Inventario: $FALLA"
+    hasta 90
+    scripts/falla.sh ok &gt; /dev/null
+    echo "$(hora) Inventario: sin falla" ;;
+  cae)
+    kubectl -n $NS scale deploy/inventario --replicas=0 &gt; /dev/null
+    echo "$(hora) Inventario a 0 réplicas"
+    hasta 90
+    kubectl -n $NS scale deploy/inventario --replicas=2 &gt; /dev/null
+    echo "$(hora) Inventario a 2 réplicas: arranca en frío"
+    kubectl -n $NS rollout status deploy/inventario --timeout=120s &gt; /dev/null
+    echo "$(hora) Inventario listo (readiness)" ;;
+  redis)
+    kubectl -n $NS scale deploy/redis --replicas=0 &gt; /dev/null
+    echo "$(hora) Redis a 0 réplicas"
+    hasta 90
+    kubectl -n $NS scale deploy/redis --replicas=1 &gt; /dev/null
+    echo "$(hora) Redis a 1 réplica" ;;
+  *)
+    echo "Falla desconocida: $FALLA"; exit 1 ;;
+esac
+
+# 4. Esperar a que k6 termine y guardar el resumen.
+until [ -n "$(kubectl -n $NS get job carga -o jsonpath='{.status.completionTime}{.status.failed}')" ]; do sleep 2; done
+kubectl -n $NS logs job/carga &gt; "resultados/$NOMBRE.txt"
+CODIGO=$(kubectl -n $NS get pods -l job-name=carga \
+  -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.exitCode}')
+tail -n 80 "resultados/$NOMBRE.txt"
+echo
+case "$CODIGO" in
+  0) echo "$(hora) $NOMBRE: se cumplieron todos los umbrales" ;;
+  99) echo "$(hora) $NOMBRE: algún umbral no se cumplió (k6 salió con 99). Busca las líneas con ✗" ;;
+  *) echo "$(hora) $NOMBRE: k6 salió con $CODIGO. Mira resultados/$NOMBRE.txt" ;;
+esac</code></pre>
+<pre data-lang="bash" data-file="a10-parte3/scripts/mira.sh"><code>#!/usr/bin/env bash
+# El tablero de los seis pods: una línea por segundo de cada uno, más los cambios de falla y el calentamiento.
+# Arráncalo en otra terminal después de scripts/modo.sh: no ve a los pods que nacen después. Ctrl+C para salir.
+# Con el experimento "cae", vuelve a arrancarlo cuando inventario vuelva, para ver sus pods nuevos.
+kubectl -n lab logs -l 'app in (gateway,pedidos,inventario)' -f --prefix --since=1s --max-log-requests=6 \
+  | grep --line-buffered -E 'tablero|falla|calentamiento'</code></pre>
+
+      <p>Cada experimento se corre igual, con tres terminales:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Elegir el modo</span><code>scripts/modo.sh breaker</code>. Recrea los pods de pedidos e inventario con esas defensas y espera a que estén listos.</li>
+        <li><span class="step-title">Mirar</span>En otra terminal, <code>scripts/mira.sh</code>: una línea por segundo de cada pod que hizo algo. En una tercera, si quieres ver CPU, <code>watch -n 2 kubectl -n lab top pods</code> (en Git Bash, un bucle con <code>sleep 2</code>).</li>
+        <li><span class="step-title">Correr</span><code>scripts/experimento.sh p3-breaker-lento lento</code>. Al final imprime el resumen de k6, que también queda en <code>resultados/</code>.</li>
+      </ol>
+
+      <dl class="pj-why">
+        <div><dt>La decisión</dt><dd>Las defensas en variables de entorno, y un modo por experimento, como en la parte 1: el código es el mismo, y cada comparación cambia una cosa. Las fallas, en cambio, se provocan en caliente con <code>/admin/falla</code>, sin reiniciar nada: reiniciar inventario para ponerlo lento lo dejaría además frío, y mezclarías dos fallas.</dd></div>
+        <div><dt>Lo que descartas</dt><dd>Chaos Mesh o Litmus, que inyectan latencia y fallas en la red del pod: son lo que usarías en un clúster de verdad (<a href="../modules/m08-resiliencia.html#caos">M08. Caos</a>), pero son un operador más, y la latencia de red no se cancela con <code>statement_timeout</code>.</dd></div>
+        <div><dt>Qué puede salir mal</dt><dd>Que <code>falla.sh</code> conteste 415 o 400: el cuerpo no llegó como JSON. <code>kubectl create --raw</code> manda lo que lee de <code>-f</code> con un POST <span class="badge badge--doc">Documentado</span>; revisa que el JSON esté bien formado. Y que <code>mira.sh</code> no muestre nada: los pods imprimen el tablero solo en los segundos en que hicieron algo.</dd></div>
+      </dl>
+
+      <h3 id="p3-pruebas">Las pruebas</h3>
+
+      <p>Ninguna prueba levanta Kubernetes. Las del gateway corren el script de Lua contra un Redis 8.10 de verdad, sin Spring; las de pedidos ponen al cliente contra un inventario falso hecho con el <code>HttpServer</code> del JDK, que contesta lo que cada prueba le pide; y las de inventario corren las reservas contra un PostgreSQL 18, con la migración de Flyway.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver las cuatro clases de prueba</summary>
+        <div class="solution-body">
+<pre data-lang="java" data-file="a10-parte3/gateway/src/test/java/lab/gateway/TokenBucketTest.java"><code>package lab.gateway;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.testcontainers.containers.GenericContainer;
+
+/** El script de Lua contra un Redis 8.10 de verdad, sin levantar Spring. */
+class TokenBucketTest {
+
+    private GenericContainer&lt;?&gt; redis;
+    private LettuceConnectionFactory conexion;
+
+    @BeforeEach
+    void levantar() {
+        redis = new GenericContainer&lt;&gt;("redis:8.10").withExposedPorts(6379);
+        redis.start();
+        conexion = new LettuceConnectionFactory(
+                new RedisStandaloneConfiguration(redis.getHost(), redis.getMappedPort(6379)),
+                LettuceClientConfiguration.builder().commandTimeout(java.time.Duration.ofMillis(200)).build());
+        conexion.afterPropertiesSet();
+        conexion.start();
+    }
+
+    @AfterEach
+    void bajar() {
+        conexion.destroy();
+        redis.stop();
+    }
+
+    private TokenBucket balde(int capacidad, double recarga) {
+        return new TokenBucket(new StringRedisTemplate(conexion), capacidad, recarga, new Tablero());
+    }
+
+    @Test
+    void dejaPasarLaRafagaYDespuesRechaza() {
+        TokenBucket balde = balde(5, 1);
+        for (int i = 0; i &lt; 5; i++) {
+            assertThat(balde.tomar("web").pasa()).isTrue();
+        }
+        TokenBucket.Resultado sexta = balde.tomar("web");
+        assertThat(sexta.pasa()).isFalse();
+        // Con 1 token por segundo, el siguiente llega en a lo sumo 1000 ms.
+        assertThat(sexta.esperaMs()).isBetween(1L, 1000L);
+    }
+
+    @Test
+    void cadaClienteTieneSuBalde() {
+        TokenBucket balde = balde(2, 1);
+        balde.tomar("abusador");
+        balde.tomar("abusador");
+        assertThat(balde.tomar("abusador").pasa()).isFalse();
+        assertThat(balde.tomar("tienda").pasa()).isTrue();
+    }
+
+    @Test
+    void elBaldeSeRecargaConElTiempo() throws InterruptedException {
+        TokenBucket balde = balde(1, 10);
+        assertThat(balde.tomar("web").pasa()).isTrue();
+        assertThat(balde.tomar("web").pasa()).isFalse();
+        // 10 tokens por segundo: en 150 ms entra uno.
+        Thread.sleep(150);
+        assertThat(balde.tomar("web").pasa()).isTrue();
+    }
+
+    @Test
+    void sinRedisDejaPasar() {
+        TokenBucket balde = balde(1, 1);
+        redis.stop();
+        assertThat(balde.tomar("web").pasa()).isTrue();
+        assertThat(balde.tomar("web").pasa()).isTrue();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/pedidos/src/test/java/lab/pedidos/InventarioClientTest.java"><code>package lab.pedidos;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntUnaryOperator;
+
+import com.sun.net.httpserver.HttpServer;
+import io.github.resilience4j.bulkhead.Bulkhead;
+import io.github.resilience4j.bulkhead.BulkheadConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import lab.pedidos.PedidosApplication.Props;
+import lab.pedidos.deadline.Deadline;
+import lab.pedidos.inventario.InventarioClient;
+import lab.pedidos.inventario.NoDisponible;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+/**
+ * El cliente contra un inventario falso: un HttpServer del JDK que contesta lo que cada prueba le diga.
+ * Sin Spring, sin base y sin red de verdad.
+ */
+class InventarioClientTest {
+
+    private HttpServer servidor;
+    private final AtomicInteger llegadas = new AtomicInteger();
+    private final List&lt;String&gt; deadlines = new CopyOnWriteArrayList&lt;&gt;();
+    /** Recibe el número de llegada (1, 2, 3…) y devuelve el status a contestar. */
+    private volatile IntUnaryOperator responder = n -&gt; 200;
+    private volatile long demoraMs = 0;
+
+    @BeforeEach
+    void levantar() throws IOException {
+        servidor = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        servidor.createContext("/reservas", ex -&gt; {
+            int n = llegadas.incrementAndGet();
+            deadlines.add(String.valueOf(ex.getRequestHeaders().getFirst("X-Request-Deadline")));
+            try {
+                Thread.sleep(demoraMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            ex.sendResponseHeaders(responder.applyAsInt(n), -1);
+            ex.close();
+        });
+        servidor.setExecutor(java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
+        servidor.start();
+    }
+
+    @AfterEach
+    void bajar() {
+        servidor.stop(0);
+    }
+
+    private InventarioClient cliente(String modo, boolean breaker, boolean deadline) {
+        URI url = URI.create("http://127.0.0.1:" + servidor.getAddress().getPort());
+        Props props = new Props(deadline,
+                new Props.Inventario(url, Duration.ofMillis(300), Duration.ofMillis(50)),
+                new Props.Reintentos(modo, 3, Duration.ofMillis(10), Duration.ofMillis(40), 0.1),
+                new Props.Breaker(breaker, 10, 5, 50, Duration.ofMillis(200), Duration.ofSeconds(30), 1),
+                new Props.Bulk(true, 2));
+        CircuitBreaker cb = CircuitBreaker.of("t", CircuitBreakerConfig.custom()
+                .slidingWindowSize(10).minimumNumberOfCalls(5).failureRateThreshold(50)
+                .waitDurationInOpenState(Duration.ofSeconds(30)).build());
+        Bulkhead bh = Bulkhead.of("t", BulkheadConfig.custom().maxConcurrentCalls(2).maxWaitDuration(Duration.ZERO).build());
+        return new InventarioClient(props, cb, bh, new Tablero());
+    }
+
+    private static Deadline en(long ms) {
+        return new Deadline(System.currentTimeMillis() + ms);
+    }
+
+    @Test
+    void reintentaUn503YLuegoReserva() {
+        responder = n -&gt; n &lt; 3 ? 503 : 200;
+        InventarioClient c = cliente("jitter", false, true);
+        assertThat(c.reservar(UUID.randomUUID(), 1, 1, en(2000))).isEqualTo(InventarioClient.Respuesta.RESERVADA);
+        assertThat(llegadas.get()).isEqualTo(3);
+    }
+
+    @Test
+    void unConflictoNoSeReintenta() {
+        responder = n -&gt; 409;
+        InventarioClient c = cliente("jitter", false, true);
+        assertThat(c.reservar(UUID.randomUUID(), 1, 1, en(2000))).isEqualTo(InventarioClient.Respuesta.SIN_STOCK);
+        assertThat(llegadas.get()).isEqualTo(1);
+    }
+
+    @Test
+    void sinReintentosHayUnSoloIntento() {
+        responder = n -&gt; 503;
+        InventarioClient c = cliente("off", false, true);
+        assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, en(2000))).isInstanceOf(NoDisponible.class);
+        assertThat(llegadas.get()).isEqualTo(1);
+    }
+
+    @Test
+    void pasaElDeadlineDelIntentoAInventario() {
+        // Al deadline le quedan 2 s, pero el intento tiene un tope de 300 ms: a inventario le llega el del intento.
+        Deadline d = en(2000);
+        long antes = System.currentTimeMillis();
+        cliente("jitter", false, true).reservar(UUID.randomUUID(), 1, 1, d);
+        assertThat(deadlines).hasSize(1);
+        long recibido = Long.parseLong(deadlines.getFirst());
+        assertThat(recibido).isBetween(antes + 300, System.currentTimeMillis() + 300);
+        assertThat(recibido).isLessThan(d.venceEpochMs());
+    }
+
+    @Test
+    void sinDeadlineNoMandaLaCabecera() {
+        cliente("jitter", false, false).reservar(UUID.randomUUID(), 1, 1, en(2000));
+        assertThat(deadlines).containsExactly("null");
+    }
+
+    @Test
+    void conElDeadlineVencidoNiLlama() {
+        InventarioClient c = cliente("jitter", false, true);
+        // Quedan 30 ms y el margen es de 50 ms: no alcanza.
+        assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, en(30))).isInstanceOf(NoDisponible.class);
+        assertThat(llegadas.get()).isZero();
+    }
+
+    @Test
+    void elTimeoutDelIntentoSaleDelDeadline() {
+        // Inventario tarda 1 s, el tope por intento es 300 ms y al deadline le quedan 200 ms.
+        demoraMs = 1000;
+        InventarioClient c = cliente("off", false, true);
+        long t0 = System.nanoTime();
+        assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, en(200))).isInstanceOf(NoDisponible.class);
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        // 200 - 50 de margen = 150 ms de timeout, no 300.
+        assertThat(ms).isLessThan(290);
+    }
+
+    @Test
+    void elBreakerAbiertoCortaSinLlamar() {
+        responder = n -&gt; 500;
+        InventarioClient c = cliente("off", true, true);
+        // 5 fallas, el mínimo de la ventana: el breaker se abre.
+        for (int i = 0; i &lt; 5; i++) {
+            assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, en(2000))).isInstanceOf(NoDisponible.class);
+        }
+        assertThat(llegadas.get()).isEqualTo(5);
+        assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, en(2000)))
+                .isInstanceOf(NoDisponible.class)
+                .hasMessageContaining("abierto");
+        assertThat(llegadas.get()).isEqualTo(5);
+    }
+
+    @Test
+    void elBulkheadRechazaLaTerceraEspera() throws InterruptedException {
+        demoraMs = 500;
+        InventarioClient c = cliente("off", false, false);
+        // Las dos primeras terminan por timeout a los 300 ms, pero hasta entonces ocupan los dos lugares.
+        Runnable ocupar = () -&gt; {
+            try {
+                c.reservar(UUID.randomUUID(), 1, 1, Deadline.SIN);
+            } catch (NoDisponible esperado) {
+                // Se esperaba: inventario tarda más que el timeout.
+            }
+        };
+        Thread a = Thread.startVirtualThread(ocupar);
+        Thread b = Thread.startVirtualThread(ocupar);
+        Thread.sleep(100);
+        // Los dos lugares están ocupados: la tercera se rechaza en el acto, sin llegar a inventario.
+        assertThatThrownBy(() -&gt; c.reservar(UUID.randomUUID(), 1, 1, Deadline.SIN))
+                .isInstanceOf(NoDisponible.class)
+                .hasMessageContaining("demasiadas");
+        a.join();
+        b.join();
+        assertThat(llegadas.get()).isEqualTo(2);
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/test/java/lab/inventario/CompuertaTest.java"><code>package lab.inventario;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.junit.jupiter.api.Test;
+
+/** La rampa con un reloj de mentira: el tiempo avanza cuando la prueba lo dice. */
+class CompuertaTest {
+
+    private final AtomicLong ahora = new AtomicLong(1_000_000);
+
+    @Test
+    void antesDeEstarListaUsaElLimiteInicial() {
+        Compuerta c = new Compuerta(true, 1, 5, 30_000, ahora::get);
+        assertThat(c.limite()).isEqualTo(1);
+        assertThat(c.entrar()).isTrue();
+        assertThat(c.entrar()).isFalse();
+    }
+
+    @Test
+    void elLimiteSubeEnLineaRectaDurantelaRampa() {
+        Compuerta c = new Compuerta(true, 1, 5, 30_000, ahora::get);
+        c.abrir();
+        assertThat(c.limite()).isEqualTo(1);
+        ahora.addAndGet(15_000);
+        // A la mitad de la rampa: 1 + (5 - 1) · 15 / 30 = 3.
+        assertThat(c.limite()).isEqualTo(3);
+        ahora.addAndGet(15_000);
+        assertThat(c.limite()).isEqualTo(5);
+        ahora.addAndGet(60_000);
+        assertThat(c.limite()).isEqualTo(5);
+    }
+
+    @Test
+    void sinRampaEmpiezaEnElMaximo() {
+        Compuerta c = new Compuerta(true, 1, 5, 0, ahora::get);
+        assertThat(c.limite()).isEqualTo(5);
+    }
+
+    @Test
+    void rechazaLoQueNoCabeYDejaEntrarAlSalirOtra() {
+        Compuerta c = new Compuerta(true, 2, 2, 0, ahora::get);
+        assertThat(c.entrar()).isTrue();
+        assertThat(c.entrar()).isTrue();
+        assertThat(c.entrar()).isFalse();
+        c.salir();
+        assertThat(c.entrar()).isTrue();
+    }
+
+    @Test
+    void apagadaDejaEntrarTodo() {
+        Compuerta c = new Compuerta(false, 1, 1, 0, ahora::get);
+        for (int i = 0; i &lt; 100; i++) {
+            assertThat(c.entrar()).isTrue();
+        }
+    }
+
+    @Test
+    void elFrioBajaHastaCero() {
+        Frio f = new Frio(300, 200);
+        assertThat(f.tomarExtraMs()).isEqualTo(300);
+        for (int i = 1; i &lt; 100; i++) {
+            f.tomarExtraMs();
+        }
+        // La 101.ª paga la mitad.
+        assertThat(f.tomarExtraMs()).isEqualTo(150);
+        for (int i = 101; i &lt; 200; i++) {
+            f.tomarExtraMs();
+        }
+        assertThat(f.tomarExtraMs()).isZero();
+    }
+}</code></pre>
+<pre data-lang="java" data-file="a10-parte3/inventario/src/test/java/lab/inventario/ReservasTest.java"><code>package lab.inventario;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.UUID;
+
+import lab.inventario.deadline.Deadline;
+
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+/** Las reservas contra un PostgreSQL 18 de verdad, con la migración de Flyway. */
+@SpringBootTest(properties = {"lab.calentar.enabled=false", "lab.frio.costo=0ms"})
+@Import(ReservasTest.Contenedores.class)
+class ReservasTest {
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class Contenedores {
+        @Bean
+        @ServiceConnection
+        PostgreSQLContainer postgres() {
+            return new PostgreSQLContainer("postgres:18");
+        }
+    }
+
+    @Autowired
+    Reservas reservas;
+    @Autowired
+    Falla falla;
+    @Autowired
+    JdbcClient jdbc;
+
+    @AfterEach
+    void sinFalla() {
+        falla.cambiar(new Falla.Config(0, 0, 0));
+    }
+
+    private int stock(long producto) {
+        return jdbc.sql("SELECT stock FROM productos WHERE id = ?").param(producto).query(Integer.class).single();
+    }
+
+    @Test
+    void elMismoPedidoDosVecesDescuentaUnaSola() {
+        UUID pedido = UUID.randomUUID();
+        int antes = stock(7);
+        assertThat(reservas.reservar(pedido, 7, 3, Deadline.SIN)).isTrue();
+        // El reintento: mismo pedido, no descuenta otra vez.
+        assertThat(reservas.reservar(pedido, 7, 3, Deadline.SIN)).isFalse();
+        assertThat(stock(7)).isEqualTo(antes - 3);
+    }
+
+    @Test
+    void sinStockNoDejaLaReservaAnotada() {
+        UUID pedido = UUID.randomUUID();
+        assertThatThrownBy(() -&gt; reservas.reservar(pedido, 8, 2_000_000, Deadline.SIN))
+                .isInstanceOf(Reservas.SinStock.class);
+        Integer reservasDelPedido = jdbc.sql("SELECT count(*) FROM reservas WHERE pedido_id = ?")
+                .param(pedido).query(Integer.class).single();
+        assertThat(reservasDelPedido).isZero();
+    }
+
+    @Test
+    void laBaseCancelaLoQueSePasaDelDeadline() {
+        // La base tarda 2 s más y al deadline le quedan 300 ms: PostgreSQL cancela la consulta.
+        falla.cambiar(new Falla.Config(2000, 0, 0));
+        Deadline deadline = new Deadline(System.currentTimeMillis() + 300);
+        long t0 = System.nanoTime();
+        assertThatThrownBy(() -&gt; reservas.reservar(UUID.randomUUID(), 9, 1, deadline))
+                .isInstanceOfSatisfying(DataAccessException.class, e -&gt; assertThat(Reservas.cancelada(e)).isTrue());
+        assertThat((System.nanoTime() - t0) / 1_000_000).isLessThan(1500);
+    }
+}</code></pre>
+        </div>
+      </details>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Prueba</th><th>Qué asegura</th></tr></thead>
+          <tbody>
+            <tr><td><code>dejaPasarLaRafagaYDespuesRechaza</code></td><td>Un balde de 5 deja pasar 5 seguidas y rechaza la sexta, con una espera de a lo sumo 1&#8239;s.</td></tr>
+            <tr><td><code>sinRedisDejaPasar</code></td><td>Con Redis apagado, el balde deja pasar (fail-open).</td></tr>
+            <tr><td><code>reintentaUn503YLuegoReserva</code></td><td>Dos 503 y un 200: tres llegadas a inventario y la reserva hecha.</td></tr>
+            <tr><td><code>pasaElDeadlineDelIntentoAInventario</code></td><td>A inventario le llega el deadline del intento, más corto que el de la request.</td></tr>
+            <tr><td><code>elTimeoutDelIntentoSaleDelDeadline</code></td><td>Con 200&#8239;ms de deadline y 50 de margen, el intento corta a los 150&#8239;ms, no a los 300 de su tope.</td></tr>
+            <tr><td><code>elBreakerAbiertoCortaSinLlamar</code></td><td>Después de 5 fallas, la sexta llamada no llega a inventario.</td></tr>
+            <tr><td><code>elBulkheadRechazaLaTerceraEspera</code></td><td>Con 2 lugares ocupados, la tercera llamada se rechaza sin llegar.</td></tr>
+            <tr><td><code>elLimiteSubeEnLineaRectaDurantelaRampa</code></td><td>La rampa da 1, 3 y 5 al principio, a la mitad y al final de los 30&#8239;s.</td></tr>
+            <tr><td><code>elMismoPedidoDosVecesDescuentaUnaSola</code></td><td>La reserva es idempotente: un reintento no descuenta dos veces.</td></tr>
+            <tr><td><code>laBaseCancelaLoQueSePasaDelDeadline</code></td><td>Con 300&#8239;ms de deadline y 2&#8239;s de lentitud, PostgreSQL cancela con <code>57014</code> antes de 1.5&#8239;s.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="p3-experimentos">Los experimentos</h3>
+
+      <p>Siete experimentos, cada uno con su pregunta. Antes del primero, la línea de base con todo puesto y sin falla: si en la fase "antes" ya hay errores o <code>dropped_iterations</code>, tu máquina no alcanza para esta carga, y los demás experimentos no van a medir lo que crees. Baja <code>rate</code> en <code>k6/carga.js</code> (por ejemplo, a 20 y 10) y repite.</p>
+
+<pre data-lang="bash"><code>scripts/modo.sh todo
+scripts/experimento.sh p3-base ninguna</code></pre>
+
+      <p>Para cada experimento, anota en una tabla lo mismo, de la fase "durante", que es donde está la falla: el p95 de las escrituras y de las lecturas, la tasa de <code>http_req_failed</code> de cada una, los contadores <code>rechazos_503</code>, <code>vencidas_504</code> y <code>cuota_429</code>, y <code>dropped_iterations</code>. Del tablero, mira la columna que dice cada experimento.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Experimento</th><th>Modo</th><th>Falla</th><th>La pregunta</th></tr></thead>
+          <tbody>
+            <tr><td>E6</td><td><code>sin</code></td><td><code>lento</code></td><td>¿Qué le pasa a las lecturas cuando inventario se pone lento y nadie corta?</td></tr>
+            <tr><td>E7</td><td><code>sin</code>, después <code>reintentos</code></td><td><code>errores</code></td><td>¿Cuánto multiplican la carga los reintentos, y cuánto la frenan el jitter y el presupuesto?</td></tr>
+            <tr><td>E8</td><td><code>breaker</code></td><td><code>lento</code></td><td>¿Siguen rápidas las lecturas con el breaker y el bulkhead?</td></tr>
+            <tr><td>E9</td><td><code>breaker</code>, después <code>deadline</code></td><td><code>lento</code></td><td>¿Cuánto trabajo inútil hace inventario sin deadline?</td></tr>
+            <tr><td>E10</td><td><code>frio</code>, después <code>todo</code></td><td><code>cae</code></td><td>¿Cómo vuelve inventario, con y sin calentamiento y rampa?</td></tr>
+            <tr><td>E11</td><td><code>todo</code></td><td><code>abuso</code>, después <code>redis</code></td><td>¿El balde frena solo al abusador? ¿Y qué pasa sin Redis?</td></tr>
+            <tr><td>E12</td><td><code>todo</code></td><td><code>cpu</code></td><td>¿El techo de CPU de inventario protege a pedidos?</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>E6. Sin defensas, inventario lento</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh sin
+scripts/experimento.sh p3-e6 lento</code></pre>
+
+      <p>Inventario tarda 1.5&#8239;s más en cada reserva, con la conexión tomada. Con 5 conexiones por pod y 2 pods, atiende a lo sumo 2 · 5 / 1.5 ≈ 6.7 reservas por segundo, y le llegan 40, más los reintentos. Las que no consiguen conexión esperan 1&#8239;s en HikariCP y fallan con 500, y pedidos, en modo ingenuo, las reintenta en el acto, hasta tres veces, con 5&#8239;s de timeout cada una. El gateway corta a los 2&#8239;s, pero pedidos no se entera y sigue.</p>
+
+      <p>Mira en el resumen el p95 y la tasa de fallas de <b>las lecturas</b> en la fase "durante": no tocan inventario, pero comparten los 40 hilos de Tomcat con las escrituras que esperan. Mira <code>dropped_iterations</code> y <code>vencidas_504</code>. En el tablero de inventario, <code>atendidas</code> y <code>500</code>; en el de pedidos, <code>llamadas</code> contra lo que manda k6. Después de los 90&#8239;s, cuenta cuántos segundos tarda la fase "después" en volver a la normalidad: es la cola que quedó.</p>
+
+      <h4>E7. Reintentos: ingenuos contra jitter y presupuesto</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh sin
+scripts/experimento.sh p3-e7-ingenuo errores
+scripts/modo.sh reintentos
+scripts/experimento.sh p3-e7-jitter errores</code></pre>
+
+      <p>El 30&#8239;% de las reservas contesta 500 en el acto. Antes de correrlo, haz la cuenta. Con tres intentos ingenuos, cada pedido hace en promedio 1 + 0.3 + 0.3² = 1.39 llamadas a inventario, y falla solo si fallan las tres: 0.3³ = 2.7&#8239;%. Con el presupuesto del 10&#8239;%, como mucho hay 0.1 reintentos por pedido: de los 0.3 que fallan, solo 0.1 se reintentan, y de esos se salva el 70&#8239;%, así que fallan cerca de 0.3 − 0.1 · 0.7 = 0.23, el 23&#8239;%, con 1.1 llamadas por pedido. Es el trade-off de <a href="../modules/m08-resiliencia.html#reintentos">M08</a>: el presupuesto cuesta errores cuando la falla es pareja y no tapa nada; a cambio, cuando inventario está saturado, no le triplica la carga.</p>
+
+      <p>Compara en el tablero de pedidos <code>llamadas</code> por segundo en los dos modos, y <code>sin_presupuesto</code> en el segundo. Divide las llamadas por los pedidos de k6 (40 por segundo) y compáralo con 1.39 y 1.1. Compara también la tasa de fallas de las escrituras con 2.7&#8239;% y 23&#8239;%. Si tus números se alejan de la cuenta, busca por qué: el saldo inicial del presupuesto (10 reintentos) y los reintentos que caen en el 70&#8239;% bueno.</p>
+
+      <h4>E8. Breaker y bulkhead, inventario lento</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh breaker
+scripts/experimento.sh p3-e8 lento</code></pre>
+
+      <p>Ahora cada intento tiene 800&#8239;ms de tope, y la reserva tarda más de 1.5&#8239;s: casi todos los intentos vencen. Mira en <code>mira.sh</code> el momento en que el breaker de cada pod pasa de <code>CLOSED</code> a <code>OPEN</code>, y cuánto después vuelve a <code>HALF_OPEN</code>. Con el breaker abierto, <code>cortadas</code> sube y <code>llamadas</code> baja casi a cero: inventario deja de recibir de ese pod. Las escrituras fallan, pero rápido: compara su p95 con el de E6. Y la pregunta del laboratorio: compara el p95 de las lecturas en "durante" con el de E6 y con el de la línea de base.</p>
+
+      <p>A los 90&#8239;s se quita la falla. Cuenta en el tablero cuántos segundos pasan hasta que el breaker de cada pod vuelve a <code>CLOSED</code>, y explícalo con los 5&#8239;s abierto y las 3 pruebas.</p>
+
+      <h4>E9. Con y sin deadline</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh breaker
+scripts/experimento.sh p3-e9-sin lento
+scripts/modo.sh deadline
+scripts/experimento.sh p3-e9-con lento</code></pre>
+
+      <p>En el primero, inventario no sabe cuándo deja de servir su respuesta: cada reserva duerme sus 1.5&#8239;s completos en la base, aunque pedidos haya cortado a los 800&#8239;ms. En el segundo, la reserva recibe el deadline del intento y lo convierte en <code>statement_timeout</code>: PostgreSQL la cancela cuando pedidos deja de escuchar. Compara en el tablero de inventario <code>atendidas</code> (trabajo que nadie leyó, en el primero) contra <code>canceladas</code> y <code>vencidas</code> (en el segundo), y <code>503</code>, los que la compuerta rechazó en el acto. Mira también cuántas sesiones están en <code>pg_sleep</code> en cada caso, con el experimento corriendo:</p>
+
+<pre data-lang="bash"><code>scripts/psql.sh -c "SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND state = 'active'"</code></pre>
+
+      <p>Con el deadline, ese número no puede pasar de 10: 5 lugares de la compuerta por cada pod de inventario.</p>
+
+      <h4>E10. Inventario cae y vuelve en frío</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh frio
+scripts/experimento.sh p3-e10-frio cae
+scripts/modo.sh todo
+scripts/experimento.sh p3-e10-todo cae</code></pre>
+
+      <p>A los 30&#8239;s, inventario se va a 0 réplicas: el Service se queda sin pods, y cada intento de pedidos falla al conectar. El breaker de pedidos se abre, y los pedidos fallan con 503 rápido mientras las lecturas siguen. A los 90&#8239;s vuelve a 2 réplicas. Cuando vuelvan los pods, reinicia <code>mira.sh</code> para verlos.</p>
+
+      <p>Con <code>frio</code>, los pods nuevos entran al Service apenas arranca Spring, sin calentar y con la compuerta en 5 desde el principio: las primeras 200 reservas de cada pod pagan el frío, todas a la vez. Con <code>todo</code>, calientan antes de estar listos, y después la compuerta empieza en 1. En el tablero de inventario, mira las columnas <code>frio_ms</code>, <code>limite</code> y <code>503</code> en los primeros segundos de cada pod nuevo; en el de pedidos, cuántas veces el breaker vuelve a <code>OPEN</code> después de cerrarse. Y en la salida de <code>experimento.sh</code>, cuántos segundos pasan entre "Inventario a 2 réplicas" e "Inventario listo" en cada modo: es lo que cuesta el calentamiento.</p>
+
+      <h4>E11. El balde: un abusador, y después sin Redis</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh todo
+scripts/experimento.sh p3-e11-abuso abuso
+scripts/experimento.sh p3-e11-redis redis</code></pre>
+
+      <p>En el primero, el cliente "abusador" manda 150 pedidos por segundo entre los 30 y los 90&#8239;s. Haz la cuenta: su balde arranca con 100 tokens y se recarga a 50 por segundo, así que en 60&#8239;s le pasan a lo sumo 100 + 50 · 60 = 3&#8239;100 de sus 9&#8239;000 requests, y unas 5&#8239;900 reciben 429. Compara con <code>cuota_429</code> de la fase "durante", y comprueba que las escrituras de "tienda" no tienen 429: cada cliente tiene su balde. Lo que sí pasa son esos 50 por segundo del abusador, que llegan a inventario: mira si se nota en el p95 de "tienda".</p>
+
+      <p>En el segundo, Redis desaparece a los 30&#8239;s. En el tablero del gateway, <code>sin_redis</code> tiene que subir y <code>cuota</code> quedar en 0: el gateway deja pasar todo. Mira si el p95 de las lecturas cambia: cada request espera hasta 50&#8239;ms a que Redis no conteste antes de pasar.</p>
+
+      <h4>E12. El techo de CPU</h4>
+
+<pre data-lang="bash"><code>scripts/modo.sh todo
+scripts/experimento.sh p3-e12 cpu</code></pre>
+
+      <p>Cada reserva quema 80&#8239;ms de CPU. Con 40 por segundo, es una demanda de 40 · 0.08 = 3.2 núcleos, y los dos pods de inventario tienen un techo de 1 núcleo cada uno: 2 en total. Con el experimento corriendo, mira <code>kubectl -n lab top pods</code>: los pods de inventario tienen que quedar cerca de <code>1000m</code> y no pasar de ahí, aunque tu máquina tenga más núcleos libres. Las reservas se encolan, la compuerta rechaza, y el breaker de pedidos puede abrirse. Lo que no tiene que pasar es que pedidos se quede sin CPU: compara el p95 de las lecturas con el de la línea de base.</p>
+
+      <p>Para ver qué protege el techo, sácalo y repite: borra la línea <code>cpu: "1"</code> de <code>limits</code> en <code>k8s/inventario.yaml</code>, aplica con <code>kubectl apply -f k8s/inventario.yaml</code> y corre <code>scripts/experimento.sh p3-e12-sin-techo cpu</code>. Ahora inventario puede usar todos los núcleos del nodo. Compara <code>top</code> y el p95 de las lecturas. Al terminar, vuelve a poner la línea y aplica.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Un techo de CPU protege a los vecinos, pero frena al pod aunque el nodo esté ocioso: el throttling agrega latencia que no se ve en el uso promedio. Por eso hay equipos que ponen <code>requests</code> de CPU y no ponen <code>limits</code>, y dejan que el reparto por <code>requests</code> los proteja cuando el nodo está lleno. <span class="badge badge--doc">Documentado</span> El techo de memoria, en cambio, se pone siempre: sin él, un pod que pierde memoria se lleva al nodo.</p>
+      </aside>
+
+      <h3 id="p3-apagar">Apagar todo</h3>
+
+<pre data-lang="bash"><code>kubectl delete namespace lab        # borra todo lo del laboratorio, con el disco de la base
+cd cluster &amp;&amp; docker compose down &amp;&amp; cd ..</code></pre>
+
+      <p>Para volver a empezar, levanta el clúster con el paso 1 y aplica todo otra vez desde el paso 2. Las imágenes siguen en el registro mientras no borres su contenedor: <code>docker compose down</code> lo borra, y entonces hay que volver a correr <code>imagenes.sh</code>.</p>
+
       <h2 id="repositorio">Tu repositorio</h2>
 
       <div class="pj-repo" data-repo="a10">
@@ -3331,6 +6936,11 @@ scripts/experimento.sh p2-congelado-e5 congelar-master</code></pre>
           <li data-check="switchover">Hiciste un failover planeado y mediste su ventana en los logs de Sentinel.</li>
           <li data-check="nodo">Apagaste el nodo del master con <code>e1</code> y con <code>e5</code>, y explicaste por qué la réplica promovida no sirve si la app no se entera.</li>
           <li data-check="congelado">Congelaste el nodo del master y explicaste por qué una conexión a un nodo congelado no se corta sola.</li>
+          <li data-check="p3-verify">Parte 3: las veintidós pruebas pasan con <code>./mvnw verify</code>, y el gateway contesta 201, 200 y 429 a mano.</li>
+          <li data-check="p3-e6e7">Sin defensas, viste a las lecturas sufrir por un inventario lento, y comparaste las llamadas por pedido con 1.39 y 1.1.</li>
+          <li data-check="p3-e8e9">Con el breaker, las lecturas siguieron rápidas; con el deadline, la base canceló el trabajo que nadie iba a leer.</li>
+          <li data-check="p3-e10">Comparaste la vuelta de inventario en frío con la vuelta con calentamiento y rampa.</li>
+          <li data-check="p3-e11e12">Comparaste los 429 del abusador con la cuenta del balde, viste el fail-open sin Redis y el techo de CPU en <code>kubectl top</code>.</li>
         </ul>
       </div>
 

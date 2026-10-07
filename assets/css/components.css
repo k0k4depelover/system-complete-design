@@ -842,6 +842,26 @@ details.exercise-sql summary { cursor: pointer; font-weight: 600; font-size: var
 .sign-step-body { font-size: var(--fs-sub); color: var(--label-2); margin: 0 0 6px !important; }
 .sign-step pre, .sign-verify pre { font-size: 0.72rem; white-space: pre-wrap; word-break: break-all; background: var(--bg); }
 .sign-verify { margin-top: var(--s-3); }
+.sign-cases .chip-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.sign-time { align-items: flex-end; }
+.sign-range { flex: 1 1 260px; }
+.sign-range input[type=range] { width: 100%; }
+.sign-useat { font-size: var(--fs-sm); color: var(--label-2); font-variant-numeric: tabular-nums; }
+.sign-checks { list-style: none; padding: 0 !important; margin: 0 0 var(--s-3) !important; display: grid; gap: 6px; }
+.sign-checks li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; margin: 0 !important; padding: 8px 12px; background: var(--bg); border-radius: var(--radius-s); max-width: none !important; }
+.sign-ck-icon { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; font-weight: 700; font-size: 0.8rem; color: var(--bg); }
+.sign-checks .is-ok .sign-ck-icon { background: var(--ok); }
+.sign-checks .is-bad .sign-ck-icon { background: var(--fail); }
+.sign-ck-title { margin: 0 !important; font-weight: 600; font-size: var(--fs-sub); }
+.sign-ck-detail { margin: 2px 0 0 !important; font-size: var(--fs-xs); color: var(--label-2); }
+.sign-diff code { white-space: pre-wrap; }
+.sign-lesson { margin-top: var(--s-3); padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--accent-tint); border-radius: var(--radius-s); }
+.sign-lesson p { font-size: var(--fs-sub); margin: 0 !important; }
+.sign-lesson .sign-lesson-title { font-weight: 700; margin-bottom: 4px !important; }
+.sign-hk-val { font-size: 0.72rem; word-break: break-all; grid-column: 1 / -1; }
+[data-calc="hashkey"] .out-row small { grid-column: 1 / -1; }
+[data-calc="hashkey"] textarea { width: 100%; padding: 10px 12px; font-family: var(--f-mono); font-size: var(--fs-sm); color: var(--label); background: var(--bg); border: 0.5px solid var(--separator); border-radius: var(--radius-s); resize: vertical; }
+[data-calc="hashkey"] .out-row > span { font-size: var(--fs-sm); font-weight: 600; }
 
 /* ---------- Laboratorio de JWT ---------- */
 
@@ -859,6 +879,33 @@ details.exercise-sql summary { cursor: pointer; font-weight: 600; font-size: var
 .jwt-checks .jwt-verdict { display: block; margin-top: 6px !important; padding: 10px 14px; border-radius: var(--radius-s); font-weight: 700; }
 .jwt-verdict.ok { background: var(--ok-tint); color: var(--ok); }
 .jwt-verdict.bad { background: var(--fail-tint); color: var(--fail); }
+
+/* ---------- PKCE ---------- */
+
+.pkce-in { align-items: flex-end; }
+.pkce-in .field { flex: 1 1 320px; }
+.pkce-in input { width: 100%; font-family: var(--f-mono); font-size: var(--fs-sm); }
+.pkce-out .out-row > span, [data-calc="pkce"] .out-row > span { font-size: var(--fs-sm); font-weight: 600; }
+[data-calc="pkce"] .out-row small { grid-column: 1 / -1; }
+[data-calc="pkce"] pre { font-size: 0.72rem; white-space: pre-wrap; word-break: break-all; background: var(--bg); }
+
+/* ---------- Row-level security ---------- */
+
+.rls-ctl { margin-bottom: var(--s-2); }
+.rls-ctl .raft-log-title { margin-bottom: 4px !important; }
+.rls-policy { margin: 0 0 var(--s-3); }
+.rls-policy summary { cursor: pointer; font-weight: 600; font-size: var(--fs-sub); min-height: 44px; display: flex; align-items: center; }
+.rls-table td, .rls-table th { white-space: nowrap; }
+.rls-row.is-hidden td, .rls-row.is-skip td { color: var(--label-3); }
+.rls-row.is-hidden td:nth-child(-n+4) { text-decoration: line-through; }
+.rls-row.is-seen td, .rls-row.is-changed td, .rls-row.is-new td { font-weight: 600; }
+.rls-tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 600; background: var(--fill); color: var(--label-2); }
+.rls-row.is-seen .rls-tag, .rls-row.is-changed .rls-tag, .rls-row.is-new .rls-tag { background: var(--ok-tint); color: var(--ok); }
+.rls-row.is-rejected .rls-tag { background: var(--fail-tint); color: var(--fail); }
+.rls-row.is-rejected td:nth-child(-n+4) { text-decoration: line-through; color: var(--label-3); }
+.rls-result { font-family: var(--f-mono); font-size: var(--fs-sm); font-weight: 600; padding: 10px 14px; border-radius: var(--radius-s); margin: var(--s-3) 0 var(--s-2) !important; word-break: break-word; }
+.rls-result.is-ok { background: var(--ok-tint); color: var(--ok); }
+.rls-result.is-bad { background: var(--fail-tint); color: var(--fail); }
 
 /* ---------- Waterfall de traces ---------- */
 

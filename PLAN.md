@@ -156,6 +156,22 @@ Los datos van en archivos `.js` que se registran en `window.SD`. No uso JSON con
 | M31 | Google Docs | OT vs CRDT, servidor de sesión por documento, cursores y presencia, historial de versiones, comentarios, permisos |
 | CP-D | Checkpoint D | Examen + diseñar un Slack |
 
+### Parte IV — Ciberseguridad
+
+Numerada después de la Parte III (M32 en adelante), con su propio checkpoint. **Cuenta para el progreso.** La premisa transversal: "si no haces esto, el atacante hace esto otro". Todo defensivo: se muestra el patrón vulnerable y su arreglo, nunca cadenas de explotación listas para usar. Hoy solo existe el esqueleto (rutas `soon` y este currículo); los módulos se escriben uno por pedido.
+
+| # | Módulo | Contenido clave | Visual / interactivo (candidato) |
+|---|---|---|---|
+| M32 | **Firewalls a fondo** | Stateless vs stateful, nftables, iptables, UFW y firewalld, filtrado de entrada y de salida (egress), host vs red, Security Groups y NACLs en la nube, NGFW, WAF (reenvío a M37), segmentación de red, el choque entre Docker y el firewall, IPv6 | Simulador de reglas: un paquete contra una cadena de reglas, con estado de conexión; diagrama de zonas |
+| M33 | **Hardening de servidores Linux** | SSH (claves, `AllowGroups`, `sshd_config`, MFA), sudo/su, actualizaciones automáticas, NTP, `/proc`, contraseñas, Fail2Ban y CrowdSec, AIDE, rkhunter, Lynis, `ss`, sysctl, GRUB, umask, paquetes huérfanos. Sección "si el firewall no alcanza": asume que el perímetro cae, inventaría lo expuesto y endurece el servidor por sí mismo (servicios atados a localhost, mínimo privilegio, MAC con AppArmor/SELinux, control de egress, monitoreo y alertas). Formato "si no haces esto, el atacante hace esto" | Checklist interactivo de hardening; antes/después de `sshd_config` |
+| M34 | **Operación y troubleshooting para SysAdmin** | Usuarios y permisos, systemd y journald, discos y LVM, backups con pruebas de restauración, diagnóstico de CPU, RAM, disco y red (top, vmstat, iostat, `ss`, dig, strace), runbooks, parches | Árbol de decisión de troubleshooting; lectura guiada de métricas |
+| M35 | **Seguridad en bases de datos** | Tablas de bitácora (triggers, pgAudit, CDC), RBAC, ABAC, ACLs, extensión de la **row-level security de M05**, cifrado de columnas, secretos y rotación de credenciales, mínimo privilegio por servicio | Simulador de RBAC/ABAC: un sujeto, una acción y un recurso contra las políticas |
+| M36 | **Criptografía desde cero** | Hash, HMAC, cifrado simétrico (AES-GCM), asimétrico, firmas, intercambio de claves, certificados y PKI, contraseñas (Argon2id, bcrypt), aleatoriedad, errores comunes. Reutiliza `SD.crypto` | Laboratorios con `SD.crypto`: hash, HMAC y firma paso a paso |
+| M37 | **Arquitecturas seguras en la nube** | IAM y mínimo privilegio, mTLS y SPIFFE, KMS/HSM, gestores de secretos, WAF, VPC y endpoints privados, zero trust, auditoría (CloudTrail), guardrails (SCP), respuesta a incidentes | Diagrama de una arquitectura zero trust; flujo de mTLS entre servicios |
+| **CP-E** | **Checkpoint E** | Examen integrador + endurecer una plataforma completa, del firewall a la nube, asumiendo que el atacante ya entró | — |
+
+Fuente base de M33: [How-To-Secure-A-Linux-Server](https://github.com/imthenachoman/How-To-Secure-A-Linux-Server), de Anchal Nigam (imthenachoman), licencia CC BY-SA 4.0. Se escribe prosa propia, se enlaza cada sección al original y se pone un recuadro de atribución arriba.
+
 ---
 
 ## 3. Checkpoints de construcción
@@ -178,6 +194,7 @@ En cada checkpoint **me detengo** para que abras el sitio en el navegador y lo r
 | **CP8** | **Cloudflare** (módulo + mapa) + **Checkpoint C** | Los 6 escenarios |
 | **CP9** | Pulido: búsqueda global, glosario completo, móvil, accesibilidad, revisión técnica cruzada | Lighthouse ≥ 90 en accesibilidad; el sitio funciona en el móvil |
 | **CP10–12** | Fase 2: Twitter, Google Docs + Checkpoint D (WhatsApp ya está como M29) | — |
+| **CP13** | Parte IV: Ciberseguridad (M32–M37 + Checkpoint E). Hoy solo el esqueleto; los módulos se escriben uno por pedido | Cada módulo: 0 errores de consola, 0 términos faltantes, quiz aprobado, sin desborde a 390 px |
 
 ---
 

@@ -123,7 +123,7 @@
     var steps = Math.round(T / dt);
     var due = []; for (var z = 0; z < steps + 600; z++) due.push([]);
     var queue = [], head = 0;
-    var offered = [], good = [], budget = 0;
+    var offered = [], good = [], late = [], fresh = [], retries = [], qlen = [], age = [], budget = 0;
 
     function schedule(i, attempt) {
       if (policy === 'none' || attempt > 3) return;
@@ -147,6 +147,7 @@
       for (var k = 0; k < nf; k++) arrivals.push(1);
       arrivals = arrivals.concat(due[i]);
       offered.push(arrivals.length / dt);
+      fresh.push(nf / dt); retries.push(due[i].length / dt);
       arrivals.forEach(function (attempt) {
         if (queue.length - head >= QMAX) schedule(i, attempt);                    /* cola llena: rechazo inmediato */
         else queue.push({ at: t, attempt: attempt, gaveUp: false });
@@ -157,23 +158,26 @@
         if (!q.gaveUp && t - q.at >= TIMEOUT) { q.gaveUp = true; schedule(i, q.attempt); }
       }
       /* el servidor atiende en orden */
-      var ok = 0;
+      var ok = 0, wasted = 0, served = -1;
       var cap = (outage ? C * 0.25 : C) * dt;                   /* el incidente deja al servicio al 25 % */
       while (cap >= 1 && head < queue.length) {
         var r = queue[head++];
         var expired = r.gaveUp || t - r.at >= TIMEOUT;
         if (expired && dropExpired) continue;                  /* se descarta sin gastar capacidad */
         cap--;
-        if (!expired) ok++;
+        if (served < 0) served = t - r.at;
+        if (!expired) ok++; else wasted++;
       }
       if (head > 5000) { queue = queue.slice(head); head = 0; }
-      good.push(ok / dt);
+      good.push(ok / dt); late.push(wasted / dt);
+      qlen.push(queue.length - head);
+      age.push(served < 0 ? (head < queue.length ? t - queue[head].at : 0) : served);
     }
     /* recuperación sostenida: desde cuándo el goodput ya no vuelve a caer por debajo del 95 % de la carga */
     var lastBad = -1;
     for (i = Math.round(15 / dt); i < steps; i++) if (good[i] < L * 0.95) lastBad = i;
     var rec = lastBad < 0 ? 0 : lastBad >= steps - 10 ? null : (lastBad + 1) * dt - 15;
-    return { offered: offered, good: good, recovery: rec, dt: dt, C: C, L: L };
+    return { offered: offered, good: good, late: late, fresh: fresh, retries: retries, qlen: qlen, age: age, recovery: rec, dt: dt, C: C, L: L, timeout: TIMEOUT };
   }
 
   function initRetry(host) {
@@ -186,54 +190,90 @@
     var stats = h('div', { class: 'sim-stats', 'aria-live': 'polite' });
     var note = h('p', { class: 'sim-note' });
 
+    var slider = h('input', { type: 'range', min: '0', max: '399', value: '200', 'aria-label': 'Segundo que se muestra' });
+    var readout = h('div', { class: 'sim-stats', 'aria-live': 'polite' });
+    var last = null, lastKey = '';
+
     function run() {
-      var r = simulateRetry(pol.value, +load.value, srv.value === 'drop');
-      var W = 700, H = 250, l = 56, t = 16, b = 34, pw = W - l - 120, ph = H - t - b;
+      var key = pol.value + load.value + srv.value;
+      if (key !== lastKey) { last = simulateRetry(pol.value, +load.value, srv.value === 'drop'); lastKey = key; }
+      var r = last;
+      var W = 720, H = 390, l = 56, t = 24, pw = W - l - 170, ph1 = 190, gap = 50, ph2 = 90;
       var maxY = Math.max(r.C * 1.2, Math.max.apply(null, r.offered) * 1.05);
       var top = Math.ceil(maxY / 1000) * 1000;
+      var y2 = t + ph1 + gap, ageTop = 4;
       function X(i) { return l + i * r.dt / 40 * pw; }
-      function Y(v) { return t + ph - v / top * ph; }
-      var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Carga ofrecida y requests exitosas antes, durante y después de una caída de 5 segundos">';
+      function Y(v) { return t + ph1 - v / top * ph1; }
+      function Y2(v) { return y2 + ph2 - Math.min(v, ageTop) / ageTop * ph2; }
+      var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Arriba: requests que llegan, atendidas a tiempo y atendidas tarde, por segundo. Abajo: cuánto llevaba esperando la request que se atiende.">';
+      [['antes', 0, 100], ['incidente', 100, 150], ['después', 150, 400]].forEach(function (p) {
+        if (p[0] === 'incidente') s += '<rect x="' + X(p[1]) + '" y="' + t + '" width="' + (X(p[2]) - X(p[1])) + '" height="' + (y2 + ph2 - t) + '" fill="var(--fail-tint)"/>';
+        s += '<text class="sim-axis" x="' + ((X(p[1]) + X(p[2])) / 2) + '" y="' + (t - 8) + '" text-anchor="middle"' + (p[0] === 'incidente' ? ' style="fill:var(--fail)"' : '') + '>' + p[0] + '</text>';
+      });
       for (var g = 0; g <= 4; g++) {
         var v = top * g / 4;
         s += '<line class="sim-grid" x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(v) + '" y2="' + Y(v) + '"/>';
         s += '<text class="sim-axis" x="' + (l - 6) + '" y="' + (Y(v) + 4) + '" text-anchor="end">' + F.num(v, 0) + '</text>';
       }
-      s += '<rect x="' + X(100) + '" y="' + t + '" width="' + (X(150) - X(100)) + '" height="' + ph + '" fill="var(--fail-tint)"/>';
-      s += '<text class="sim-axis" x="' + ((X(100) + X(150)) / 2) + '" y="' + (t + 12) + '" text-anchor="middle" style="fill:var(--fail)">incidente</text>';
       s += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(r.C) + '" y2="' + Y(r.C) + '" stroke="var(--ink-3)" stroke-dasharray="5 4"/>';
-      s += '<text class="sim-axis" x="' + (l + pw + 6) + '" y="' + (Y(r.C) + 4) + '">capacidad</text>';
-      function line(arr, color, width) {
-        var d = arr.map(function (v, i) { return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(Math.min(v, top)).toFixed(1); }).join(' ');
-        return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="' + width + '" stroke-linejoin="round"/>';
+      s += '<text class="sim-axis" x="' + (l + pw - 4) + '" y="' + (Y(r.C) - 6) + '" text-anchor="end">capacidad normal</text>';
+      function line(arr, color, width, YF, cap, dash) {
+        var d = arr.map(function (v, i) { return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + YF(Math.min(v, cap)).toFixed(1); }).join(' ');
+        return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="' + width + '" stroke-linejoin="round"' + (dash ? ' stroke-dasharray="' + dash + '"' : '') + '/>';
       }
-      s += line(r.offered, 'var(--warn)', 2);
-      s += line(r.good, 'var(--link)', 2);
-      var n = r.offered.length - 1;
-      s += '<text class="sim-label" x="' + (l + pw + 6) + '" y="' + (Y(Math.min(r.offered[n], top)) - 4) + '" style="fill:var(--ink)">carga ofrecida</text>';
-      var yo = Y(Math.min(r.offered[n], top)), yg = Y(r.good[n]);
-      var ygl = Math.abs(yg - yo) < 20 ? Math.min(yo + 18, t + ph - 4) : yg - 6;
-      s += '<text class="sim-label" x="' + (l + pw + 6) + '" y="' + ygl + '" style="fill:var(--ink)">exitosas</text>';
-      for (var sec = 0; sec <= 40; sec += 5) s += '<text class="sim-axis" x="' + X(sec / r.dt) + '" y="' + (H - 12) + '" text-anchor="middle">' + sec + ' s</text>';
-      s += '<text class="sim-axis" x="' + l + '" y="' + (t - 4) + '">requests por segundo</text>';
+      s += line(r.offered, 'var(--warn)', 2, Y, top);
+      s += line(r.late, 'var(--fail)', 2, Y, top, '5 3');
+      s += line(r.good, 'var(--link)', 2.4, Y, top);
+      var lg = [['llegan: nuevas', 'y reintentos', 'var(--warn)', ''], ['atendidas', 'a tiempo', 'var(--link)', ''], ['atendidas tarde:', 'CPU perdida', 'var(--fail)', '5 3']];
+      lg.forEach(function (e, k) {
+        var yy = t + 60 + k * 40;
+        s += '<line x1="' + (l + pw + 8) + '" x2="' + (l + pw + 26) + '" y1="' + (yy - 4) + '" y2="' + (yy - 4) + '" stroke="' + e[2] + '" stroke-width="2.4"' + (e[3] ? ' stroke-dasharray="' + e[3] + '"' : '') + '/>';
+        s += '<text class="sim-axis" x="' + (l + pw + 32) + '" y="' + yy + '">' + e[0] + '</text>';
+        s += '<text class="sim-axis" x="' + (l + pw + 32) + '" y="' + (yy + 15) + '">' + e[1] + '</text>';
+      });
+      s += '<text class="sim-axis" x="' + (l + 4) + '" y="' + (t + 12) + '">requests por segundo</text>';
+      for (var a2 = 0; a2 <= ageTop; a2 += 2) {
+        s += '<line class="sim-grid" x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y2(a2) + '" y2="' + Y2(a2) + '"/>';
+        s += '<text class="sim-axis" x="' + (l - 6) + '" y="' + (Y2(a2) + 4) + '" text-anchor="end">' + a2 + ' s</text>';
+      }
+      s += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y2(r.timeout) + '" y2="' + Y2(r.timeout) + '" stroke="var(--fail)" stroke-dasharray="5 4"/>';
+      s += '<text class="sim-axis" x="' + (l + pw + 8) + '" y="' + (Y2(r.timeout) + 4) + '" style="fill:var(--fail)">timeout del cliente: 1 s</text>';
+      s += line(r.age, 'var(--ink-2)', 2, Y2, ageTop);
+      s += '<text class="sim-axis" x="' + l + '" y="' + (y2 - 10) + '">cuánto esperó la request que se atiende</text>';
+      for (var sec = 0; sec <= 40; sec += 5) s += '<text class="sim-axis" x="' + X(sec / r.dt) + '" y="' + (H - 6) + '" text-anchor="middle">' + sec + ' s</text>';
+      var ci = +slider.value;
+      s += '<line x1="' + X(ci) + '" x2="' + X(ci) + '" y1="' + t + '" y2="' + (y2 + ph2) + '" stroke="var(--ink)" stroke-width="1.5"/>';
       s += '</svg>';
       viz.innerHTML = s;
       var peak = Math.max.apply(null, r.offered);
       stats.innerHTML = '';
-      [['Pico de carga ofrecida', F.num(peak, 0) + '/s'], ['Respecto de la capacidad', F.num(peak / r.C * 100, 0) + ' %'], ['Recuperación tras la caída', r.recovery == null ? 'no se recupera' : F.num(r.recovery, 1) + ' s']].forEach(function (x) {
+      [['Pico de lo que llega', F.num(peak, 0) + '/s'], ['Respecto de la capacidad', F.num(peak / r.C * 100, 0) + ' %'], ['Recuperación tras la caída', r.recovery == null ? 'no se recupera' : F.num(r.recovery, 1) + ' s']].forEach(function (x) {
         stats.appendChild(h('div', { class: 'sim-stat' }, [h('span', { text: x[0] }), h('b', { text: x[1] })]));
       });
       note.textContent = r.recovery == null
-        ? 'Falla metaestable: el incidente terminó a los 15 s y el servicio tiene capacidad de sobra para la carga normal, pero no se recupera. Atiende requests viejas cuyos clientes ya se fueron (trabajo desperdiciado), esos clientes reintentan, y la cola nunca se vacía. Hay que romper el ciclo desde afuera.'
-        : r.recovery > 3 ? 'Se recupera, pero tarda ' + F.num(r.recovery, 1) + ' s en vaciar la cola acumulada.' : 'Se recupera casi de inmediato: la carga extra nunca se vuelve trabajo desperdiciado.';
+        ? 'Falla metaestable: el incidente terminó a los 15 s y el servicio tiene capacidad de sobra para la carga normal, pero no se recupera. En el gráfico de abajo, la espera nunca vuelve a bajar del timeout: todo lo que atiende es de clientes que ya se fueron, y esos clientes reintentan. Hay que romper el ciclo desde afuera.'
+        : r.recovery > 3 ? 'Se recupera, pero tarda ' + F.num(r.recovery, 1) + ' s: lo que tarda en vaciarse la cola acumulada. Mira cuándo la espera de abajo vuelve a quedar bajo el timeout.' : 'Se recupera casi de inmediato: la carga extra nunca se vuelve trabajo perdido.';
+      show();
     }
+
+    function show() {
+      var r = last, i = +slider.value, tt = i * r.dt;
+      readout.innerHTML = '';
+      [['Segundo', F.num(tt, 1) + ' s' + (tt >= 10 && tt < 15 ? ' (incidente)' : '')],
+       ['Nuevas', F.num(r.fresh[i], 0) + '/s'], ['Reintentos', F.num(r.retries[i], 0) + '/s'],
+       ['Atendidas a tiempo', F.num(r.good[i], 0) + '/s'], ['Atendidas tarde', F.num(r.late[i], 0) + '/s'],
+       ['En la cola', F.num(r.qlen[i], 0)], ['Espera de la que se atiende', F.num(r.age[i], 2) + ' s']].forEach(function (x) {
+        readout.appendChild(h('div', { class: 'sim-stat' }, [h('span', { text: x[0] }), h('b', { text: x[1] })]));
+      });
+    }
+    slider.addEventListener('input', run);
 
     [pol, load, srv].forEach(function (el) { el.addEventListener('change', run); });
     host.classList.add('sim');
     host.appendChild(h('div', { class: 'sim-head' }, [h('p', { class: 'sim-title', text: 'Tormenta de reintentos: 5 segundos de capacidad reducida' })]));
     host.appendChild(h('div', { class: 'sim-body' }, [
       h('div', { class: 'sim-controls' }, [h('div', { class: 'field' }, [h('label', { text: 'Política de reintentos' }), pol]), h('div', { class: 'field' }, [h('label', { text: 'Carga normal' }), load]), h('div', { class: 'field' }, [h('label', { text: 'Servidor' }), srv])]),
-      viz, stats, note
+      viz, h('div', { class: 'field' }, [h('label', { text: 'Mover el cursor en el tiempo' }), slider]), readout, stats, note
     ]));
     host.appendChild(h('p', { class: 'sim-foot', text: 'Capacidad de 1 000 requests/s que cae al 25 % entre los 10 y los 15 s. Cada cliente espera 1 s; si no recibe respuesta, se va y reintenta según la política (hasta 3 veces). La request abandonada sigue en la cola del servidor.' }));
     run();

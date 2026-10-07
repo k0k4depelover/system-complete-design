@@ -105,6 +105,66 @@ SD.defineQuiz('m10', {
       ],
       answer: [0, 1, 3, 4],
       explain: 'El aislamiento se aplica en el servidor, en capas. El frontend no es una barrera de seguridad: cualquiera puede llamar a la API directamente.'
+    },
+    {
+      id: 'stateful', type: 'single',
+      prompt: 'Despides a un empleado y quieres que su sesión deje de funcionar en segundos, no cuando venza el access token. ¿Qué diseño lo permite?',
+      options: [
+        'Alargar el access token a varias horas para controlarlo mejor desde el servidor.',
+        'Guardar el estado de cada sesión en una caché y comprobarlo en el gateway en cada request.',
+        'Cifrar el access token con una clave que solo conoce el gateway, para que nadie más pueda leer su contenido ni modificar sus claims en tránsito.',
+        'Poner toda la información del usuario dentro del JWT para no depender de la base.'
+      ],
+      answer: 1,
+      explain: 'Un JWT puro no se puede revocar antes de su <code>exp</code>. Dándole estado (un <code>sid</code> que el gateway comprueba en Redis), revocar la sesión la corta en la siguiente request, sin renunciar a la verificación local de la firma.'
+    },
+    {
+      id: 'refresh-reuse', type: 'single',
+      prompt: 'Un refresh token ya rotado (marcado como usado) vuelve a aparecer en una petición de refresh. ¿Qué debe hacer el servidor?',
+      options: [
+        'Aceptarlo: puede ser la app legítima reintentando tras un corte de red, así que lo mejor es no molestar al usuario con un cierre de sesión inesperado.',
+        'Emitir tokens nuevos solo si viene de la misma IP que la primera vez.',
+        'Revocar toda la familia de la sesión, porque hay dos copias del token en circulación.',
+        'Ignorar la petición en silencio y dejar que el access token actual siga vivo.'
+      ],
+      answer: 2,
+      explain: 'Un token usado que reaparece significa que hay una copia: una es del atacante y el servidor no sabe cuál. Revoca la sesión entera. La víctima vuelve a entrar con su contraseña y su segundo factor; el atacante no.'
+    },
+    {
+      id: 'pkce-confirm', type: 'single',
+      prompt: '¿En qué se diferencia PKCE del número que confirmas en la app del teléfono al aprobar un inicio de sesión?',
+      options: [
+        'En nada: PKCE es justamente ese número de confirmación con otro nombre.',
+        'PKCE es automático entre máquinas; el número lo confirma el usuario a mano.',
+        'PKCE lo escribe el usuario en otra pantalla, como al activar YouTube en un televisor que no tiene un teclado cómodo para la contraseña.',
+        'PKCE solo se usa en aplicaciones de banca; el número, en cualquier app.'
+      ],
+      answer: 1,
+      explain: 'PKCE (RFC 7636) ocurre entre máquinas y el usuario no lo ve. El number matching del MFA push y el Device Authorization Grant (el código del televisor) sí involucran al usuario, y son mecanismos distintos.'
+    },
+    {
+      id: 'shred-backup', type: 'single',
+      prompt: 'Un usuario ejerce su derecho al borrado, pero sus datos también están en backups inmutables de 30 días. ¿Cómo los vuelves ilegibles?',
+      options: [
+        'Editando cada backup para quitar las filas del usuario.',
+        'Esperando 30 días a que los backups caduquen por sí solos; mientras tanto no hay absolutamente nada más que se pueda hacer al respecto.',
+        'Cifrando los datos con una clave propia del usuario y destruyendo esa clave.',
+        'Comprimiendo los backups para que las filas antiguas se sobrescriban.'
+      ],
+      answer: 2,
+      explain: 'Es el borrado criptográfico. Si cada usuario tiene su clave y esta vive fuera de los backups (en el KMS), destruirla vuelve ilegibles todas sus copias a la vez, aunque no puedas tocar los backups.'
+    },
+    {
+      id: 'audit-log', type: 'single',
+      prompt: '¿Qué distingue a un log de auditoría de los logs normales de la aplicación?',
+      options: [
+        'Registra el contenido completo de cada request y de cada respuesta para poder depurar los problemas mucho más rápido cuando algo falla en producción.',
+        'Es append-only, va aparte y guarda poca información sensible, para investigar, no para depurar.',
+        'Es el mismo log de aplicación, solo que con el nivel subido a DEBUG.',
+        'Guarda las contraseñas de los usuarios por si hay que verificar un acceso después.'
+      ],
+      answer: 1,
+      explain: 'El log de auditoría anota acciones sensibles (quién, qué, cuándo, desde dónde), es append-only y a prueba de manipulación, y no guarda secretos ni datos personales de más. Los logs de aplicación son para depurar y se rotan en días.'
     }
   ]
 });

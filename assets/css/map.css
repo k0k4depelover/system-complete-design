@@ -172,6 +172,27 @@
 .sdm-step pre { margin: 6px 0 0; font-size: 0.72rem; max-height: 220px; background: var(--bg); }
 .sdm-step-intro { font-size: var(--fs-sub); color: var(--label-2); margin: 0 !important; }
 
+/* Panel lateral que explica el paso actual (def.stepPanel) */
+.sdm-steppanel .sdm-step-n { margin: 0 0 2px !important; }
+.sdm-sp-route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 10px !important; color: var(--label-2); }
+.sdm-sp-route .chip-btn { min-height: 30px; padding: 3px 10px; font-size: var(--fs-xs); }
+.sdm-sp-arrow { color: var(--label-3); font-weight: 700; }
+.sdm-sp-tag { font-size: var(--fs-xs); }
+.sdm-steppanel pre { max-height: 260px; background: var(--bg-2); white-space: pre; overflow: auto; }
+.sdm-sp-list { list-style: none; padding: 0 !important; margin: 0 0 12px !important; display: grid; gap: 2px; }
+.sdm-sp-list li { margin: 0 !important; }
+.sdm-sp-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 5px 8px; border: 0; border-radius: var(--radius-s); background: none; color: var(--label-2); font: inherit; font-size: var(--fs-xs); text-align: left; cursor: pointer; }
+.sdm-sp-item:hover { background: var(--fill); }
+.sdm-sp-item.is-past { color: var(--label-3); }
+.sdm-sp-item.is-now { background: var(--accent-tint); color: var(--label); font-weight: 600; }
+.sdm-sp-num { flex: none; min-width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font-size: 0.7rem; font-weight: 700; color: var(--bg); background: var(--label-3); }
+.sdm-sp-item.k-res .sdm-sp-num { background: var(--accent-fill); }
+.sdm-sp-item.k-fail .sdm-sp-num { background: var(--fail); }
+.sdm-sp-item.k-async .sdm-sp-num { background: var(--l-queue); }
+.sdm-sp-item.k-req .sdm-sp-num { background: var(--label-2); }
+.sdm-sp-help summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; color: var(--label-2); padding: 6px 0; }
+.sdm-sp-help .sdm-panel-inner { padding: 4px 0 0; }
+
 /* ---------- Pantalla completa ---------- */
 
 .sdmap:fullscreen { display: flex; flex-direction: column; border-radius: 0; margin: 0; background: var(--bg-2); --sdm-h: calc(100vh - 230px); }
