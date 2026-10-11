@@ -141,7 +141,7 @@
   SD.fmt = { num: num, sig: sig, words: words, bytes: bytes, bitrate: bitrate, pct: pct, nines: nines, duration: duration };
 
   /* ---------------------------------------------------------------------------
-     Resaltado mínimo para <pre data-lang="json|http|sse|sql|python">.
+     Resaltado mínimo para <pre data-lang="json|http|sse|sql|python|shell">.
      --------------------------------------------------------------------------- */
   function span(cls, text) { return '<span class="' + cls + '">' + SD.escape(text) + '</span>'; }
 
@@ -232,7 +232,21 @@
     return out + SD.escape(src.slice(last));
   }
 
-  var HL = { json: hlJSON, http: hlHTTP, sse: hlSSE, sql: hlSQL, python: hlPython };
+  /* Comandos y archivos de configuración (sshd_config, nftables, sysctl): comentarios con #, el prompt $ y cadenas */
+  function hlShell(src) {
+    var re = /(^|\s)(#[^\n]*)|(^\$(?= ))|("(?:\\.|[^"\\\n])*"|'[^'\n]*')/gm;
+    var out = '', last = 0, m;
+    while ((m = re.exec(src))) {
+      out += SD.escape(src.slice(last, m.index));
+      if (m[2]) out += SD.escape(m[1]) + span('c-c', m[2]);
+      else if (m[3]) out += span('c-m', m[3]);
+      else if (m[4]) out += span('c-s', m[4]);
+      last = re.lastIndex;
+    }
+    return out + SD.escape(src.slice(last));
+  }
+
+  var HL = { json: hlJSON, http: hlHTTP, sse: hlSSE, sql: hlSQL, python: hlPython, shell: hlShell };
 
   SD.highlight = function (root) {
     (root || document).querySelectorAll('pre[data-lang]').forEach(function (pre) {

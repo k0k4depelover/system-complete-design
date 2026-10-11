@@ -309,6 +309,86 @@ Content-Type: application/json
       </div>
       <p><span class="badge badge--doc">Documentado</span></p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f17n1t f17n1d">
+<title id="f17n1t">Quién guarda la conversación</title>
+<desc id="f17n1d">Tres turnos de la misma conversación en dos APIs. Sin estado, como Chat Completions o Messages, el cliente reenvía en cada turno el prompt de sistema y todo el historial: el turno 3 lleva seis bloques. Con Responses y previous_response_id, el cliente manda solo el mensaje nuevo y el id de la respuesta anterior, y el servidor guarda la cadena de respuestas. En los dos casos el modelo procesa el historial completo: lo que cambia es quién lo envía y quién lo guarda.</desc>
+<defs><marker id="f17n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="24" text-anchor="start">Sin estado (Chat Completions, Messages)</text>
+<text class="dg-group" x="410" y="24" text-anchor="start">Con estado (Responses + previous_response_id)</text>
+<path class="sim-grid" d="M392 16 V250"/>
+<text class="sim-label" x="20" y="67" text-anchor="start">Turno 1</text>
+<rect x="90" y="50" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.4"/>
+<text class="dg-tiny" x="113" y="67" text-anchor="middle">sis</text>
+<rect x="140" y="50" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="163" y="67" text-anchor="middle">u1</text>
+<text class="dg-tiny" x="90" y="92" text-anchor="start">el cliente envía 2 bloques</text>
+<text class="sim-label" x="20" y="125" text-anchor="start">Turno 2</text>
+<rect x="90" y="108" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.4"/>
+<text class="dg-tiny" x="113" y="125" text-anchor="middle">sis</text>
+<rect x="140" y="108" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="163" y="125" text-anchor="middle">u1</text>
+<rect x="190" y="108" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.4"/>
+<text class="dg-tiny" x="213" y="125" text-anchor="middle">a1</text>
+<rect x="240" y="108" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="263" y="125" text-anchor="middle">u2</text>
+<text class="dg-tiny" x="90" y="150" text-anchor="start">el cliente envía 4 bloques</text>
+<text class="sim-label" x="20" y="183" text-anchor="start">Turno 3</text>
+<rect x="90" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.4"/>
+<text class="dg-tiny" x="113" y="183" text-anchor="middle">sis</text>
+<rect x="140" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="163" y="183" text-anchor="middle">u1</text>
+<rect x="190" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.4"/>
+<text class="dg-tiny" x="213" y="183" text-anchor="middle">a1</text>
+<rect x="240" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="263" y="183" text-anchor="middle">u2</text>
+<rect x="290" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.4"/>
+<text class="dg-tiny" x="313" y="183" text-anchor="middle">a2</text>
+<rect x="340" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="363" y="183" text-anchor="middle">u3</text>
+<text class="dg-tiny" x="90" y="208" text-anchor="start">el cliente envía 6 bloques</text>
+<text class="sim-label" x="410" y="67" text-anchor="start">Turno 1</text>
+<rect x="480" y="50" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.4"/>
+<text class="dg-tiny" x="503" y="67" text-anchor="middle">sis</text>
+<rect x="530" y="50" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="553" y="67" text-anchor="middle">u1</text>
+<rect x="680" y="50" width="70" height="26" rx="5" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-tiny" x="715" y="67" text-anchor="middle" style="font-family: var(--f-mono)">resp_1</text>
+<path class="dg-edge" d="M580 63 H676" marker-end="url(#f17n1a)"/>
+<text class="sim-label" x="410" y="125" text-anchor="start">Turno 2</text>
+<rect class="dg-box" x="480" y="108" width="96" height="26" rx="5"/>
+<text class="dg-tiny" x="528" y="125" text-anchor="middle" style="font-family: var(--f-mono)">prev: resp_1</text>
+<rect x="580" y="108" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="603" y="125" text-anchor="middle">u2</text>
+<rect x="680" y="108" width="70" height="26" rx="5" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-tiny" x="715" y="125" text-anchor="middle" style="font-family: var(--f-mono)">resp_2</text>
+<path class="dg-edge" d="M630 121 H676" marker-end="url(#f17n1a)"/>
+<path class="dg-feedback" d="M715 76 V104" marker-end="url(#f17n1a)"/>
+<text class="sim-label" x="410" y="183" text-anchor="start">Turno 3</text>
+<rect class="dg-box" x="480" y="166" width="96" height="26" rx="5"/>
+<text class="dg-tiny" x="528" y="183" text-anchor="middle" style="font-family: var(--f-mono)">prev: resp_2</text>
+<rect x="580" y="166" width="46" height="26" rx="5" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.4"/>
+<text class="dg-tiny" x="603" y="183" text-anchor="middle">u3</text>
+<rect x="680" y="166" width="70" height="26" rx="5" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-tiny" x="715" y="183" text-anchor="middle" style="font-family: var(--f-mono)">resp_3</text>
+<path class="dg-edge" d="M630 179 H676" marker-end="url(#f17n1a)"/>
+<path class="dg-feedback" d="M715 134 V162" marker-end="url(#f17n1a)"/>
+<text class="dg-tiny" x="715" y="238" text-anchor="middle">el servidor guarda</text>
+<text class="dg-tiny" x="715" y="252" text-anchor="middle">la cadena</text>
+<rect x="20" y="268" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="40" y="279" text-anchor="start">sis: prompt de sistema</text>
+<rect x="210" y="268" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<text class="dg-tiny" x="230" y="279" text-anchor="start">u: mensaje del usuario</text>
+<rect x="400" y="268" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="420" y="279" text-anchor="start">a: respuesta del modelo</text>
+<text class="dg-tiny" x="20" y="296" text-anchor="start">Con estado se envía menos, pero el modelo igual procesa todo el historial en cada turno.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.2.</b> Con estado, el cliente envía solo lo nuevo, pero OpenAI cobra igual como entrada todos los tokens anteriores de la cadena: el ahorro es de red y de código, no de tokens. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <aside class="callout callout--tradeoff">
         <p class="callout-label">Trade-off</p>
         <p>Guardar la conversación en el servidor le ahorra al cliente reenviar el historial y le permite al proveedor reutilizar su KV cache con más facilidad. A cambio, el proveedor guarda tus conversaciones (retención, privacidad, M10) y la conversación queda atada a ese proveedor: para cambiar de modelo o de empresa hay que tener tu propia copia. Los productos serios guardan siempre su propia copia de cada mensaje (M20), usen o no el estado del proveedor.</p>
@@ -355,6 +435,50 @@ Content-Type: application/json
 {"input_file_id": "file-9Qa1", "endpoint": "/v1/chat/completions", "completion_window": "24h"}</code></pre>
 
       <p>El batch pasa por <code>validating</code>, <code>in_progress</code> y <code>finalizing</code> hasta <code>completed</code>, o termina en <code>failed</code>, <code>expired</code> o <code>cancelled</code>. Al final hay un archivo de resultados y otro de errores. En OpenAI cuesta la mitad que las mismas requests síncronas, admite hasta 50 000 requests por batch y no consume los límites por minuto habituales: tiene los suyos. <span class="badge badge--doc">Documentado</span> Al proveedor le conviene: un trabajo que puede esperar horas llena las GPUs de madrugada, cuando el tráfico interactivo baja (M12).</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f17n2t f17n2d">
+<title id="f17n2t">Los estados de un batch</title>
+<desc id="f17n2d">Un batch empieza en validating, donde se revisa el archivo; si no es válido, termina en failed. Después pasa a in_progress, donde se procesan las requests, a finalizing, donde se arman los archivos de resultados y de errores, y a completed. Si vence la ventana de 24 horas termina en expired: lo terminado se cobra y el resto se cancela. Si se cancela, pasa por cancelling hasta cancelled.</desc>
+<defs><marker id="f17n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="20" y="40" width="160" height="54" rx="10"/>
+<text class="dg-label" x="100" y="64" text-anchor="middle" style="font-family: var(--f-mono)">validating</text>
+<text class="dg-tiny" x="100" y="82" text-anchor="middle">revisa el archivo</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="210" y="40" width="160" height="54" rx="10"/>
+<text class="dg-label" x="290" y="64" text-anchor="middle" style="font-family: var(--f-mono)">in_progress</text>
+<text class="dg-tiny" x="290" y="82" text-anchor="middle">procesa las requests</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="400" y="40" width="160" height="54" rx="10"/>
+<text class="dg-label" x="480" y="64" text-anchor="middle" style="font-family: var(--f-mono)">finalizing</text>
+<text class="dg-tiny" x="480" y="82" text-anchor="middle">arma los archivos</text>
+<rect class="dg-ok" x="590" y="40" width="160" height="54" rx="10"/>
+<text class="dg-label" x="670" y="64" text-anchor="middle" style="font-family: var(--f-mono)">completed</text>
+<text class="dg-tiny" x="670" y="82" text-anchor="middle">resultados y errores</text>
+<path class="dg-edge" d="M181 67 H206" marker-end="url(#f17n2a)"/>
+<path class="dg-edge" d="M371 67 H396" marker-end="url(#f17n2a)"/>
+<path class="dg-edge" d="M561 67 H586" marker-end="url(#f17n2a)"/>
+<rect class="dg-bad" x="20" y="150" width="160" height="54" rx="10"/>
+<text class="dg-label" x="100" y="174" text-anchor="middle" style="font-family: var(--f-mono)">failed</text>
+<text class="dg-tiny" x="100" y="192" text-anchor="middle">archivo inválido</text>
+<path class="dg-edge" d="M100 95 V146" marker-end="url(#f17n2a)"/>
+<rect class="dg-bad" x="210" y="150" width="160" height="54" rx="10"/>
+<text class="dg-label" x="290" y="174" text-anchor="middle" style="font-family: var(--f-mono)">expired</text>
+<text class="dg-tiny" x="290" y="192" text-anchor="middle">venció la ventana de 24 h</text>
+<path class="dg-edge" d="M290 95 V146" marker-end="url(#f17n2a)"/>
+<rect class="dg-box" x="400" y="150" width="160" height="54" rx="10"/>
+<text class="dg-label" x="480" y="174" text-anchor="middle" style="font-family: var(--f-mono)">cancelling</text>
+<text class="dg-tiny" x="480" y="192" text-anchor="middle">pedido de cancelar</text>
+<path class="dg-edge" d="M480 95 V146" marker-end="url(#f17n2a)"/>
+<rect class="dg-bad" x="590" y="150" width="160" height="54" rx="10"/>
+<text class="dg-label" x="670" y="174" text-anchor="middle" style="font-family: var(--f-mono)">cancelled</text>
+<text class="dg-tiny" x="670" y="192" text-anchor="middle">lo terminado se cobra</text>
+<path class="dg-edge" d="M561 177 H586" marker-end="url(#f17n2a)"/>
+<text class="dg-tiny" x="20" y="232" text-anchor="start">En expired también se cobra lo terminado y el resto se cancela. Los resultados se unen con la entrada por custom_id.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.3.</b> Los estados de un batch en OpenAI. Tres de los cuatro finales no son un éxito completo, y hasta completed puede traer un archivo de errores: el proceso que lo consume revisa los dos archivos. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <aside class="callout callout--prod">
         <p class="callout-label">En producción real</p>
@@ -443,7 +567,7 @@ Content-Type: application/json
 <text class="dg-small" x="12" y="164">800 tokens a 50 tokens por segundo: los dos terminan a los 16.4 s. Cambia cuándo empieza a leer el usuario.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.2.</b> El tiempo total es el mismo. El streaming cambia lo que siente el usuario: la espera pasa de 16 segundos al TTFT.</figcaption>
+        <figcaption><b>Figura 17.4.</b> El tiempo total es el mismo. El streaming cambia lo que siente el usuario: la espera pasa de 16 segundos al TTFT.</figcaption>
       </figure>
 
       <p>Una persona lee en silencio unas 240 palabras por minuto, unas 4 por segundo, según un metaanálisis de Brysbaert de 2019 sobre 190 estudios. <span class="badge badge--doc">Documentado</span> Un modelo a 50 tokens por segundo escribe unas 35 palabras por segundo, mucho más rápido de lo que se lee. Por eso lo que el usuario percibe es el TTFT, no el tiempo total, y por eso también puede detener una respuesta que ve ir por mal camino en el segundo 2 en lugar de pagarla entera.</p>
@@ -506,6 +630,62 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         <li><b>Poner un timeout total.</b> Una respuesta larga puede durar minutos y estar sana. Lo que conviene es un timeout entre eventos: si pasan 60 segundos sin nada, ni siquiera un <code>ping</code>, la conexión está muerta.</li>
       </ul>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f17n3t f17n3d">
+<title id="f17n3t">Tres lecturas de la red, dos eventos</title>
+<desc id="f17n3d">Dos eventos SSE llegan en tres lecturas. La primera trae el evento 1 completo y el principio del evento 2: el cliente procesa el evento 1 y guarda el resto en el buffer. La segunda trae un solo byte, C3, la primera mitad de la ñ; el decodificador en modo stream lo retiene sin emitir nada. La tercera trae B1 y el resto del evento: el decodificador emite la ñ, aparece la línea vacía y el cliente procesa el evento 2.</desc>
+<defs><marker id="f17n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="24" text-anchor="start">Lo que manda el servidor</text>
+<rect x="20" y="40" width="172" height="30" rx="4" fill="color-mix(in srgb, var(--l-service) 28%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="106" y="60" text-anchor="middle" style="font-family: var(--f-mono)">data: {&quot;t&quot;:&quot;Hola&quot;}</text>
+<rect x="196" y="40" width="34" height="30" rx="4" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="213" y="60" text-anchor="middle" style="font-family: var(--f-mono)">\n\n</text>
+<rect x="234" y="40" width="140" height="30" rx="4" fill="color-mix(in srgb, var(--l-service) 28%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="304" y="60" text-anchor="middle" style="font-family: var(--f-mono)">data: {&quot;t&quot;:&quot;ma</text>
+<rect x="378" y="40" width="34" height="30" rx="4" fill="color-mix(in srgb, var(--l-external) 28%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="395" y="60" text-anchor="middle" style="font-family: var(--f-mono)">C3</text>
+<rect x="416" y="40" width="34" height="30" rx="4" fill="color-mix(in srgb, var(--l-external) 28%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="433" y="60" text-anchor="middle" style="font-family: var(--f-mono)">B1</text>
+<rect x="454" y="40" width="60" height="30" rx="4" fill="color-mix(in srgb, var(--l-service) 28%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="484" y="60" text-anchor="middle" style="font-family: var(--f-mono)">ana&quot;}</text>
+<rect x="518" y="40" width="34" height="30" rx="4" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="535" y="60" text-anchor="middle" style="font-family: var(--f-mono)">\n\n</text>
+<text class="dg-tiny" x="414" y="88" text-anchor="middle">la ñ son 2 bytes</text>
+<path class="dg-edge" d="M20 106 V100 H374 V106"/>
+<text class="dg-small" x="197" y="122" text-anchor="middle">Lectura 1</text>
+<path class="dg-edge" d="M378 106 V100 H412 V106"/>
+<text class="dg-small" x="395" y="122" text-anchor="middle">Lectura 2</text>
+<path class="dg-edge" d="M416 106 V100 H552 V106"/>
+<text class="dg-small" x="484" y="122" text-anchor="middle">Lectura 3</text>
+<path class="sim-grid" d="M20 140 H750"/>
+<text class="sim-label" x="110" y="162" text-anchor="start">Queda en el buffer</text>
+<text class="sim-label" x="500" y="162" text-anchor="start">Procesa</text>
+<text class="dg-small" x="20" y="195" text-anchor="start">Lectura 1</text>
+<rect class="dg-box" x="110" y="176" width="360" height="28" rx="5"/>
+<text class="dg-tiny" x="120" y="195" text-anchor="start" style="font-family: var(--f-mono)">data: {&quot;t&quot;:&quot;ma</text>
+<rect class="dg-ok" x="500" y="176" width="250" height="28" rx="5"/>
+<text class="dg-tiny" x="512" y="195" text-anchor="start">evento 1: «Hola»</text>
+<path class="dg-edge" d="M472 190 H496" marker-end="url(#f17n3a)"/>
+<text class="dg-small" x="20" y="235" text-anchor="start">Lectura 2</text>
+<rect class="dg-box" x="110" y="216" width="360" height="28" rx="5"/>
+<text class="dg-tiny" x="120" y="235" text-anchor="start" style="font-family: var(--f-mono)">data: {&quot;t&quot;:&quot;ma  + C3 retenido</text>
+<rect class="dg-box" x="500" y="216" width="250" height="28" rx="5"/>
+<text class="dg-tiny" x="512" y="235" text-anchor="start">nada: el decodificador espera</text>
+<path class="dg-edge" d="M472 230 H496" marker-end="url(#f17n3a)"/>
+<text class="dg-small" x="20" y="275" text-anchor="start">Lectura 3</text>
+<rect class="dg-box" x="110" y="256" width="360" height="28" rx="5"/>
+<text class="dg-tiny" x="120" y="275" text-anchor="start" style="font-family: var(--f-mono)">data: {&quot;t&quot;:&quot;mañana&quot;}\n\n</text>
+<rect class="dg-ok" x="500" y="256" width="250" height="28" rx="5"/>
+<text class="dg-tiny" x="512" y="275" text-anchor="start">evento 2: «mañana»</text>
+<path class="dg-edge" d="M472 270 H496" marker-end="url(#f17n3a)"/>
+<text class="dg-tiny" x="20" y="312" text-anchor="start">Se procesa solo hasta la última línea vacía (\n\n). Sin { stream: true }, la lectura 2 imprimiría un carácter roto.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.5.</b> Las lecturas de la red no respetan los límites de los eventos ni de los caracteres. El buffer y el decodificador en modo stream son los que reconstruyen los eventos.</figcaption>
+      </figure>
+
       <p>El núcleo de un cliente en el navegador, con el botón de detener incluido:</p>
 
 <pre><code>const ctrl = new AbortController();
@@ -544,6 +724,89 @@ for (;;) {
         <li><b>Límite de conexiones del navegador.</b> Sobre HTTP/1.1, el navegador abre como mucho 6 conexiones por dominio, y cada stream abierto ocupa una: con varias pestañas, la séptima espera. <span class="badge badge--doc">Documentado</span> HTTP/2 lleva muchos streams por una sola conexión.</li>
         <li><b>Deploys.</b> Reiniciar un gateway corta todos sus streams. Se drena (M03): la instancia deja de recibir requests nuevas y espera a que terminen las que tiene, con un máximo. Con respuestas de minutos, ese máximo es largo, y conviene que el cliente sepa reanudar (17.5).</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f17n4t f17n4d">
+<title id="f17n4t">Dónde se rompe un stream entre el motor y el navegador</title>
+<desc id="f17n4d">La cadena de saltos de un stream: navegador, CDN, balanceador, nginx, servidor de la API y motor. Cloudflare responde 524 si pasan 125 segundos sin datos del origen; un balanceador de aplicación de AWS cierra la conexión tras 60 segundos sin datos, salvo que se configure; nginx acumula la respuesta si el buffering está activo; el navegador abre como mucho 6 conexiones por dominio con HTTP/1.1. Abajo, un stream con 70 segundos de silencio, por ejemplo un modelo que razona: sin comentarios, el balanceador lo corta a los 60 segundos; con un comentario cada 15 segundos, la conexión nunca queda inactiva.</desc>
+<defs><marker id="f17n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="76" y="55" text-anchor="middle">Navegador</text>
+<rect class="dg-box" x="20" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="76" y="104" text-anchor="middle">6 conexiones por</text>
+<text class="dg-tiny" x="76" y="120" text-anchor="middle">dominio en HTTP/1.1</text>
+<path class="dg-feedback" d="M76.0 71 V85"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="147" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="203" y="55" text-anchor="middle">CDN</text>
+<rect class="dg-warnbox" x="147" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="203" y="104" text-anchor="middle">Cloudflare: 524</text>
+<text class="dg-tiny" x="203" y="120" text-anchor="middle">tras 125 s sin datos</text>
+<path class="dg-feedback" d="M203.0 71 V85"/>
+<path class="dg-edge" d="M134 50 H145" marker-start="url(#f17n4a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="274" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="330" y="55" text-anchor="middle">Balanceador</text>
+<rect class="dg-warnbox" x="274" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="330" y="104" text-anchor="middle">ALB: cierra tras 60 s</text>
+<text class="dg-tiny" x="330" y="120" text-anchor="middle">sin datos (hasta 4000)</text>
+<path class="dg-feedback" d="M330.0 71 V85"/>
+<path class="dg-edge" d="M261 50 H272" marker-start="url(#f17n4a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="401" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="457" y="55" text-anchor="middle">Nginx</text>
+<rect class="dg-warnbox" x="401" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="457" y="104" text-anchor="middle">buffering: junta</text>
+<text class="dg-tiny" x="457" y="120" text-anchor="middle">todo hasta el final</text>
+<path class="dg-feedback" d="M457.0 71 V85"/>
+<path class="dg-edge" d="M388 50 H399" marker-start="url(#f17n4a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="528" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="584" y="55" text-anchor="middle">API</text>
+<rect class="dg-box" x="528" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="584" y="104" text-anchor="middle">manda : ping</text>
+<text class="dg-tiny" x="584" y="120" text-anchor="middle">cada 15 s</text>
+<path class="dg-feedback" d="M584.0 71 V85"/>
+<path class="dg-edge" d="M515 50 H526" marker-start="url(#f17n4a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="655" y="30" width="112" height="40" rx="10"/>
+<text class="dg-label" x="711" y="55" text-anchor="middle">Motor</text>
+<rect class="dg-box" x="655" y="86" width="112" height="44" rx="6"/>
+<text class="dg-tiny" x="711" y="104" text-anchor="middle">puede callar:</text>
+<text class="dg-tiny" x="711" y="120" text-anchor="middle">prefill o razonamiento</text>
+<path class="dg-feedback" d="M711.0 71 V85"/>
+<path class="dg-edge" d="M642 50 H653" marker-start="url(#f17n4a)"/>
+<text class="dg-tiny" x="20" y="152" text-anchor="start">Las tres cajas marcadas cortan o frenan el stream sin que el servidor vea un error.</text>
+<path class="sim-grid" d="M20 166 H750"/>
+<text class="sim-label" x="20" y="216" text-anchor="start">Sin ping</text>
+<path class="sim-grid" d="M160 212 H680.0" style="stroke: var(--label-3); fill: none"/>
+<rect x="188.9" y="203" width="404.4" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, transparent)"/>
+<text class="dg-tiny" x="391.111" y="198" text-anchor="middle">70 s sin tokens visibles</text>
+<circle cx="160.0" cy="212" r="3" fill="var(--label)"/>
+<circle cx="171.6" cy="212" r="3" fill="var(--label)"/>
+<circle cx="183.1" cy="212" r="3" fill="var(--label)"/>
+<path class="dg-edge" d="M529.8 198 V226" style="stroke: var(--fail); stroke-width: 2.5"/>
+<text class="dg-small dg-fail-text" x="535.778" y="238" text-anchor="start">✗ a los 60 s sin datos, el ALB cierra</text>
+<text class="sim-label" x="20" y="280" text-anchor="start">Ping cada 15 s</text>
+<path class="sim-grid" d="M160 276 H680.0" style="stroke: var(--label-3); fill: none"/>
+<rect x="188.9" y="267" width="404.4" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 14%, transparent)"/>
+<text class="dg-tiny" x="391.111" y="262" text-anchor="middle">70 s sin tokens visibles</text>
+<circle cx="160.0" cy="276" r="3" fill="var(--label)"/>
+<circle cx="171.6" cy="276" r="3" fill="var(--label)"/>
+<circle cx="183.1" cy="276" r="3" fill="var(--label)"/>
+<path class="dg-edge" d="M269.8 268 V284" style="stroke: var(--accent); stroke-width: 2.5"/>
+<path class="dg-edge" d="M356.4 268 V284" style="stroke: var(--accent); stroke-width: 2.5"/>
+<path class="dg-edge" d="M443.1 268 V284" style="stroke: var(--accent); stroke-width: 2.5"/>
+<path class="dg-edge" d="M529.8 268 V284" style="stroke: var(--accent); stroke-width: 2.5"/>
+<circle cx="593.3" cy="276" r="3" fill="var(--label)"/>
+<circle cx="604.9" cy="276" r="3" fill="var(--label)"/>
+<circle cx="616.4" cy="276" r="3" fill="var(--label)"/>
+<text class="dg-small" x="633.778" y="262" text-anchor="middle">✓ sigue viva</text>
+<text class="dg-tiny" x="160" y="304" text-anchor="middle">0 s</text>
+<text class="dg-tiny" x="333.333" y="304" text-anchor="middle">30 s</text>
+<text class="dg-tiny" x="506.667" y="304" text-anchor="middle">60 s</text>
+<text class="dg-tiny" x="680" y="304" text-anchor="middle">90 s</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.6.</b> Cada salto tiene su propio timeout de inactividad y sus propias ganas de acumular. El comentario cada 15 segundos mantiene viva la conexión en todos a la vez. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <p>El streaming también cambia la cuenta de capacidad. Lo que ocupa memoria y descriptores en el gateway ya no son las requests por segundo, sino los streams abiertos, que por la ley de Little son las requests por segundo multiplicadas por la duración de cada stream:</p>
 
@@ -616,7 +879,7 @@ for (;;) {
 <text class="dg-tiny" x="536.0" y="483">registra el uso parcial</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.3.</b> En HTTP no hay un mensaje de "cancelar": la señal es que la conexión se cerró, y cada salto tiene que notarlo y cerrar la suya.</figcaption>
+        <figcaption><b>Figura 17.7.</b> En HTTP no hay un mensaje de "cancelar": la señal es que la conexión se cerró, y cada salto tiene que notarlo y cerrar la suya.</figcaption>
       </figure>
 
       <ol class="steps">
@@ -691,7 +954,7 @@ for (;;) {
 <text class="dg-small" x="12" y="24">La conexión se puede cortar; la generación sigue.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.4.</b> El worker genera una sola vez y el servidor de la API solo lee y reenvía. Cualquier instancia puede atender una reconexión, porque el estado está en el buffer y no en la memoria del servidor que se cayó.</figcaption>
+        <figcaption><b>Figura 17.8.</b> El worker genera una sola vez y el servidor de la API solo lee y reenvía. Cualquier instancia puede atender una reconexión, porque el estado está en el buffer y no en la memoria del servidor que se cayó.</figcaption>
       </figure>
 
       <p>El diseño, en detalle: <span class="badge badge--ref">Diseño de referencia</span></p>
@@ -701,6 +964,65 @@ for (;;) {
         <li><b>El cliente guarda el último id</b> y reconecta con <code>Last-Event-ID</code> (o un parámetro como <code>starting_after</code>). Si recibe un evento repetido, lo descarta por su número: el consumo es idempotente.</li>
         <li><b>El buffer vive unos minutos</b> después del final. Alcanza para reconectar, para recargar la página y para abrir la conversación en otro dispositivo mientras la respuesta todavía se escribe. El mensaje completo se guarda en la base de datos al terminar (M20).</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 478" role="img" aria-labelledby="f17n5t f17n5d">
+<title id="f17n5t">Una reconexión con Last-Event-ID</title>
+<desc id="f17n5d">El cliente recibe los eventos 8 y 9 desde la instancia A del servidor de la API, que los lee del buffer. La conexión se corta. Mientras tanto, el worker sigue generando y escribe los eventos 10 y 11. El cliente reconecta con Last-Event-ID 9 y lo atiende la instancia B, que lee del buffer desde el 9 y le manda el 10 y el 11. Nada se regenera.</desc>
+<defs><marker id="f17n5-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f17n5-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f17n5-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f17n5-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M70.0 40 V468"/>
+<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">API, instancia A</text>
+<path class="dg-frame" d="M227.5 40 V468"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">API, instancia B</text>
+<path class="dg-frame" d="M385.0 40 V468"/>
+<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">Buffer (Redis)</text>
+<path class="dg-frame" d="M542.5 40 V468"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Worker</text>
+<path class="dg-frame" d="M700.0 40 V468"/>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M697.0 72 L547.5 72" marker-end="url(#f17n5-q)"/>
+<rect x="585.55" y="55" width="71.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="66" text-anchor="middle">XADD 8, 9</text>
+<path class="dg-edge" d="M230.5 106 L537.5 106" marker-end="url(#f17n5-a)"/>
+<rect x="336.1" y="89" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">XREAD desde 7</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M224.5 140 L75.0 140" marker-end="url(#f17n5-r)"/>
+<rect x="99.85" y="123" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="134" text-anchor="middle">id: 8 · id: 9</text>
+<path d="M20 172 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="161" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="176" text-anchor="middle" style="fill:var(--fail)">la red del teléfono se corta</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M697.0 208 L547.5 208" marker-end="url(#f17n5-q)"/>
+<rect x="555.85" y="191" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="202" text-anchor="middle">XADD 10, 11: sigue</text>
+<path class="dg-edge" d="M73.0 242 L380.0 242" marker-end="url(#f17n5-a)"/>
+<rect x="115.9" y="225" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="236" text-anchor="middle">GET …/eventos · Last-Event-ID: 9</text>
+<path class="dg-edge" d="M388.0 276 L537.5 276" marker-end="url(#f17n5-a)"/>
+<rect x="414.85" y="259" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="270" text-anchor="middle">XREAD desde 9</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M539.5 310 L390.0 310" marker-end="url(#f17n5-r)"/>
+<rect x="437.95" y="293" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="304" text-anchor="middle">10, 11</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 344 L75.0 344" marker-end="url(#f17n5-r)"/>
+<rect x="172.0" y="327" width="111.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="338" text-anchor="middle">id: 10 · id: 11</text>
+<rect x="80.0" y="364" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="380">si llega un id repetido, lo descarta</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M697.0 412 L547.5 412" marker-end="url(#f17n5-q)"/>
+<rect x="529.45" y="395" width="183.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="406" text-anchor="middle">XADD [DONE] · EXPIRE 600 s</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.9.</b> La reconexión, paso a paso: otra instancia atiende al cliente, lee del buffer desde el último id confirmado y el worker nunca se enteró del corte. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>Guardar eventos tiene una consecuencia de privacidad que conviene decir en voz alta: aun para clientes con retención cero, el modo en segundo plano de OpenAI guarda los datos de la respuesta unos 10 minutos para poder consultarla. <span class="badge badge--doc">Documentado</span> Si tu producto promete no guardar nada, la reanudación tiene que entrar en esa promesa.</p>
 
@@ -747,7 +1069,7 @@ for (;;) {
 <text class="dg-tiny" x="227.5" y="304" text-anchor="middle">texto: &quot;Tu pedido está en camino…&quot;</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.5.</b> Una llamada a herramienta son dos requests al modelo. En la primera, el modelo decide qué función llamar y con qué argumentos; en la segunda, recibe el resultado y escribe la respuesta.</figcaption>
+        <figcaption><b>Figura 17.10.</b> Una llamada a herramienta son dos requests al modelo. En la primera, el modelo decide qué función llamar y con qué argumentos; en la segunda, recibe el resultado y escribe la respuesta.</figcaption>
       </figure>
 
       <p>La declaración, en el formato de Chat Completions:</p>
@@ -851,7 +1173,7 @@ for (;;) {
 <text class="dg-small" x="12" y="280">La máscara se aplica a los logits en cada paso. El modelo sigue eligiendo; solo que entre las opciones válidas.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 17.6.</b> La máscara no elige por el modelo: descarta lo inválido y reparte la probabilidad entre lo que queda.</figcaption>
+        <figcaption><b>Figura 17.11.</b> La máscara no elige por el modelo: descarta lo inválido y reparte la probabilidad entre lo que queda.</figcaption>
       </figure>
 
       <p>Lo que hay que saber para usarlas bien:</p>
@@ -886,6 +1208,67 @@ for (;;) {
         </table>
       </div>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f17n6t f17n6d">
+<title id="f17n6t">Reintentar o no: el árbol de decisión</title>
+<desc id="f17n6d">Primero se mira si ya llegó el 200. Si el error llega dentro del stream, se conserva lo recibido, se muestra el error y se ofrece reintentar, sabiendo que la respuesta nueva será otra. Si no llegó el 200, se mira el código: 400, 401, 403, 404 y 413 no se reintentan, se corrigen; un 429 con Retry-After es el límite por minuto y se reintenta después de esperar; un 429 sin Retry-After es el tope de gasto y no se reintenta; 500, 503, 529 y 504 se reintentan con backoff y jitter, respetando Retry-After.</desc>
+<defs><marker id="f17n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="20" width="190" height="46" rx="10"/>
+<text class="dg-label" x="385" y="48" text-anchor="middle">¿Ya llegó el 200?</text>
+<path class="dg-edge" d="M480 43 H560" marker-end="url(#f17n6a)"/>
+<text class="dg-tiny" x="520" y="36" text-anchor="middle">sí</text>
+<rect class="dg-warnbox" x="564" y="20" width="186" height="82" rx="8"/>
+<text class="dg-small" x="657" y="40" text-anchor="middle">error dentro del stream</text>
+<text class="dg-tiny" x="657" y="58" text-anchor="middle">conserva lo recibido,</text>
+<text class="dg-tiny" x="657" y="73" text-anchor="middle">muestra el error y ofrece</text>
+<text class="dg-tiny" x="657" y="88" text-anchor="middle">reintentar: sale otra respuesta</text>
+<path class="dg-edge" d="M385 67 V96" marker-end="url(#f17n6a)"/>
+<text class="dg-tiny" x="393" y="86" text-anchor="start">no</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="100" width="190" height="40" rx="10"/>
+<text class="dg-label" x="385" y="125" text-anchor="middle">¿Qué código?</text>
+<path class="dg-edge" d="M385 141 V156 H107 V180" marker-end="url(#f17n6a)"/>
+<rect class="dg-box" x="20" y="184" width="175" height="60" rx="8"/>
+<text class="dg-small" x="107" y="204" text-anchor="middle">4xx de la request</text>
+<text class="dg-tiny" x="107" y="222" text-anchor="middle" style="font-family: var(--f-mono)">400 · 401 · 403</text>
+<text class="dg-tiny" x="107" y="237" text-anchor="middle" style="font-family: var(--f-mono)">404 · 413</text>
+<rect class="dg-bad" x="20" y="256" width="175" height="44" rx="8"/>
+<text class="dg-tiny" x="107" y="274" text-anchor="middle">✗ no reintentar:</text>
+<text class="dg-tiny" x="107" y="290" text-anchor="middle">corregir</text>
+<path class="dg-edge" d="M107 245 V252" marker-end="url(#f17n6a)"/>
+<path class="dg-edge" d="M385 141 V156 H292 V180" marker-end="url(#f17n6a)"/>
+<rect class="dg-box" x="205" y="184" width="175" height="60" rx="8"/>
+<text class="dg-small" x="292" y="204" text-anchor="middle">429 con Retry-After</text>
+<text class="dg-tiny" x="292" y="222" text-anchor="middle" style="font-family: var(--f-mono)">límite por minuto</text>
+<text class="dg-tiny" x="292" y="237" text-anchor="middle">(M18)</text>
+<rect class="dg-ok" x="205" y="256" width="175" height="44" rx="8"/>
+<text class="dg-tiny" x="292" y="274" text-anchor="middle">✓ esperar lo indicado</text>
+<text class="dg-tiny" x="292" y="290" text-anchor="middle">y frenar el ritmo</text>
+<path class="dg-edge" d="M292 245 V252" marker-end="url(#f17n6a)"/>
+<path class="dg-edge" d="M385 141 V156 H477 V180" marker-end="url(#f17n6a)"/>
+<rect class="dg-box" x="390" y="184" width="175" height="60" rx="8"/>
+<text class="dg-small" x="477" y="204" text-anchor="middle">429 sin Retry-After</text>
+<text class="dg-tiny" x="477" y="222" text-anchor="middle" style="font-family: var(--f-mono)">tope de gasto</text>
+<rect class="dg-bad" x="390" y="256" width="175" height="44" rx="8"/>
+<text class="dg-tiny" x="477" y="274" text-anchor="middle">✗ no reintentar:</text>
+<text class="dg-tiny" x="477" y="290" text-anchor="middle">falla hasta que cambie</text>
+<path class="dg-edge" d="M477 245 V252" marker-end="url(#f17n6a)"/>
+<path class="dg-edge" d="M385 141 V156 H662 V180" marker-end="url(#f17n6a)"/>
+<rect class="dg-box" x="575" y="184" width="175" height="60" rx="8"/>
+<text class="dg-small" x="662" y="204" text-anchor="middle">5xx y sobrecarga</text>
+<text class="dg-tiny" x="662" y="222" text-anchor="middle" style="font-family: var(--f-mono)">500 · 503 · 529</text>
+<text class="dg-tiny" x="662" y="237" text-anchor="middle" style="font-family: var(--f-mono)">504</text>
+<rect class="dg-ok" x="575" y="256" width="175" height="44" rx="8"/>
+<text class="dg-tiny" x="662" y="274" text-anchor="middle">✓ backoff con jitter,</text>
+<text class="dg-tiny" x="662" y="290" text-anchor="middle">respetar Retry-After</text>
+<path class="dg-edge" d="M662 245 V252" marker-end="url(#f17n6a)"/>
+<text class="dg-tiny" x="20" y="322" text-anchor="start">Los SDK ya reintentan (el de Anthropic, dos veces): si tu código reintenta encima, las tormentas se multiplican (M08).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.12.</b> La primera pregunta no es el código sino si ya llegó el 200: después del 200, el error viaja dentro del stream y lo recibido ya está en pantalla. La tabla de arriba es este árbol en forma de lista.</figcaption>
+      </figure>
+
       <p>Los dos proveedores distinguen el tope de gasto del límite por minuto: Anthropic lo marca con <code>error_code: enforced_spend_limit_reached</code> y sin <code>retry-after</code>; OpenAI, con el código <code>organization_spend_limit_exceeded</code> o <code>project_spend_limit_exceeded</code>. <span class="badge badge--doc">Documentado</span> Un cliente que reintenta todos los 429 igual se queda horas golpeando una puerta cerrada.</p>
 
       <ul>
@@ -905,6 +1288,63 @@ for (;;) {
         <li><b>El tamaño de los paquetes.</b> Aunque el tráfico vaya cifrado, un token por evento deja ver el largo de cada token. Un trabajo presentado en USENIX Security en 2024 reconstruyó con exactitud el 29&#8239;% de las respuestas de ChatGPT y de Copilot, y dedujo el tema del 55&#8239;%, solo a partir de esa secuencia de largos. <span class="badge badge--doc">Documentado</span> La mitigación es rellenar los eventos (el campo <code>obfuscation</code> de OpenAI) o agrupar varios tokens por evento.</li>
         <li><b>Las claves.</b> La clave del proveedor nunca llega al navegador: el cliente habla con tu backend, que autentica al usuario, aplica tus cuotas y llama al proveedor (el patrón BFF del M03).</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 362" role="img" aria-labelledby="f17n7t f17n7d">
+<title id="f17n7t">Lo que deja ver el tamaño de los paquetes</title>
+<desc id="f17n7d">Una respuesta de seis tokens viaja cifrada, un token por evento. Cada evento tiene una parte fija de JSON y el texto del token, así que el tamaño cifrado menos la parte fija es el largo del token: 2, 6, 5, 2, 4 y 2 caracteres. Esa secuencia de largos es lo que un observador de la red usa para reconstruir el texto. Con relleno al azar en cada evento, los tamaños ya no siguen los largos.</desc>
+<text class="dg-group" x="20" y="24" text-anchor="start">Lo que genera el modelo</text>
+<rect x="200" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="238" y="55" text-anchor="middle" style="font-family: var(--f-mono)">El</text>
+<rect x="290" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="328" y="55" text-anchor="middle" style="font-family: var(--f-mono)">␣vuelo</text>
+<rect x="380" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="418" y="55" text-anchor="middle" style="font-family: var(--f-mono)">␣sale</text>
+<rect x="470" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="508" y="55" text-anchor="middle" style="font-family: var(--f-mono)">␣a</text>
+<rect x="560" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="598" y="55" text-anchor="middle" style="font-family: var(--f-mono)">␣las</text>
+<rect x="650" y="36" width="76" height="28" rx="5" fill="color-mix(in srgb, var(--l-gpu) 25%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="688" y="55" text-anchor="middle" style="font-family: var(--f-mono)">␣9</text>
+<text class="dg-group" x="20" y="92" text-anchor="start">Lo que ve un observador de la red: el tamaño de cada paquete cifrado</text>
+<text class="sim-label" x="20" y="120" text-anchor="start">Sin relleno</text>
+<text class="dg-tiny" x="20" y="136" text-anchor="start">fijo + largo del token</text>
+<path class="sim-grid" d="M190 180 H730" style="stroke: var(--label-3); fill: none"/>
+<rect x="218" y="171" width="40" height="9" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="238" y="196" text-anchor="middle">+2</text>
+<rect x="308" y="153" width="40" height="27" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="328" y="196" text-anchor="middle">+6</text>
+<rect x="398" y="157.5" width="40" height="22.5" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="418" y="196" text-anchor="middle">+5</text>
+<rect x="488" y="171" width="40" height="9" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="508" y="196" text-anchor="middle">+2</text>
+<rect x="578" y="162" width="40" height="18" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="598" y="196" text-anchor="middle">+4</text>
+<rect x="668" y="171" width="40" height="9" rx="2" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="688" y="196" text-anchor="middle">+2</text>
+
+<text class="sim-label" x="20" y="220" text-anchor="start">Con relleno al azar</text>
+<text class="dg-tiny" x="20" y="236" text-anchor="start">campo obfuscation</text>
+<path class="sim-grid" d="M190 310 H730" style="stroke: var(--label-3); fill: none"/>
+<rect x="218" y="269.5" width="40" height="40.5" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="238" y="326" text-anchor="middle">+9</text>
+<rect x="308" y="269.5" width="40" height="40.5" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="328" y="326" text-anchor="middle">+9</text>
+<rect x="398" y="247" width="40" height="63" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="418" y="326" text-anchor="middle">+14</text>
+<rect x="488" y="274" width="40" height="36" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="508" y="326" text-anchor="middle">+8</text>
+<rect x="578" y="283" width="40" height="27" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="598" y="326" text-anchor="middle">+6</text>
+<rect x="668" y="265" width="40" height="45" rx="2" fill="color-mix(in srgb, var(--l-queue) 40%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="688" y="326" text-anchor="middle">+10</text>
+<text class="dg-tiny" x="20" y="352" text-anchor="start">Arriba, los tamaños delatan el largo de cada token. Abajo, ya no: el relleno cambia en cada evento. Agrupar varios tokens por evento también sirve.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.13.</b> Los tokens y el relleno son un ejemplo; lo que importa es la forma. El cifrado esconde el contenido, no el tamaño, y un token por evento convierte el tamaño en el largo de cada token. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h2 id="implementacion"><span class="sec-num">17.10</span>Impleméntalo: el endpoint de streaming</h2>
 
@@ -964,6 +1404,67 @@ async def chat(request: Request):
 
     return StreamingResponse(eventos(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})</code></pre>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 340" role="img" aria-labelledby="f17n8t f17n8d">
+<title id="f17n8t">La vida de una request en el endpoint de streaming</title>
+<desc id="f17n8d">La request entra y reserva cuota; si no alcanza, responde 429 sin tocar el motor. Después abre el stream con el motor y entra en un bucle: espera el próximo chunk hasta 15 segundos; si no llega nada, manda un comentario de keep-alive; si llega, lo reenvía como evento data. Hay tres salidas del bucle: el motor termina y se manda [DONE], el cliente se va y Starlette cancela el generador, o el motor falla. Las tres pasan por el bloque finally, que cierra el stream con el motor para que deje de generar, reconcilia la cuota y registra el uso.</desc>
+<defs><marker id="f17n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="30" width="150" height="52" rx="10"/>
+<text class="dg-label" x="95" y="53" text-anchor="middle">POST</text>
+<text class="dg-tiny" x="95" y="70" text-anchor="middle">/v1/chat/completions</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="210" y="30" width="150" height="52" rx="10"/>
+<text class="dg-label" x="285" y="53" text-anchor="middle">Reservar cuota</text>
+<text class="dg-tiny" x="285" y="70" text-anchor="middle">M18</text>
+<path class="dg-edge" d="M171 56 H206" marker-end="url(#f17n8a)"/>
+<rect class="dg-bad" x="210" y="108" width="150" height="36" rx="8"/>
+<text class="dg-small" x="285" y="131" text-anchor="middle">429: no alcanza</text>
+<path class="dg-edge" d="M285 83 V104" marker-end="url(#f17n8a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="400" y="30" width="150" height="52" rx="10"/>
+<text class="dg-label" x="475" y="53" text-anchor="middle">Abrir stream</text>
+<text class="dg-tiny" x="475" y="70" text-anchor="middle">con el motor</text>
+<path class="dg-edge" d="M361 56 H396" marker-end="url(#f17n8a)"/>
+<rect x="390" y="104" width="360" height="118" rx="12" fill="none" stroke="var(--separator-strong)" stroke-dasharray="6 4"/>
+<text class="dg-group" x="402" y="122" text-anchor="start">Bucle</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="410" y="132" width="150" height="50" rx="10"/>
+<text class="dg-label" x="485" y="154" text-anchor="middle">Esperar chunk</text>
+<text class="dg-tiny" x="485" y="171" text-anchor="middle">hasta 15 s</text>
+<path class="dg-edge" d="M475 83 V128" marker-end="url(#f17n8a)"/>
+<rect class="dg-box" x="620" y="134" width="120" height="32" rx="6"/>
+<text class="dg-tiny" x="680" y="155" text-anchor="middle" style="font-family: var(--f-mono)">: keep-alive</text>
+<rect class="dg-box" x="620" y="178" width="120" height="32" rx="6"/>
+<text class="dg-tiny" x="680" y="199" text-anchor="middle" style="font-family: var(--f-mono)">data: {chunk}</text>
+<path class="dg-edge" d="M561 150 H616" marker-end="url(#f17n8a)"/>
+<text class="dg-tiny" x="588" y="142" text-anchor="middle">silencio</text>
+<path class="dg-edge" d="M561 172 L616 192" marker-end="url(#f17n8a)"/>
+<text class="dg-tiny" x="584" y="200" text-anchor="end">chunk</text>
+<path class="dg-feedback" d="M741 150 H746 V194 H741"/>
+<path class="dg-feedback" d="M746 172 H748 V116 H540 V128" marker-end="url(#f17n8a)"/>
+<text class="dg-tiny" x="644" y="112" text-anchor="middle">vuelve a esperar</text>
+<rect class="dg-box" x="20" y="240" width="150" height="44" rx="8"/>
+<text class="dg-small" x="95" y="258" text-anchor="middle">Terminó bien</text>
+<text class="dg-tiny" x="95" y="274" text-anchor="middle">data: [DONE]</text>
+<path class="dg-edge" d="M95 285 V298" marker-end="url(#f17n8a)"/>
+<rect class="dg-box" x="210" y="240" width="150" height="44" rx="8"/>
+<text class="dg-small" x="285" y="258" text-anchor="middle">El cliente se fue</text>
+<text class="dg-tiny" x="285" y="274" text-anchor="middle">Starlette cancela</text>
+<path class="dg-edge" d="M285 285 V298" marker-end="url(#f17n8a)"/>
+<rect class="dg-box" x="400" y="240" width="150" height="44" rx="8"/>
+<text class="dg-small" x="475" y="258" text-anchor="middle">Falla del motor</text>
+<text class="dg-tiny" x="475" y="274" text-anchor="middle">excepción</text>
+<path class="dg-edge" d="M475 285 V298" marker-end="url(#f17n8a)"/>
+<path class="dg-edge" d="M475 223 V239"/>
+<path class="dg-feedback" d="M410 182 H300 V239"/>
+<path class="dg-feedback" d="M410 160 H95 V239"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="20" y="302" width="730" height="32" rx="8"/>
+<text class="dg-label" x="36" y="323" text-anchor="start">finally:</text>
+<text class="dg-small" x="110" y="323" text-anchor="start">stream.close() para que el motor deje de generar · reconciliar la cuota · registrar el uso</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 17.14.</b> El código de arriba, como diagrama. Todos los caminos terminan en el mismo finally: por eso es el lugar de cerrar el motor, reconciliar la cuota y registrar el uso.</figcaption>
+      </figure>
 
       <p>Tres detalles que suelen faltar. El bloque <code>finally</code> corre aunque el cliente se vaya, y es el único lugar donde la cuota se reconcilia y el uso se registra en todos los casos; en producción conviene protegerlo de una segunda cancelación o hacerlo en una tarea aparte. <code>stream.close()</code> es lo que le avisa al motor que deje de generar. Y los comentarios de keep-alive salen de una espera con timeout sobre el próximo chunk, no de un temporizador aparte que podría escribir en medio de un evento.</p>
 

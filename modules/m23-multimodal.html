@@ -71,6 +71,36 @@
 
       <p>Empecemos por la entrada, con una foto de teléfono de 4032 × 3024 píxeles (12.2 megapíxeles). Sin comprimir, en RGB, son 36.6 MB. Como JPEG de calidad media, a unos 2 bits por píxel, unos 3.05 MB, y codificada en base64 para mandarla dentro de un JSON, 4.06 MB. <span class="badge badge--ref">Diseño de referencia</span> El modelo no ve ninguno de esos números. Ve tokens: con las reglas de Anthropic en alta resolución, la foto se achica a 2212 × 1659 y cuesta 4&#8239;740 tokens (la cuenta, en 23.2). A los 2 USD por millón de tokens de entrada de Sonnet 5.5 que usamos en el <a href="m21-metering.html#precios">M21</a>, son 0.0095 USD por foto, o 9.48 USD cada mil.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f23n1t f23n1d">
+<title id="f23n1t">La misma foto en cuatro tamaños</title>
+<desc id="f23n1d">Una foto de teléfono de 4032 × 3024 píxeles, de izquierda a derecha. Sin comprimir, en RGB, ocupa 36.6 MB. Como JPEG a unos 2 bits por píxel, 3.05 MB. En base64, para viajar dentro de un JSON, 4.06 MB, un tercio más. El modelo no ve ningún byte: la achica a 2212 × 1659 y la ve como 4 740 tokens. Las áreas de las barras son proporcionales a los bytes.</desc>
+<defs><marker id="f23n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="50" text-anchor="start">Píxeles en RGB</text>
+<text class="dg-tiny" x="20" y="66" text-anchor="start">4032 × 3024 × 3 B</text>
+<rect class="dg-box" x="170" y="38" width="540" height="30" rx="3"/>
+<text class="dg-small" x="718" y="58" text-anchor="start">36.6 MB</text>
+<text class="dg-small" x="20" y="98" text-anchor="start">JPEG</text>
+<text class="dg-tiny" x="20" y="114" text-anchor="start">≈ 2 bits por píxel</text>
+<rect class="dg-box" x="170" y="86" width="45" height="30" rx="3"/>
+<text class="dg-small" x="223" y="106" text-anchor="start">3.05 MB</text>
+<text class="dg-small" x="20" y="146" text-anchor="start">Base64 en el JSON</text>
+<text class="dg-tiny" x="20" y="162" text-anchor="start">× 4/3</text>
+<rect class="dg-warnbox" x="170" y="134" width="59.9016" height="30" rx="3"/>
+<text class="dg-small" x="237.902" y="154" text-anchor="start">4.06 MB</text>
+<text class="dg-small" x="20" y="194" text-anchor="start">Lo que ve el modelo</text>
+<text class="dg-tiny" x="20" y="210" text-anchor="start">achicada a 2212 × 1659</text>
+<rect x="170" y="182" width="200" height="30" rx="3" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="270" y="202" text-anchor="middle">4 740 tokens</text>
+<text class="dg-tiny" x="380" y="202" text-anchor="start">0.0095 USD por foto a 2 USD por millón</text>
+<text class="dg-tiny" x="20" y="240" text-anchor="start">Los bytes deciden la subida y el límite de la request; los tokens deciden el prefill y el costo.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.1.</b> Los números del párrafo, a escala. La compresión y el base64 cambian lo que viaja por la red; lo que se cobra y lo que ocupa el prefill son los tokens. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>Ahora pongamos esa foto en la flota del <a href="m21-metering.html#numeros-volumen">M21</a>: 400 requests por segundo en el pico y 17.3 millones por día. Supongamos que el 8&#8239;% de las requests trae una foto. <span class="badge badge--ref">Diseño de referencia</span></p>
 
       <div class="table-wrap">
@@ -172,7 +202,7 @@
 <text class="dg-small" x="10" y="292">Foto de 4032 × 3024 (12.2 MP). Punteado: lo que mandas. Lleno: lo que ve el modelo, a escala; la grilla marca una línea cada 10 bloques.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.1.</b> La misma foto cuesta entre 765 y 4&#8239;740 tokens según el proveedor y el modo. Ninguno la procesa a su tamaño original: todos la achican primero, y lo que no se ve en el tamaño achicado no existe para el modelo.</figcaption>
+  <figcaption><b>Figura 23.2.</b> La misma foto cuesta entre 765 y 4&#8239;740 tokens según el proveedor y el modo. Ninguno la procesa a su tamaño original: todos la achican primero, y lo que no se ve en el tamaño achicado no existe para el modelo.</figcaption>
 </figure>
 
       <p>Las cuentas, para que puedas rehacerlas:</p>
@@ -259,7 +289,7 @@
 <text class="dg-small" x="10" y="252">El encoder es el 0.43 % del cómputo: lo caro es que la foto sean 4 740 tokens más.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.2.</b> El encoder y el proyector convierten la imagen en vectores que el LLM trata como tokens. Desde el punto de vista del LLM, la foto son 4&#8239;740 tokens más en el prefill.</figcaption>
+  <figcaption><b>Figura 23.3.</b> El encoder y el proyector convierten la imagen en vectores que el LLM trata como tokens. Desde el punto de vista del LLM, la foto son 4&#8239;740 tokens más en el prefill.</figcaption>
 </figure>
 
       <p>¿Cuánto cuesta el encoder? Con la regla del <a href="m13-gpus.html#roofline">M13</a> de 2 FLOP por parámetro y por token: un ViT-L tiene unos 300 millones de parámetros (307 M en el paper del ViT) <span class="badge badge--doc">Documentado</span>, y sobre 4&#8239;740 tokens hace 2 × 0.3 × 10⁹ × 4&#8239;740 ≈ 2.8 TFLOP. El LLM de 70 mil millones de parámetros del M19 hace, sobre esos mismos tokens, 2 × 70 × 10⁹ × 4&#8239;740 ≈ 664 TFLOP. El encoder es el 0.43&#8239;% del cómputo. <span class="badge badge--ref">Diseño de referencia</span> Con un modelo grande, lo caro de una imagen no es el encoder: es que agrega miles de tokens al prefill.</p>
@@ -312,7 +342,7 @@
 <text class="dg-tiny" x="65" y="170" text-anchor="middle">solo texto: directo al prefill</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.3.</b> Con el encoder como etapa propia, se dimensiona aparte y se le pone un caché adelante. Una imagen que ya se vio no vuelve a pasar por el encoder.</figcaption>
+  <figcaption><b>Figura 23.4.</b> Con el encoder como etapa propia, se dimensiona aparte y se le pone un caché adelante. Una imagen que ya se vio no vuelve a pasar por el encoder.</figcaption>
 </figure>
 
       <p>El caché es la otra mitad de la idea. Si el mismo usuario manda la misma captura en cinco turnos, o mil usuarios mandan el mismo meme, el encoder hace el mismo trabajo cada vez. La clave natural es el hash de los bytes de la imagen, como el <a href="m09-objetos.html#claves">almacenamiento direccionado por contenido</a> del M09: misma imagen, mismos vectores. vLLM guarda los embeddings ya calculados y los reutiliza con costo de encoder cero. <span class="badge badge--doc">Documentado</span> Y si la imagen forma parte de un prefijo que se repite, como en una conversación de varios turnos, el <a href="m15-motores-inferencia.html#prefix">prefix caching</a> del M15 va más lejos: guarda el KV cache de esos tokens y también se salta el prefill.</p>
@@ -358,6 +388,52 @@
 
       <p>La API es sin estado: en cada turno, el cliente manda la conversación entera (<a href="m17-api-streaming.html#endpoints">M17</a>). Con base64, eso significa reenviar los bytes de todas las imágenes en cada turno. La documentación de Anthropic lo advierte y recomienda el id de archivo para mantener chico el payload. <span class="badge badge--doc">Documentado</span> La cuenta lo muestra: el límite es de 32 MB por request, y una foto sin reescalar son 4.06 MB en base64. Si el usuario manda una foto por turno, en el turno 8 la request pesa 32.5 MB y falla. Reescaladas a 1568 × 1176, entran 52.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f23n2t f23n2d">
+<title id="f23n2t">Base64 reenvía todas las fotos en cada turno</title>
+<desc id="f23n2d">El peso de la request en cada turno de una conversación en la que el usuario manda una foto sin reescalar por turno, en base64. La API es sin estado, así que cada turno lleva las fotos de todos los anteriores: 4.06 MB, 8.12, 12.18… En el turno 8, 32.5 MB, pasa el límite de 32 MB y falla. Con las fotos reescaladas a 1568 × 1176, 615 kB cada una, entran 52.</desc>
+<defs><marker id="f23n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-axis" d="M90 224 H740" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90 224 V44" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="82" y="228" text-anchor="end">0 MB</text>
+<text class="dg-tiny" x="82" y="188" text-anchor="end">8 MB</text>
+<text class="dg-tiny" x="82" y="148" text-anchor="end">16 MB</text>
+<text class="dg-tiny" x="82" y="108" text-anchor="end">24 MB</text>
+<text class="dg-tiny" x="82" y="68" text-anchor="end">32 MB</text>
+<path class="dg-edge" d="M90 64.0 H740" style="stroke: var(--fail); stroke-dasharray: 6 4"/>
+<text class="dg-tiny dg-fail-text" x="110" y="56" text-anchor="start">límite: 32 MB por request</text>
+<rect class="dg-warnbox" x="110" y="203.7" width="60" height="20.3" rx="3"/>
+<text class="dg-tiny" x="140" y="242" text-anchor="middle">turno 1</text>
+<text class="dg-tiny" x="140" y="197.7" text-anchor="middle">4.06</text>
+<rect class="dg-warnbox" x="188" y="183.4" width="60" height="40.6" rx="3"/>
+<text class="dg-tiny" x="218" y="242" text-anchor="middle">turno 2</text>
+<text class="dg-tiny" x="218" y="177.4" text-anchor="middle">8.12</text>
+<rect class="dg-warnbox" x="266" y="163.1" width="60" height="60.9" rx="3"/>
+<text class="dg-tiny" x="296" y="242" text-anchor="middle">turno 3</text>
+<text class="dg-tiny" x="296" y="157.1" text-anchor="middle">12.18</text>
+<rect class="dg-warnbox" x="344" y="142.8" width="60" height="81.2" rx="3"/>
+<text class="dg-tiny" x="374" y="242" text-anchor="middle">turno 4</text>
+<text class="dg-tiny" x="374" y="136.8" text-anchor="middle">16.24</text>
+<rect class="dg-warnbox" x="422" y="122.5" width="60" height="101.5" rx="3"/>
+<text class="dg-tiny" x="452" y="242" text-anchor="middle">turno 5</text>
+<text class="dg-tiny" x="452" y="116.5" text-anchor="middle">20.30</text>
+<rect class="dg-warnbox" x="500" y="102.2" width="60" height="121.8" rx="3"/>
+<text class="dg-tiny" x="530" y="242" text-anchor="middle">turno 6</text>
+<text class="dg-tiny" x="530" y="96.2" text-anchor="middle">24.36</text>
+<rect class="dg-warnbox" x="578" y="81.9" width="60" height="142.1" rx="3"/>
+<text class="dg-tiny" x="608" y="242" text-anchor="middle">turno 7</text>
+<text class="dg-tiny" x="608" y="75.9" text-anchor="middle">28.42</text>
+<rect class="dg-bad" x="656" y="61.6" width="60" height="162.4" rx="3"/>
+<text class="dg-tiny" x="686" y="242" text-anchor="middle">turno 8</text>
+<text class="dg-tiny" x="686" y="55.6" text-anchor="middle">32.5</text>
+<text class="dg-tiny" x="20" y="262" text-anchor="start">Reescaladas a 615 kB entran 52 turnos. Con un id de la Files API, cada turno manda el id en lugar de la imagen.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.5.</b> La advertencia de la documentación, como cuenta. Cada barra suma una foto más, porque la API sin estado recibe la conversación entera en cada turno. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <p>Para subir el archivo, el patrón es el del <a href="m09-objetos.html#signed-urls">M09</a> y el del <a href="m20-producto-chatgpt.html#archivos">M20</a>: la API entrega una signed URL, el cliente sube directo a S3 (con <a href="m09-objetos.html#multipart">multipart</a> si el archivo es grande) y la API nunca toca los bytes. Un evento de "objeto creado" dispara la validación.</p>
 
       <h3 id="entrada-validar">Validar antes de decodificar</h3>
@@ -373,6 +449,37 @@
       </ol>
 
       <p>El paso 2 existe por la <dfn data-term="bomba-descompresion">bomba de descompresión</dfn>: un archivo chico que se vuelve enorme al decodificarlo. Un PNG de 20&#8239;000 × 20&#8239;000 píxeles en RGBA ocupa 20&#8239;000 × 20&#8239;000 × 4 = 1.6 GB en memoria. Si todos sus píxeles son iguales, deflate lo comprime hasta unas 1&#8239;032 veces: el archivo pesa 1.55 MB. <span class="badge badge--ref">Diseño de referencia</span> Mil uploads de esos en paralelo tiran cualquier flota de workers. Pillow, la biblioteca de imágenes más usada en Python, trae un límite de 89&#8239;478&#8239;485 píxeles: avisa al pasarlo y tira <code>DecompressionBombError</code> al pasar el doble. <span class="badge badge--doc">Documentado</span> La imagen del ejemplo lo pasa 4.5 veces.</p>
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f23n3t f23n3d">
+<title id="f23n3t">Una bomba de descompresión</title>
+<desc id="f23n3d">Un PNG de 1.55 MB que, al decodificarlo, ocupa 1.6 GB: 20 000 × 20 000 píxeles por 4 bytes. Abajo, los 400 millones de píxeles contra el límite de Pillow, 89 478 485 píxeles: avisa al pasarlo y falla con DecompressionBombError al pasar el doble. La imagen lo pasa 4.5 veces. Por eso las dimensiones se leen de la cabecera, antes de decodificar.</desc>
+<defs><marker id="f23n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="20" y="50" width="22" height="22" rx="3"/>
+<text class="dg-small" x="20" y="92" text-anchor="start">archivo: 1.55 MB</text>
+<text class="dg-tiny" x="20" y="108" text-anchor="start">píxeles iguales,</text>
+<text class="dg-tiny" x="20" y="122" text-anchor="start">deflate ≈ 1 032 ×</text>
+<path class="dg-edge" d="M48 61 H176" marker-end="url(#f23n3a)"/>
+<text class="dg-tiny" x="112" y="52" text-anchor="middle">decodificar</text>
+<rect class="dg-bad" x="180" y="20" width="278.4" height="116" rx="4"/>
+<text class="dg-label dg-fail-text" x="319.2" y="70" text-anchor="middle">en memoria: 1.6 GB</text>
+<text class="dg-tiny" x="319.2" y="90" text-anchor="middle">20 000 × 20 000 × 4 B (RGBA)</text>
+<text class="dg-tiny" x="480" y="56" text-anchor="start">el área del cuadro rojo es unas mil</text>
+<text class="dg-tiny" x="480" y="72" text-anchor="start">veces la del archivo: no está a escala</text>
+<text class="dg-small" x="20" y="188" text-anchor="start">Píxeles, en millones</text>
+<rect class="dg-bad" x="180" y="170" width="560" height="28" rx="3"/>
+<text class="dg-tiny" x="732" y="189" text-anchor="end">400 M: la imagen</text>
+<path class="dg-edge" d="M305.3 162 V206" style="stroke: var(--label); stroke-dasharray: 4 3"/>
+<text class="dg-tiny" x="305.3" y="222" text-anchor="middle">aviso: 89.5 M</text>
+<path class="dg-edge" d="M430.6 162 V206" style="stroke: var(--label); stroke-dasharray: 4 3"/>
+<text class="dg-tiny" x="430.6" y="222" text-anchor="middle">error: 179 M</text>
+<text class="dg-tiny" x="20" y="250" text-anchor="start">Pillow avisa al pasar 89 478 485 píxeles y lanza DecompressionBombError al pasar el doble.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.6.</b> La bomba del párrafo. Lo que pesa el archivo no dice nada sobre lo que ocupa al decodificarlo; las dimensiones de la cabecera, sí. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
 
 <pre data-lang="python"><code>from PIL import Image
 
@@ -497,7 +604,7 @@ def validar(ruta: str) -&gt; Image.Image:
 <text class="dg-small" x="10" y="284">gpt-image-1, calidad alta, 1024 × 1024: 0.167 USD, unos 4 175 tokens de salida a 40 USD por millón.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.4.</b> En difusión, el costo es el modelo completo por cada paso. En la autorregresiva, es un decode de miles de tokens. Las dos tardan segundos.</figcaption>
+  <figcaption><b>Figura 23.7.</b> En difusión, el costo es el modelo completo por cada paso. En la autorregresiva, es un decode de miles de tokens. Las dos tardan segundos.</figcaption>
 </figure>
 
       <h3 id="generar-costo">Cuántos segundos de GPU cuesta una imagen</h3>
@@ -517,12 +624,96 @@ def validar(ruta: str) -&gt; Image.Image:
         </table>
       </div>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 312" role="img" aria-labelledby="f23n4t f23n4d">
+<title id="f23n4t">De píxeles a tokens en un DiT</title>
+<desc id="f23n4d">Arriba, el camino de una imagen de 1024 × 1024: el VAE la reduce 8 veces por lado, a un latente de 128 × 128 con 16 canales; el DiT lo corta en parches de 2 × 2, 64 × 64 = 4 096 tokens, más hasta 512 de texto. Abajo, lo que pasa a 2048 × 2048: 16 896 tokens, la parte lineal del cómputo crece 3.67 veces y la atención, cuadrática, 13.4 veces.</desc>
+<defs><marker id="f23n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="34" width="160" height="112" rx="8" fill="color-mix(in srgb, var(--l-client) 18%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="100" y="54" text-anchor="middle">Imagen</text>
+<text class="dg-tiny" x="100" y="136" text-anchor="middle">1024 × 1024 px</text>
+<rect x="54.0" y="62" width="92" height="62" fill="none" stroke="var(--l-client)"/>
+<path class="dg-edge" d="M182 90 H206" marker-end="url(#f23n4a)"/>
+<text class="dg-tiny" x="194" y="80" text-anchor="middle">÷ 8</text>
+<rect x="210" y="34" width="160" height="112" rx="8" fill="color-mix(in srgb, var(--l-db) 18%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="290" y="54" text-anchor="middle">Latente del VAE</text>
+<text class="dg-tiny" x="290" y="136" text-anchor="middle">128 × 128 × 16</text>
+<rect x="258.0" y="62" width="64" height="62" fill="none" stroke="var(--l-db)"/>
+<path class="dg-edge" d="M372 90 H396" marker-end="url(#f23n4a)"/>
+<text class="dg-tiny" x="384" y="80" text-anchor="middle">2 × 2</text>
+<rect x="400" y="34" width="160" height="112" rx="8" fill="color-mix(in srgb, var(--l-service) 18%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="480" y="54" text-anchor="middle">Parches de 2 × 2</text>
+<text class="dg-tiny" x="480" y="136" text-anchor="middle">64 × 64 = 4 096</text>
+<rect x="448.0" y="62" width="64" height="62" fill="none" stroke="var(--l-service)"/>
+<path class="sim-grid" d="M456.0 62 V124 M448.0 69.8 H512.0"/>
+<path class="sim-grid" d="M464.0 62 V124 M448.0 77.5 H512.0"/>
+<path class="sim-grid" d="M472.0 62 V124 M448.0 85.2 H512.0"/>
+<path class="sim-grid" d="M480.0 62 V124 M448.0 93.0 H512.0"/>
+<path class="sim-grid" d="M488.0 62 V124 M448.0 100.8 H512.0"/>
+<path class="sim-grid" d="M496.0 62 V124 M448.0 108.5 H512.0"/>
+<path class="sim-grid" d="M504.0 62 V124 M448.0 116.2 H512.0"/>
+<path class="dg-edge" d="M562 90 H586" marker-end="url(#f23n4a)"/>
+<text class="dg-tiny" x="574" y="80" text-anchor="middle"></text>
+<rect x="590" y="34" width="160" height="112" rx="8" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="670" y="54" text-anchor="middle">Al DiT</text>
+<text class="dg-tiny" x="670" y="136" text-anchor="middle">4 096 + 512 de texto</text>
+<rect x="608" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="621" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="634" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="647" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="660" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="673" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="686" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="699" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="712" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<rect x="725" y="70" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<rect x="608" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="621" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="634" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="647" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="660" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="673" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="686" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="699" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="712" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<rect x="725" y="86" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<rect x="608" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="621" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="634" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="647" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="660" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="673" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="686" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="699" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 60%, var(--bg))"/>
+<rect x="712" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<rect x="725" y="102" width="10" height="11" rx="2" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))"/>
+<text class="dg-group" x="20" y="180" text-anchor="start">Al doblar el lado, a 2048 × 2048</text>
+<text class="dg-small" x="20" y="211" text-anchor="start">Tokens</text>
+<rect class="dg-box" x="220" y="198" width="34.9714" height="22" rx="3"/>
+<rect class="dg-warnbox" x="220" y="198" width="128.229" height="22" rx="3"/>
+<text class="dg-small" x="356.229" y="214" text-anchor="start">4 608 → 16 896</text>
+<text class="dg-small" x="20" y="243" text-anchor="start">Cómputo lineal</text>
+<rect class="dg-box" x="220" y="230" width="34.9714" height="22" rx="3"/>
+<rect class="dg-warnbox" x="220" y="230" width="128.229" height="22" rx="3"/>
+<text class="dg-small" x="356.229" y="246" text-anchor="start">× 3.67</text>
+<text class="dg-small" x="20" y="275" text-anchor="start">Atención (cuadrática)</text>
+<rect class="dg-box" x="220" y="262" width="34.9714" height="22" rx="3"/>
+<rect class="dg-bad" x="220" y="262" width="470.171" height="22" rx="3"/>
+<text class="dg-small" x="698.171" y="278" text-anchor="start">× 13.4</text>
+<text class="dg-tiny" x="20" y="304" text-anchor="start">Barras: el tamaño a 1024 × 1024 vale 1 (el borde gris de la izquierda).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.8.</b> La cuenta de la tabla, en piezas. El VAE y los parches reducen un millón de píxeles a unos 4&#8239;000 tokens; doblar el lado los multiplica por cuatro, y la atención lo siente al cuadrado. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>La cuenta se puede contrastar con una medición pública. En MLPerf Inference v4.1, con SDXL (un modelo de difusión de unos 3&#8239;500 millones de parámetros, 20 pasos a 1024 × 1024), 8 H200 generaron 17.42 imágenes por segundo: 8 ÷ 17.42 = 0.46 segundos de GPU por imagen. <span class="badge badge--doc">Documentado</span> Escalar los 7 segundos a un modelo 3.4 veces más chico y con 2.5 veces menos pasos da unos 0.8 segundos: la misma magnitud que la medición, que además usa una GPU con el mismo cómputo y más ancho de banda de memoria.</p>
 
       <p>Tres consecuencias para el diseño:</p>
 
       <ul>
-        <li><b>Los pasos son la palanca.</b> Los modelos destilados generan en 1 a 4 pasos: FLUX.1 [schnell] tiene el mismo tamaño que [dev] y genera en 1 a 4. <span class="badge badge--doc">Documentado</span> Son 12 veces menos GPU por imagen, a cambio de algo de calidad y de variedad. Cómo se destila un modelo es tema del entrenamiento (M26).</li>
+        <li><b>Los pasos son la palanca.</b> Los modelos destilados generan en 1 a 4 pasos: FLUX.1 [schnell] tiene el mismo tamaño que [dev] y genera en 1 a 4. <span class="badge badge--doc">Documentado</span> Son 12 veces menos GPU por imagen, a cambio de algo de calidad y de variedad. Cómo se destila un modelo es tema del <a href="m26-entrenamiento.html">entrenamiento (M26)</a>.</li>
         <li><b>La resolución cuesta más que lineal.</b> A 2048 × 2048 hay 4 × 4&#8239;096 + 512 = 16&#8239;896 tokens: la parte lineal del cómputo crece 3.67 veces y la atención, que es cuadrática, 13.4 veces. Por eso los servicios ofrecen pocos tamaños fijos, y una resolución grande se genera chica y se agranda después.</li>
         <li><b>La guía duplica el trabajo.</b> La técnica clásica para que la imagen siga el prompt (classifier-free guidance) corre el modelo dos veces por paso, con y sin el prompt. FLUX.1 [dev] está destilado para hacerlo en una sola pasada. <span class="badge badge--doc">Documentado</span></li>
       </ul>
@@ -556,6 +747,47 @@ def validar(ruta: str) -&gt; Image.Image:
         <li><b>Avisar</b> con un <a href="m02-apis.html#webhooks">webhook</a> firmado, con reintentos, como el de Stripe en el <a href="m27-pagos-stripe.html#webhooks-envio">M27</a>.</li>
         <li><b>Mostrar el progreso</b> con un stream SSE (<a href="m17-api-streaming.html#sse">M17</a>) que manda los cambios de estado y las vistas previas.</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f23n5t f23n5d">
+<title id="f23n5t">Tres formas de enterarse de que el job terminó</title>
+<desc id="f23n5d">El cliente crea el job con un POST y recibe 202 Accepted con un id, antes de que se genere nada. Después hay tres formas de enterarse del resultado. Polling: el cliente pregunta con GET cada tanto, respetando el Retry-After. Webhook: el servidor llama a una URL del cliente cuando termina, firmado y con reintentos. SSE: el cliente deja abierto un stream que recibe los cambios de estado y las vistas previas. El GET siempre dice la verdad y es la red de seguridad de los otros dos.</desc>
+<defs><marker id="f23n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="20" y="30" width="220" height="60" rx="8"/>
+<text class="dg-tiny" x="130" y="54" text-anchor="middle" style="font-family: var(--f-mono)">POST /v1/images/jobs</text>
+<text class="dg-tiny" x="130" y="74" text-anchor="middle">con Idempotency-Key</text>
+<path class="dg-edge" d="M242 60 H286" marker-end="url(#f23n5a)"/>
+<rect class="dg-ok" x="290" y="30" width="200" height="60" rx="8"/>
+<text class="dg-small" x="390" y="54" text-anchor="middle" style="font-family: var(--f-mono)">202 Accepted</text>
+<text class="dg-tiny" x="390" y="74" text-anchor="middle">id y Location, sin imagen</text>
+<text class="dg-tiny" x="520" y="54" text-anchor="start">responde enseguida;</text>
+<text class="dg-tiny" x="520" y="70" text-anchor="start">el job queda en la cola</text>
+<rect x="20" y="130" width="230" height="100" rx="8" fill="color-mix(in srgb, var(--l-service) 20%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="135" y="152" text-anchor="middle">Polling</text>
+<text class="dg-tiny" x="135" y="176" text-anchor="middle" style="font-family: var(--f-mono)">GET /v1/images/jobs/{id}</text>
+<text class="dg-tiny" x="135" y="196" text-anchor="middle">cada Retry-After segundos</text>
+<text class="dg-tiny" x="135" y="216" text-anchor="middle">simple; consulta de más</text>
+<path class="dg-edge" d="M390 92 L135.0 126" marker-end="url(#f23n5a)"/>
+<rect x="270" y="130" width="230" height="100" rx="8" fill="color-mix(in srgb, var(--l-queue) 20%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-label" x="385" y="152" text-anchor="middle">Webhook</text>
+<text class="dg-tiny" x="385" y="176" text-anchor="middle" style="font-family: var(--f-mono)">POST a tu URL, firmado</text>
+<text class="dg-tiny" x="385" y="196" text-anchor="middle">reintentos si tu servidor falla</text>
+<text class="dg-tiny" x="385" y="216" text-anchor="middle">sin consultas; necesita un servidor</text>
+<path class="dg-edge" d="M390 92 L385.0 126" marker-end="url(#f23n5a)"/>
+<rect x="520" y="130" width="230" height="100" rx="8" fill="color-mix(in srgb, var(--l-gpu) 20%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="635" y="152" text-anchor="middle">SSE</text>
+<text class="dg-tiny" x="635" y="176" text-anchor="middle" style="font-family: var(--f-mono)">GET …/events</text>
+<text class="dg-tiny" x="635" y="196" text-anchor="middle">estados y vistas previas</text>
+<text class="dg-tiny" x="635" y="216" text-anchor="middle">progreso en vivo; conexión abierta</text>
+<path class="dg-edge" d="M390 92 L635.0 126" marker-end="url(#f23n5a)"/>
+<rect class="dg-box" x="20" y="248" width="730" height="38" rx="8"/>
+<text class="dg-small" x="385" y="272" text-anchor="middle">El GET siempre dice la verdad: si el webhook se pierde o el stream se corta, el cliente consulta.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.9.</b> Las cuatro piezas de la lista. La creación es siempre la misma; las tres formas de enterarse se combinan, y el GET queda como la que nunca falla. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <div class="endpoint">
         <div class="ep-head">
@@ -689,7 +921,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-small" x="10" y="244">Cada transición: UPDATE … WHERE status = el anterior AND lease_owner = el worker que la hace.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.5.</b> Los estados de un job. La moderación es un estado propio porque puede tardar y puede caerse; un job atascado en <code>moderating</code> es una alerta distinta de uno atascado en <code>running</code>.</figcaption>
+  <figcaption><b>Figura 23.10.</b> Los estados de un job. La moderación es un estado propio porque puede tardar y puede caerse; un job atascado en <code>moderating</code> es una alerta distinta de uno atascado en <code>running</code>.</figcaption>
 </figure>
 
 <figure class="schema">
@@ -835,7 +1067,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-group" x="10" y="174">Un día de demanda</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.6.</b> La flota se dimensiona para el pico de lo interactivo y lo estándar; batch llena lo que queda. Un job batch se interrumpe entre dos pasos cuando llega trabajo interactivo.</figcaption>
+  <figcaption><b>Figura 23.11.</b> La flota se dimensiona para el pico de lo interactivo y lo estándar; batch llena lo que queda. Un job batch se interrumpe entre dos pasos cuando llega trabajo interactivo.</figcaption>
 </figure>
 
       <p>Cada job es un mensaje en una <a href="m07-mensajeria.html#cola-log">cola de trabajo</a> del M07, con su semántica: entrega al menos una vez, un tiempo de visibilidad que hace de lease y una <a href="m07-mensajeria.html#dlq">DLQ</a> para lo que falla siempre. El mensaje envenenado típico de este sistema es un prompt o un tamaño que hace que el worker se quede sin memoria cada vez: sin un tope de intentos, mataría una GPU tras otra.</p>
@@ -877,6 +1109,67 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f23n6t f23n6d">
+<title id="f23n6t">La espera crece muy rápido cerca del 100 %</title>
+<desc id="f23n6d">Cuatro tamaños de flota para el MVP, 2.31 imágenes por segundo en el pico. Con 24 GPUs, al 67 % de uso, espera el 4.8 % de los jobs y la espera p95 es 0 s. Con 20, al 81 %, espera el 28 % y el p95 es 3.1 s. Con 18, al 90 %, el 56 % y 9.3 s. Con 17, al 95 %, el 78 % y 23.2 s. La curva sube casi vertical en los últimos puntos.</desc>
+<defs><marker id="f23n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-axis" d="M90 230 H520" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90 230 V40" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90.0 230 V235" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="90" y="250" text-anchor="middle">60 %</text>
+<path class="sim-axis" d="M197.5 230 V235" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="197.5" y="250" text-anchor="middle">70 %</text>
+<path class="sim-axis" d="M305.0 230 V235" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="305" y="250" text-anchor="middle">80 %</text>
+<path class="sim-axis" d="M412.5 230 V235" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="412.5" y="250" text-anchor="middle">90 %</text>
+<path class="sim-axis" d="M520.0 230 V235" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="520" y="250" text-anchor="middle">100 %</text>
+<text class="dg-tiny" x="305" y="270" text-anchor="middle">uso de la flota en el pico</text>
+<path class="sim-grid" d="M90 230.0 H520"/>
+<text class="dg-tiny" x="82" y="234" text-anchor="end">0 s</text>
+<path class="sim-grid" d="M90 192.0 H520"/>
+<text class="dg-tiny" x="82" y="196" text-anchor="end">5 s</text>
+<path class="sim-grid" d="M90 154.0 H520"/>
+<text class="dg-tiny" x="82" y="158" text-anchor="end">10 s</text>
+<path class="sim-grid" d="M90 116.0 H520"/>
+<text class="dg-tiny" x="82" y="120" text-anchor="end">15 s</text>
+<path class="sim-grid" d="M90 78.0 H520"/>
+<text class="dg-tiny" x="82" y="82" text-anchor="end">20 s</text>
+<path class="sim-grid" d="M90 40.0 H520"/>
+<text class="dg-tiny" x="82" y="44" text-anchor="end">25 s</text>
+<path class="dg-edge" d="M165.2 230.0 L315.8 206.4 L412.5 159.3 L466.2 53.7" style="stroke: var(--accent); stroke-width: 2; fill: none"/>
+<circle cx="165.2" cy="230.0" r="5" class="dg-box" style="stroke: var(--accent)"/>
+<text class="dg-tiny" x="155.25" y="220" text-anchor="end">24 GPUs</text>
+<circle cx="315.8" cy="206.4" r="5" class="dg-box" style="stroke: var(--accent)"/>
+<text class="dg-tiny" x="305.75" y="198.44" text-anchor="end">20 GPUs</text>
+<circle cx="412.5" cy="159.3" r="5" class="dg-box" style="stroke: var(--accent)"/>
+<text class="dg-tiny" x="402.5" y="151.32" text-anchor="end">18 GPUs</text>
+<circle cx="466.2" cy="53.7" r="5" class="dg-box" style="stroke: var(--accent)"/>
+<text class="dg-tiny" x="456.25" y="45.68" text-anchor="end">17 GPUs</text>
+<text class="dg-tiny" x="90" y="24" text-anchor="start">Espera p95</text>
+<text class="dg-small" x="560" y="40" text-anchor="start">Jobs que esperan</text>
+<text class="dg-tiny" x="560" y="72" text-anchor="start">24 GPUs</text>
+<rect class="dg-box" x="616" y="60" width="7.68" height="18" rx="3"/>
+<text class="dg-tiny" x="629.68" y="73" text-anchor="start">4.8 %</text>
+<text class="dg-tiny" x="560" y="112" text-anchor="start">20 GPUs</text>
+<rect class="dg-box" x="616" y="100" width="44.8" height="18" rx="3"/>
+<text class="dg-tiny" x="666.8" y="113" text-anchor="start">28 %</text>
+<text class="dg-tiny" x="560" y="152" text-anchor="start">18 GPUs</text>
+<rect class="dg-warnbox" x="616" y="140" width="89.6" height="18" rx="3"/>
+<text class="dg-tiny" x="711.6" y="153" text-anchor="start">56 %</text>
+<text class="dg-tiny" x="560" y="192" text-anchor="start">17 GPUs</text>
+<rect class="dg-warnbox" x="616" y="180" width="124.8" height="18" rx="3"/>
+<text class="dg-tiny" x="746.8" y="193" text-anchor="start">78 %</text>
+<text class="dg-tiny" x="560" y="230" text-anchor="start">Erlang C, sobre el MVP de 23.7</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.12.</b> La tabla de Erlang C como curva. Entre el 67 y el 81&#8239;% de uso la espera casi no se nota; entre el 90 y el 95&#8239;% se dispara. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>Con 695 GPUs, en cambio, al 70&#8239;% prácticamente nadie espera: una flota grande absorbe mejor las variaciones que una chica, y podría trabajar más cerca del límite. Lo que la frena es otra cosa: el pico real puede ser más alto que el estimado, y sumar GPUs no es instantáneo, porque un nodo nuevo tarda minutos en arrancar y cargar los pesos (el <a href="m19-router-flota.html#cold-start">cold start</a> del M19). El margen cubre el error de la estimación mientras el <a href="m19-router-flota.html#autoscaling">autoscaling</a> reacciona.</p>
 
@@ -969,7 +1262,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-tiny" x="115.0" y="546" text-anchor="middle">200 + URL firmada</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.7.</b> Un job sin fallas. Cada escritura en la tabla de estado es una transición de la figura 23.5, y el aviso sale del outbox, no del worker.</figcaption>
+  <figcaption><b>Figura 23.13.</b> Un job sin fallas. Cada escritura en la tabla de estado es una transición de la figura 23.5, y el aviso sale del outbox, no del worker.</figcaption>
 </figure>
 
       <p>En el camino feliz no se nota, pero cada paso está pensado para un reintento. El job se entrega al menos una vez, así que cualquier efecto puede ocurrir dos veces, y cada uno tiene su defensa:</p>
@@ -1071,7 +1364,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-small" x="10" y="240">2 850 bloqueos con razón y 14 985 sin razón (precisión del 16 %). Si el moderador no responde, el job espera o falla.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.8.</b> Lo barato va primero y corta antes de gastar la GPU. La capa de salida es la única que ve lo que de verdad se generó, y nada se entrega sin pasarla.</figcaption>
+  <figcaption><b>Figura 23.14.</b> Lo barato va primero y corta antes de gastar la GPU. La capa de salida es la única que ve lo que de verdad se generó, y nada se entrega sin pasarla.</figcaption>
 </figure>
 
       <ul>
@@ -1133,7 +1426,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-small" x="10" y="266">La procedencia dice de dónde viene la imagen y qué le hicieron, no si lo que muestra es verdad.</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.9.</b> El manifiesto viaja con el archivo y se pierde con él. La marca invisible está en los píxeles y sobrevive a una captura de pantalla.</figcaption>
+  <figcaption><b>Figura 23.15.</b> El manifiesto viaja con el archivo y se pierde con él. La marca invisible está en los píxeles y sobrevive a una captura de pantalla.</figcaption>
 </figure>
 
       <p>El punto débil de C2PA está en la misma especificación: una herramienta que no conoce C2PA puede recortar o recomprimir la imagen sin actualizar el manifiesto, y una captura de pantalla lo descarta entero. <span class="badge badge--doc">Documentado</span> Por eso existe la segunda técnica, la <dfn data-term="marca-invisible">marca invisible</dfn>: una señal escondida en los píxeles, que no se ve y que un detector reconoce. SynthID, de Google DeepMind, marca imágenes y video sin cambiar la calidad y resiste recortes, filtros, cambios de cuadros por segundo y compresión con pérdida; se verifica en la app de Gemini o en el SynthID Detector. <span class="badge badge--doc">Documentado</span> C2PA prevé usar una marca así como soft binding: si el manifiesto se perdió, la marca permite encontrarlo en un repositorio en la nube. <span class="badge badge--doc">Documentado</span></p>
@@ -1227,6 +1520,45 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
         <li><span class="step-title">Sumar capacidad</span>Mover GPUs de otros usos (el entrenamiento, la flota de texto en su valle) y conseguir más. Es la más lenta.</li>
       </ol>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f23n7t f23n7d">
+<title id="f23n7t">Las palancas ante un pico viral</title>
+<desc id="f23n7d">Cinco palancas, de la más barata e invisible a la más visible y lenta: pausar los trabajos batch, bajar el costo por imagen con un modelo destilado en el plan gratuito, admitir solo lo que se puede cumplir, poner topes por usuario y sumar capacidad. Cada una está en una sección del módulo.</desc>
+<defs><marker id="f23n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-ok" x="20" y="150" width="136" height="100" rx="8"/>
+<text class="dg-label" x="88" y="172" text-anchor="middle">1</text>
+<text class="dg-small" x="88" y="196" text-anchor="middle">Pausar batch</text>
+<text class="dg-tiny" x="88" y="228" text-anchor="middle">tienen 24 h de plazo</text>
+<rect class="dg-ok" x="168" y="124" width="136" height="126" rx="8"/>
+<text class="dg-label" x="236" y="146" text-anchor="middle">2</text>
+<text class="dg-small" x="236" y="196" text-anchor="middle">Bajar el costo</text>
+<text class="dg-small" x="236" y="212" text-anchor="middle">por imagen</text>
+<text class="dg-tiny" x="236" y="228" text-anchor="middle">destilado: 12 × menos</text>
+<text class="dg-tiny" x="236" y="242" text-anchor="middle">GPU</text>
+<rect class="dg-warnbox" x="316" y="98" width="136" height="152" rx="8"/>
+<text class="dg-label" x="384" y="120" text-anchor="middle">3</text>
+<text class="dg-small" x="384" y="196" text-anchor="middle">Admitir con plazo</text>
+<text class="dg-tiny" x="384" y="228" text-anchor="middle">rechazar lo que no se</text>
+<text class="dg-tiny" x="384" y="242" text-anchor="middle">cumple</text>
+<rect class="dg-warnbox" x="464" y="72" width="136" height="178" rx="8"/>
+<text class="dg-label" x="532" y="94" text-anchor="middle">4</text>
+<text class="dg-small" x="532" y="196" text-anchor="middle">Topes por usuario</text>
+<text class="dg-tiny" x="532" y="228" text-anchor="middle">el más visible y el más</text>
+<text class="dg-tiny" x="532" y="242" text-anchor="middle">efectivo</text>
+<rect class="dg-box" x="612" y="46" width="136" height="204" rx="8"/>
+<text class="dg-label" x="680" y="68" text-anchor="middle">5</text>
+<text class="dg-small" x="680" y="196" text-anchor="middle">Sumar capacidad</text>
+<text class="dg-tiny" x="680" y="228" text-anchor="middle">mover GPUs, comprar más</text>
+<path class="dg-edge" d="M20 286 H744" marker-end="url(#f23n7a)"/>
+<text class="dg-tiny" x="20" y="278" text-anchor="start">más barata, invisible</text>
+<text class="dg-tiny" x="744" y="278" text-anchor="end">más visible, más lenta</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 23.16.</b> Las cinco palancas en el orden en que se usan. Las primeras no las nota casi nadie; las últimas se anuncian, y la de sumar capacidad tarda más que el pico. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>La degradación es la del <a href="m08-resiliencia.html#degradacion">M08</a>: el producto sigue funcionando para todos, peor para algunos, en lugar de caerse para todos.</p>
 
       <h2 id="implementalo"><span class="sec-num">23.14</span>Impleméntalo en AWS</h2>
@@ -1293,7 +1625,7 @@ data: {"id": "job_8f3", "images": 1}</code></pre>
 <text class="dg-tiny" x="170" y="252" text-anchor="middle">la imagen</text>
 </svg>
   </div>
-  <figcaption><b>Figura 23.10.</b> Todo es administrado salvo los workers de GPU, que son el 99&#8239;% de la factura.</figcaption>
+  <figcaption><b>Figura 23.17.</b> Todo es administrado salvo los workers de GPU, que son el 99&#8239;% de la factura.</figcaption>
 </figure>
 
       <p>La factura, con precios de lista on-demand de us-east-1. Un p5.48xlarge (8 H100) cuesta 55.04 USD por hora después de la baja de junio de 2025, 6.88 USD por GPU. <span class="badge badge--doc">Documentado</span> Es bastante más que los 4 USD por hora del M21, que suponen capacidad reservada; por eso la línea de producción da 3.5 millones de dólares y no los 2.03 de 23.7.</p>

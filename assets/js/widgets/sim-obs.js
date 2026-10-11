@@ -1,6 +1,7 @@
 /* Widgets de observabilidad:
    <div data-sim="trace">     waterfall de un trace distribuido con tres escenarios y detalle por span
-   <div data-sim="burnrate">  alertas por burn rate sobre un SLO (reglas de ventanas múltiples) */
+   <div data-sim="burnrate">  alertas por burn rate sobre un SLO (reglas de ventanas múltiples)
+   <div data-calc="cardinality">  cuántas series crea una métrica según sus etiquetas, memoria, disco y churn por deploys */
 (function () {
   'use strict';
   var SD = window.SD, h = SD.h, F = SD.fmt;
@@ -178,7 +179,127 @@
     run();
   }
 
+  /* ======================= Cardinalidad ======================= */
+
+  /* Memoria por serie activa: Robust Perception midió Prometheus 2.9.2, ~2 GiB por millón de series por la
+     cardinalidad más ~2.5 GiB por millón por la ingesta con scrape de 15 s: unos 4.8 KB por serie. Disco: 1 a 2
+     bytes por muestra según la documentación de Prometheus; se usa 1.5. Son órdenes de magnitud, no un presupuesto. */
+  var BYTES_SERIES = 4.5 * 1073741824 / 1e6, BYTES_SAMPLE = 1.5;
+
+  var LABELS = [
+    { k: 'route', name: 'ruta con plantilla', n: 40, on: true },
+    { k: 'method', name: 'GET, POST…', n: 4, on: false },
+    { k: 'code', name: 'código exacto (5 si es por clase)', n: 8, on: true },
+    { k: 'region', name: 'región', n: 3, on: false },
+    { k: 'pod', name: 'cambia en cada deploy', n: 150, on: true, churn: true },
+    { k: 'version', name: 'versión desplegada', n: 2, on: false },
+    { k: 'user_id', name: 'sin límite: un valor por usuario', n: 1000000, on: false, unbounded: true }
+  ];
+  var CPRESETS = [
+    { name: 'Ejemplo de 11.3', set: { route: [1, 40], method: [0], code: [1, 8], region: [0], pod: [1, 150], version: [0], user_id: [0] }, type: 'hist', b: 10 },
+    { name: '+ user_id', set: { route: [1, 40], method: [0], code: [1, 8], region: [0], pod: [1, 150], version: [0], user_id: [1, 1000000] }, type: 'hist', b: 10 },
+    { name: 'Bien acotada', set: { route: [1, 40], method: [1, 4], code: [1, 5], region: [1, 3], pod: [0], version: [1, 2], user_id: [0] }, type: 'hist', b: 10 }
+  ];
+
+  function initCard(host) {
+    var type = h('select', { 'aria-label': 'Tipo de métrica' }, [
+      h('option', { value: 'counter', text: 'Contador o gauge: 1 serie por combinación' }),
+      h('option', { value: 'hist', text: 'Histograma: buckets + suma + conteo' })
+    ]);
+    var buckets = h('input', { type: 'number', min: 1, max: 100, step: 1, value: 10, 'aria-label': 'Buckets del histograma' });
+    var deploys = h('input', { type: 'number', min: 0, max: 100, step: 1, value: 4, 'aria-label': 'Deploys por día' });
+    var scrape = h('input', { type: 'number', min: 1, max: 300, step: 1, value: 15, 'aria-label': 'Intervalo de scrape en segundos' });
+    type.value = 'hist';
+    var rows = LABELS.map(function (L) {
+      var chip = h('button', { type: 'button', class: 'chip-btn', 'aria-pressed': L.on ? 'true' : 'false', text: L.k });
+      var inp = h('input', { type: 'number', min: 1, step: 1, value: L.n, 'aria-label': 'Valores distintos de ' + L.k });
+      chip.addEventListener('click', function () { chip.setAttribute('aria-pressed', chip.getAttribute('aria-pressed') === 'true' ? 'false' : 'true'); run(); });
+      inp.addEventListener('input', run);
+      return { L: L, chip: chip, inp: inp, el: h('div', { class: 'card-row' }, [chip, h('span', { class: 'card-name', text: L.name }), inp]) };
+    });
+    function on(r) { return r.chip.getAttribute('aria-pressed') === 'true'; }
+
+    function out(label, formula) {
+      var v = h('output', { class: 'out-value' });
+      return { el: h('div', { class: 'out-row' }, [h('span', { class: 'out-label', text: label }), v, h('span', { class: 'out-formula', text: formula })]), v: v };
+    }
+    var o = {
+      series: out('Series activas (peor caso)', ''),
+      mem: out('Memoria del servidor de métricas', '~4.8 KB por serie activa (Prometheus 2.9, scrape de 15 s)'),
+      samples: out('Muestras por día', 'series × 86 400 s ÷ intervalo de scrape'),
+      disk: out('Disco por día', '~1.5 bytes por muestra comprimida'),
+      churn: out('Series nuevas por día por los deploys', 'con pod: cada deploy crea otras tantas series y deja viejas las anteriores')
+    };
+    var verdict = h('p', { class: 'sim-note card-verdict' });
+
+    function run() {
+      var hist = type.value === 'hist';
+      var B = Math.max(1, Math.round(parseFloat(buckets.value) || 1));
+      buckets.disabled = !hist;
+      var mult = hist ? B + 2 : 1, prod = 1, parts = [], unb = false, churnOn = false;
+      rows.forEach(function (r) {
+        r.inp.disabled = !on(r);
+        r.el.classList.toggle('is-off', !on(r));
+        if (!on(r)) return;
+        var n = Math.max(1, Math.round(parseFloat(r.inp.value) || 1));
+        prod *= n; parts.push(F.num(n, 0));
+        if (r.L.unbounded) unb = true;
+        if (r.L.churn) churnOn = true;
+      });
+      var series = mult * prod;
+      var sc = Math.max(1, parseFloat(scrape.value) || 15);
+      var D = Math.max(0, Math.round(parseFloat(deploys.value) || 0));
+      o.series.v.textContent = F.num(series, 0);
+      o.series.el.querySelector('.out-formula').textContent = mult + (parts.length ? ' × ' + parts.join(' × ') : '') + ' = ' + F.num(series, 0);
+      o.mem.v.textContent = F.bytes(series * BYTES_SERIES);
+      o.samples.v.textContent = F.num(series * 86400 / sc, 0);
+      o.disk.v.textContent = F.bytes(series * 86400 / sc * BYTES_SAMPLE);
+      o.churn.v.textContent = churnOn ? F.num(series * D, 0) : '0';
+      if (unb) {
+        verdict.className = 'sim-note card-verdict is-fail';
+        verdict.textContent = '✗ Sin límite: una etiqueta crece con el producto. Con el doble de usuarios hay el doble de series, y nadie cambió una línea de código. Ese dato va en logs, traces o eventos anchos.';
+      } else if (series > 1e6) {
+        verdict.className = 'sim-note card-verdict is-warn';
+        verdict.textContent = '! Acotada pero grande: más de un millón de series para una sola métrica. Quita la etiqueta que menos preguntas responde (casi siempre pod) o agrégala antes de guardarla.';
+      } else {
+        verdict.className = 'sim-note card-verdict is-ok';
+        verdict.textContent = '✓ Acotada: cada etiqueta tiene un conjunto fijo de valores y el total no depende de cuántos usuarios tengas.';
+      }
+    }
+
+    var presets = h('div', { class: 'calc-presets', role: 'group', 'aria-label': 'Ejemplos' });
+    CPRESETS.forEach(function (p) {
+      var b = h('button', { type: 'button', class: 'chip-btn', text: p.name });
+      b.addEventListener('click', function () {
+        rows.forEach(function (r) {
+          var x = p.set[r.L.k];
+          r.chip.setAttribute('aria-pressed', x[0] ? 'true' : 'false');
+          if (x[1]) r.inp.value = x[1];
+        });
+        type.value = p.type; buckets.value = p.b;
+        run();
+      });
+      presets.appendChild(b);
+    });
+
+    [type, buckets, deploys, scrape].forEach(function (x) { x.addEventListener('input', run); x.addEventListener('change', run); });
+    var inCol = h('div', { class: 'calc-inputs' }, [
+      h('div', { class: 'field' }, [h('label', { text: 'Tipo de métrica' }), type]),
+      h('div', { class: 'field' }, [h('label', { text: 'Buckets del histograma' }), buckets]),
+      h('div', { class: 'field' }, [h('p', { class: 'card-legend', text: 'Etiquetas (toca para activar) y cuántos valores distintos tiene cada una' }), h('div', { class: 'card-rows' }, rows.map(function (r) { return r.el; }))]),
+      h('div', { class: 'field' }, [h('label', { text: 'Deploys por día' }), deploys]),
+      h('div', { class: 'field' }, [h('label', { text: 'Intervalo de scrape (s)' }), scrape])
+    ]);
+    var outCol = h('div', { class: 'calc-outputs', 'aria-live': 'polite' }, Object.keys(o).map(function (k) { return o[k].el; }).concat([verdict]));
+    host.classList.add('calc');
+    host.appendChild(h('div', { class: 'calc-head' }, [h('p', { class: 'calc-title', text: 'Cuántas series crea una métrica' }), presets]));
+    host.appendChild(h('div', { class: 'calc-body' }, [inCol, outCol]));
+    host.appendChild(h('p', { class: 'calc-foot', text: 'Peor caso: supone que existen todas las combinaciones. En la práctica algunas nunca aparecen (no todas las rutas devuelven todos los códigos), pero una etiqueta sin límite siempre termina ganando. La memoria por serie es la que midió Robust Perception en Prometheus 2.9.2; tu versión y tus etiquetas la mueven, así que mídela con prometheus_tsdb_head_series.' }));
+    run();
+  }
+
   SD.ready(function () {
+    document.querySelectorAll('[data-calc="cardinality"]').forEach(initCard);
     document.querySelectorAll('[data-sim="trace"]').forEach(initTrace);
     document.querySelectorAll('[data-sim="burnrate"]').forEach(initBurn);
   });

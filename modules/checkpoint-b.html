@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CP-B. Checkpoint B: serving de LLMs</title>
+<meta name="description" content="Examen integrador de la Parte II (M12 a M26) y diseño completo del serving de un modelo de 70B para 10 000 usuarios concurrentes con un presupuesto dado, con solución de referencia.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="cpb">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Checkpoint B: serving de LLMs</h1>
+        <p class="lead">La Parte II termina aquí. El examen cruza los quince módulos en situaciones concretas, y el diseño te pide servir un modelo de 70B a 10 000 personas a la vez sin pasarte del presupuesto: elegir el formato y las GPUs de cada réplica, dimensionar la flota, decidir cómo se reparte cada turno, y decir qué pasa cuando falla cada pieza.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>CP-B</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12 a M26</dd></div>
+          <div><dt>Estado</dt><dd data-status="cpb">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Qué vas a demostrar</h2>
+        <ul>
+          <li>Dimensionar una réplica y una flota de GPUs con números: memoria, ancho de banda, cómputo, streams simultáneos y costo.</li>
+          <li>Elegir entre formatos, políticas de routing, estrategias de autoscaling y de caché según el tráfico, y justificar lo que descartas.</li>
+          <li>Diseñar el camino completo de un turno, desde la cuota hasta la factura, con sus fallos y su operación.</li>
+        </ul>
+      </section>
+
+      <h2 id="examen"><span class="sec-num">B.1</span>El examen</h2>
+
+      <p>Veinte preguntas que cruzan los módulos M12 a M26; se aprueba con el 70&#8239;%. Cada explicación dice qué módulo repasar si fallaste, y puedes repetirlo las veces que quieras. Aprobarlo habilita el botón para marcar el checkpoint como completado, al final de la página.</p>
+
+      <div data-quiz="cpb"></div>
+
+      <h2 id="diseno"><span class="sec-num">B.2</span>Diseño: un 70B para 10&#8239;000 usuarios concurrentes</h2>
+
+      <p>Tu empresa lanza un asistente de chat sobre un modelo abierto, Llama 3.1 70B, servido en GPUs propias. El producto ya existe en una escala chica; ahora tiene que aguantar el pico de un lanzamiento grande sin pasarse del presupuesto de GPUs. La misma flota atiende además una API para empresas, que se cobra por token.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Requisitos funcionales</th><th>Requisitos no funcionales</th></tr></thead>
+          <tbody>
+            <tr><td>Chat con streaming, historial, regenerar, editar y detener</td><td>10&#8239;000 usuarios concurrentes en el pico. Cada uno manda un mensaje cada 60 s en promedio, entre leer y escribir; el 20&#8239;% de los turnos llega por la API</td></tr>
+            <tr><td>API compatible con Chat Completions, con streaming, para empresas que pagan por token</td><td>Prompt promedio de 3000 tokens: 1500 del prompt de sistema y el resto, historial. Solo unos 150 tokens son nuevos en cada turno. Respuesta promedio de 400 tokens; contexto máximo de 32&#8239;768</td></tr>
+            <tr><td>Plan gratis con un límite de mensajes, plan pago con prioridad, y cuotas en tokens por minuto para la API</td><td>TTFT p95 menor a 1 s y TPOT p95 menor a 50 ms. Disponibilidad mensual del 99.9&#8239;%</td></tr>
+            <tr><td>Factura mensual por token para las empresas, con un tablero de consumo</td><td>H100 a 4 USD por GPU y hora, y un presupuesto de 120&#8239;000 USD por mes en GPUs</td></tr>
+            <tr><td>El 70&#8239;% de los usuarios del chat está en el plan gratis</td><td>El promedio del día es el 55&#8239;% del pico, y en la subida de la mañana la demanda crece un 3&#8239;% por minuto. La factura no puede cobrar un token de más ni de menos</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Escribe tu diseño como un design doc corto (M00) antes de mirar la solución. Tiene que incluir:</p>
+      <ol>
+        <li>Estimaciones: turnos por segundo, tokens de prefill y de decode por segundo, y streams generando a la vez.</li>
+        <li>La réplica: formato de los pesos y del KV cache, cuántas GPUs, cuántos streams y por qué.</li>
+        <li>La flota: réplicas en el pico, colchón, regiones, autoscaling y costo contra el presupuesto.</li>
+        <li>El camino de un turno: gateway, cuotas, admisión, API y streaming, router y motor.</li>
+        <li>El metering y la factura.</li>
+        <li>Qué pasa cuando falla cada pieza: una réplica, una GPU, un pico, una región, Redis, Kafka, un modelo nuevo que contesta peor.</li>
+        <li>SLIs, alertas y cómo despliegas una versión nueva del modelo.</li>
+      </ol>
+      <p>Igual que en el Checkpoint A, lo que más importa no es acertar con la solución de referencia, sino que cada decisión tenga su alternativa descartada y su motivo, y que cada número salga de una cuenta.</p>
+
+      <h2 id="solucion"><span class="sec-num">B.3</span>Solución de referencia</h2>
+
+      <p>Hay más de un buen diseño. Este es uno completo, con sus cuentas y sus decisiones; compáralo con el tuyo decisión por decisión. Las cuentas usan los números del curso: los del 70B y la H100 del M12 y el M13, los formatos del M14, la flota del M19.</p>
+
+      <details class="solution" data-toc="skip">
+        <summary>Ver la solución de referencia</summary>
+        <div class="solution-body">
+
+        <h3>Estimaciones</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Magnitud</th><th>Cálculo</th><th class="r">Resultado</th></tr></thead>
+            <tbody>
+              <tr><td>Turnos en el pico</td><td>10&#8239;000 usuarios ÷ 60 s</td><td class="r">167/s</td></tr>
+              <tr><td>Tokens de salida</td><td>167 × 400</td><td class="r">66&#8239;700/s</td></tr>
+              <tr><td>Prefill sin ningún caché</td><td>167 × 3000</td><td class="r">500&#8239;000 tokens/s</td></tr>
+              <tr><td>Prefill con solo el prompt de sistema en caché</td><td>167 × 1500</td><td class="r">250&#8239;000 tokens/s</td></tr>
+              <tr><td>Prefill con el historial en caché en el 85&#8239;% de los turnos</td><td>167 × (0.85 × 150 + 0.15 × 1500)</td><td class="r">59&#8239;000 tokens/s</td></tr>
+              <tr><td>Duración de un turno</td><td>TTFT de ~0.3 s + 400 tokens × 25 ms</td><td class="r">10.3 s</td></tr>
+              <tr><td>Streams generando a la vez</td><td>Ley de Little: 167/s × 10.3 s</td><td class="r">~1720</td></tr>
+              <tr><td>KV cache por token en FP8</td><td>2 × 80 capas × 8 cabezas KV × 128 × 1 byte</td><td class="r">164 kB</td></tr>
+              <tr><td>KV cache de un stream</td><td>(3000 + 400 ÷ 2) tokens de contexto promedio × 164 kB</td><td class="r">0.52 GB</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><b>Por qué 25 ms de TPOT.</b> Para cada réplica planifico un TPOT teórico de 15 ms, calculado como en el M13: bytes leídos por paso ÷ ancho de banda. Un motor real logra cerca del 60&#8239;% de ese ancho de banda (M12), así que el TPOT real ronda los 25 ms: la mitad del SLO, con lugar para el p95 y para los trozos de prefill que se mezclan en cada paso.</p>
+        <p>El 85&#8239;% de aciertos del historial es el orden de lo que logra el routing consciente del prefijo del M19, que reutilizó entre el 87 y el 89&#8239;% del prompt. Ese supuesto se mide desde el primer día.</p>
+
+        <h3>La réplica</h3>
+        <p>Una réplica tiene tres límites, y los streams que acepta son los del más estricto:</p>
+        <ul>
+          <li><b>Ancho de banda.</b> En cada paso de decode, la réplica lee los pesos una vez y el KV cache de todos sus streams. Con 15 ms por paso: streams ≤ (ancho de banda × 15 ms − pesos) ÷ KV de un stream.</li>
+          <li><b>Memoria.</b> Los streams activos usan como mucho la mitad de la memoria libre para KV cache. La otra mitad guarda los prefijos de las conversaciones que esperan su próximo turno.</li>
+          <li><b>Cómputo.</b> El decode y el prefill juntos no pasan del 75&#8239;% del cómputo útil: 4 × 1979 TFLOPS en FP8 al 50&#8239;% de MFU, unos 28&#8239;000 tokens/s por réplica.</li>
+        </ul>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Réplica</th><th class="r">Pesos</th><th class="r">Libre para KV</th><th class="r">Límite por ancho de banda</th><th class="r">Límite por memoria</th><th class="r">Streams por GPU</th><th class="r">Réplicas al 75&#8239;%</th><th class="r">GPUs</th></tr></thead>
+            <tbody>
+              <tr><td>BF16, KV en BF16, 4 × H100</td><td class="r">141 GB</td><td class="r">159 GB</td><td class="r">57</td><td class="r">75</td><td class="r">14</td><td class="r">41</td><td class="r">164</td></tr>
+              <tr><td>FP8, KV en FP8, 2 × H100</td><td class="r">70.6 GB</td><td class="r">79 GB</td><td class="r">57</td><td class="r">75</td><td class="r">28</td><td class="r">41</td><td class="r">82</td></tr>
+              <tr><td><b>FP8, KV en FP8, 4 × H100</b></td><td class="r">70.6 GB</td><td class="r">229 GB</td><td class="r">248</td><td class="r">218</td><td class="r">54</td><td class="r">11</td><td class="r">44</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>La memoria libre resta los pesos y 5 GB por GPU de reserva. Las réplicas salen de 1720 streams ÷ (0.75 × streams por réplica), con el mismo objetivo de uso del 75&#8239;% que el M19.</p>
+        <p><b>Decisión: FP8 en pesos y KV cache, en réplicas de 4 H100.</b> La tabla tiene una sorpresa. FP8 en 2 GPUs usa la mitad de GPUs que BF16 en 4, como prometía el M14, pero FP8 en 4 GPUs atiende el doble de streams por GPU que en 2. La razón está en el límite de ancho de banda: los pesos se leen una vez por paso, sin importar cuántos streams haya. Con 2 H100, el presupuesto de cada paso es de 100 GB y los pesos se llevan 70.6; con 4, el presupuesto es de 201 GB y los pesos se llevan un 35&#8239;%. Más GPUs por réplica no es desperdicio: reparte la lectura de los pesos entre más streams.</p>
+        <p>Antes de servir en FP8, la versión pasa por evals de tus propias tareas contra la BF16, por categoría y con contextos largos, y después por un canary (M14 y M22). FP8 casi no pierde en un 70B, pero "casi" se mide.</p>
+
+        <h4>El cómputo y el chunked prefill</h4>
+        <p>A 164 streams en promedio (el 75&#8239;% de 218), el decode pide 164 × 141 GFLOP cada 25 ms: unos 920 TFLOPS, el 23&#8239;% del cómputo útil de la réplica. El prefill con routing por prefijo, 59&#8239;000 tokens/s repartidos en 11 réplicas, pide otro 19&#8239;%. Entra con margen.</p>
+        <p>Sin routing por prefijo cambia el límite. Con solo el prompt de sistema en caché, decode y prefill suman 317&#8239;000 tokens/s de cómputo: al 75&#8239;% de 28&#8239;000 por réplica hacen falta 16 réplicas, no 11, aunque la memoria y el ancho de banda alcancen. Sin ningún caché, 27. El routing por prefijo es lo que deja que la flota la limite la memoria y no el cómputo.</p>
+        <p>El presupuesto de tokens por iteración (M15) se fija en 768: es lo que la réplica calcula en unos 27 ms, así que un paso con prefill no tarda mucho más que uno de decode puro, y un prompt largo no le mete saltos de medio segundo al TPOT de los demás. Con unos 550 tokens de prefill por paso, un turno que perdió su historial (1500 tokens por calcular) tiene un TTFT de unos 75 ms. Un prompt de 32&#8239;000 tokens sin caché tarda 1.5 s: es el caso que decide el p99, no el p95, y se mide aparte. La configuración de cada réplica, con las opciones del M15:</p>
+<pre><code>vllm serve meta-llama/Llama-3.1-70B-Instruct \
+  --tensor-parallel-size 4 \
+  --quantization fp8 --kv-cache-dtype fp8 \
+  --max-model-len 32768 \
+  --max-num-seqs 256 \
+  --max-num-batched-tokens 768 \
+  --enable-prefix-caching \
+  --gpu-memory-utilization 0.90</code></pre>
+        <p><code>--max-num-seqs 256</code> es un techo duro por encima de los 218: quien mantiene el promedio cerca de 164 es el router, con su techo de carga.</p>
+
+        <h4>Dónde viven los prefijos que esperan</h4>
+        <p>Entre dos turnos de un usuario pasan unos 50 s. Mientras tanto, su KV cache ocupa memoria: cada réplica tiene unas 900 conversaciones abiertas (10&#8239;000 ÷ 11), de 0.56 GB cada una, unos 500 GB. La mitad libre de la HBM, 115 GB, guarda solo 206, el 23&#8239;%. Con eso, el caché expulsaría la mayoría de los historiales antes del turno siguiente, y el 85&#8239;% de aciertos no existiría: es la advertencia del M19 de que la memoria también es capacidad de routing.</p>
+        <p>La solución es una segunda capa en la RAM del host. Un servidor de 8 H100 trae del orden de 2 TB de RAM, así que cada réplica dispone de 1 TB y los 500 GB entran. <span class="badge badge--ref">Diseño de referencia</span> Traer una conversación de vuelta cuesta 0.56 GB repartidos entre 4 GPUs por PCIe 5 a 64 GB/s (M13): unos 2 ms, contra 107 ms de recalcular sus 3000 tokens. Leer de la RAM es unas 50 veces más lento que leer de la HBM, pero mucho más rápido que volver a calcular. LMCache ofrece esa capa para vLLM. <span class="badge badge--doc">Documentado</span> El índice de prefijos del router cuenta como acierto un bloque que está en la RAM de la réplica.</p>
+
+        <h3>La flota, el autoscaling y el presupuesto</h3>
+        <ul>
+          <li><b>Pico:</b> 11 réplicas para la demanda.</li>
+          <li><b>Colchón de arranque:</b> con los pesos FP8 (70.6 GB) en el NVMe del nodo a 6 GB/s y la caché de compilación del motor, una réplica arranca en unos 32 s (12 de pesos y 20 de motor, como en el M19). Con la demanda creciendo un 3&#8239;% por minuto, el colchón es 11 × (1.03<sup>0.53</sup> − 1) = 0.17: una réplica.</li>
+          <li><b>Una réplica de reserva</b> para la falla de una réplica en el pico (N+1).</li>
+          <li><b>Dos regiones activas,</b> con 7 réplicas cada una: las 13 se redondean a 14, con 56 H100 en el pico.</li>
+        </ul>
+        <p><b>Autoscaling.</b> La métrica es el uso del KV cache por réplica, con la cola de requests como segunda señal; nunca la utilización de GPU de nvidia-smi (M19). Con 7 réplicas al 92&#8239;% y un objetivo del 75&#8239;%, el HPA pide ceil(7 × 0.92 ÷ 0.75) = 9. Además, un escalado por calendario sube las réplicas 20 minutos antes del pico de cada mañana, y se baja despacio, drenando cada réplica antes de apagarla.</p>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Opción</th><th class="r">Réplicas</th><th class="r">GPUs</th><th class="r">USD por mes</th></tr></thead>
+            <tbody>
+              <tr><td>BF16 en 4 × H100, flota fija para el pico</td><td class="r">43</td><td class="r">172</td><td class="r">502&#8239;240</td></tr>
+              <tr><td>FP8 sin routing por prefijo, flota fija</td><td class="r">18</td><td class="r">72</td><td class="r">210&#8239;240</td></tr>
+              <tr><td>FP8 con routing por prefijo, flota fija</td><td class="r">14</td><td class="r">56</td><td class="r">163&#8239;520</td></tr>
+              <tr><td><b>FP8 con routing por prefijo y autoscaling</b></td><td class="r">~8 en promedio</td><td class="r">~32</td><td class="r">~93&#8239;400</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Una réplica cuesta 4 GPUs × 4 USD × 730 horas = 11&#8239;680 USD por mes. Con autoscaling, la flota sigue la curva del día: en promedio, 0.55 × 1720 ÷ (0.75 × 218) = 5.8 réplicas de demanda más las 2 de colchón y reserva, unas 8. Solo la última fila entra en los 120&#8239;000 USD, y deja unos 26&#8239;600 USD para las réplicas del canary, un modelo chico de respaldo y los evals. Sin routing por prefijo, aun con autoscaling, la flota promedio sube a unas 10 réplicas y se come el presupuesto entero. En el pico, cada millón de tokens de salida cuesta unos 0.93 USD de GPU.</p>
+        <aside class="callout callout--tradeoff">
+          <p class="callout-label">Trade-off</p>
+          <p>El autoscaling ahorra solo si las GPUs se pagan por hora. Si la empresa reserva las GPUs por un año, más baratas pero fijas, bajar réplicas de noche no ahorra nada: los valles se llenan con trabajo en batch (M17) y evals, y la flota reservada se dimensiona para el promedio, con capacidad por hora encima para el pico.</p>
+        </aside>
+        <p><b>Perder una región.</b> Si cae una región, la otra recibe todo: 1720 streams sobre 7 réplicas de 218, el 112.5&#8239;% de su capacidad. Dimensionar para absorberlo sin recortar exige trabajar al 50&#8239;% (M19) y duplicar la flota. En cambio, el recorte está decidido de antemano: el 11&#8239;% de los turnos que sobra sale del plan gratis, que es el 56&#8239;% de los turnos. Uno de cada cinco turnos gratis pasa a un modelo chico, como el 8B, mientras el autoscaler pide réplicas en la región que queda, si hay GPUs (M13). El tráfico pago y la API no se tocan.</p>
+
+        <h3>Arquitectura</h3>
+        <figure class="figure">
+          <div class="figure-frame">
+<svg viewBox="0 0 770 440" role="img" aria-labelledby="fcpbt fcpbd">
+<title id="fcpbt">Arquitectura de referencia del serving del Checkpoint B</title>
+<desc id="fcpbd">El cliente llega al API gateway, que autentica, reserva la cuota en Redis y decide si admite el turno. El servicio de chat arma el contexto desde el árbol de mensajes en PostgreSQL, copia cada evento SSE a un buffer en Redis y pide la generación al router, que elige la réplica de vLLM con más prefijo en caché sin pasarse de un techo de carga. Un autoscaler ajusta la cantidad de réplicas según el uso del KV cache y la cola. Al cerrar el stream, el servicio de chat publica un evento de uso en Kafka; el metering lo deduplica, lo suma por hora en ClickHouse y le pasa los totales a la facturación. La segunda región repite toda la pila.</desc>
+<defs><marker id="fcpba" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker>
+<marker id="fcpbq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="16" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="91.0" y="63" text-anchor="middle">Cliente</text>
+<text class="dg-tiny" x="91.0" y="81" text-anchor="middle">web, app y API</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="206" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="63" text-anchor="middle">API gateway</text>
+<text class="dg-tiny" x="281.0" y="81" text-anchor="middle">auth, cuotas, admisión</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="396" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="471.0" y="63" text-anchor="middle">Servicio de chat</text>
+<text class="dg-tiny" x="471.0" y="81" text-anchor="middle">contexto, SSE, uso</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="586" y="40" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="63" text-anchor="middle">Router</text>
+<text class="dg-tiny" x="661.0" y="81" text-anchor="middle">prefijo y carga</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="206" y="150" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="173" text-anchor="middle">Redis</text>
+<text class="dg-tiny" x="281.0" y="191" text-anchor="middle">cuotas y buffer de SSE</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="396" y="150" width="150" height="54" rx="10"/>
+<text class="dg-label" x="471.0" y="173" text-anchor="middle">PostgreSQL</text>
+<text class="dg-tiny" x="471.0" y="191" text-anchor="middle">árbol de mensajes</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="586" y="150" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="173" text-anchor="middle">Réplicas vLLM</text>
+<text class="dg-tiny" x="661.0" y="191" text-anchor="middle">FP8 en 4 × H100</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="586" y="260" width="150" height="54" rx="10"/>
+<text class="dg-label" x="661.0" y="283" text-anchor="middle">Autoscaler</text>
+<text class="dg-tiny" x="661.0" y="301" text-anchor="middle">KV cache y cola</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="396" y="260" width="150" height="54" rx="10"/>
+<text class="dg-label" x="471.0" y="283" text-anchor="middle">Kafka</text>
+<text class="dg-tiny" x="471.0" y="301" text-anchor="middle">tema usage</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="206" y="260" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="283" text-anchor="middle">Metering</text>
+<text class="dg-tiny" x="281.0" y="301" text-anchor="middle">dedupe y suma por hora</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="16" y="260" width="150" height="54" rx="10"/>
+<text class="dg-label" x="91.0" y="283" text-anchor="middle">Facturación</text>
+<text class="dg-tiny" x="91.0" y="301" text-anchor="middle">conciliación diaria</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="206" y="370" width="150" height="54" rx="10"/>
+<text class="dg-label" x="281.0" y="393" text-anchor="middle">ClickHouse</text>
+<text class="dg-tiny" x="281.0" y="411" text-anchor="middle">uso por org y hora</text>
+<path class="dg-edge" d="M168 67.0 H203" marker-end="url(#fcpba)"/>
+<path class="dg-edge" d="M358 67.0 H393" marker-end="url(#fcpba)"/>
+<path class="dg-edge" d="M548 67.0 H583" marker-start="url(#fcpba)" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="186" y="30" text-anchor="middle">turno</text>
+<text class="dg-tiny" x="376" y="30" text-anchor="middle">admitido</text>
+<text class="dg-tiny" x="566" y="30" text-anchor="middle">genera y recibe tokens</text>
+<path class="dg-edge" d="M281 96 V147" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="273" y="128" text-anchor="end">reserva tokens</text>
+<path class="dg-edge" d="M410 96 V118 H330 V147" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="338" y="136" text-anchor="start">eventos SSE</text>
+<path class="dg-edge" d="M490 96 V147" marker-start="url(#fcpba)" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="498" y="128" text-anchor="start">mensajes</text>
+<path class="dg-edge" d="M661 96 V147" marker-start="url(#fcpba)" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="669" y="128" text-anchor="start">una réplica</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M540 96 V118 H566 V287 H549" marker-end="url(#fcpbq)"/>
+<text class="dg-tiny" x="560" y="238" text-anchor="end">evento de uso</text>
+<path class="dg-feedback" d="M661 258 V207" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="669" y="238" text-anchor="start">escala</text>
+<path class="dg-edge" style="stroke: var(--l-queue); stroke-dasharray: 6 4" d="M394 287 H359" marker-end="url(#fcpbq)"/>
+<path class="dg-edge" d="M204 287 H169" marker-end="url(#fcpba)"/>
+<path class="dg-edge" d="M281 316 V367" marker-end="url(#fcpba)"/>
+<text class="dg-tiny" x="289" y="348" text-anchor="start">filas por hora</text>
+<text class="dg-small" x="396" y="388" text-anchor="start">La región B repite toda la pila. El DNS manda</text>
+<text class="dg-small" x="396" y="405" text-anchor="start">a cada usuario a la más cercana y saca de la</text>
+<text class="dg-small" x="396" y="422" text-anchor="start">rotación a la que falla.</text>
+<text class="dg-small" x="16" y="170" text-anchor="start">Arriba, el camino del turno.</text>
+<text class="dg-small" x="16" y="187" text-anchor="start">Abajo, el uso: nunca frena</text>
+<text class="dg-small" x="16" y="204" text-anchor="start">un stream.</text>
+</svg>
+
+          </div>
+          <figcaption><b>Figura B.1.</b> El camino del turno (arriba) y el del uso (abajo) se tocan en un solo punto: el evento que el servicio de chat publica al cerrar el stream. Kafka puede atrasarse sin que ningún usuario lo note.</figcaption>
+        </figure>
+
+        <h3>API</h3>
+        <div class="endpoint">
+          <div class="ep-head">
+            <span class="ep-method" data-m="POST">POST</span>
+            <code class="ep-path">/v1/chat/completions</code>
+            <span class="badge badge--ref">Diseño de referencia</span>
+          </div>
+          <p class="ep-desc">La API para empresas, con el formato de Chat Completions. El chat usa la misma ruta interna, con su propio endpoint de producto que guarda los mensajes y permite reanudar el stream.</p>
+          <div class="ep-body">
+            <p class="ep-sec">Request</p>
+<pre data-lang="http"><code>POST /v1/chat/completions HTTP/1.1
+Authorization: Bearer &lt;API key&gt;
+Content-Type: application/json
+
+{
+  "model": "llama-3.1-70b",
+  "messages": [
+    {"role": "system", "content": "Eres el asistente de soporte de Acme."},
+    {"role": "user", "content": "¿Cómo cambio el plan de mi cuenta?"}
+  ],
+  "max_tokens": 1024,
+  "stream": true,
+  "stream_options": {"include_usage": true}
+}</code></pre>
+            <p class="ep-sec">Respuesta 200 (SSE)</p>
+<pre data-lang="sse"><code>data: {"id":"chatcmpl-7Hq2","model":"llama-3.1-70b-fp8-2026-09","choices":[{"index":0,"delta":{"content":"Para"}}]}
+
+data: {"id":"chatcmpl-7Hq2","model":"llama-3.1-70b-fp8-2026-09","choices":[{"index":0,"delta":{"content":" cambiar"}}]}
+
+data: {"id":"chatcmpl-7Hq2","choices":[],"usage":{"prompt_tokens":3012,"completion_tokens":412,"prompt_tokens_details":{"cached_tokens":2848}}}
+
+data: [DONE]</code></pre>
+            <p class="ep-sec">Códigos de respuesta</p>
+            <ul class="ep-responses">
+              <li><span class="st st--2xx">200</span><span>Stream de eventos. La respuesta dice qué versión contestó, y el último evento trae el uso, con los tokens leídos del caché.</span></li>
+              <li><span class="st st--4xx">400</span><span>El prompt más <code>max_tokens</code> pasa de 32&#8239;768 tokens, o el cuerpo no es válido.</span></li>
+              <li><span class="st st--4xx">401</span><span>La API key no existe o fue revocada.</span></li>
+              <li><span class="st st--4xx">429</span><span>Se superó la cuota de la organización, del proyecto o de la clave. Trae <code>Retry-After</code> y los headers de lo que queda.</span></li>
+              <li><span class="st st--5xx">503</span><span>El cliente está dentro de su cuota, pero la flota no puede darle el primer token a tiempo. Trae <code>Retry-After</code>.</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <h3>El camino de un turno</h3>
+        <ol class="steps">
+          <li><span class="step-title">Gateway y cuota</span>Autentica la sesión o la API key y reserva la entrada más una estimación de la salida en todos los niveles a la vez, con un script de Lua en Redis (M18). La estimación es el p95 de las respuestas recientes de ese cliente; en el plan gratis, además, cuenta mensajes por ventana. Si no alcanza, 429 con <code>Retry-After</code>.</li>
+          <li><span class="step-title">Admisión</span>Estima la espera en la región: tokens de prefill pendientes ÷ throughput. Si el primer token no va a llegar antes del plazo, primero degrada (el plan gratis pasa al modelo chico) y después rechaza con 503. Una fracción de la capacidad queda reservada para el tráfico pago, como el load shedder de Stripe (M18).</li>
+          <li><span class="step-title">Servicio de chat</span>El id del mensaje lo genera el cliente, así un reintento choca con la clave primaria y no genera dos respuestas (M20). Lee la rama desde la raíz hasta el padre y arma el prompt con lo estable primero: el prompt de sistema, las herramientas en orden fijo y el historial. Nada de la fecha al principio, que cambiaría el prefijo en cada turno (M16). La entrada pasa por la moderación.</li>
+          <li><span class="step-title">Router</span>Divide el prompt en bloques de 16 tokens con hashes encadenados y elige, entre las réplicas con menos de 1.25 veces la carga promedio, la que tiene el prefijo más largo, en la HBM o en la RAM. Suma a las métricas de cada réplica lo que él mismo mandó desde la última lectura, para que veinte routers no saturen a la misma (M19).</li>
+          <li><span class="step-title">Réplica</span>Trae el prefijo de la RAM si hace falta, calcula los tokens nuevos en trozos dentro del presupuesto de 768 por paso y genera a unos 25 ms por token.</li>
+          <li><span class="step-title">Stream</span>Cada token se escribe en un stream de Redis por respuesta, <code>resp:{id}</code>, con un número creciente. El servicio lo lee y lo manda por SSE con ese número en el campo <code>id</code>; si la conexión se corta, el cliente vuelve con <code>Last-Event-ID</code> y la generación sigue sin él (M17). El botón Detener llama a un endpoint de cancelación, y el motor libera los bloques del KV cache. La salida se modera por tramos mientras se genera (M20).</li>
+          <li><span class="step-title">Cierre</span>La respuesta se guarda con su estado: <code>complete</code>, o <code>interrupted</code> si se detuvo. La reserva de cuota se reconcilia con el uso real. El evento de uso sale con un id derivado del turno, primero a un spool local y de ahí a Kafka (M21).</li>
+        </ol>
+
+        <h3>Metering y factura</h3>
+        <p>El evento de uso lleva <code>event_id</code>, organización, usuario, versión del modelo, tokens de entrada, de entrada leídos del caché y de salida, el estado (<code>complete</code> o <code>cancelled</code>) y la hora del evento. No lleva el precio: si cambia la tarifa, se vuelve a tarifar (M21).</p>
+        <ul>
+          <li><b>Volumen.</b> En un día promedio, 0.55 × 167 × 86&#8239;400 ≈ 7.9 millones de eventos.</li>
+          <li><b>Exactamente una vez, en la práctica.</b> Productor idempotente, deduplicación por <code>event_id</code> en una ventana de 48 horas (unos 16 millones de ids × 64 bytes, 1 GB de estado) y filas por hora que se escriben con su valor y su versión, no como un incremento.</li>
+          <li><b>Por hora del evento,</b> no por hora de proceso: así el resultado no depende del lag de Kafka y un reproceso da lo mismo.</li>
+          <li><b>A la facturación, los totales por hora:</b> mandar cada evento serían 167 llamadas por segundo en el pico.</li>
+          <li><b>Conciliación diaria</b> contra el registro que el motor deja por otro camino. Los topes de gasto los lleva el metering; el contador del limitador se corrige con él.</li>
+        </ul>
+        <p>En el chat no se cobra por token, pero el mismo metering mide el costo de cada plan, detecta las cuentas gratis que abusan y alimenta la decisión de cuántos mensajes regala el plan gratis.</p>
+
+        <h3>Fallos</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Falla</th><th>Qué pasa</th><th>Mitigación</th></tr></thead>
+            <tbody>
+              <tr><td>Muere una réplica a mitad del decode</td><td>Sus ~164 streams se cortan</td><td>El router los continúa en otra réplica: le manda el prompt más los tokens ya generados, con <code>max_tokens</code> reducido. El usuario ve una pausa de menos de un segundo, no un error. La réplica N+1 absorbe la carga (M19)</td></tr>
+              <tr><td>Una GPU con errores de HBM o de NVLink</td><td>Cae la réplica entera de tensor parallelism</td><td>Los health checks de GPU la detectan; la readiness falla a propósito, el router la saca y el índice la olvida, se drena y se reemplaza el servidor (M13)</td></tr>
+              <tr><td>La demanda crece más rápido que el autoscaler</td><td>Cola, TTFT alto, preemptions</td><td>Colchón de una réplica, escalado por calendario y admisión que degrada el plan gratis antes de rechazar a nadie</td></tr>
+              <tr><td>Cae una región</td><td>La otra queda al 112.5&#8239;%</td><td>El DNS mueve a los usuarios; un turno gratis de cada cinco pasa al modelo chico. Las conversaciones movidas pierden su KV cache y pagan un prefill completo en el primer turno</td></tr>
+              <tr><td>Cae el router</td><td>Se cortan los streams que reenvía</td><td>El servicio de chat tiene los tokens en el buffer de Redis y pide la continuación a otro router. Un router falla mucho menos que una réplica de 4 GPUs</td></tr>
+              <tr><td>Cae el Redis de cuotas</td><td>No se pueden reservar tokens</td><td>Cada gateway pasa a límites locales, una fracción de la cuota de cada cliente, durante unos minutos; el metering y la conciliación corrigen lo que se pasó</td></tr>
+              <tr><td>Kafka no responde</td><td>El evento de uso no se puede publicar</td><td>El turno no se entera: el evento queda en el spool y se publica al volver. Los duplicados los descarta el <code>event_id</code></td></tr>
+              <tr><td>La versión nueva contesta peor</td><td>Todo responde 200, con TTFT y TPOT normales</td><td>El canary compara la tasa de regeneración y los evals por versión; el rollback es cambiar la tabla de rutas del router (M22)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Seguridad y abuso</h3>
+        <ul>
+          <li>El prefix cache se aísla por organización. Un caché compartido es un canal lateral: la velocidad de la respuesta revela si otro mandó el mismo prompt (M22).</li>
+          <li>Moderación de entrada y de salida por tramos, sin cortar el streaming; las cuentas gratis nuevas empiezan con límites bajos que suben con el uso (M18 y M20).</li>
+          <li>Las conversaciones se leen solo después de verificar el dueño en cada acceso (BOLA, M10). Las API keys se guardan con hash y con alcance por proyecto.</li>
+          <li>Si el chat usa herramientas que leen contenido externo, las defensas contra prompt injection están fuera del modelo: una sesión que leyó contenido no confiable pierde las herramientas que envían datos afuera (M22 y M25).</li>
+        </ul>
+
+        <h3>Observabilidad y despliegue de modelos</h3>
+        <ul>
+          <li><b>SLIs:</b> TTFT p95 y TPOT p95 por región y por versión, medidos en el gateway, que es lo que vive el usuario; turnos completos sobre turnos admitidos; goodput, los turnos que cumplen los dos SLOs a la vez.</li>
+          <li><b>Saturación, en los dashboards:</b> uso del KV cache, cola, tasa de preemptions (M15), aciertos del prefijo en la HBM y en la RAM (M19).</li>
+          <li><b>Calidad:</b> tasa de regeneración y votos negativos por versión, y los evals del golden set, que corren antes de cada despliegue (M22).</li>
+          <li><b>Alertas:</b> burn rate de dos ventanas para cada SLO (M11). El aviso de "aciertos del prefijo por debajo del 75&#8239;%" no despierta a nadie, pero se revisa al día siguiente: cada punto de aciertos es cómputo de prefill.</li>
+          <li><b>Despliegue de una versión:</b> los pesos, el prompt de sistema y los parámetros por defecto son un solo paquete versionado. Evals por categoría, shadow traffic sin efectos, y canary por hash del usuario con una prueba secuencial, del 1 al 5&#8239;% y después progresivo (M22).</li>
+        </ul>
+
+        <h3>Decisiones y alternativas</h3>
+        <div class="table-wrap">
+          <table class="t">
+            <thead><tr><th>Decisión</th><th>Alternativa descartada</th><th>Por qué</th></tr></thead>
+            <tbody>
+              <tr><td>FP8 en pesos y KV cache, réplicas de 4 H100</td><td>BF16, o FP8 en 2 H100</td><td>Los pesos se leen una vez por paso: con 4 GPUs se reparten entre 218 streams. 44 GPUs contra 82 y 164</td></tr>
+              <tr><td>Routing por prefijo con carga acotada</td><td>Round robin, o afinidad pura por conversación</td><td>Sin él, el prefill limita la flota: 16 réplicas en lugar de 11. La afinidad pura no mira la carga</td></tr>
+              <tr><td>Segunda capa de KV cache en la RAM del host</td><td>Solo la HBM</td><td>La HBM guarda el 23&#8239;% de las conversaciones que esperan; traer una de la RAM cuesta 2 ms y recalcularla, 107</td></tr>
+              <tr><td>Autoscaling por uso del KV cache, más calendario</td><td>Flota fija para el pico</td><td>La fija cuesta 163&#8239;520 USD y no entra en el presupuesto</td></tr>
+              <tr><td>Dos regiones con recorte del plan gratis</td><td>Dimensionar para perder una región sin recortar</td><td>Trabajar al 50&#8239;% duplica la flota; el recorte deja intacto el tráfico pago</td></tr>
+              <tr><td>Prefill y decode en las mismas GPUs, con chunked prefill</td><td>Desagregarlos</td><td>Con el historial en caché, el prefill de cada turno es corto: mover el KV cache y operar dos grupos no se paga (M15)</td></tr>
+              <tr><td>Stream reanudable con buffer en Redis</td><td>Cancelar al cortarse la conexión</td><td>En el teléfono la conexión se corta todo el tiempo; Detener tiene su propio endpoint</td></tr>
+              <tr><td>Evento de uso al cerrar el stream, en el servicio</td><td>Contar en el motor</td><td>El servicio sabe a quién cobrar y qué recibió el cliente; el registro del motor sirve para conciliar</td></tr>
+            </tbody>
+          </table>
+        </div>
+        </div>
+      </details>
+
+      <h2 id="repaso"><span class="sec-num">B.4</span>Qué repasar según tus errores</h2>
+
+      <div class="table-wrap no-autolink">
+        <table class="t">
+          <thead><tr><th>Si te costó</th><th>Repasa</th></tr></thead>
+          <tbody>
+            <tr><td>Prefill, decode, KV cache y el costo por token</td><td><a href="m12-llm-por-dentro.html#prefill-decode">M12, prefill y decode</a>, <a href="m12-llm-por-dentro.html#memoria">la memoria</a> y <a href="m12-llm-por-dentro.html#costo">el costo</a></td></tr>
+            <tr><td>Dimensionar GPUs</td><td><a href="m13-gpus.html#roofline">M13, roofline</a> y <a href="m13-gpus.html#sizing">sizing</a></td></tr>
+            <tr><td>Elegir un formato de pesos y de KV cache</td><td><a href="m14-cuantizacion.html#calidad">M14, cuánto se pierde</a> e <a href="m14-cuantizacion.html#impacto">impacto</a></td></tr>
+            <tr><td>Batching, prefix caching y chunked prefill</td><td><a href="m15-motores-inferencia.html#batching">M15, continuous batching</a>, <a href="m15-motores-inferencia.html#chunked">chunked prefill</a> y <a href="m15-motores-inferencia.html#elegir">configurar el motor</a></td></tr>
+            <tr><td>El costo de una conversación y el prompt caching</td><td><a href="m16-context-windows.html#costo">M16, conversaciones largas</a> y <a href="m16-context-windows.html#prompt-caching">prompt caching</a></td></tr>
+            <tr><td>Streaming, cancelación y reanudación</td><td><a href="m17-api-streaming.html#cancelacion">M17, cuando el cliente se va</a> y <a href="m17-api-streaming.html#reanudar">streams que sobreviven a un corte</a></td></tr>
+            <tr><td>Cuotas, reservas y admisión</td><td><a href="m18-cuotas-tokens.html#reservar">M18, reservar y reconciliar</a> y <a href="m18-cuotas-tokens.html#admision">admission control</a></td></tr>
+            <tr><td>Routing, autoscaling y cold start</td><td><a href="m19-router-flota.html#prefijo">M19, routing por prefijo</a>, <a href="m19-router-flota.html#autoscaling">autoscaling</a> y <a href="m19-router-flota.html#cold-start">cold start</a></td></tr>
+            <tr><td>Fallos de réplicas y de regiones</td><td><a href="m19-router-flota.html#spot">M19, drenaje</a> y <a href="m19-router-flota.html#fallback">fallback entre regiones</a></td></tr>
+            <tr><td>El árbol de mensajes y el turno</td><td><a href="m20-producto-chatgpt.html#arbol">M20, el árbol</a> y <a href="m20-producto-chatgpt.html#turno">el turno</a></td></tr>
+            <tr><td>Metering exacto</td><td><a href="m21-metering.html#emitir">M21, emitir sin perder</a> y <a href="m21-metering.html#dedupe">exactamente una vez</a></td></tr>
+            <tr><td>Evals, canary y seguridad del modelo</td><td><a href="m22-operar-modelos.html#evals">M22, evals</a>, <a href="m22-operar-modelos.html#canary">canary</a> y <a href="m22-operar-modelos.html#injection">prompt injection</a></td></tr>
+            <tr><td>Imágenes, voz y agentes sobre la misma flota</td><td><a href="m23-multimodal.html#entrada">M23, imágenes de entrada</a>, <a href="m24-voz-tiempo-real.html#presupuesto">M24, presupuesto de latencia</a> y <a href="m25-agentes.html#presupuestos">M25, presupuestos</a></td></tr>
+            <tr><td>Afinar un modelo</td><td><a href="m26-entrenamiento.html#lora">M26, LoRA</a> y <a href="m26-entrenamiento.html#a-produccion">del entrenamiento a producción</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div data-checkpoint="cpb"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/cpb.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+</body>
+</html>

@@ -1,10 +1,12 @@
 /* Motor de mapas explorables.
    <div class="sdmap" data-map="id"></div> + SD.defineMap('id', {...})
    Definición:
-     { title, intro, width, height,
+     { title, intro, width, height, pieces?, stepPanel?,
        groups: [{ id, label, x, y, w, h }],
-       nodes:  [{ id, layer, label, sub, x, y, w?, h?, bus?, info: { resp, api, data, fail, nums } }]   (x, y = centro)
+       nodes:  [{ id, layer, label, sub, brief?, x, y, w?, h?, bus?, info: { resp, api, data, fail, nums } }]   (x, y = centro)
                (bus: true = una barra larga, como un log, que recibe cada arista de frente a la altura o en la columna del otro nodo)
+               (brief: una frase con lo que hace la pieza; sale en el tooltip, en el detalle y en la lista de piezas)
+       pieces: true = el panel lateral lista las piezas por grupo, con su brief, y cada una abre su detalle
        edges:  [{ id, from, to, label?, async?, bend?, labelAt? }],   (labelAt: 0–1, dónde va la etiqueta; 0.5 por defecto)
        scenarios: [...] (ver flow-sim.js) }
    Deep link: #node=<id>&scenario=<id>&step=<n> */
@@ -84,6 +86,7 @@
   MapView.prototype.build = function () {
     var self = this, def = this.def;
     this.host.classList.add('sdmap');
+    if (def.stepPanel) this.host.classList.add('has-steppanel');
     this.host.innerHTML = '';
     if (def.stageHeight) this.host.style.setProperty('--sdm-h', def.stageHeight + 'px');
 
@@ -193,6 +196,8 @@
         s('rect', { x: x0 + n.w - 50, y: y0 - 10, width: 50, height: 18, rx: 3 }),
         s('text', { x: x0 + n.w - 25, y: y0 + 3, 'text-anchor': 'middle' }, ['Caído'])
       ]));
+      /* Tooltip al pasar el mouse: qué hace la pieza */
+      kids.unshift(s('title', {}, [n.label + ': ' + (n.brief || n.sub || L.name)]));
       var el = s('g', {
         class: 'sdm-node', 'data-id': n.id, 'data-layer': n.layer, tabindex: '0', role: 'button',
         style: '--c: var(' + L.c + ')',
@@ -328,12 +333,17 @@
     }
   };
 
+  /* Alto libre para el mapa: abajo quedan el minimapa y la ayuda, que no deben tapar nodos */
+  MapView.prototype.fitH = function () {
+    return this.W > 640 ? Math.max(120, this.H - 104) : this.H;
+  };
+
   MapView.prototype.fit = function () {
     this.measure();
-    var b = this.bounds;
-    this.k = clamp(Math.min(this.W / b.w, this.H / b.h), 0.2, 1.3);
+    var b = this.bounds, H = this.fitH();
+    this.k = clamp(Math.min(this.W / b.w, H / b.h), 0.2, 1.3);
     this.tx = (this.W - b.w * this.k) / 2 - b.x * this.k;
-    this.ty = (this.H - b.h * this.k) / 2 - b.y * this.k;
+    this.ty = (H - b.h * this.k) / 2 - b.y * this.k;
     this.apply();
   };
 
@@ -341,7 +351,7 @@
   MapView.prototype.home = function () {
     this.measure();
     var b = this.bounds, minK = this.def.minZoom || 0.72;
-    var kFit = Math.min(this.W / b.w, this.H / b.h);
+    var kFit = Math.min(this.W / b.w, this.fitH() / b.h);
     if (kFit >= minK) { this.fit(); return; }
     this.k = minK;
     var start = this.nodes[this.def.start] || this.nodes[this.firstNodeId()];
@@ -522,8 +532,57 @@
     legend.appendChild(h('li', { html: '<svg width="14" height="14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="var(--l-queue)"/></svg>Evento asíncrono' }));
     inner.appendChild(h('h4', { text: 'Leyenda' }));
     inner.appendChild(legend);
+    /* (la ayuda plegable del panel de pasos reusa esta función sobre un objeto sin piezas: por eso el guard) */
+    if (def.pieces && this.piecesBlock) inner.appendChild(this.piecesBlock(true));
     this.panel.innerHTML = '';
     this.panel.appendChild(inner);
+  };
+
+  /* Lista de piezas del mapa, agrupadas como en el lienzo, con una frase de qué hace cada una (def.pieces).
+     active: ids que participan en el paso actual; se marcan en la lista. */
+  MapView.prototype.piecesBlock = function (open, active) {
+    var self = this, def = this.def, act = {};
+    /* El bloque anterior se reemplaza bajo el puntero sin recibir mouseleave: se limpia el resaltado */
+    function clearHl() { Object.keys(self.nodes).forEach(function (id) { self.nodes[id].el.classList.remove('is-hl'); }); }
+    clearHl();
+    (active || []).forEach(function (id) { act[id] = true; });
+    var groups = (def.groups || []).map(function (g) { return { label: g.label, g: g, items: [] }; });
+    var rest = { label: 'Otras piezas', items: [] };
+    def.nodes.forEach(function (n) {
+      var home = groups.filter(function (x) {
+        var g = x.g;
+        return n.x >= g.x && n.x <= g.x + g.w && n.y >= g.y && n.y <= g.y + g.h;
+      })[0];
+      (home || rest).items.push(n);
+    });
+    var box = h('details', { class: 'sdm-pieces' });
+    var sum = h('summary', { text: 'Qué hace cada pieza' });
+    /* Si el lector la abrió o la cerró, esa elección se mantiene entre pasos y escenarios */
+    sum.addEventListener('click', function () { self.piecesOpen = !box.open; });
+    if (self.piecesOpen != null ? self.piecesOpen : open) box.open = true;
+    box.appendChild(sum);
+    groups.concat([rest]).forEach(function (grp) {
+      if (!grp.items.length) return;
+      box.appendChild(h('p', { class: 'sdm-pc-group', text: grp.label }));
+      var ul = h('ul', { class: 'sdm-pc-list' });
+      grp.items.forEach(function (n) {
+        var L = LAYERS[n.layer] || LAYERS.service;
+        var b = h('button', {
+          type: 'button', class: 'sdm-pc-item' + (act[n.id] ? ' is-now' : ''), style: '--c: var(' + L.c + ')',
+          'aria-label': n.label + '. ' + (n.brief || n.sub || '') + ' Abrir detalle.'
+        }, [h('b', { text: n.label }), h('span', { text: n.brief || n.sub || L.name })]);
+        b.addEventListener('click', function () { clearHl(); if (self.pause) self.pause(); self.select(n.id, true); });
+        function hl() { self.nodes[n.id].el.classList.add('is-hl'); }
+        function unhl() { self.nodes[n.id].el.classList.remove('is-hl'); }
+        b.addEventListener('mouseenter', hl);
+        b.addEventListener('mouseleave', unhl);
+        b.addEventListener('focus', hl);
+        b.addEventListener('blur', unhl);
+        ul.appendChild(h('li', {}, [b]));
+      });
+      box.appendChild(ul);
+    });
+    return box;
   };
 
   MapView.prototype.select = function (id, focusPanel) {
@@ -540,9 +599,17 @@
       n.el.classList.remove('is-selected'); self.selected = null; self.showDefaultPanel(); n.el.focus();
     });
     inner.appendChild(close);
+    if (this.def.stepPanel && this.scen) {
+      var back = h('button', { type: 'button', class: 'chip-btn sdm-back', text: '← Volver al escenario' });
+      back.addEventListener('click', function () {
+        n.el.classList.remove('is-selected'); self.selected = null; self.showDefaultPanel();
+      });
+      inner.appendChild(back);
+    }
     inner.appendChild(h('p', { class: 'sdm-plabel', style: '--c: var(' + L.c + ')', text: L.name }));
     inner.appendChild(h('h3', { text: d.label }));
     if (d.sub) inner.appendChild(h('p', { class: 'muted', text: d.sub }));
+    if (d.brief) inner.appendChild(h('p', { class: 'sdm-brief', text: d.brief }));
 
     var tablist = h('div', { class: 'sdm-tabs', role: 'tablist', 'aria-label': 'Detalle de ' + d.label });
     var body = h('div', { class: 'sdm-tabbody', role: 'tabpanel', tabindex: '0' });

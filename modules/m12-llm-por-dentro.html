@@ -47,6 +47,10 @@
           <div><dt>Estado</dt><dd data-status="m12">Sin empezar</dd></div>
         </dl>
       </header>
+<aside class="level-switch" data-toc="skip">
+        <p><b>Esta es la versión esencial.</b> Cubre lo que necesitas para seguir el curso. Si quieres ver qué pasa dentro del modelo en cada pasada (el bloque transformer pieza por pieza, la atención con sus formas, GEMM contra GEMV, el KV cache por dentro, FlashAttention, el paso mixto y el muestreo), sigue con M12.1, que es opcional y está lleno de diagramas.</p>
+        <a class="btn" href="m121-prefill-decode-a-fondo.html">Ir a la versión a fondo (M12.1)</a>
+      </aside>
 <section class="objectives" data-toc="skip" aria-labelledby="obj">
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
@@ -202,6 +206,8 @@ print(enc.decode(ids[:3]))                         # los tres primeros tokens, c
       </ul>
       <p>Que las dos fases tengan cuellos de botella distintos es la razón de ser de buena parte de los motores de inferencia: mezclarlas bien en un mismo batch, o separarlas en máquinas distintas, es tema del M15.</p>
 
+      <p class="more-link">Para profundizar: <a href="m121-prefill-decode-a-fondo.html#prefill">el prefill y el decode paso a paso, capa por capa, con las formas de cada tensor</a>, en M12.1.</p>
+
       <h2 id="kv-cache"><span class="sec-num">12.4</span>El KV cache</h2>
 
       <aside class="callout callout--def">
@@ -237,6 +243,8 @@ Una conversación de 8192 tokens:  8192 × 328 kB ≈ 2.7 GB</code></pre>
       <div data-sim="kvcache"></div>
 
       <p>El KV cache es el recurso escaso del serving. En el despliegue de 4 H100 con el 70B en FP8, de los 320 GB quedan unos 229 GB libres después de los pesos y la reserva del runtime: unos 700 000 tokens de cache, o 85 conversaciones de 8192 tokens a la vez. Por eso los motores administran el cache en bloques, como la memoria virtual de un sistema operativo (PagedAttention, M15); por eso una ventana de contexto grande cuesta caro (M16); y por eso guardar el cache en FP8 duplica la capacidad (M14).</p>
+
+      <p class="more-link">Para profundizar: <a href="m121-prefill-decode-a-fondo.html#kv-por-dentro">cómo se ordena el KV cache por capa y por cabeza, y por qué su atención no mejora con el batch</a>, en M12.1.</p>
 
       <h2 id="memoria"><span class="sec-num">12.5</span>Por qué el decode está limitado por memoria</h2>
 
@@ -297,6 +305,8 @@ Una conversación de 8192 tokens:  8192 × 328 kB ≈ 2.7 GB</code></pre>
         <p>El tamaño del batch es la perilla entre costo y velocidad. Más usuarios por paso bajan el costo por token, porque cada GPU produce más, y suben el TPOT de cada usuario. Un SLO de TPOT (por ejemplo, 50 ms) fija cuántos usuarios caben por despliegue; la memoria del KV fija el otro techo. El que se alcance primero manda.</p>
       </aside>
 
+      <p class="more-link">Para profundizar: <a href="m121-prefill-decode-a-fondo.html#pasada">qué pieza se lleva el tiempo de cada pasada, con una calculadora por pieza</a>, en M12.1.</p>
+
       <h2 id="metricas"><span class="sec-num">12.6</span>Las métricas que importan</h2>
 
       <div class="table-wrap">
@@ -345,6 +355,11 @@ Una conversación de 8192 tokens:  8192 × 328 kB ≈ 2.7 GB</code></pre>
       </section>
 
       <div data-checkpoint="m12"></div>
+
+      <aside class="level-switch" data-toc="skip">
+        <p><b>¿Quieres más detalle?</b> M12.1 abre el modelo y recorre el prefill y el decode capa por capa, con diagramas de qué se calcula, qué se escribe y qué se lee en cada pasada. Es opcional.</p>
+        <a class="btn" href="m121-prefill-decode-a-fondo.html">Ir a la versión a fondo (M12.1)</a>
+      </aside>
 
     </article>
 

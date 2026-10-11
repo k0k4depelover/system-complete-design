@@ -87,6 +87,42 @@
 
       <p>La cuenta de la primera fila: (80 + 50) bytes × 8 bits × 50 paquetes por segundo = 52&#8239;000 bits por segundo. Con paquetes tan chicos, más de un tercio del tráfico son cabeceras; agrandar el cuadro a 60 ms las reduciría, pero sumaría 40 ms de espera antes de mandar cada paquete. En el <a href="m29-whatsapp.html#llamadas">M29</a> usamos 40 kbps por sentido como número redondo para una llamada; acá contamos las cabeceras.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f24n1t f24n1d">
+<title id="f24n1t">Un paquete de voz por dentro</title>
+<desc id="f24n1d">Un paquete de 20 ms de Opus a 32 kbps, a escala, byte por byte: 20 bytes de cabecera IP, 8 de UDP, 12 de RTP y 10 del tag de autenticación de SRTP, y 80 bytes de audio. Son 130 bytes; 50 paquetes por segundo dan 52 kbps en el cable, y las cabeceras son el 38 % del total.</desc>
+<defs><marker id="f24n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="50" width="112.308" height="56" rx="4" fill="color-mix(in srgb, var(--l-edge) 30%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-small" x="76.1538" y="76" text-anchor="middle">IP</text>
+<text class="dg-tiny" x="76.1538" y="94" text-anchor="middle">20 B</text>
+<rect x="132.308" y="50" width="44.9231" height="56" rx="4" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="154.769" y="76" text-anchor="middle">UDP</text>
+<text class="dg-tiny" x="154.769" y="94" text-anchor="middle">8 B</text>
+<rect x="177.231" y="50" width="67.3846" height="56" rx="4" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="210.923" y="76" text-anchor="middle">RTP</text>
+<text class="dg-tiny" x="210.923" y="94" text-anchor="middle">12 B</text>
+<rect x="244.615" y="50" width="56.1538" height="56" rx="4" fill="color-mix(in srgb, var(--l-external) 30%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="272.692" y="76" text-anchor="middle">SRTP</text>
+<text class="dg-tiny" x="272.692" y="94" text-anchor="middle">10 B</text>
+<rect class="dg-ok" x="300.769" y="50" width="449.231" height="56" rx="4"/>
+<text class="dg-small" x="525.385" y="76" text-anchor="middle">Audio Opus</text>
+<text class="dg-tiny" x="525.385" y="94" text-anchor="middle">80 B</text>
+<path class="dg-feedback" d="M20 120 H300.7692307692308"/>
+<path class="dg-feedback" d="M20 114 V126 M300.7692307692308 114 V126"/>
+<text class="dg-tiny" x="160.385" y="142" text-anchor="middle">cabeceras: 50 B, el 38 %</text>
+<path class="dg-feedback" d="M300.7692307692308 120 H750.0"/>
+<path class="dg-feedback" d="M750.0 114 V126"/>
+<text class="dg-tiny" x="525.385" y="142" text-anchor="middle">20 ms de voz a 32 kbps: 80 B</text>
+<text class="dg-group" x="20" y="34" text-anchor="start">Un paquete: 130 bytes</text>
+<rect class="dg-box" x="140" y="168" width="490" height="44" rx="8"/>
+<text class="dg-small" x="385" y="195" text-anchor="middle">130 B × 8 bits × 50 paquetes por segundo = 52 kbps en el cable</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.1.</b> La primera fila de la tabla, byte por byte. Con cuadros de 20 ms, las cabeceras pesan casi tanto como el audio; agrandar el cuadro las diluye a cambio de espera. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <h3 id="numeros-flota">La flota de referencia</h3>
 
       <p>Diseñamos un agente de voz para atención al cliente con <b>30&#8239;000 sesiones simultáneas en el pico</b>. Un intercambio típico dura 18 segundos: el usuario habla 6, el agente tarda menos de uno en contestar, habla 9 y el resto es silencio. <span class="badge badge--ref">Diseño de referencia</span></p>
@@ -177,7 +213,7 @@
 <text class="dg-small" x="376" y="250" text-anchor="middle">780 ms contra 700 ms en el presupuesto de 24.8; 0.12 contra 0.52 dólares por una llamada de 10 minutos (24.11).</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.1.</b> En la cascada, cada frontera es texto que se puede leer y cambiar; en speech-to-speech, un solo modelo oye y contesta.</figcaption>
+        <figcaption><b>Figura 24.2.</b> En la cascada, cada frontera es texto que se puede leer y cambiar; en speech-to-speech, un solo modelo oye y contesta.</figcaption>
       </figure>
 
       <div class="table-wrap">
@@ -288,7 +324,7 @@
 <text class="dg-tiny" x="530" y="92">audio</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.2.</b> El audio baja de la app al SFU y del SFU al worker; el worker habla con los cuatro modelos.</figcaption>
+        <figcaption><b>Figura 24.3.</b> El audio baja de la app al SFU y del SFU al worker; el worker habla con los cuatro modelos.</figcaption>
       </figure>
 
       <p>El mapa tiene cada pieza con su API, sus datos, sus fallas y sus números. Los escenarios recorren un turno normal, una interrupción, una pausa larga, una red con pérdida, un cambio de red, un firewall que solo deja salir el 443, un worker que muere, una llamada telefónica, una herramienta lenta y el mismo turno con speech-to-speech. El reloj de cada escenario suma solo el camino crítico: en el turno normal llega exactamente a 780 ms.</p>
@@ -368,7 +404,7 @@
 <text class="dg-tiny" x="90.0" y="554">reproduce tras 40 ms: 780 ms en total</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.3.</b> Un turno en cascada. Las notas son los tiempos del camino crítico; el STT trabaja en paralelo desde antes.</figcaption>
+        <figcaption><b>Figura 24.4.</b> Un turno en cascada. Las notas son los tiempos del camino crítico; el STT trabaja en paralelo desde antes.</figcaption>
       </figure>
 
       <p>Dos cosas se ven en la figura. La primera: el turno lo cierra el detector de fin de turno, no el STT, y es el salto más largo (24.6). La segunda: el TTS empieza con la primera frase, no con la respuesta completa. Si el worker esperara la respuesta entera, el usuario oiría la primera palabra después de toda la generación.</p>
@@ -434,10 +470,45 @@
 <path class="dg-frame" d="M385 36 V250"/>
 </svg>
         </div>
-        <figcaption><b>Figura 24.4.</b> La pila de WebRTC contra la de un WebSocket. La diferencia que importa está abajo: UDP o TCP.</figcaption>
+        <figcaption><b>Figura 24.5.</b> La pila de WebRTC contra la de un WebSocket. La diferencia que importa está abajo: UDP o TCP.</figcaption>
       </figure>
 
       <p>Un <a href="m02-apis.html#websocket-cable">WebSocket</a> es mucho más fácil: una conexión, mensajes en los dos sentidos y ningún NAT que atravesar. Pero va sobre TCP. En una red buena da igual; en una red móvil con pérdida, cada retransmisión frena el audio entero, y el buffer tiene que crecer para no cortarse. La regla práctica es esta: <b>WebRTC entre el usuario y tu borde, WebSocket entre servidores de la misma región</b>, donde casi no hay pérdida. Es lo que hace el worker cuando habla con la Realtime API desde la nube. La comparación con SSE y long polling está en la <a href="m02-apis.html#tiempo-real-comparacion">tabla del M02</a>: la voz es el caso que necesita los dos sentidos a la vez.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 310" role="img" aria-labelledby="f24n8t f24n8d">
+<title id="f24n8t">Cómo encuentra ICE un camino</title>
+<desc id="f24n8d">El cliente está detrás de un NAT. Primero le pregunta a un servidor STUN con qué IP y puerto lo ve internet. Después ICE prueba pares de candidatos: si el camino directo por UDP al SFU funciona, el audio va por ahí. Si un NAT simétrico o un firewall corporativo lo bloquea, el audio pasa por un relay TURN, que puede escuchar en TLS sobre el puerto 443. DTLS negocia las claves y SRTP cifra cada paquete en cualquiera de los dos caminos.</desc>
+<defs><marker id="f24n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="120" width="130" height="60" rx="10"/>
+<text class="dg-label" x="85" y="147" text-anchor="middle">App</text>
+<text class="dg-tiny" x="85" y="164" text-anchor="middle">IP local</text>
+<rect x="180" y="96" width="60" height="108" rx="6" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-small" x="210" y="154" text-anchor="middle">NAT</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="330" y="20" width="150" height="54" rx="10"/>
+<text class="dg-label" x="405" y="44" text-anchor="middle">STUN</text>
+<text class="dg-tiny" x="405" y="61" text-anchor="middle">¿con qué IP me ves?</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="600" y="120" width="150" height="60" rx="10"/>
+<text class="dg-label" x="675" y="147" text-anchor="middle">SFU</text>
+<text class="dg-tiny" x="675" y="164" text-anchor="middle">UDP, SRTP</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="330" y="226" width="150" height="54" rx="10"/>
+<text class="dg-label" x="405" y="250" text-anchor="middle">TURN</text>
+<text class="dg-tiny" x="405" y="267" text-anchor="middle">relay, TLS en el 443</text>
+<path class="dg-edge" d="M152 140 H176" marker-end="url(#f24n8a)"/>
+<path class="dg-edge" d="M242 116 C280 70 300 50 326 48" marker-end="url(#f24n8a)"/>
+<text class="dg-tiny" x="244" y="62" text-anchor="start">1. consulta</text>
+<path class="dg-edge" d="M242 150 H596" marker-end="url(#f24n8a)"/>
+<text class="dg-tiny" x="420" y="142" text-anchor="middle">2. camino directo, si funciona</text>
+<path class="dg-feedback" d="M242 184 C280 230 300 250 326 252" marker-end="url(#f24n8a)"/>
+<path class="dg-feedback" d="M482 252 C540 250 600 220 640 184" marker-end="url(#f24n8a)"/>
+<text class="dg-tiny" x="560" y="272" text-anchor="middle">3. si no: por el relay</text>
+<text class="dg-tiny" x="20" y="300" text-anchor="start">En el M29, el relay se llevaba entre el 10 y el 30 % de las llamadas: NAT simétricos y firewalls corporativos.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.6.</b> Las cuatro piezas de WebRTC en un dibujo. ICE prueba el camino directo primero y deja el relay para cuando no hay otro, porque el relay cuesta tráfico propio. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h3 id="transporte-sesion">Abrir una sesión sin exponer la clave</h3>
 
@@ -581,7 +652,7 @@ Content-Type: application/json
 <text class="dg-tiny" x="385" y="256" text-anchor="middle">Las flechas gruesas del SFU llevan el stream de cada uno hacia los otros tres.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.5.</b> P2P, SFU y MCU con cuatro participantes. Un agente de voz es la sala más chica: el usuario y el agente.</figcaption>
+        <figcaption><b>Figura 24.7.</b> P2P, SFU y MCU con cuatro participantes. Un agente de voz es la sala más chica: el usuario y el agente.</figcaption>
       </figure>
 
       <ul>
@@ -608,6 +679,42 @@ Content-Type: application/json
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f24n7t f24n7d">
+<title id="f24n7t">Lo que se pierde y lo que sobrevive</title>
+<desc id="f24n7d">El estado de una sesión de voz, en dos columnas. En la memoria del worker, el audio reciente, los buffers, el VAD y el turno en curso: si el worker muere, se pierde. En Redis, con una escritura por turno, el contexto, qué parte de la última respuesta sonó y las herramientas que cambiaron algo con su idempotency key: el worker nuevo lo lee y retoma.</desc>
+<defs><marker id="f24n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="30" width="350" height="190" rx="10" fill="color-mix(in srgb, var(--l-service) 14%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="195" y="54" text-anchor="middle">Memoria del worker</text>
+<rect class="dg-box" x="40" y="70" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="195" y="89" text-anchor="middle">Audio de los últimos cientos de ms</text>
+<rect class="dg-box" x="40" y="106" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="195" y="125" text-anchor="middle">Buffers y VAD</text>
+<rect class="dg-box" x="40" y="142" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="195" y="161" text-anchor="middle">Parcial del STT</text>
+<rect class="dg-box" x="40" y="178" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="195" y="197" text-anchor="middle">Frases en cola del TTS</text>
+<rect class="dg-bad" x="20" y="232" width="350" height="36" rx="6"/>
+<text class="dg-small dg-fail-text" x="195" y="255" text-anchor="middle">el worker muere: se pierde</text>
+<rect x="400" y="30" width="350" height="190" rx="10" fill="color-mix(in srgb, var(--l-cache) 14%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.5"/>
+<text class="dg-label" x="575" y="54" text-anchor="middle">Redis, una escritura por turno</text>
+<rect class="dg-box" x="420" y="70" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="575" y="89" text-anchor="middle">Contexto: resumen y turnos recientes</text>
+<rect class="dg-box" x="420" y="106" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="575" y="125" text-anchor="middle">Qué parte de la última respuesta sonó</text>
+<rect class="dg-box" x="420" y="142" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="575" y="161" text-anchor="middle">Herramientas que cambiaron algo</text>
+<rect class="dg-box" x="420" y="178" width="310" height="28" rx="5"/>
+<text class="dg-tiny" x="575" y="197" text-anchor="middle">Idempotency key del turno</text>
+<rect class="dg-ok" x="400" y="232" width="350" height="36" rx="6"/>
+<text class="dg-small" x="575" y="255" text-anchor="middle">el worker nuevo lo lee: ≈ 2.4 s de silencio</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.8.</b> La tabla en dos columnas. Lo que cambia cada 20 ms se pierde con el worker; lo que se escribe una vez por turno sobrevive, y alcanza para retomar. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>Con 80 sesiones por worker de 8 vCPU, al 75&#8239;%, la flota de referencia necesita 500 workers en el pico. <span class="badge badge--ref">Diseño de referencia</span> El escenario "Un worker muere a mitad del turno" del mapa recorre el reemplazo: el SFU nota que el agente se fue en unos 2 segundos, despacha otro worker, el nuevo lee el estado y dice "Perdón, se me cortó. ¿Me repites lo último?". Unos 2.4 segundos de silencio, en lugar de una llamada cortada.</p>
 
@@ -653,7 +760,7 @@ Content-Type: application/json
 <text class="dg-tiny" x="430" y="24" text-anchor="middle">1.9 s</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.6.</b> El usuario piensa 700 ms a mitad de frase. El umbral fijo corta en la pausa; el detector espera porque la frase termina en "al".</figcaption>
+        <figcaption><b>Figura 24.9.</b> El usuario piensa 700 ms a mitad de frase. El umbral fijo corta en la pausa; el detector espera porque la frase termina en "al".</figcaption>
       </figure>
 
       <p>La mejora es mirar también <b>qué dijo</b>. "Quiero cambiar mi vuelo al…" no está terminado aunque haya silencio; "Quiero cambiar mi vuelo del viernes." sí. Un modelo de detección de turno lee el parcial del STT y da una probabilidad de que el usuario haya terminado. Con probabilidad alta, cierra pronto; con baja, espera más:</p>
@@ -684,6 +791,42 @@ Content-Type: application/json
         <li><b>Especular con el parcial.</b> Si el parcial lleva un rato estable, el worker puede arrancar el LLM antes del final. Si el final sale igual, ganó 50 ms; si cambia, descarta esa generación y pagó un prefill de más. Con el historial en caché, ese prefill es de unas decenas de tokens.</li>
       </ul>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f24n2t f24n2d">
+<title id="f24n2t">Parciales, final y especulación</title>
+<desc id="f24n2d">Una línea de tiempo mientras el usuario habla y después de que calla. El STT emite parciales que pueden cambiar: «quiero cambiar mi buelo», después «quiero cambiar mi vuelo del». Cuando el usuario calla, el STT emite el final, unos 50 ms después. Si el parcial lleva un rato estable, el worker puede arrancar el LLM antes del final: si el final sale igual, gana esos 50 ms; si cambia, descarta la generación y pagó un prefill de más. Las duraciones son cualitativas.</desc>
+<defs><marker id="f24n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="52" text-anchor="start">Usuario</text>
+<rect x="150" y="36" width="380" height="28" rx="4" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-tiny" x="340" y="55" text-anchor="middle">habla</text>
+<path class="dg-feedback" d="M530 30 V250"/>
+<text class="dg-tiny" x="534" y="26" text-anchor="start">calla</text>
+<text class="dg-label" x="20" y="104" text-anchor="start">STT</text>
+<rect class="dg-warnbox" x="210" y="86" width="160" height="28" rx="4"/>
+<text class="dg-tiny" x="290" y="104" text-anchor="middle">quiero cambiar mi buelo</text>
+<rect class="dg-box" x="380" y="86" width="160" height="28" rx="4"/>
+<text class="dg-tiny" x="460" y="104" text-anchor="middle">quiero cambiar mi vuelo del</text>
+<text class="dg-tiny" x="290" y="132" text-anchor="middle">parcial: puede cambiar</text>
+<rect class="dg-ok" x="550" y="86" width="110" height="28" rx="4"/>
+<text class="dg-tiny" x="605" y="104" text-anchor="middle">final</text>
+<path class="dg-edge" d="M530 120 H550" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="605" y="132" text-anchor="middle">≈ 50 ms después</text>
+<text class="dg-label" x="20" y="172" text-anchor="start">LLM</text>
+<rect x="550" y="158" width="190" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="645" y="175" text-anchor="middle">arranca con el final</text>
+<text class="dg-label" x="20" y="222" text-anchor="start">LLM, especulando</text>
+<rect x="490" y="208" width="190" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="585" y="225" text-anchor="middle">arranca con el parcial</text>
+<path class="dg-feedback" d="M450 116 C450 170 460 214 486 220"/>
+<text class="dg-tiny" x="442" y="190" text-anchor="end">parcial estable</text>
+<text class="dg-tiny" x="20" y="270" text-anchor="start">Si el final coincide, ganó ≈ 50 ms; si cambia, descarta la generación y pagó un prefill chico (el historial está en caché).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.10.</b> El STT trabaja mientras el usuario habla, así que al final le queda poco. La especulación adelanta el LLM al parcial estable y apuesta un prefill chico contra 50&#8239;ms. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <h3 id="etapas-llm">LLM: el primer token manda</h3>
 
       <p>En texto, el usuario lee mientras el modelo genera, así que importan el TTFT y el ritmo de los tokens que siguen (<a href="m12-llm-por-dentro.html#metricas">M12</a>). En voz, solo importa el TTFT y lo que tarda la primera frase. La cuenta: una respuesta de 30 tokens a 25 ms por token se genera en 750 ms, pero se dice en 9 segundos. La generación va doce veces más rápido que la voz, así que, una vez que la primera frase sale, el resto llega siempre antes de que haga falta.</p>
@@ -694,6 +837,48 @@ Content-Type: application/json
         <li><b>Réplicas cerca.</b> Los turnos de voz van a réplicas de la misma región que el SFU, con la política de routing del <a href="m19-router-flota.html#elegir">M19</a> que prefiere la réplica con el prefijo en caché, y con prioridad sobre el tráfico batch (<a href="m18-cuotas-tokens.html#admision">M18</a>).</li>
         <li><b>Herramientas lentas.</b> Si el modelo llama a una herramienta y la respuesta tarda, el usuario está en silencio. A los 700 ms, el worker dice una frase de relleno ya sintetizada ("Dame un segundo, lo reviso") y, con un deadline de 8 s (<a href="m08-resiliencia.html#timeouts">M08</a>), se rinde y lo dice. El escenario "Una herramienta lenta y una frase de relleno" del mapa lo recorre.</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="f24n3t f24n3d">
+<title id="f24n3t">Generar contra decir</title>
+<desc id="f24n3d">Dos barras sobre el mismo eje de tiempo. Generar una respuesta de 30 tokens a 25 ms por token tarda 750 ms. Decirla en voz alta tarda 9 segundos. La generación va doce veces más rápido que la voz: una vez que sale la primera frase, el resto siempre llega antes de que haga falta.</desc>
+<defs><marker id="f24n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="56" text-anchor="start">Generar</text>
+<text class="dg-tiny" x="20" y="72" text-anchor="start">30 tokens × 25 ms</text>
+<rect x="150" y="40" width="49.1667" height="34" rx="4" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="207.167" y="62" text-anchor="start">750 ms</text>
+<text class="dg-label" x="20" y="112" text-anchor="start">Decir</text>
+<text class="dg-tiny" x="20" y="128" text-anchor="start">la misma respuesta</text>
+<rect x="150" y="96" width="590" height="34" rx="4" fill="color-mix(in srgb, var(--l-client) 26%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="445" y="118" text-anchor="middle">9 s de voz</text>
+<path class="sim-axis" d="M150 148 H740" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M150.0 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="150" y="168" text-anchor="middle">0 s</text>
+<path class="sim-axis" d="M215.55555555555554 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="215.556" y="168" text-anchor="middle">1 s</text>
+<path class="sim-axis" d="M281.1111111111111 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="281.111" y="168" text-anchor="middle">2 s</text>
+<path class="sim-axis" d="M346.6666666666667 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="346.667" y="168" text-anchor="middle">3 s</text>
+<path class="sim-axis" d="M412.22222222222223 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="412.222" y="168" text-anchor="middle">4 s</text>
+<path class="sim-axis" d="M477.7777777777778 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="477.778" y="168" text-anchor="middle">5 s</text>
+<path class="sim-axis" d="M543.3333333333334 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="543.333" y="168" text-anchor="middle">6 s</text>
+<path class="sim-axis" d="M608.8888888888889 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="608.889" y="168" text-anchor="middle">7 s</text>
+<path class="sim-axis" d="M674.4444444444445 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="674.444" y="168" text-anchor="middle">8 s</text>
+<path class="sim-axis" d="M740.0 148 V154" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="740" y="168" text-anchor="middle">9 s</text>
+<text class="dg-tiny" x="20" y="192" text-anchor="start">En voz, lo que importa es el TTFT y la primera frase; el ritmo de los tokens que siguen sobra.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.11.</b> La cuenta del párrafo, a escala. Toda la generación cabe en el primer segundo de voz: por eso en voz solo importan el TTFT y la primera frase.</figcaption>
+      </figure>
 
       <p>El worker corta el texto en frases mientras llega y manda cada una al TTS apenas termina. Una versión mínima, con asyncio:</p>
 
@@ -835,7 +1020,7 @@ async def responder(llm_stream, tts, cola_audio):
 <text class="dg-tiny" x="558" y="280">modelos</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.7.</b> Las dos versiones rápidas en la misma escala. El fin de turno es el bloque más grande de las dos.</figcaption>
+        <figcaption><b>Figura 24.12.</b> Las dos versiones rápidas en la misma escala. El fin de turno es el bloque más grande de las dos.</figcaption>
       </figure>
 
       <p>La ingenua pierde casi tres segundos en esperar etapas completas: 1.5 s en generar la respuesta entera antes de hablar y 400 ms en sintetizarla entera. El streaming no hace más rápido ningún modelo; solapa las esperas. Y aun la cascada en streaming tarda casi cuatro veces el silencio típico entre dos personas. Prueba qué pasa si la red de ida es de 100 ms, o si el fin de turno vuelve a 500:</p>
@@ -932,7 +1117,7 @@ contexto.ultimo_turno_del_agente = oido          # lo que el modelo "dijo"
 <text class="dg-small" x="385" y="330" text-anchor="middle" style="fill: var(--fail)">Sin truncar, el contexto dice que el agente ya dio el precio del cambio.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 24.8.</b> Arriba, lo que sonó y lo que no; abajo, los 310 ms entre que el usuario empieza a hablar y el agente calla.</figcaption>
+        <figcaption><b>Figura 24.13.</b> Arriba, lo que sonó y lo que no; abajo, los 310 ms entre que el usuario empieza a hablar y el agente calla.</figcaption>
       </figure>
 
       <h3 id="interrupciones-falsas">Falsas interrupciones</h3>
@@ -950,6 +1135,60 @@ contexto.ultimo_turno_del_agente = oido          # lo que el modelo "dijo"
       <h3 id="sesion-contexto">El contexto crece</h3>
 
       <p>En la cascada, cada turno agrega unos 50 tokens de texto: después de una llamada de 10 minutos, 33 turnos, la conversación ocupa unos 1&#8239;650 tokens, más el system prompt. Con speech-to-speech, el contexto es audio: la Realtime API cuenta 1 token cada 100 ms del usuario y 1 cada 50 ms del asistente, y vuelve a mandar la conversación entera en cada respuesta. <span class="badge badge--doc">Documentado</span> Son 240 tokens de audio por turno: 7&#8239;920 a los 10 minutos y 48&#8239;000 a la hora (200 turnos). El caché abarata lo repetido, pero hay que podar. La técnica es la del <a href="m16-context-windows.html#estrategias">M16</a>: resumir los turnos viejos en texto y dejar los recientes completos. La Realtime API trae un <code>retention_ratio</code> para recortar el contexto, y advierte que recortar rompe el caché del prefijo: conviene recortar mucho de una vez y no un poco en cada turno. <span class="badge badge--doc">Documentado</span></p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f24n4t f24n4d">
+<title id="f24n4t">El contexto crece con la sesión</title>
+<desc id="f24n4d">Tokens de la conversación según los minutos de sesión, con un turno cada 18 segundos. En cascada, el contexto es texto: unos 50 tokens por turno, 1 650 a los 10 minutos y 10 000 a la hora. Con speech-to-speech, es audio: 240 tokens por turno, 7 920 a los 10 minutos y 48 000 a la hora.</desc>
+<defs><marker id="f24n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-axis" d="M90 236 H590" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90 236 V40" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90.0 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="90" y="256" text-anchor="middle">0 min</text>
+<path class="sim-axis" d="M173.33333333333334 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="173.333" y="256" text-anchor="middle">10 min</text>
+<path class="sim-axis" d="M256.6666666666667 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="256.667" y="256" text-anchor="middle">20 min</text>
+<path class="sim-axis" d="M340.0 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="340" y="256" text-anchor="middle">30 min</text>
+<path class="sim-axis" d="M423.33333333333337 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="423.333" y="256" text-anchor="middle">40 min</text>
+<path class="sim-axis" d="M506.6666666666667 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="506.667" y="256" text-anchor="middle">50 min</text>
+<path class="sim-axis" d="M590.0 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="590" y="256" text-anchor="middle">60 min</text>
+<path class="sim-grid" d="M90 236.0 H590"/>
+<text class="dg-tiny" x="82" y="240" text-anchor="end">0</text>
+<path class="sim-grid" d="M90 196.8 H590"/>
+<text class="dg-tiny" x="82" y="200.8" text-anchor="end">10 000</text>
+<path class="sim-grid" d="M90 157.60000000000002 H590"/>
+<text class="dg-tiny" x="82" y="161.6" text-anchor="end">20 000</text>
+<path class="sim-grid" d="M90 118.4 H590"/>
+<text class="dg-tiny" x="82" y="122.4" text-anchor="end">30 000</text>
+<path class="sim-grid" d="M90 79.20000000000002 H590"/>
+<text class="dg-tiny" x="82" y="83.2" text-anchor="end">40 000</text>
+<path class="sim-grid" d="M90 40.0 H590"/>
+<text class="dg-tiny" x="82" y="44" text-anchor="end">50 000</text>
+<path class="dg-edge" d="M90 236 L590 47.84" style="stroke: var(--l-gpu); stroke-width: 2.5; fill: none"/>
+<path class="dg-edge" d="M90 236 L590 196.8" style="stroke: var(--l-service); stroke-width: 2.5; fill: none"/>
+<circle cx="173.3" cy="205.0" r="4" style="fill: var(--l-gpu)"/>
+<circle cx="590.0" cy="47.8" r="4" style="fill: var(--l-gpu)"/>
+<circle cx="173.3" cy="229.5" r="4" style="fill: var(--l-service)"/>
+<circle cx="590.0" cy="196.8" r="4" style="fill: var(--l-service)"/>
+<text class="dg-tiny" x="181.333" y="198.954" text-anchor="start">7 920</text>
+<text class="dg-tiny" x="181.333" y="223.532" text-anchor="start">1 650</text>
+<text class="dg-tiny" x="600" y="51.84" text-anchor="start">48 000: speech-to-speech</text>
+<text class="dg-tiny" x="600" y="200.8" text-anchor="start">10 000: cascada</text>
+<text class="dg-tiny" x="600" y="67.84" text-anchor="start">240 tokens de audio</text>
+<text class="dg-tiny" x="600" y="81.84" text-anchor="start">por turno</text>
+<text class="dg-tiny" x="600" y="216.8" text-anchor="start">50 de texto por turno</text>
+<text class="dg-tiny" x="20" y="274" text-anchor="start">Un turno cada 18 s: 33 turnos en 10 minutos, 200 en una hora. Hay que podar: resumir lo viejo, recortar mucho de una vez.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.14.</b> Las dos pendientes del párrafo. Con speech-to-speech, el contexto crece casi cinco veces más rápido, y cada respuesta lo vuelve a mandar entero. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h3 id="sesion-red">La red cambia</h3>
 
@@ -1012,6 +1251,39 @@ contexto.ultimo_turno_del_agente = oido          # lo que el modelo "dijo"
 
       <p>La cuenta de la salida con caché: 33 turnos × 180 tokens × 64 USD por millón = 0.380 USD, el 73&#8239;% de 0.519. Lo caro de speech-to-speech es <b>la voz del agente</b>: cada segundo que habla son 20 tokens a 64 USD por millón. Y sin caché, el costo se multiplica por nueve, porque cada turno vuelve a pagar todo el audio anterior a precio completo. En la cascada, lo caro también es la voz: el TTS es el 60&#8239;% del costo. El LLM, que en texto era todo, acá es menos de un cuarto.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f24n5t f24n5d">
+<title id="f24n5t">De qué está hecho el costo de una llamada</title>
+<desc id="f24n5d">El costo de una llamada de 10 minutos, en dólares, con dos arquitecturas. Con gpt-realtime y caché, 0.519: 0.380 son el audio de salida, el 73 %, y 0.139 la entrada y el caché. Con la cascada por APIs, 0.123: STT 0.0198, LLM 0.0291 y TTS 0.0742, el 60 %. Sin caché, gpt-realtime cuesta 4.697, nueve veces más, y no entra en la escala.</desc>
+<defs><marker id="f24n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="62" text-anchor="start">gpt-realtime, con caché</text>
+<rect x="210" y="40" width="125.1" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="272.55" y="62" text-anchor="middle">entrada y caché</text>
+<rect x="335.1" y="40" width="342" height="36" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="506.1" y="62" text-anchor="middle">audio de salida, 73 %</text>
+<text class="dg-small" x="685.1" y="62" text-anchor="start">0.519 USD</text>
+<text class="dg-small" x="20" y="132" text-anchor="start">Cascada con APIs</text>
+<rect x="210" y="110" width="17.82" height="36" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<path class="dg-feedback" d="M218.91 148 V160"/>
+<text class="dg-tiny" x="218.91" y="172" text-anchor="middle">STT</text>
+<rect x="227.82" y="110" width="26.19" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<path class="dg-feedback" d="M240.915 148 V160"/>
+<text class="dg-tiny" x="240.915" y="172" text-anchor="middle">LLM</text>
+<rect x="254.01" y="110" width="66.78" height="36" rx="3" fill="color-mix(in srgb, var(--l-gpu) 50%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="287.4" y="132" text-anchor="middle">TTS, 60 %</text>
+<text class="dg-small" x="328.79" y="132" text-anchor="start">0.123 USD</text>
+<text class="dg-small" x="20" y="208" text-anchor="start">gpt-realtime, sin caché</text>
+<rect class="dg-bad" x="210" y="186" width="530" height="36" rx="3"/>
+<path d="M630 182 l10 44 M642 182 l10 44" style="stroke: var(--bg-2); stroke-width: 5"/>
+<text class="dg-small dg-fail-text" x="410" y="208" text-anchor="middle">4.697 USD: × 9, fuera de escala</text>
+<text class="dg-tiny" x="20" y="250" text-anchor="start">Lo caro, en las dos, es la voz del agente: cada segundo que habla.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.15.</b> La tabla como barras apiladas. En las dos arquitecturas, la mayor parte del costo es la voz del agente; el LLM, que en texto era todo, aquí es una franja chica. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>Con la flota de referencia, 15&#8239;000 sesiones en promedio son 657 millones de minutos al mes. A esa escala, la elección pesa: 34.1 millones de dólares al mes con gpt-realtime, 8.09 millones con la cascada por APIs y 0.87 millones con la flota propia de 24.14, que necesita un equipo que la opere. <span class="badge badge--ref">Diseño de referencia</span></p>
 
       <h3 id="costo-medir">Medir el uso de una sesión</h3>
@@ -1041,6 +1313,40 @@ contexto.ultimo_turno_del_agente = oido          # lo que el modelo "dijo"
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f24n6t f24n6d">
+<title id="f24n6t">Cuántas unidades de cada pieza</title>
+<desc id="f24n6d">Las unidades de cada pieza para 30 000 sesiones abiertas en el pico, al 75 % de uso: 40 SFU, 500 workers de voz con 8 vCPU, 134 GPUs L4 para el STT, 200 para el TTS y 27 réplicas del LLM. Debajo de cada barra, cuántas sesiones caben por unidad. La flota de voz es sobre todo CPU y GPUs chicas.</desc>
+<defs><marker id="f24n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="50" text-anchor="start">SFU</text>
+<text class="dg-tiny" x="20" y="65" text-anchor="start">c7gn.2xlarge · 1 000 sesiones c/u</text>
+<rect x="200" y="38" width="36.8" height="28" rx="3" fill="color-mix(in srgb, var(--l-edge) 30%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-small" x="244.8" y="57" text-anchor="start">40</text>
+<text class="dg-small" x="20" y="92" text-anchor="start">Workers de voz</text>
+<text class="dg-tiny" x="20" y="107" text-anchor="start">8 vCPU · 80 sesiones c/u</text>
+<rect x="200" y="80" width="460" height="28" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="668" y="99" text-anchor="start">500</text>
+<text class="dg-small" x="20" y="134" text-anchor="start">STT</text>
+<text class="dg-tiny" x="20" y="149" text-anchor="start">GPU L4 · 300 sesiones c/u</text>
+<rect x="200" y="122" width="123.28" height="28" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="331.28" y="141" text-anchor="start">134</text>
+<text class="dg-small" x="20" y="176" text-anchor="start">TTS</text>
+<text class="dg-tiny" x="20" y="191" text-anchor="start">GPU L4 · 200 sesiones c/u</text>
+<rect x="200" y="164" width="184" height="28" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="392" y="183" text-anchor="start">200</text>
+<text class="dg-small" x="20" y="218" text-anchor="start">LLM</text>
+<text class="dg-tiny" x="20" y="233" text-anchor="start">réplica · 64 generaciones c/u</text>
+<rect x="200" y="206" width="24.84" height="28" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="232.84" y="225" text-anchor="start">27</text>
+<text class="dg-tiny" x="20" y="254" text-anchor="start">Little: 100 sesiones nuevas por segundo × 300 s = 30 000 abiertas; ÷ 0.75 = 40 000 de capacidad.</text>
+<text class="dg-tiny" x="20" y="272" text-anchor="start">Cada pieza se escala por su propio recurso: red, CPU, streams de GPU o generaciones.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 24.16.</b> La última columna de la tabla como barras. Los workers de CPU son la pieza más numerosa, y el LLM la más chica. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>Los números por unidad son de referencia y se miden con una prueba de carga antes de creerlos. <span class="badge badge--ref">Diseño de referencia</span> Lo importante es la forma: la flota de voz es sobre todo CPU y GPUs chicas, y el LLM es la parte más pequeña. El autoscaling del <a href="m19-router-flota.html#autoscaling">M19</a> escala cada pieza por separado; en el promedio del día, la flota usa cerca de dos tercios de lo que necesita en el pico.</p>
 
@@ -1149,7 +1455,7 @@ contexto.ultimo_turno_del_agente = oido          # lo que el modelo "dijo"
 <path class="dg-edge" d="M420 186 V218 H545 V228" marker-end="url(#f24wa)"/>
 </svg>
         </div>
-        <figcaption><b>Figura 24.9.</b> El agente de voz en AWS. El audio va del cliente al SFU, directo o por coturn, y del SFU a los workers.</figcaption>
+        <figcaption><b>Figura 24.17.</b> El agente de voz en AWS. El audio va del cliente al SFU, directo o por coturn, y del SFU a los workers.</figcaption>
       </figure>
 
       <ol class="steps">

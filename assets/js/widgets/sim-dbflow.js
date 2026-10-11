@@ -8,7 +8,8 @@
               deco: 'SVG'                    marcas fijas que se dibujan debajo de las cajas,
               init: { id: { v: ['línea'], st: 'on|ok|fail|warn|down' } },
               def, rows: [['Ganas', '…']],   tarjeta de abajo (HTML),
-              steps: [ { m: [['a', 'b', kind, 'etiqueta']], say: 'HTML', set: { id: { v, st } } } ] }
+              steps: [ { m: [['a', 'b', kind, 'etiqueta']], say: 'HTML', set: { id: { v, st } }, deco: 'SVG' } ] }
+   deco de un paso: marcas que se dibujan solo en ese paso, encima de las de la escena (el waterfall de M11).
    kind: req, res, ok, fail, write, async (punteado), warn. Un paso sin mensajes solo cambia estados.
 
    Escenas de este archivo:
@@ -141,6 +142,7 @@
           (on ? ' style="stroke:' + on.c + (on.dash ? ';stroke-dasharray:7 5' : '') + '"' : '') + '/>';
       });
       if (sc.deco) s += sc.deco;
+      if (step.deco) s += step.deco;
       Object.keys(nodes).forEach(function (id) { s += nodeSvg(id, nodes[id], st[id]); });
       moves.forEach(function (m, i) {
         var p = edgePts(nodes, m[0], m[1]), k = KIND[m[2]];

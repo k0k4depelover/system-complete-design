@@ -1,0 +1,1760 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M12.1. Prefill y decode a fondo</title>
+<meta name="description" content="Qué pasa dentro del modelo en cada pasada: el bloque transformer pieza por pieza, la atención con sus formas, GEMM contra GEMV, el prefill y el decode paso a paso, el KV cache por dentro, FlashAttention, dónde se va el tiempo y el muestreo.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m121">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Prefill y decode a fondo</h1>
+        <p class="lead">M12 dice que el prefill está limitado por cómputo y el decode por memoria. Este módulo abre la caja y lo muestra: qué matrices se multiplican en cada capa, con qué formas, qué se escribe y qué se lee del KV cache en cada pasada, y por qué la misma multiplicación cuesta tan distinto con 2000 tokens que con uno. Es la versión opcional y a fondo de M12.3 a M12.5, para quien quiere entender el modelo además de servirlo.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M12.1</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12 (M13 ayuda con el roofline)</dd></div>
+          <div><dt>Estado</dt><dd data-status="m121">Sin empezar</dd></div>
+        </dl>
+      </header>
+<aside class="level-switch" data-toc="skip">
+        <p><b>Esta es la versión a fondo de prefill y decode, y es opcional.</b> No cuenta para el progreso y el resto del curso no la necesita: M12 alcanza para seguir. Aquí se abre el modelo pieza por pieza, con las formas de cada tensor, las cuentas de cada fase, diagramas de qué se calcula y qué se lee en cada pasada, y dos simuladores.</p>
+        <a class="btn" href="m12-llm-por-dentro.html">Volver a lo esencial (M12)</a>
+      </aside>
+
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Recorrer un forward pass de un transformer decoder-only pieza por pieza, con la forma de cada tensor.</li>
+          <li>Contar los parámetros de Llama 3.1 70B a partir de su configuración y decir dónde está cada uno.</li>
+          <li>Calcular los FLOPs y los bytes de una multiplicación de matrices y decidir si la limita el cómputo o la memoria.</li>
+          <li>Explicar la atención con su máscara causal, GQA y FlashAttention, y escribirla en NumPy con y sin KV cache.</li>
+          <li>Describir qué calcula, qué escribe y qué lee cada pasada de prefill y de decode, y estimar cuánto tarda cada pieza.</li>
+          <li>Predecir qué les pasa a los usuarios en decode cuando llega un prompt largo, y cómo lo cambia el chunked prefill.</li>
+          <li>Convertir logits en un token con temperatura, top-k y top-p, y escribir el bucle de generación a mano.</li>
+        </ul>
+      </section>
+
+      <h2 id="mapa"><span class="sec-num">12.1.1</span>El mapa: un forward pass completo</h2>
+
+      <p>En M12 el modelo fue <a href="m12-llm-por-dentro.html#caja">una función</a>: entran tokens, salen logits. Esa función tiene una forma muy regular. Casi todos los LLM actuales son un <dfn data-term="transformer">transformer decoder-only</dfn>: una tabla que convierte cada token en un vector, una pila de bloques iguales que transforman esos vectores, y una capa final que convierte el último vector en un puntaje por token del vocabulario. Llamar al modelo una vez, con todos los tokens que entran en esa llamada, es un <dfn data-term="forward-pass">forward pass</dfn>, o una pasada. El prefill es una pasada con todos los tokens del prompt; cada paso de decode es una pasada con un solo token por request.</p>
+
+      <p>La lámina muestra una pasada de Llama 3.1 70B, que usamos de ejemplo en todo el módulo porque es el de M12 y M13. Mírala entera antes de leer cada sección; vuelve a ella cuando un nombre se confunda con otro.</p>
+
+      <figure class="figure plate">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 616" role="img" aria-labelledby="plat plad">
+<title id="plat">Lámina 12.1.A: un forward pass de Llama 3.1 70B</title>
+<desc id="plad">El texto se convierte en IDs de tokens y cada ID en un vector de 8192 números con la tabla de embeddings. Esos vectores forman el flujo residual, que atraviesa 80 bloques iguales. En cada bloque, la rama de atención normaliza con RMSNorm, proyecta Q, K y V, les aplica RoPE, escribe K y V en el KV cache, calcula la atención causal leyendo el cache y proyecta el resultado con O; la salida se suma al flujo residual. La rama MLP normaliza, proyecta a 28 672 con gate y up, combina con SwiGLU, vuelve a 8192 con down y también se suma. Después de los 80 bloques, una norma final y el LM head producen los logits, y el muestreo elige el token siguiente. Catorce marcas numeradas señalan cada pieza y se explican en la lista debajo de la figura.</desc>
+<defs><marker id="plaa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="14" width="150" height="50" rx="10"/>
+<text class="dg-label" x="85" y="36" text-anchor="middle">Texto</text>
+<text class="dg-tiny" x="85" y="53" text-anchor="middle">«¿Qué es el KV cache?»</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="196" y="14" width="170" height="50" rx="10"/>
+<text class="dg-label" x="281" y="36" text-anchor="middle">IDs de tokens</text>
+<text class="dg-tiny" x="281" y="53" text-anchor="middle">T posiciones</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="402" y="14" width="200" height="50" rx="10"/>
+<text class="dg-label" x="502" y="36" text-anchor="middle">Embedding</text>
+<text class="dg-tiny" x="502" y="53" text-anchor="middle">128 256 filas de 8192</text>
+<path class="dg-edge" d="M161 39 H192" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M367 39 H398" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M502 65 V80 H80 V94" marker-end="url(#plaa)"/>
+<g class="pl-pin"><circle cx="196" cy="14" r="11"/><text x="196" y="18" text-anchor="middle">1</text></g>
+<g class="pl-pin"><circle cx="402" cy="14" r="11"/><text x="402" y="18" text-anchor="middle">2</text></g>
+<text class="dg-tiny" x="612" y="34" text-anchor="start">una fila de la tabla</text>
+<text class="dg-tiny" x="612" y="49" text-anchor="start">por cada token</text>
+<rect class="dg-frame" x="30" y="100" width="732" height="372" rx="14"/>
+<text class="dg-group" x="116" y="120" text-anchor="start">Bloque decoder: se repite 80 veces, cada uno con sus propios pesos</text>
+<rect x="70" y="96" width="20" height="440" rx="6" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" transform="translate(84 228) rotate(-90)" text-anchor="middle">flujo residual [T, 8192]</text>
+<g class="pl-pin"><circle cx="104" cy="254" r="11"/><text x="104" y="258" text-anchor="middle">3</text></g>
+<text class="dg-group" x="116" y="140" text-anchor="start">Atención</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="116" y="160" width="90" height="36" rx="10"/>
+<text class="dg-label" x="161" y="183" text-anchor="middle">RMSNorm</text>
+<path class="dg-edge" d="M91 178 H112" marker-end="url(#plaa)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="222" y="148" width="140" height="62" rx="10"/>
+<text class="dg-label" x="292" y="168" text-anchor="middle">Q, K, V</text>
+<text class="dg-tiny" x="292" y="185" text-anchor="middle">Q: 64 cabezas × 128</text>
+<text class="dg-tiny" x="292" y="200" text-anchor="middle">K y V: 8 × 128</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="378" y="148" width="84" height="62" rx="10"/>
+<text class="dg-label" x="420" y="168" text-anchor="middle">RoPE</text>
+<text class="dg-tiny" x="420" y="185" text-anchor="middle">rota Q y K</text>
+<text class="dg-tiny" x="420" y="200" text-anchor="middle">por posición</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="478" y="148" width="152" height="62" rx="10"/>
+<text class="dg-label" x="554" y="176" text-anchor="middle">Atención causal</text>
+<text class="dg-tiny" x="554" y="193" text-anchor="middle">softmax(QKᵀ/√128)·V</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="646" y="148" width="104" height="62" rx="10"/>
+<text class="dg-label" x="698" y="176" text-anchor="middle">Proyección O</text>
+<text class="dg-tiny" x="698" y="193" text-anchor="middle">8192 → 8192</text>
+<path class="dg-edge" d="M207 178 H218" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M363 178 H374" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M463 178 H474" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M631 178 H642" marker-end="url(#plaa)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="378" y="246" width="252" height="46" rx="10"/>
+<text class="dg-label" x="504" y="266" text-anchor="middle">KV cache de esta capa</text>
+<text class="dg-tiny" x="504" y="283" text-anchor="middle">K y V de todos los tokens anteriores</text>
+<path class="dg-edge" d="M420 211 V242" marker-end="url(#plaa)"/>
+<text class="dg-tiny" x="426" y="230" text-anchor="start">escribe K, V</text>
+<path class="dg-edge" d="M590 245 V214" marker-end="url(#plaa)"/>
+<text class="dg-tiny" x="584" y="230" text-anchor="end">lee K, V</text>
+<path class="dg-edge" d="M698 211 V316 H93" marker-end="url(#plaa)"/>
+<circle cx="80" cy="316" r="11" fill="var(--bg)" stroke="var(--l-service)" stroke-width="1.8"/>
+<text class="dg-label" x="80" y="321" text-anchor="middle">+</text>
+<g class="pl-pin"><circle cx="116" cy="160" r="11"/><text x="116" y="164" text-anchor="middle">4</text></g>
+<g class="pl-pin"><circle cx="222" cy="148" r="11"/><text x="222" y="152" text-anchor="middle">5</text></g>
+<g class="pl-pin"><circle cx="378" cy="148" r="11"/><text x="378" y="152" text-anchor="middle">6</text></g>
+<g class="pl-pin"><circle cx="478" cy="148" r="11"/><text x="478" y="152" text-anchor="middle">7</text></g>
+<g class="pl-pin"><circle cx="378" cy="246" r="11"/><text x="378" y="250" text-anchor="middle">8</text></g>
+<g class="pl-pin"><circle cx="646" cy="148" r="11"/><text x="646" y="152" text-anchor="middle">9</text></g>
+<g class="pl-pin"><circle cx="106" cy="336" r="11"/><text x="106" y="340" text-anchor="middle">10</text></g>
+<text class="dg-tiny" x="400" y="310" text-anchor="middle">la salida se suma al flujo, no lo reemplaza</text>
+<text class="dg-group" x="130" y="362" text-anchor="start">MLP</text>
+<g class="pl-pin"><circle cx="116" cy="358" r="11"/><text x="116" y="362" text-anchor="middle">11</text></g>
+<rect class="dg-layer" style="--c: var(--l-service)" x="116" y="380" width="90" height="36" rx="10"/>
+<text class="dg-label" x="161" y="403" text-anchor="middle">RMSNorm</text>
+<path class="dg-edge" d="M91 398 H112" marker-end="url(#plaa)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="222" y="368" width="170" height="60" rx="10"/>
+<text class="dg-label" x="307" y="395" text-anchor="middle">gate y up</text>
+<text class="dg-tiny" x="307" y="412" text-anchor="middle">8192 → 28 672, dos veces</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="408" y="368" width="140" height="60" rx="10"/>
+<text class="dg-label" x="478" y="395" text-anchor="middle">SwiGLU</text>
+<text class="dg-tiny" x="478" y="412" text-anchor="middle">SiLU(gate) × up</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="564" y="368" width="186" height="60" rx="10"/>
+<text class="dg-label" x="657" y="395" text-anchor="middle">down</text>
+<text class="dg-tiny" x="657" y="412" text-anchor="middle">28 672 → 8192</text>
+<path class="dg-edge" d="M207 398 H218" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M393 398 H404" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M549 398 H560" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M657 429 V446 H93" marker-end="url(#plaa)"/>
+<circle cx="80" cy="446" r="11" fill="var(--bg)" stroke="var(--l-service)" stroke-width="1.8"/>
+<text class="dg-label" x="80" y="451" text-anchor="middle">+</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="116" y="504" width="120" height="48" rx="10"/>
+<text class="dg-label" x="176" y="533" text-anchor="middle">RMSNorm final</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="252" y="504" width="170" height="48" rx="10"/>
+<text class="dg-label" x="337" y="525" text-anchor="middle">LM head</text>
+<text class="dg-tiny" x="337" y="542" text-anchor="middle">8192 → 128 256</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="438" y="504" width="150" height="48" rx="10"/>
+<text class="dg-label" x="513" y="525" text-anchor="middle">Logits</text>
+<text class="dg-tiny" x="513" y="542" text-anchor="middle">un puntaje por token</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="604" y="504" width="146" height="48" rx="10"/>
+<text class="dg-label" x="677" y="525" text-anchor="middle">Muestreo</text>
+<text class="dg-tiny" x="677" y="542" text-anchor="middle">elige el siguiente</text>
+<path class="dg-edge" d="M91 528 H112" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M237 528 H248" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M423 528 H434" marker-end="url(#plaa)"/>
+<path class="dg-edge" d="M589 528 H600" marker-end="url(#plaa)"/>
+<g class="pl-pin"><circle cx="116" cy="504" r="11"/><text x="116" y="508" text-anchor="middle">12</text></g>
+<g class="pl-pin"><circle cx="252" cy="504" r="11"/><text x="252" y="508" text-anchor="middle">13</text></g>
+<g class="pl-pin"><circle cx="604" cy="504" r="11"/><text x="604" y="508" text-anchor="middle">14</text></g>
+<text class="dg-tiny" x="750" y="580" text-anchor="end">el token elegido se agrega al final de la secuencia y vuelve a entrar: una pasada por token</text>
+<text class="dg-tiny" x="750" y="598" text-anchor="end">en el prefill entran los T tokens del prompt; en cada paso de decode, solo uno</text>
+</svg>
+
+        </div>
+        <figcaption><b>Lámina 12.1.A.</b> Un forward pass de Llama 3.1 70B. El flujo residual baja por la izquierda; cada bloque le suma lo que calcula su rama de atención y su rama MLP, y solo la atención lee y escribe el KV cache.</figcaption>
+      </figure>
+      <ol class="plate-key">
+        <li><b>IDs de tokens</b><span>El tokenizer convierte el texto en una lista de enteros, uno por token: T posiciones. <a href="m12-llm-por-dentro.html#tokens">M12.2</a></span></li>
+        <li><b class="no-autolink">Tabla de embeddings</b><span>Una matriz de 128 256 filas por 8192 columnas: cada ID elige una fila. Es una lectura, no una cuenta. <a href="#tensores">12.1.2</a></span></li>
+        <li><b>Flujo residual</b><span>La matriz [T, 8192] que atraviesa los 80 bloques. Cada bloque le suma algo; nadie la reemplaza. <a href="#tensores">12.1.2</a></span></li>
+        <li><b>RMSNorm</b><span>Reescala cada vector antes de cada rama para que los números no crezcan con las 160 sumas. <a href="#tensores">12.1.2</a></span></li>
+        <li><b>Proyecciones Q, K y V</b><span>Tres multiplicaciones de matrices: la consulta, la clave y el valor de cada token, repartidos en cabezas. <a href="#atencion">12.1.4</a></span></li>
+        <li><b>RoPE</b><span>Rota Q y K según la posición del token, para que la atención sepa qué está cerca de qué. <a href="#atencion">12.1.4</a></span></li>
+        <li><b>Atención causal</b><span>Cada token compara su consulta con las claves de los anteriores y mezcla sus valores. Es lo único que mezcla información entre tokens. <a href="#atencion">12.1.4</a></span></li>
+        <li><b>KV cache</b><span>Las K y V de cada token, por capa, guardadas para no recalcularlas en cada paso. <a href="#decode">12.1.6</a></span></li>
+        <li><b>Proyección O</b><span>Junta las 64 cabezas en un vector de 8192 antes de sumarlo al flujo. <a href="#atencion">12.1.4</a></span></li>
+        <li><b>Suma residual</b><span>x = x + rama(x). Por eso cada bloque refina en lugar de reescribir. <a href="#tensores">12.1.2</a></span></li>
+        <li><b>MLP</b><span>Tres matrices grandes (gate, up y down) que trabajan cada token por separado. Tiene el 82&#8239;% de los pesos de cada bloque. <a href="#tensores">12.1.2</a></span></li>
+        <li><b>RMSNorm final</b><span>Una última <span class="no-autolink">normalización</span> del vector que sale del bloque 80. <a href="#prefill">12.1.5</a></span></li>
+        <li><b>LM head</b><span>Una matriz de 8192 por 128 256: del vector final a un logit por token. Solo corre en la última posición. <a href="#prefill">12.1.5</a></span></li>
+        <li><b>Muestreo</b><span>Temperatura, top-k y top-p convierten los logits en un token elegido. <a href="#muestreo">12.1.9</a></span></li>
+      </ol>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Piensa en una carpeta que pasa por 80 escritorios en fila. En cada escritorio, alguien la lee, escribe notas en los márgenes y la pasa al siguiente; nadie borra lo que ya estaba. El primer empleado de cada escritorio (la atención) puede mirar las carpetas de los clientes anteriores, guardadas en un archivo (el KV cache); el segundo (el MLP) trabaja solo con esta carpeta. Al final, alguien lee la última página y escribe una palabra. Para escribir la siguiente palabra, la carpeta entera vuelve a recorrer los 80 escritorios, aunque ahora con una sola hoja nueva.</p>
+      </aside>
+
+      <h2 id="tensores"><span class="sec-num">12.1.2</span>De tokens a tensores: las piezas y sus pesos</h2>
+
+      <p>Todo lo que hace el modelo sale de su configuración, un archivo <code>config.json</code> que viene con los pesos. Para Llama 3.1 70B: <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Campo de config.json</th><th class="r">Valor</th><th>Qué significa</th></tr></thead>
+          <tbody>
+            <tr><td><code>hidden_size</code></td><td class="r">8192</td><td>El ancho del flujo residual: cada token es un vector de 8192 números en todo el modelo. Se suele llamar d_model.</td></tr>
+            <tr><td><code>num_hidden_layers</code></td><td class="r">80</td><td>Bloques decoder en la pila.</td></tr>
+            <tr><td><code>num_attention_heads</code></td><td class="r">64</td><td>Cabezas de consulta. Cada una mira con 8192 ÷ 64 = 128 números: el head_dim.</td></tr>
+            <tr><td><code>num_key_value_heads</code></td><td class="r">8</td><td>Cabezas de K y V, compartidas por grupos de 8 consultas (GQA, 12.1.4).</td></tr>
+            <tr><td><code>intermediate_size</code></td><td class="r">28 672</td><td>El ancho interno del MLP: 3.5 veces el del flujo.</td></tr>
+            <tr><td><code>vocab_size</code></td><td class="r">128 256</td><td>Filas de la tabla de embeddings y columnas del LM head.</td></tr>
+            <tr><td><code>rope_theta</code></td><td class="r">500 000</td><td>La base de las rotaciones de RoPE (<a href="m16-context-windows.html#rope">M16</a>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con esos números se cuentan los pesos uno por uno. Una matriz que lleva un vector de ancho a a uno de ancho b tiene a × b pesos:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Matriz</th><th class="r">Pesos</th><th class="r">Del total</th></tr></thead>
+          <tbody>
+            <tr><td><span class="no-autolink">Tabla de embeddings</span></td><td>128 256 × 8192</td><td class="r">1 050 673 152</td><td class="r">1.5&#8239;%</td></tr>
+            <tr><td>Por bloque: Q y O</td><td>8192 × 8192, dos veces</td><td class="r">134 217 728</td><td class="r"></td></tr>
+            <tr><td>Por bloque: K y V</td><td>8192 × 1024, dos veces (8 cabezas × 128)</td><td class="r">16 777 216</td><td class="r"></td></tr>
+            <tr><td>Por bloque: MLP</td><td>8192 × 28 672, tres veces (gate, up y down)</td><td class="r">704 643 072</td><td class="r"></td></tr>
+            <tr><td>Por bloque: dos RMSNorm</td><td>8192, dos veces</td><td class="r">16 384</td><td class="r"></td></tr>
+            <tr><td><b>Los 80 bloques</b></td><td>855 654 400 × 80</td><td class="r">68 452 352 000</td><td class="r">97.0&#8239;%</td></tr>
+            <tr><td>RMSNorm final</td><td>8192</td><td class="r">8192</td><td class="r">0&#8239;%</td></tr>
+            <tr><td>LM head</td><td>8192 × 128 256</td><td class="r">1 050 673 152</td><td class="r">1.5&#8239;%</td></tr>
+            <tr><td><b>Total</b></td><td></td><td class="r"><b>70 553 706 496</b></td><td class="r">100&#8239;%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La suma da 70 554 millones, los 70.6 mil millones que anuncia Meta. Dos cosas salen de la tabla. La primera: el MLP tiene el 82&#8239;% de los pesos de cada bloque, así que es la pieza que más lee y más calcula. La segunda: la cuenta de M12, unas 2 operaciones por parámetro por token, sale de aquí. Cada peso de una matriz participa una vez por token en una multiplicación y una suma; la <span class="no-autolink">tabla de embeddings</span> no suma nada porque solo se lee una fila.</p>
+
+      <h3 id="tensores-bloque">Qué hace cada pieza del bloque</h3>
+
+      <ul>
+        <li><b>El flujo residual.</b> La salida de la <span class="no-autolink">tabla de embeddings</span> es una matriz [T, 8192], una fila por token. Esa matriz es el <dfn data-term="flujo-residual">flujo residual</dfn>: cada rama de cada bloque lee una copia <span class="no-autolink">normalizada</span>, calcula algo y lo suma de vuelta, x = x + rama(x). Como nada se reemplaza, la información de las primeras capas llega intacta a las últimas, y las 80 capas se pueden entrenar sin que la señal se pierda en el camino.</li>
+        <li><b class="no-autolink">La normalización.</b> Antes de cada rama, <dfn data-term="rmsnorm">RMSNorm</dfn> divide cada vector por la raíz de la media de sus cuadrados y lo multiplica por 8192 pesos aprendidos. Sin eso, 160 sumas seguidas harían crecer los números sin control. Llama aplica la norma antes de cada rama (pre-norm), no después. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>La atención.</b> Es la única pieza que mezcla información entre tokens: cada posición mira las anteriores y trae lo que le sirve. Tiene la sección 12.1.4 para ella.</li>
+        <li><b>El <dfn data-term="mlp">MLP</dfn>.</b> Trabaja cada token por separado, sin mirar a los otros. Llama usa la variante SwiGLU: dos proyecciones a 28 672 (gate y up), una se pasa por la función SiLU y se multiplica elemento por elemento con la otra, y una tercera (down) vuelve a 8192. <span class="badge badge--doc">Documentado</span> Se suele leer como la memoria de hechos del modelo: la atención decide qué información juntar y el MLP la transforma.</li>
+      </ul>
+
+      <p>En código, una pasada completa es corta. Este esqueleto en Python es el modelo entero, sin los detalles de la atención, que vienen en 12.1.4:</p>
+
+<pre data-lang="python"><code>def bloque(x, capa, cache):
+    x = x + atencion(rmsnorm(x, capa.norm_1), capa, cache)   # mezcla entre tokens
+    x = x + mlp(rmsnorm(x, capa.norm_2), capa)               # cada token por separado
+    return x
+
+def mlp(x, capa):
+    return (silu(x @ capa.W_gate) * (x @ capa.W_up)) @ capa.W_down
+
+def forward(ids, modelo, cache):
+    x = modelo.embedding[ids]                  # [T, 8192]: una fila de la tabla por token
+    for i, capa in enumerate(modelo.capas):    # 80 bloques, siempre en orden
+        x = bloque(x, capa, cache[i])
+    x = rmsnorm(x[-1], modelo.norm_final)      # solo la última posición
+    return x @ modelo.lm_head                  # [128 256]: un logit por token del vocabulario</code></pre>
+
+      <p>Fíjate en que la función es la misma para el prefill y para el decode. Lo único que cambia es T: 2000 en el prefill de un prompt de 2000 tokens, 1 en cada paso de decode. Todo lo que sigue en el módulo sale de esa diferencia.</p>
+
+      <h2 id="matmul"><span class="sec-num">12.1.3</span>Una multiplicación de matrices, contada</h2>
+
+      <p>Casi todo el tiempo de una pasada se va en multiplicar la matriz de activaciones [T, a] por una matriz de pesos [a, b]. Esa operación tiene dos costos que se cuentan por separado:</p>
+
+      <div class="formula">FLOPs = 2 × T × a × b &nbsp;&nbsp;·&nbsp;&nbsp; bytes ≈ a × b × bytes por peso + T × (a + b) × 2</div>
+
+      <p>El primer término de los bytes son los pesos, que se leen una vez por pasada sin importar T. El segundo son las activaciones que entran y salen, en BF16. Dividir FLOPs por bytes da la intensidad aritmética, las operaciones por byte leído (<a href="m13-gpus.html#roofline">M13.3</a>). Cuando T es chico frente a a y b, los pesos dominan los bytes y la cuenta se simplifica: la intensidad es 2 × T ÷ bytes por peso. Cada fila de activaciones reutiliza los pesos ya leídos; más filas, más cuentas por el mismo viaje a memoria.</p>
+
+      <p>A esa operación se le dice <dfn data-term="gemm-gemv">GEMM</dfn> (matriz por matriz) cuando T es grande, y GEMV (matriz por vector) cuando T es 1. El nombre importa porque las bibliotecas y los profilers los distinguen: la misma capa corre como GEMM en el prefill y como GEMV en el decode de un solo usuario.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 268" role="img" aria-labelledby="f1211t f1211d">
+<title id="f1211t">La misma multiplicación en prefill y en decode</title>
+<desc id="f1211d">A la izquierda, el prefill: una matriz de activaciones de 2000 filas, una por token, por la matriz de pesos de Q de 8192 por 8192, da 2000 filas de salida. Los 67 MB de pesos se leen una vez y sirven para 2000 tokens: unas 2000 operaciones por byte. A la derecha, el decode: una sola fila por la misma matriz. Los mismos 67 MB sirven para un token: 2 operaciones por byte. Las matrices están dibujadas a escala: la de pesos es mucho más grande que las activaciones.</desc>
+<text class="dg-group" x="10" y="24" text-anchor="start">Prefill: GEMM, 2000 tokens</text>
+<text class="dg-tiny" x="10" y="42" text-anchor="start">una fila por token del prompt</text>
+<rect x="10" y="62" width="110" height="26.9" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<text class="dg-tiny" x="65" y="103.855" text-anchor="middle">X: [2 000 × 8192]</text>
+<text class="dg-label" x="135" y="104" text-anchor="middle">×</text>
+<rect x="150" y="62" width="110" height="110" rx="2" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="205" y="112" text-anchor="middle">W_q</text>
+<text class="dg-tiny" x="205" y="130" text-anchor="middle">[8192 × 8192]</text>
+<text class="dg-tiny" x="205" y="146" text-anchor="middle">67 MB en FP8</text>
+<text class="dg-label" x="275" y="104" text-anchor="middle">=</text>
+<rect x="290" y="62" width="80" height="26.9" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<text class="dg-tiny" x="330" y="103.855" text-anchor="middle">Y: [2 000 × 8192]</text>
+<text class="dg-small" x="10" y="202" text-anchor="start">Lee W_q una vez: 67 MB.</text>
+<text class="dg-small" x="10" y="220" text-anchor="start">Hace 2 × 2000 × 8192² ≈ 268 mil millones de FLOPs.</text>
+<text class="dg-small" x="10" y="238" text-anchor="start">Unas 2000 FLOP por byte: manda el cómputo.</text>
+<text class="dg-group" x="396" y="24" text-anchor="start">Decode: GEMV, 1 token</text>
+<text class="dg-tiny" x="396" y="42" text-anchor="start">una sola fila: el token nuevo</text>
+<rect x="396" y="62" width="110" height="3.0" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<text class="dg-tiny" x="451" y="80" text-anchor="middle">X: [1 × 8192]</text>
+<text class="dg-label" x="521" y="104" text-anchor="middle">×</text>
+<rect x="536" y="62" width="110" height="110" rx="2" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="591" y="112" text-anchor="middle">W_q</text>
+<text class="dg-tiny" x="591" y="130" text-anchor="middle">[8192 × 8192]</text>
+<text class="dg-tiny" x="591" y="146" text-anchor="middle">67 MB en FP8</text>
+<text class="dg-label" x="661" y="104" text-anchor="middle">=</text>
+<rect x="676" y="62" width="80" height="3.0" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<text class="dg-tiny" x="716" y="80" text-anchor="middle">Y: [1 × 8192]</text>
+<text class="dg-small" x="396" y="202" text-anchor="start">Lee W_q una vez: los mismos 67 MB.</text>
+<text class="dg-small" x="396" y="220" text-anchor="start">Hace 2 × 1 × 8192² ≈ 134 millones de FLOPs.</text>
+<text class="dg-small" x="396" y="238" text-anchor="start">2 FLOP por byte: manda la memoria.</text>
+<path class="dg-frame" d="M384 14 V256"/>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.1.</b> La proyección Q de una capa, a escala. Los pesos pesan lo mismo en las dos fases; lo que cambia es cuántas filas los aprovechan.</figcaption>
+      </figure>
+
+      <p>Con la proyección Q de Llama 3.1 70B, de 8192 por 8192, la intensidad según cuántos tokens entran en la pasada es esta. La H100 cambia de régimen en 590 FLOP por byte en FP8 y en 295 en BF16 (989 TFLOPS ÷ 3.35 TB/s):</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th class="r">Tokens en la pasada (T)</th><th class="r">Intensidad, pesos en FP8</th><th class="r">Intensidad, pesos en BF16</th><th>Qué la limita en una H100</th></tr></thead>
+          <tbody>
+            <tr><td class="r">1</td><td class="r">2</td><td class="r">1</td><td>Memoria: un token de decode</td></tr>
+            <tr><td class="r">8</td><td class="r">16</td><td class="r">8</td><td>Memoria</td></tr>
+            <tr><td class="r">64</td><td class="r">124</td><td class="r">63</td><td>Memoria: 64 usuarios en decode</td></tr>
+            <tr><td class="r">128</td><td class="r">241</td><td class="r">124</td><td>Memoria</td></tr>
+            <tr><td class="r">345</td><td class="r">590</td><td class="r">318</td><td>El quiebre en FP8 (en BF16, desde 318)</td></tr>
+            <tr><td class="r">512</td><td class="r">819</td><td class="r">455</td><td>Cómputo: un trozo de prefill</td></tr>
+            <tr><td class="r">2000</td><td class="r">2024</td><td class="r">1344</td><td>Cómputo: un prompt de 2000 tokens</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La regla que sale de la tabla: <b>desde unos 300 tokens por pasada, una proyección deja de esperar a la memoria</b>, en FP8 o en BF16. El prefill de un prompt mediano pasa ese umbral de sobra. El decode llega a él solo si junta cientos de usuarios en el mismo paso, porque en el decode T es la cantidad de usuarios del batch: cada uno aporta una fila. Es la misma cuenta de <a href="m12-llm-por-dentro.html#memoria">M12.5</a>, ahora vista desde una sola matriz.</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term">Tokens por pasada <span class="def-en">tokens per forward pass</span></p>
+        <p class="def-one">La cantidad de filas que entran a cada multiplicación de matrices en una pasada: los tokens de prefill más un token por usuario en decode.</p>
+        <dl class="def-rows">
+          <dt>Intuición</dt><dd>Cada viaje a la memoria trae los pesos de una capa; cuantas más filas los usan antes de tirarlos, más trabajo útil por viaje.</dd>
+          <dt>Ejemplo</dt><dd>Un prefill de 2000 tokens: 2000 filas. Un paso de decode con 64 usuarios: 64 filas. Un paso mixto con un trozo de 512 y 64 usuarios: 576.</dd>
+          <dt>Por qué importa en producción</dt><dd>Es la perilla que los motores mueven: el continuous batching suma filas de decode y el chunked prefill elige cuántas de prefill entran en cada paso (<a href="m15-motores-inferencia.html#batching">M15</a>).</dd>
+        </dl>
+      </aside>
+
+      <h2 id="atencion"><span class="sec-num">12.1.4</span>La atención por dentro</h2>
+
+      <p>La <dfn data-term="self-attention">atención</dfn> responde, para cada token, una pregunta: de todo lo que vino antes, ¿qué me sirve? Lo hace con tres vectores por token y por cabeza, que salen de las proyecciones de la lámina (marca 5):</p>
+      <ul>
+        <li><b>Q, la consulta:</b> qué está buscando este token.</li>
+        <li><b>K, la clave:</b> qué ofrece cada token, para ser encontrado.</li>
+        <li><b>V, el valor:</b> lo que entrega cada token si lo eligen.</li>
+      </ul>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Una biblioteca. La consulta es lo que le preguntas al bibliotecario; cada libro tiene una etiqueta en el lomo (la clave) y un contenido (el valor). El bibliotecario compara tu pregunta con todas las etiquetas, le da a cada libro un puntaje según cuánto se parece, y te arma un resumen que mezcla los contenidos en proporción a esos puntajes. La máscara causal es una regla de la biblioteca: solo puedes consultar libros que llegaron antes que tú.</p>
+      </aside>
+
+      <p>Paso a paso, en una capa y una cabeza:</p>
+      <ol class="steps">
+        <li><span class="step-title">Proyectar</span>Q = x · W_q, K = x · W_k, V = x · W_v. En Llama 3.1 70B, Q tiene 64 cabezas de 128 números y K y V tienen 8.</li>
+        <li><span class="step-title">Rotar</span>RoPE gira cada par de números de Q y K un ángulo que depende de la posición. Así el producto de una consulta y una clave depende de cuán lejos están los dos tokens (<a href="m16-context-windows.html#rope">M16.5</a>). V no se rota.</li>
+        <li><span class="step-title">Comparar</span>El puntaje entre la consulta i y la clave j es su producto escalar dividido por √128 ≈ 11.3: S = Q · Kᵀ ÷ √128.</li>
+        <li><span class="step-title">Tapar el futuro</span>La <dfn data-term="mascara-causal">máscara causal</dfn> pone −∞ en los puntajes de las claves posteriores a la consulta. Ningún token puede mirar a uno que todavía no existía cuando se generó.</li>
+        <li><span class="step-title no-autolink">Normalizar</span><dfn data-term="softmax">Softmax</dfn> convierte cada fila de puntajes en pesos positivos que suman 1: eˢ dividido por la suma de eˢ de la fila. Un −∞ da peso 0.</li>
+        <li><span class="step-title">Mezclar</span>La salida de la consulta i es la suma de los V de cada token pesados por esos pesos. Las 64 cabezas se pegan en un vector de 8192 y la proyección O lo mezcla antes de sumarlo al flujo residual.</li>
+      </ol>
+
+      <p>¿Por qué dividir por √128? El producto escalar de dos vectores de 128 números al azar tiene una dispersión que crece con √128. Sin la división, los puntajes serían tan grandes que softmax daría casi todo el peso a una sola clave, y en el entrenamiento los gradientes se apagarían. Es la escala que propuso el paper original del transformer. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>Las formas, para el prefill de 2000 tokens y para el paso de decode del token 2001:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Tensor</th><th>Prefill: 2000 tokens</th><th>Decode: el token 2001</th></tr></thead>
+          <tbody>
+            <tr><td class="no-autolink">Entrada x (normalizada)</td><td>[2000, 8192]</td><td>[1, 8192]</td></tr>
+            <tr><td>Q</td><td>[2000, 64, 128]</td><td>[1, 64, 128]</td></tr>
+            <tr><td>K y V que se calculan</td><td>[2000, 8, 128] cada uno</td><td>[1, 8, 128] cada uno</td></tr>
+            <tr><td>K y V que se usan</td><td>los mismos 2000</td><td>[2001, 8, 128]: 2000 leídos del cache y 1 nuevo</td></tr>
+            <tr><td>Puntajes S = QKᵀ ÷ √128</td><td>[64, 2000, 2000], con la mitad tapada</td><td>[64, 1, 2001]: una fila por cabeza</td></tr>
+            <tr><td>Salida, pesos × V</td><td>[2000, 64, 128] → [2000, 8192]</td><td>[1, 64, 128] → [1, 8192]</td></tr>
+            <tr><td>Después de la proyección O</td><td>[2000, 8192]</td><td>[1, 8192]</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Con GQA (<a href="m12-llm-por-dentro.html#kv-cache">M12.4</a>), las 64 consultas no tienen cada una su K y su V: se reparten en 8 grupos, y cada grupo lee el mismo par. El cálculo de la atención sigue siendo de 64 cabezas; lo que baja es lo que se guarda y se lee. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 214" role="img" aria-labelledby="f1212t f1212d">
+<title id="f1212t">Grouped-Query Attention en Llama 3.1 70B</title>
+<desc id="f1212d">Las 64 cabezas de consulta se reparten en 8 grupos de 8. Cada grupo comparte un solo par de K y V, así que el KV cache guarda 8 pares por token y por capa en lugar de 64. Las 64 cabezas siguen calculando su propia atención.</desc>
+<text class="dg-group" x="10" y="22" text-anchor="start">64 cabezas de consulta (Q), cada una de 128 números</text>
+<rect x="10" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="15" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="25" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="35" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="45" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="55" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="65" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="75" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="85" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="54" y="96" text-anchor="middle">Q 0–7</text>
+<path class="dg-feedback" d="M54.0 102 V112"/>
+<rect x="18" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="35" y="130" text-anchor="middle">K0</text>
+<rect x="56" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="73" y="130" text-anchor="middle">V0</text>
+<text class="dg-tiny" x="54" y="155" text-anchor="middle">grupo 1</text>
+<rect x="105" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="110" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="120" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="130" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="140" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="150" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="160" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="170" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="180" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="149" y="96" text-anchor="middle">Q 8–15</text>
+<path class="dg-feedback" d="M149.0 102 V112"/>
+<rect x="113" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="130" y="130" text-anchor="middle">K1</text>
+<rect x="151" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="168" y="130" text-anchor="middle">V1</text>
+<text class="dg-tiny" x="149" y="155" text-anchor="middle">grupo 2</text>
+<rect x="200" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="205" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="215" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="225" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="235" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="245" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="255" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="265" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="275" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="244" y="96" text-anchor="middle">Q 16–23</text>
+<path class="dg-feedback" d="M244.0 102 V112"/>
+<rect x="208" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="225" y="130" text-anchor="middle">K2</text>
+<rect x="246" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="263" y="130" text-anchor="middle">V2</text>
+<text class="dg-tiny" x="244" y="155" text-anchor="middle">grupo 3</text>
+<rect x="295" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="300" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="310" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="320" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="330" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="340" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="350" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="360" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="370" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="339" y="96" text-anchor="middle">Q 24–31</text>
+<path class="dg-feedback" d="M339.0 102 V112"/>
+<rect x="303" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="320" y="130" text-anchor="middle">K3</text>
+<rect x="341" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="358" y="130" text-anchor="middle">V3</text>
+<text class="dg-tiny" x="339" y="155" text-anchor="middle">grupo 4</text>
+<rect x="390" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="395" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="405" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="415" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="425" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="435" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="445" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="455" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="465" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="434" y="96" text-anchor="middle">Q 32–39</text>
+<path class="dg-feedback" d="M434.0 102 V112"/>
+<rect x="398" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="415" y="130" text-anchor="middle">K4</text>
+<rect x="436" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="453" y="130" text-anchor="middle">V4</text>
+<text class="dg-tiny" x="434" y="155" text-anchor="middle">grupo 5</text>
+<rect x="485" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="490" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="500" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="510" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="520" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="530" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="540" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="550" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="560" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="529" y="96" text-anchor="middle">Q 40–47</text>
+<path class="dg-feedback" d="M529.0 102 V112"/>
+<rect x="493" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="510" y="130" text-anchor="middle">K5</text>
+<rect x="531" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="548" y="130" text-anchor="middle">V5</text>
+<text class="dg-tiny" x="529" y="155" text-anchor="middle">grupo 6</text>
+<rect x="580" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="585" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="595" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="605" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="615" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="625" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="635" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="645" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="655" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="624" y="96" text-anchor="middle">Q 48–55</text>
+<path class="dg-feedback" d="M624.0 102 V112"/>
+<rect x="588" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="605" y="130" text-anchor="middle">K6</text>
+<rect x="626" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="643" y="130" text-anchor="middle">V6</text>
+<text class="dg-tiny" x="624" y="155" text-anchor="middle">grupo 7</text>
+<rect x="675" y="36" width="88" height="128" rx="8" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="680" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="690" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="700" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="710" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="720" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="730" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="740" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<rect x="750" y="46" width="8" height="34" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1"/>
+<text class="dg-tiny" x="719" y="96" text-anchor="middle">Q 56–63</text>
+<path class="dg-feedback" d="M719.0 102 V112"/>
+<rect x="683" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="700" y="130" text-anchor="middle">K7</text>
+<rect x="721" y="114" width="34" height="24" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="738" y="130" text-anchor="middle">V7</text>
+<text class="dg-tiny" x="719" y="155" text-anchor="middle">grupo 8</text>
+<text class="dg-small" x="10" y="188" text-anchor="start">En el cache: 8 pares de K y V por token y por capa, 2 × 8 × 128 × 2 bytes = 4 kB en BF16; por 80 capas, 328 kB.</text>
+<text class="dg-small" x="10" y="206" text-anchor="start">Sin compartir (MHA) serían 64 pares: 2.6 MB por token, 8 veces más.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.2.</b> GQA en Llama 3.1 70B: 64 consultas, 8 pares de K y V. Cada grupo de 8 consultas lee el mismo par del cache.</figcaption>
+      </figure>
+
+      <p>La atención entera cabe en unas líneas de NumPy. Este programa la calcula de dos maneras: con el prefill de 7 tokens y un paso de decode que usa el cache, y recalculando los 8 tokens desde cero. La última fila sale igual, y esa igualdad es la razón por la que existe el KV cache: guardar K y V no aproxima nada, solo evita repetir cuentas.</p>
+
+<pre data-lang="python"><code>import numpy as np
+
+rng = np.random.default_rng(0)
+d, dh = 64, 16                       # ancho del modelo y de la cabeza (de juguete)
+Wq, Wk, Wv = (rng.normal(size=(d, dh)) / d**0.5 for _ in range(3))
+
+def softmax(x):
+    x = x - x.max(axis=-1, keepdims=True)          # estabilidad numérica: no cambia el resultado
+    e = np.exp(x)
+    return e / e.sum(axis=-1, keepdims=True)
+
+def atencion(X):
+    """Prefill: todas las posiciones a la vez, con máscara causal."""
+    Q, K, V = X @ Wq, X @ Wk, X @ Wv                   # [T, dh] cada una
+    S = Q @ K.T / dh**0.5                              # [T, T]: cada consulta contra cada clave
+    futuro = np.triu(np.ones_like(S, dtype=bool), k=1)
+    S[futuro] = -np.inf                                # nadie mira tokens posteriores
+    return softmax(S) @ V, K, V                        # [T, dh], y K y V para el cache
+
+def paso_decode(x, K_cache, V_cache):
+    """Decode: una sola posición nueva contra todo lo guardado."""
+    q, k, v = x @ Wq, x @ Wk, x @ Wv                   # [dh] cada una
+    K_cache = np.vstack([K_cache, k])                  # se agrega, no se recalcula
+    V_cache = np.vstack([V_cache, v])
+    s = K_cache @ q / dh**0.5                          # [T + 1]: una fila de la matriz
+    return softmax(s) @ V_cache, K_cache, V_cache
+
+X = rng.normal(size=(8, d))                            # 8 tokens: 7 de prompt y 1 nuevo
+_, K, V = atencion(X[:7])                              # prefill del prompt
+fila, K, V = paso_decode(X[7], K, V)                   # decode del token 8
+completo, _, _ = atencion(X)                           # sin cache: recalcular los 8
+print(np.allclose(fila, completo[-1]))                 # True: el mismo resultado</code></pre>
+
+      <p>El simulador muestra la matriz de puntajes de una cabeza mientras se genera una respuesta. Prueba primero con el KV cache y después sin él, y compara las celdas calculadas en total:</p>
+
+      <div data-sim="attnrows"></div>
+
+      <p>Con 7 tokens de prompt y 6 pasos de decode, el cache deja el total en 91 celdas, una por cada par posible. Sin el cache, cada paso recalcula el triángulo entero y el total sube a 399. La diferencia crece con el cuadrado del largo: en una respuesta de 500 tokens sobre un prompt de 2000, recalcular todo en cada paso haría unas 1000 veces más trabajo de atención, y además habría que recalcular las proyecciones de todos los tokens.</p>
+
+      <h3 id="atencion-costo">Lo que cuesta la atención</h3>
+
+      <p>En el prefill, cada una de las T consultas se compara con hasta T claves, en 64 cabezas de 128 números, dos veces (QKᵀ y la suma de los V). Con la máscara causal, los kernels se saltean la mitad tapada:</p>
+
+      <div class="formula">FLOPs de la atención en un prefill ≈ 2 × T² × 8192 × 80 = 1.31 millones × T²</div>
+
+      <p>Las proyecciones y el MLP cuestan unas 2 × 70 600 millones × T, en línea recta con T. Las dos cuentas se igualan cuando T ≈ 70 600 millones ÷ (8192 × 80), unos <b>108 000 tokens</b>. Por debajo, la atención es una parte chica del prefill: el 1.8&#8239;% con 2000 tokens. Por encima, domina. Es la curva que dibuja <a href="m16-context-windows.html#limites">M16.1</a>.</p>
+
+      <h3 id="flash">La matriz que no cabe: FlashAttention</h3>
+
+      <p>El problema de la atención no son solo los FLOPs. Escrita de la manera directa, calcula la matriz de puntajes S entera, la guarda en la HBM, la vuelve a leer para el softmax y otra vez para multiplicarla por V. Esa matriz tiene T × T valores por cabeza. Con 2000 tokens y 64 cabezas en BF16 son 512 MB por capa; con 32 768 tokens, <b>137 GB por capa</b>, más que la memoria de una H100.</p>
+
+      <p><dfn data-term="flashattention">FlashAttention</dfn> calcula lo mismo sin escribir esa matriz. <span class="badge badge--doc">Documentado</span> Trae a la SRAM del chip (<a href="m13-gpus.html#anatomia">M13.1</a>) un bloque de consultas y va recorriendo bloques de claves y valores; calcula cada pedazo de S ahí mismo, lo usa y lo tira. El truco que lo permite es el softmax en línea: para cada consulta guarda el máximo de los puntajes vistos y la suma de sus exponenciales. Cuando un bloque nuevo trae un máximo mayor, reescala lo acumulado por e elevado a la diferencia de máximos y sigue. Al final el resultado es exacto, idéntico al de la matriz completa, y la memoria extra crece con T y no con T².</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 326" role="img" aria-labelledby="f1216t f1216d">
+<title id="f1216t">Atención ingenua contra FlashAttention</title>
+<desc id="f1216d">Arriba de cada panel, la SRAM del chip, chica y rápida; abajo, la HBM, grande y más lenta. En la atención ingenua, un primer kernel calcula la matriz de puntajes de T por T y la escribe en la HBM, un segundo kernel la lee, aplica softmax y la vuelve a escribir, y un tercero la lee para multiplicarla por V. En FlashAttention, un solo kernel trae bloques de Q, K y V a la SRAM, calcula cada bloque de puntajes ahí mismo con un softmax en línea y escribe en la HBM solo la salida. La matriz de T por T nunca existe entera.</desc>
+<defs><marker id="f1216a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="20" text-anchor="start">Atención ingenua: tres kernels</text>
+<rect x="10" y="32" width="360" height="104" rx="10" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<text class="dg-tiny" x="362" y="48" text-anchor="end">SRAM: ~60 MB en total, decenas de TB/s</text>
+<rect x="10" y="190" width="360" height="86" rx="10" fill="color-mix(in srgb, var(--l-db) 12%, var(--bg))" stroke="var(--l-db)"/>
+<text class="dg-tiny" x="362" y="268" text-anchor="end">HBM: 80 GB, 3.35 TB/s</text>
+<text class="dg-group" x="400" y="20" text-anchor="start">FlashAttention: un kernel</text>
+<rect x="400" y="32" width="360" height="104" rx="10" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<text class="dg-tiny" x="752" y="48" text-anchor="end">SRAM: ~60 MB en total, decenas de TB/s</text>
+<rect x="400" y="190" width="360" height="86" rx="10" fill="color-mix(in srgb, var(--l-db) 12%, var(--bg))" stroke="var(--l-db)"/>
+<text class="dg-tiny" x="752" y="268" text-anchor="end">HBM: 80 GB, 3.35 TB/s</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="20" y="62" width="104" height="50" rx="10"/>
+<text class="dg-label" x="72" y="84" text-anchor="middle">S = QKᵀ</text>
+<text class="dg-tiny" x="72" y="101" text-anchor="middle">kernel 1</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="138" y="62" width="104" height="50" rx="10"/>
+<text class="dg-label" x="190" y="84" text-anchor="middle">P = softmax(S)</text>
+<text class="dg-tiny" x="190" y="101" text-anchor="middle">kernel 2</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="256" y="62" width="104" height="50" rx="10"/>
+<text class="dg-label" x="308" y="84" text-anchor="middle">O = P·V</text>
+<text class="dg-tiny" x="308" y="101" text-anchor="middle">kernel 3</text>
+<rect class="dg-box" x="20" y="206" width="60" height="40" rx="6"/>
+<text class="dg-small" x="50" y="231" text-anchor="middle">Q, K</text>
+<rect class="dg-warnbox" x="96" y="206" width="150" height="40" rx="6"/>
+<text class="dg-small" x="171" y="231" text-anchor="middle">S y P: T × T</text>
+<rect class="dg-box" x="262" y="206" width="36" height="40" rx="6"/>
+<text class="dg-small" x="280" y="231" text-anchor="middle">V</text>
+<rect class="dg-box" x="314" y="206" width="36" height="40" rx="6"/>
+<text class="dg-small" x="332" y="231" text-anchor="middle">O</text>
+<path class="dg-edge" d="M50 205 V116" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M100 116 V202" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M150 205 V116" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M200 116 V202" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M236 205 V116" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M280 205 V116" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M332 116 V202" marker-end="url(#f1216a)"/>
+<text class="dg-tiny" x="185" y="298" text-anchor="middle">S y P van y vuelven por la HBM; con T = 32 768 y 64 cabezas,</text>
+<text class="dg-tiny" x="185" y="314" text-anchor="middle">son 137 GB por capa. Memoria y tráfico crecen con T².</text>
+<rect x="414" y="58" width="332" height="66" rx="10" class="dg-box dg-box--em"/>
+<text class="dg-label" x="580" y="76" text-anchor="middle">Un kernel, por bloques</text>
+<rect x="424" y="84" width="40" height="30" rx="4" fill="var(--accent-tint)" stroke="var(--accent)"/>
+<text class="dg-tiny" x="444" y="103" text-anchor="middle">Qᵢ</text>
+<rect x="470" y="84" width="54" height="30" rx="4" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="497" y="103" text-anchor="middle">Kⱼ, Vⱼ</text>
+<rect x="530" y="84" width="40" height="30" rx="4" class="dg-warnbox"/>
+<text class="dg-tiny" x="550" y="103" text-anchor="middle">Sᵢⱼ</text>
+<text class="dg-tiny" x="578" y="96" text-anchor="start">softmax en línea:</text>
+<text class="dg-tiny" x="578" y="110" text-anchor="start">máximo y suma parciales</text>
+<rect class="dg-box" x="414" y="206" width="70" height="40" rx="6"/>
+<text class="dg-small" x="449" y="231" text-anchor="middle">Q</text>
+<rect class="dg-box" x="494" y="206" width="70" height="40" rx="6"/>
+<text class="dg-small" x="529" y="231" text-anchor="middle">K</text>
+<rect class="dg-box" x="574" y="206" width="70" height="40" rx="6"/>
+<text class="dg-small" x="609" y="231" text-anchor="middle">V</text>
+<rect class="dg-box" x="676" y="206" width="70" height="40" rx="6"/>
+<text class="dg-small" x="711" y="231" text-anchor="middle">O</text>
+<path class="dg-edge" d="M444 205 V118" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M529 205 V118" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M609 205 V118" marker-end="url(#f1216a)"/>
+<path class="dg-edge" d="M711 126 V202" marker-end="url(#f1216a)"/>
+<text class="dg-tiny" x="704" y="166" text-anchor="end">solo la salida</text>
+<text class="dg-tiny" x="580" y="298" text-anchor="middle">Trae bloques de Q, K y V a la SRAM y escribe solo O.</text>
+<text class="dg-tiny" x="580" y="314" text-anchor="middle">La memoria extra crece con T, no con T².</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.3.</b> La atención ingenua lleva la matriz de T × T de ida y vuelta por la HBM; FlashAttention la calcula por bloques dentro de la SRAM y solo escribe la salida.</figcaption>
+      </figure>
+
+      <p>La primera versión es de 2022; FlashAttention-2 (2023) reparte mejor el trabajo entre los SMs y FlashAttention-3 (2024) usa las instrucciones de la H100 y FP8. <span class="badge badge--doc">Documentado</span> En el decode el problema cambia: hay una sola consulta por usuario, así que no hay bloques de consultas que repartir entre los SMs. Flash-Decoding (2023) reparte entonces el largo del cache: cada SM procesa un tramo de claves y valores, y los resultados se combinan con el mismo softmax en línea. <span class="badge badge--doc">Documentado</span></p>
+
+      <h2 id="prefill"><span class="sec-num">12.1.5</span>Prefill paso a paso</h2>
+
+      <p>Antes de que la GPU vea un token, la request recorre el servidor. El diagrama sigue a una request de 2000 tokens de prompt de punta a punta; esta sección se ocupa de su primera pasada, y la siguiente, de las demás.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 682" role="img" aria-labelledby="f1210t f1210d">
+<title id="f1210t">La vida de una request, de la API a la GPU</title>
+<desc id="f1210d">El cliente manda la request; el servidor aplica la plantilla de chat y el tokenizer y la encola en el scheduler del motor. Cuando hay lugar, el scheduler reserva bloques del KV cache y lanza el prefill de los 2000 tokens en una pasada, que escribe K y V en el cache y devuelve los logits de la última posición. El primer token viaja al cliente: ese es el TTFT. Después, cada paso de decode lee el cache, agrega un par K y V y devuelve un token, que sale por el stream. Al terminar, el scheduler libera los bloques del cache.</desc>
+<defs><marker id="f1210-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f1210-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f1210-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f1210-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M70.0 40 V672"/>
+<rect class="dg-box" x="165.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="227.5" y="29" text-anchor="middle" style="font-size:13.5px">Servidor API</text>
+<path class="dg-frame" d="M227.5 40 V672"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Scheduler</text>
+<path class="dg-frame" d="M385.0 40 V672"/>
+<rect class="dg-box" x="480.5" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="542.5" y="29" text-anchor="middle" style="font-size:13.5px">GPU: modelo</text>
+<path class="dg-frame" d="M542.5 40 V672"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">KV cache</text>
+<path class="dg-frame" d="M700.0 40 V672"/>
+<path class="dg-edge" d="M73.0 72 L222.5 72" marker-end="url(#f1210-a)"/>
+<rect x="60.25" y="55" width="177.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="66" text-anchor="middle">POST /v1/chat/completions</text>
+<path class="dg-edge" d="M227.5 98 h40 v14 h-38" marker-end="url(#f1210-a)"/>
+<text class="dg-tiny" x="273.5" y="109">plantilla y tokenizer: 2000 tokens</text>
+<path class="dg-edge" d="M230.5 140 L380.0 140" marker-end="url(#f1210-a)"/>
+<rect x="240.85" y="123" width="130.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="134" text-anchor="middle">encolar la request</text>
+<rect x="395.0" y="160" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="176">espera un lugar en el batch: la cola</text>
+<path class="dg-edge" d="M388.0 208 L695.0 208" marker-end="url(#f1210-a)"/>
+<rect x="427.6" y="191" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="202" text-anchor="middle">reservar bloques para 2000 tokens</text>
+<path class="dg-edge" d="M388.0 242 L537.5 242" marker-end="url(#f1210-a)"/>
+<rect x="345.55" y="225" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="236" text-anchor="middle">prefill: 2000 tokens en una pasada</text>
+<path class="dg-edge" d="M545.5 276 L695.0 276" marker-end="url(#f1210-a)"/>
+<rect x="489.85" y="259" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="270" text-anchor="middle">escribir K y V: 2000 tokens × 80 capas</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M539.5 310 L390.0 310" marker-end="url(#f1210-r)"/>
+<rect x="365.35" y="293" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="304" text-anchor="middle">logits de la última posición</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 344 L232.5 344" marker-end="url(#f1210-r)"/>
+<rect x="277.15" y="327" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="306.25" y="338" text-anchor="middle">token 1</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M224.5 378 L75.0 378" marker-end="url(#f1210-r)"/>
+<rect x="23.950000000000003" y="361" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="372" text-anchor="middle">data: token 1 (aquí termina el TTFT)</text>
+<path class="dg-edge" d="M388.0 412 L537.5 412" marker-end="url(#f1210-a)"/>
+<rect x="309.25" y="395" width="309.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="406" text-anchor="middle">paso de decode: 1 token por usuario del batch</text>
+<path class="dg-edge" d="M545.5 446 L695.0 446" marker-end="url(#f1210-a)"/>
+<rect x="496.45" y="429" width="249.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="621.25" y="440" text-anchor="middle">leer K y V de 2000 tokens, agregar 1</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M539.5 480 L390.0 480" marker-end="url(#f1210-r)"/>
+<rect x="437.95" y="463" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="463.75" y="474" text-anchor="middle">logits</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M224.5 514 L75.0 514" marker-end="url(#f1210-r)"/>
+<rect x="99.85" y="497" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="508" text-anchor="middle">data: token 2</text>
+<path d="M20 546 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="535" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="550" text-anchor="middle" style="fill:var(--fail)">se repite una vez por token, cada TPOT</text>
+<path class="dg-edge" d="M388.0 582 L695.0 582" marker-end="url(#f1210-a)"/>
+<rect x="427.6" y="565" width="229.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="576" text-anchor="middle">fin o max_tokens: liberar bloques</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M224.5 616 L75.0 616" marker-end="url(#f1210-r)"/>
+<rect x="103.15" y="599" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="148.75" y="610" text-anchor="middle">data: [DONE]</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.4.</b> La vida de una request. El TTFT es la cola, el prefill y el viaje del primer token; después, cada paso de decode lee el cache, agrega una columna y produce un token.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><span class="step-title">Plantilla y tokenizer</span>En la CPU: los mensajes se envuelven con la plantilla de chat y se tokenizan. Resultan 2000 IDs (<a href="m12-llm-por-dentro.html#tokens">M12.2</a>).</li>
+        <li><span class="step-title">Admisión</span>El scheduler del motor la admite cuando hay bloques libres de KV cache para sus 2000 tokens. Si el prompt empieza con un prefijo que ya está en el cache, como un prompt de sistema compartido, esos tokens no se recalculan (<a href="m15-motores-inferencia.html#prefix">M15.4</a>).</li>
+        <li><span class="step-title"><span class="no-autolink">Embedding</span></span>Se leen 2000 filas de la tabla: una matriz [2000, 8192]. Son 33 MB en BF16 y ninguna cuenta.</li>
+        <li><span class="step-title">80 bloques</span>En cada uno, las proyecciones y el MLP son GEMMs de 2000 filas. RoPE usa las posiciones 0 a 1999. K y V de los 2000 tokens se escriben en el cache: 4 kB por token y capa, 655 MB en total. La atención causal corre con FlashAttention.</li>
+        <li><span class="step-title">LM head en una sola posición</span>Solo hace falta el logit de la última posición, porque el siguiente token sale de ahí. Aplicar el <dfn data-term="lm-head">LM head</dfn> a una fila cuesta 2 × 8192 × 128 256 ≈ 2100 millones de FLOPs; aplicarlo a las 2000 costaría 4.2 billones, el 1.5&#8239;% del prefill, para descartarlos.</li>
+        <li><span class="step-title">Primer token</span>El muestreo elige un token, que sale por el stream (<a href="m17-api-streaming.html">M17</a>). Ahí termina el TTFT.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 336" role="img" aria-labelledby="f1213t f1213d">
+<title id="f1213t">El prefill: todos los tokens del prompt, capa por capa</title>
+<desc id="f1213d">Una rejilla con los tokens del prompt en las columnas y las capas en las filas. En el prefill se calculan todas las celdas: cada capa procesa los 2000 tokens juntos, en una sola multiplicación de matrices, y las capas van en orden. Cada celda deja su K y su V en el KV cache. Solo la salida de la última posición de la capa 80 pasa al LM head y produce el primer token; las otras 1999 salidas se descartan.</desc>
+<defs><marker id="f1213a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="96" y="22" text-anchor="start">Los 2000 tokens del prompt entran juntos: cada fila es una sola multiplicación de matrices</text>
+<path class="dg-edge" d="M96 32 H584" marker-start="url(#f1213a)" marker-end="url(#f1213a)"/>
+<text class="dg-tiny" x="123" y="56" text-anchor="middle">tok 1</text>
+<text class="dg-tiny" x="185" y="56" text-anchor="middle">tok 2</text>
+<text class="dg-tiny" x="247" y="56" text-anchor="middle">tok 3</text>
+<text class="dg-tiny" x="309" y="56" text-anchor="middle">tok 4</text>
+<text class="dg-tiny" x="371" y="56" text-anchor="middle">…</text>
+<text class="dg-tiny" x="433" y="56" text-anchor="middle">tok 1998</text>
+<text class="dg-tiny" x="495" y="56" text-anchor="middle">tok 1999</text>
+<text class="dg-tiny" x="557" y="56" text-anchor="middle">tok 2000</text>
+<text class="dg-small" x="86" y="85" text-anchor="end">capa 1</text>
+<rect x="96" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="102" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="124" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="111" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="164" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="186" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="173" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="226" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="248" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="235" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="282" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="288" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="310" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="297" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="319" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="371" y="86" text-anchor="middle">…</text>
+<rect x="406" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="412" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="434" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="421" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="530" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="536" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="558" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="545" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="567" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-small" x="86" y="125" text-anchor="end">capa 2</text>
+<rect x="96" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="102" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="124" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="111" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="164" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="186" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="173" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="226" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="248" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="235" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="282" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="288" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="310" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="297" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="319" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="371" y="126" text-anchor="middle">…</text>
+<rect x="406" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="412" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="434" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="421" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="530" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="536" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="558" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="545" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="567" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-small" x="86" y="165" text-anchor="end">capa 3</text>
+<rect x="96" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="102" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="124" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="111" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="164" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="186" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="173" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="226" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="248" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="235" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="282" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="288" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="310" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="297" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="319" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="371" y="166" text-anchor="middle">…</text>
+<rect x="406" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="412" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="434" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="421" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="530" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="536" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="558" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="545" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="567" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-small" x="86" y="205" text-anchor="end">⋮</text>
+<text class="dg-label" x="123" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="185" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="247" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="309" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="371" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="433" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="495" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="557" y="206" text-anchor="middle">⋮</text>
+<text class="dg-small" x="86" y="245" text-anchor="end">capa 80</text>
+<rect x="96" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="102" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="124" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="111" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="164" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="186" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="173" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="226" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="248" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="235" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="282" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="288" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="310" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="297" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="319" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="371" y="246" text-anchor="middle">…</text>
+<rect x="406" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="412" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="434" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="421" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="530" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="536" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="558" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="545" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="567" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<path class="dg-edge" d="M14 66 V256" marker-end="url(#f1213a)"/>
+<text class="dg-tiny" transform="translate(28 166) rotate(-90)" text-anchor="middle">capas en orden</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="620" y="212" width="140" height="58" rx="10"/>
+<text class="dg-label" x="690" y="230" text-anchor="middle">LM head</text>
+<text class="dg-tiny" x="690" y="247" text-anchor="middle">solo la última</text>
+<text class="dg-tiny" x="690" y="262" text-anchor="middle">posición</text>
+<path class="dg-edge" d="M585 241.0 H616" marker-end="url(#f1213a)"/>
+<path class="dg-edge" d="M690 271 V296" marker-end="url(#f1213a)"/>
+<text class="dg-small" x="690" y="310" text-anchor="middle">primer token: «Guarda»</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="620" y="66" width="140" height="98" rx="10"/>
+<text class="dg-label" x="690" y="96" text-anchor="middle">KV cache</text>
+<text class="dg-tiny" x="690" y="113" text-anchor="middle">2000 tokens</text>
+<text class="dg-tiny" x="690" y="128" text-anchor="middle">× 80 capas</text>
+<text class="dg-tiny" x="690" y="143" text-anchor="middle">≈ 655 MB en BF16</text>
+<text class="dg-tiny" x="96" y="300" text-anchor="start">Celeste: lo que calcula esta pasada. Cada celda deja su K y su V en el cache, y las salidas de las</text>
+<text class="dg-tiny" x="96" y="316" text-anchor="start">otras 1999 posiciones de la última capa no se usan: el LM head corre una sola vez.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.5.</b> En el prefill se calculan todas las celdas de la rejilla: cada fila (una capa) procesa los 2000 tokens en una sola multiplicación, y cada celda deja su K y su V en el cache.</figcaption>
+      </figure>
+
+      <p>¿Cuánto tarda? Con Llama 3.1 70B en FP8 sobre 4 H100, el cómputo al 40&#8239;% del pico y cada pieza limitada por el mayor de sus dos costos (el modelo de la calculadora de 12.1.7):</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th class="r">Prompt</th><th class="r">FLOPs</th><th class="r">Tiempo de la atención</th><th class="r">Prefill</th><th class="r">KV escrito (BF16)</th><th>Lo limita</th></tr></thead>
+          <tbody>
+            <tr><td class="r">100</td><td class="r">1.4 × 10<sup>13</sup></td><td class="r">0.4&#8239;%</td><td class="r">5.4 ms</td><td class="r">33 MB</td><td>La memoria: leer los pesos</td></tr>
+            <tr><td class="r">500</td><td class="r">6.9 × 10<sup>13</sup></td><td class="r">0.6&#8239;%</td><td class="r">22 ms</td><td class="r">164 MB</td><td>El cómputo</td></tr>
+            <tr><td class="r">2000</td><td class="r">2.8 × 10<sup>14</sup></td><td class="r">1.9&#8239;%</td><td class="r">88 ms</td><td class="r">655 MB</td><td>El cómputo, sobre todo el MLP</td></tr>
+            <tr><td class="r">8000</td><td class="r">1.2 × 10<sup>15</sup></td><td class="r">7.1&#8239;%</td><td class="r">372 ms</td><td class="r">2.6 GB</td><td>El cómputo</td></tr>
+            <tr><td class="r">32 000</td><td class="r">5.7 × 10<sup>15</sup></td><td class="r">23&#8239;%</td><td class="r">1.81 s</td><td class="r">10.5 GB</td><td>El cómputo, con la atención creciendo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Tres lecturas de la tabla:</p>
+      <ul>
+        <li><b>El TTFT crece en línea recta con el prompt</b> mientras la atención es chica, y más rápido después. Cuatro veces más prompt, de 2000 a 8000, son 4.2 veces más prefill.</li>
+        <li><b>Un prompt corto cuesta casi lo mismo que un paso de decode.</b> Con 100 tokens, la pasada está por debajo del quiebre de 12.1.3 y la limita leer los 70.6 GB de pesos: 5.4 ms, contra 5.3 ms de un paso de decode. El TTFT tiene un piso, una lectura completa de los pesos, por corto que sea el prompt.</li>
+        <li><b>El prefill procesa tokens mucho más rápido que el decode.</b> 2000 tokens en 88 ms son unos 22 700 tokens por segundo para una sola request; el decode de esa misma request da 189 por segundo. Por eso las APIs cobran bastante menos por un token de entrada que por uno de salida (<a href="m12-llm-por-dentro.html#costo">M12.7</a>).</li>
+      </ul>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El TTFT que ve el usuario es la cola, más el prefill, más la red. Si el TTFT sube sin que suba el largo de los prompts, la causa suele ser la cola, y se arregla con capacidad (<a href="m19-router-flota.html">M19</a>). Si sube con el largo del prompt, es el prefill: se ataca con prefix caching, que evita recalcular lo repetido, con chunked prefill o desagregación, que lo separan del decode (12.1.8), o recortando el contexto (<a href="m16-context-windows.html#estrategias">M16.3</a>). Distinguirlos exige spans separados de cola y prefill en el trace (<a href="m11-observabilidad.html">M11</a>).</p>
+      </aside>
+
+      <h2 id="decode"><span class="sec-num">12.1.6</span>Decode paso a paso</h2>
+
+      <p>Después del prefill, la request está en el batch de decode del motor. Cada paso hace la misma pasada de la lámina con un solo token por usuario. Para el token 2001 de nuestra request:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Una fila</span>Se lee la fila del token anterior en la tabla: [1, 8192]. Si hay 64 usuarios en el batch, son 64 filas, una de cada uno.</li>
+        <li><span class="step-title">80 bloques</span>Cada proyección y el MLP leen sus pesos enteros para multiplicarlos por esas pocas filas. RoPE usa la posición 2000. K y V del token nuevo se agregan al cache de cada capa.</li>
+        <li><span class="step-title">Atención contra el cache</span>La consulta del token nuevo se compara con las 2001 claves de su capa y mezcla los 2001 valores: hay que leer los 2000 pares guardados.</li>
+        <li><span class="step-title">LM head y muestreo</span>Una fila por usuario, un token por usuario. El token se convierte en texto y sale por el stream.</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 356" role="img" aria-labelledby="f1214t f1214d">
+<title id="f1214t">Un paso de decode: una sola columna nueva</title>
+<desc id="f1214d">La misma rejilla después del prefill. Las 2000 columnas del prompt ya están calculadas y su K y su V están en el cache. El paso de decode calcula solo la columna del token nuevo, el 2001, capa por capa. En cada capa, la atención del token nuevo lee las K y V de las 2000 columnas anteriores de esa fila y agrega las suyas. Los pesos de las 80 capas se leen enteros para una sola columna. La salida de la capa 80 pasa al LM head y produce el token siguiente.</desc>
+<defs><marker id="f1214a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="96" y="22" text-anchor="start">Solo entra el token nuevo; los anteriores ya están en el cache</text>
+<text class="dg-tiny" x="123" y="56" text-anchor="middle">tok 1</text>
+<text class="dg-tiny" x="185" y="56" text-anchor="middle">tok 2</text>
+<text class="dg-tiny" x="247" y="56" text-anchor="middle">tok 3</text>
+<text class="dg-tiny" x="309" y="56" text-anchor="middle">…</text>
+<text class="dg-tiny" x="371" y="56" text-anchor="middle">tok 1999</text>
+<text class="dg-tiny" x="433" y="56" text-anchor="middle">tok 2000</text>
+<text class="dg-tiny" x="495" y="56" text-anchor="middle" style="font-weight:600">tok 2001</text>
+<text class="dg-small" x="86" y="85" text-anchor="end">capa 1</text>
+<rect x="96" y="66" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="102" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="124" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="111" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="66" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="164" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="186" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="173" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="66" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="226" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="248" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="235" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="309" y="86" text-anchor="middle">…</text>
+<rect x="344" y="66" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="350" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="372" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="359" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="381" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="406" y="66" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="412" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="434" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="421" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="66" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="75" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="85" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="85" text-anchor="middle" style="font-size:9.5px">V</text>
+<path class="dg-feedback" d="M495.0 96 V101 H100" marker-end="url(#f1214a)"/>
+<text class="dg-small" x="86" y="125" text-anchor="end">capa 2</text>
+<rect x="96" y="106" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="102" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="124" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="111" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="106" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="164" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="186" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="173" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="106" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="226" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="248" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="235" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="309" y="126" text-anchor="middle">…</text>
+<rect x="344" y="106" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="350" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="372" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="359" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="381" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="406" y="106" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="412" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="434" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="421" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="106" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="115" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="125" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="125" text-anchor="middle" style="font-size:9.5px">V</text>
+<path class="dg-feedback" d="M495.0 136 V141 H100" marker-end="url(#f1214a)"/>
+<text class="dg-small" x="86" y="165" text-anchor="end">capa 3</text>
+<rect x="96" y="146" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="102" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="124" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="111" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="146" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="164" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="186" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="173" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="146" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="226" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="248" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="235" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="309" y="166" text-anchor="middle">…</text>
+<rect x="344" y="146" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="350" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="372" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="359" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="381" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="406" y="146" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="412" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="434" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="421" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="146" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="155" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="165" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="165" text-anchor="middle" style="font-size:9.5px">V</text>
+<path class="dg-feedback" d="M495.0 176 V181 H100" marker-end="url(#f1214a)"/>
+<text class="dg-small" x="86" y="205" text-anchor="end">⋮</text>
+<text class="dg-label" x="123" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="185" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="247" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="309" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="371" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="433" y="206" text-anchor="middle">⋮</text>
+<text class="dg-label" x="495" y="206" text-anchor="middle">⋮</text>
+<text class="dg-small" x="86" y="245" text-anchor="end">capa 80</text>
+<rect x="96" y="226" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="102" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="124" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="111" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="133" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="158" y="226" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="164" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="186" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="173" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="195" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="220" y="226" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="226" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="248" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="235" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="257" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<text class="dg-label" x="309" y="246" text-anchor="middle">…</text>
+<rect x="344" y="226" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="350" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="372" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="359" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="381" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="406" y="226" width="54" height="30" rx="5" fill="var(--fill)" stroke="var(--separator-strong)"/>
+<rect x="412" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="434" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="421" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="443" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<rect x="468" y="226" width="54" height="30" rx="5" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.3"/>
+<rect x="474" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<rect x="496" y="235" width="18" height="13" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--accent)"/>
+<text class="dg-tiny" x="483" y="245" text-anchor="middle" style="font-size:9.5px">K</text>
+<text class="dg-tiny" x="505" y="245" text-anchor="middle" style="font-size:9.5px">V</text>
+<path class="dg-feedback" d="M495.0 256 V261 H100" marker-end="url(#f1214a)"/>
+<text class="dg-tiny" x="309" y="64" text-anchor="middle"></text>
+<path class="dg-edge" d="M14 66 V256" marker-end="url(#f1214a)"/>
+<text class="dg-tiny" transform="translate(28 166) rotate(-90)" text-anchor="middle">capas en orden</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="212" width="140" height="58" rx="10"/>
+<text class="dg-label" x="630" y="238" text-anchor="middle">LM head</text>
+<text class="dg-tiny" x="630" y="255" text-anchor="middle">una posición</text>
+<path class="dg-edge" d="M523 241.0 H556" marker-end="url(#f1214a)"/>
+<path class="dg-edge" d="M630 271 V292" marker-end="url(#f1214a)"/>
+<text class="dg-small" x="630" y="306" text-anchor="middle">siguiente token: «las»</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="66" width="196" height="98" rx="10"/>
+<text class="dg-label" x="658" y="96" text-anchor="middle">En este paso se lee</text>
+<text class="dg-tiny" x="658" y="113" text-anchor="middle">los pesos enteros: 70.6 GB</text>
+<text class="dg-tiny" x="658" y="128" text-anchor="middle">el KV de 2000 tokens: 655 MB</text>
+<text class="dg-tiny" x="658" y="143" text-anchor="middle">para producir 1 token</text>
+<text class="dg-tiny" x="96" y="300" text-anchor="start">Línea punteada: en cada capa, la consulta del token nuevo lee las K y V de las 2000 columnas</text>
+<text class="dg-tiny" x="96" y="316" text-anchor="start">de su fila (no las de otras capas). Gris: calculado en pasadas anteriores, guardado en el cache.</text>
+<text class="dg-tiny" x="96" y="336" text-anchor="start">Sin el cache habría que recalcular las 2000 columnas en cada paso.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.6.</b> En el decode se calcula una sola columna, pero cada celda de esa columna lee las K y V de toda su fila. Los pesos se leen enteros para producir un token.</figcaption>
+      </figure>
+
+      <p>Lo que se lee en un paso de decode de un solo usuario con 4000 tokens de contexto, con los pesos en FP8, el KV en BF16 y 4 H100 que leen 13.4 TB/s en total:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué se lee</th><th class="r">Bytes</th><th class="r">Tiempo de leerlo</th><th class="r">FLOP por byte</th></tr></thead>
+          <tbody>
+            <tr><td>Pesos de Q, K, V y O de las 80 capas</td><td class="r">12.1 GB</td><td class="r">0.90 ms</td><td class="r">2</td></tr>
+            <tr><td>Pesos del MLP de las 80 capas</td><td class="r">56.4 GB</td><td class="r">4.21 ms</td><td class="r">2</td></tr>
+            <tr><td>KV cache de 4000 tokens</td><td class="r">1.31 GB</td><td class="r">0.10 ms</td><td class="r">8</td></tr>
+            <tr><td>LM head</td><td class="r">1.05 GB</td><td class="r">0.08 ms</td><td class="r">2</td></tr>
+            <tr><td><b>Un paso</b></td><td class="r"><b>70.9 GB</b></td><td class="r"><b>5.29 ms</b></td><td class="r"></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>5.29 ms por token son 189 tokens por segundo. En esos 5.29 ms la GPU hace unas 150 000 millones de operaciones; al 40&#8239;% de su pico podría hacer 16.7 billones. Usa menos del 1&#8239;% de su cómputo: el resto del tiempo espera a la memoria.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Un cocinero que, para cada plato, tiene que traer a la mesa la despensa entera, abrir cada frasco una vez y devolverla. Cocinar es rápido; el viaje a la despensa no. Si cocina un plato por viaje, pasa casi todo el tiempo caminando. Si cocina 64 platos con el mismo viaje, el viaje se reparte entre los 64. Pero cada comensal trae además su propia caja de apuntes (su KV cache), que hay que leer entera para su plato, y esas cajas no se comparten.</p>
+      </aside>
+
+      <h3 id="kv-por-dentro">El KV cache por dentro</h3>
+
+      <p>El cache de una request es una pila de 80 capas. En cada capa hay 8 cabezas, y cada cabeza guarda, por token, un vector K y un vector V de 128 números. Cada paso de decode agrega una columna al final de todas las cabezas de todas las capas. Los motores no reservan un arreglo contiguo por request: lo reparten en bloques de un número fijo de tokens, como páginas de memoria, para no desperdiciar espacio con reservas al largo máximo (<a href="m15-motores-inferencia.html#paged">M15.3</a>).</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f1215t f1215d">
+<title id="f1215t">Cómo se ordena el KV cache de una request</title>
+<desc id="f1215d">Una pila de 80 capas. Cada capa tiene 8 cabezas de K y V; cada cabeza guarda, por cada token, un vector K y un vector V de 128 números. Los tokens se agrupan en bloques, como páginas de memoria. En cada paso de decode se escribe una casilla nueva en el último bloque, en todas las cabezas de todas las capas; las casillas que quedan en ese bloque están reservadas y vacías. Por token: 2 por 8 por 128 por 2 bytes, 4 kB por capa; por 80 capas, 328 kB.</desc>
+<defs><marker id="f1215a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<g transform="translate(0 22)">
+<rect x="54" y="16" width="470" height="250" rx="10" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="46" y="24" width="470" height="250" rx="10" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<rect x="38" y="32" width="470" height="250" rx="10" fill="var(--bg-2)" stroke="var(--separator-strong)"/>
+<text class="dg-tiny" x="530" y="30" text-anchor="start">capa 80</text>
+<rect x="30" y="40" width="470" height="250" rx="10" fill="var(--bg)" stroke="var(--separator-strong)" stroke-width="1.3"/>
+<text class="dg-group" x="42" y="60" text-anchor="start">capa 1</text>
+<text class="dg-tiny" x="88" y="85" text-anchor="end">K0</text>
+<rect x="96" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="85" text-anchor="middle">…</text>
+<rect x="426" y="74" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="74" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="74" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="74" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="105" text-anchor="end">V0</text>
+<rect x="96" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="105" text-anchor="middle">…</text>
+<rect x="426" y="94" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="94" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="94" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="94" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="131" text-anchor="end">K1</text>
+<rect x="96" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="131" text-anchor="middle">…</text>
+<rect x="426" y="120" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="120" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="120" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="120" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="151" text-anchor="end">V1</text>
+<rect x="96" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="151" text-anchor="middle">…</text>
+<rect x="426" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="140" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="140" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="140" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="177" text-anchor="end">K2</text>
+<rect x="96" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="177" text-anchor="middle">…</text>
+<rect x="426" y="166" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="166" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="166" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="166" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="197" text-anchor="end">V2</text>
+<rect x="96" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="197" text-anchor="middle">…</text>
+<rect x="426" y="186" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="186" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="186" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="186" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-label" x="62" y="216" text-anchor="middle">⋮</text>
+<text class="dg-tiny" x="88" y="237" text-anchor="end">K7</text>
+<rect x="96" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="237" text-anchor="middle">…</text>
+<rect x="426" y="226" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="226" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="226" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="226" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<text class="dg-tiny" x="88" y="257" text-anchor="end">V7</text>
+<rect x="96" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="111" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="126" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="141" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="162" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="177" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="192" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="207" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="228" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="243" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="258" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="273" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="294" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="309" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="324" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="339" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<text class="dg-tiny" x="390" y="257" text-anchor="middle">…</text>
+<rect x="426" y="246" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 30%, var(--bg))" stroke="var(--l-cache)"/>
+<rect x="441" y="246" width="12" height="14" rx="2" fill="var(--accent-tint)" stroke="var(--accent)" stroke-width="1.4"/>
+<rect x="456" y="246" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<rect x="471" y="246" width="12" height="14" rx="2" fill="var(--bg)" stroke="var(--separator-strong)" stroke-dasharray="2 2"/>
+<path class="dg-feedback" d="M96 274 H153"/>
+<text class="dg-tiny" x="96" y="288" text-anchor="start">un bloque (aquí, de 4 tokens; en vLLM, 16)</text>
+<path class="dg-feedback" d="M426 274 H483"/>
+<text class="dg-tiny" x="483" y="288" text-anchor="end">el último bloque</text>
+<path class="dg-edge" d="M447.0 -2 V70" marker-end="url(#f1215a)"/>
+<text class="dg-tiny" x="439" y="4" text-anchor="end">el paso actual escribe aquí, en todas las cabezas</text>
+<text class="dg-group" x="540" y="64" text-anchor="start">Por token y por capa</text>
+<text class="dg-small" x="540" y="84" text-anchor="start">2 (K y V) × 8 cabezas × 128 × 2 bytes</text>
+<text class="dg-small" x="540" y="102" text-anchor="start">= 4096 bytes</text>
+<text class="dg-group" x="540" y="134" text-anchor="start">Por token, en las 80 capas</text>
+<text class="dg-small" x="540" y="154" text-anchor="start">4096 × 80 = 327 680 bytes ≈ 328 kB</text>
+<text class="dg-group" x="540" y="186" text-anchor="start">Una request de 4000 tokens</text>
+<text class="dg-small" x="540" y="206" text-anchor="start">4000 × 328 kB ≈ 1.31 GB</text>
+<text class="dg-small" x="540" y="238" text-anchor="start">El motor reparte los bloques</text>
+<text class="dg-small" x="540" y="256" text-anchor="start">como páginas de memoria</text>
+<text class="dg-small" x="540" y="274" text-anchor="start">(PagedAttention, M15)</text>
+<text class="dg-tiny" x="30" y="316" text-anchor="start">Rosa: K y V ya guardados. Celeste: lo que escribe el paso actual. Punteadas: lugar reservado en el bloque, vacío.</text>
+</g>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.7.</b> El cache de una request: 80 capas, 8 cabezas de K y V por capa, una columna por token, agrupadas en bloques. El paso actual escribe la última columna en todas las cabezas.</figcaption>
+      </figure>
+
+      <p>La atención del decode tiene una propiedad incómoda. Por cada token del contexto, una consulta hace 2 × 64 × 128 operaciones contra su clave y otras tantas con su valor: 32 768 por capa. Para eso lee K y V de las 8 cabezas de KV: 2 × 8 × 128 × 2 bytes = 4096 bytes. <b>La intensidad es 8 FLOP por byte, sin importar cuántos usuarios haya en el batch</b>, porque cada usuario lee su propio cache. Juntar usuarios ayuda a las proyecciones y al MLP, que comparten los pesos, pero no a la atención. Sin GQA, con 64 cabezas de KV, sería 1; con el KV en FP8, 16. MLA, la atención de DeepSeek (<a href="m12-llm-por-dentro.html#kv-cache">M12.4</a>), reconstruye K y V desde un vector comprimido y hace más cuentas por byte leído. Esa es la razón de fondo por la que la arquitectura de la atención pesa tanto en el costo de servir un modelo.</p>
+
+      <h3 id="decode-extra">Lo que no es cómputo ni memoria</h3>
+
+      <p>Un paso de 5 ms es tan corto que aparecen costos que en el prefill no se notan:</p>
+      <ul>
+        <li><b>Lanzar kernels.</b> Un paso son cientos de kernels: varios por capa, por 80 capas. Lanzar cada uno desde la CPU cuesta microsegundos, y con batches chicos ese tiempo se acerca al de las cuentas. Los <dfn data-term="cuda-graphs">CUDA graphs</dfn> graban la secuencia de un paso una vez y la relanzan entera con una sola llamada (<a href="m15-motores-inferencia.html#paralelismo">M15.8</a>). <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Sincronizar las GPUs.</b> Con tensor parallelism, cada GPU tiene un pedazo de cada matriz y hay que juntar los resultados dos veces por capa, después de la atención y después del MLP: 160 all-reduce por paso. <span class="badge badge--doc">Documentado</span> Cada uno mueve poco, 8192 × 2 bytes = 16 kB por usuario, así que no lo limita el ancho de banda de NVLink sino la latencia de cada sincronización, que se paga 160 veces.</li>
+        <li><b>La CPU.</b> Armar el batch del paso siguiente, convertir tokens en texto, revisar stop sequences y escribir en cada stream son trabajo de CPU. Si la CPU tarda más que la GPU, la GPU espera. vLLM rediseñó su motor en 2025 (V1) en buena parte para solapar ese trabajo con el de la GPU. <span class="badge badge--doc">Documentado</span></li>
+      </ul>
+
+      <h2 id="pasada"><span class="sec-num">12.1.7</span>Dónde se va el tiempo de una pasada</h2>
+
+      <p>La calculadora junta todo lo anterior. Elige cuántos tokens de prefill y cuántos usuarios en decode entran en la pasada, y mira qué pieza se lleva el tiempo y qué la limita. Cada pieza tarda lo que diga el mayor de sus dos costos, y las piezas corren una detrás de otra:</p>
+
+      <div data-calc="fwdcost"></div>
+
+      <p>Lo que muestran los ejemplos precargados, con el 70B en FP8 sobre 4 H100:</p>
+      <ul>
+        <li><b>Prefill de 2000 tokens: 88 ms.</b> Todo lo limita el cómputo, salvo el LM head. El MLP se lleva 71 ms, el 81&#8239;%; la atención, menos de 2 ms.</li>
+        <li><b>Decode de un usuario: 5.3 ms.</b> Todo lo limita la memoria; el MLP se lleva 4.2 ms porque es donde están los pesos.</li>
+        <li><b>Decode de 64 usuarios con 4000 tokens: 11.6 ms.</b> Los pesos se leen una vez para los 64, pero leer los 64 caches (84 GB, 6.3 ms) ya cuesta más que leer el MLP (4.3 ms). Pasa a mandar la atención.</li>
+        <li><b>El paso mixto, un trozo de 512 tokens de prefill con 64 usuarios: 31 ms.</b> Las proyecciones y el MLP pasan a estar limitados por cómputo por las 576 filas, mientras la atención de los 64 usuarios sigue limitada por la memoria. Es el paso que usa el chunked prefill (12.1.8).</li>
+      </ul>
+
+      <p>Dos experimentos para hacer con la calculadora. Sube los usuarios en decode a 175: el MLP y las proyecciones pasan a estar limitados por cómputo con el 40&#8239;% de eficiencia, y el paso tarda 24.8 ms en lugar de los 22.4 ms del límite de memoria de la <a href="m12-llm-por-dentro.html#memoria">figura 12.3</a>. Después baja el contexto a 500 y sube los usuarios a 256: con cachés chicos, el batch sí llena el cómputo, y salen unos 17 800 tokens por segundo. Con contextos largos, en cambio, el KV manda antes de que el cómputo se llene; guardarlo en FP8 (<a href="m14-cuantizacion.html#que">M14.3</a>) baja el paso de 64 usuarios de 11.6 a 8.4 ms.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>En el decode, cada usuario más en el batch es casi gratis para las proyecciones y el MLP mientras la pasada no llegue al quiebre de cómputo, y nunca es gratis para la atención, que lee un cache por usuario. Por eso el tamaño de batch que conviene depende del largo de los contextos: con conversaciones cortas, cientos de usuarios por réplica; con contextos de 100 000 tokens, unos pocos, y el TPOT lo decide el KV.</p>
+      </aside>
+
+      <h2 id="juntas"><span class="sec-num">12.1.8</span>Cuando las dos fases comparten la GPU</h2>
+
+      <p>Un motor con continuous batching (<a href="m15-motores-inferencia.html#batching">M15.2</a>) arma un batch nuevo en cada paso: las requests que terminan salen y las que llegan entran. Cuando entra una request nueva, su prefill comparte el paso con el decode de los demás. ¿Qué ven los usuarios que ya estaban generando?</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f1217t f1217d">
+<title id="f1217t">Un prefill de 2000 tokens llega a una GPU con 64 usuarios en decode</title>
+<desc id="f1217d">Tres líneas de tiempo de la misma réplica de Llama 3.1 70B en FP8 sobre 4 H100. Arriba, solo decode: un paso cada 11.6 ms y un token para cada usuario al final de cada paso. En el medio, el prefill entero entra en un solo paso de 96 ms: los 64 usuarios esperan 96 ms por su próximo token. Abajo, con chunked prefill de 512 tokens: cuatro pasos de 31 ms; los usuarios esperan 31 ms entre tokens y el prefill termina a los 126 ms en lugar de 96.</desc>
+<text class="dg-tiny" x="10" y="20" text-anchor="start">Llama 3.1 70B en FP8, 4 H100, 64 usuarios con 4000 tokens de contexto; modelo de la calculadora de 12.1.7</text>
+<text class="dg-group" x="10" y="70" text-anchor="start">Solo decode</text>
+<rect x="141.0" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="178.3" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="179.3" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="216.6" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="217.6" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="254.8" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="255.8" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="293.1" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="294.1" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="331.4" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="332.4" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="369.7" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="370.7" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="408.0" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="409.0" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="446.2" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="447.2" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="484.5" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="485.5" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="522.8" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="523.8" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="561.1" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="562.1" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="599.4" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="600.4" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="637.6" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="638.6" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="675.9" cy="90" r="3" fill="var(--l-client)"/>
+<rect x="676.9" y="54" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="714.2" cy="90" r="3" fill="var(--l-client)"/>
+<text class="dg-group" x="10" y="144" text-anchor="start">Prefill entero</text>
+<rect x="141.0" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="178.3" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="179.3" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="216.6" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="217.6" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="254.8" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="255.8" y="128" width="315.1" height="26" rx="4" class="dg-warnbox" stroke-width="1.2"/>
+<text class="dg-tiny" x="413.405" y="146" text-anchor="middle">prefill 2000 + 64 decodes: 96 ms</text>
+<circle cx="572.0" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="573.0" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="610.2" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="611.2" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="648.5" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="649.5" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="686.8" cy="164" r="3" fill="var(--l-client)"/>
+<rect x="687.8" y="128" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="725.1" cy="164" r="3" fill="var(--l-client)"/>
+<text class="dg-group" x="10" y="218" text-anchor="start">Chunked, 512</text>
+<rect x="141.0" y="202" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="178.3" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="179.3" y="202" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="216.6" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="217.6" y="202" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="254.8" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="255.8" y="202" width="101.6" height="26" rx="4" fill="color-mix(in srgb, var(--l-queue) 22%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.2"/>
+<text class="dg-tiny" x="306.65" y="220" text-anchor="middle">512 + 64</text>
+<circle cx="358.5" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="359.5" y="202" width="101.6" height="26" rx="4" fill="color-mix(in srgb, var(--l-queue) 22%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.2"/>
+<text class="dg-tiny" x="410.27" y="220" text-anchor="middle">512 + 64</text>
+<circle cx="462.1" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="463.1" y="202" width="101.6" height="26" rx="4" fill="color-mix(in srgb, var(--l-queue) 22%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.2"/>
+<text class="dg-tiny" x="513.89" y="220" text-anchor="middle">512 + 64</text>
+<circle cx="565.7" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="566.7" y="202" width="101.6" height="26" rx="4" fill="color-mix(in srgb, var(--l-queue) 22%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.2"/>
+<text class="dg-tiny" x="617.51" y="220" text-anchor="middle">512 + 64</text>
+<circle cx="669.3" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="670.3" y="202" width="36.3" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<circle cx="707.6" cy="238" r="3" fill="var(--l-client)"/>
+<rect x="708.6" y="202" width="31.0" height="26" rx="4" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.2"/>
+<text class="dg-tiny" x="254.51" y="178" text-anchor="start">los 64 usuarios esperan 96 ms por su token</text>
+<text class="dg-tiny" x="254.51" y="252" text-anchor="start">saltos de 31 ms; el prefill termina a los 126 ms</text>
+<path class="sim-grid" d="M140.0 46 V262"/>
+<text class="sim-axis" x="140" y="280" text-anchor="middle">0 ms</text>
+<path class="sim-grid" d="M239.0 46 V262"/>
+<text class="sim-axis" x="239" y="280" text-anchor="middle">30 ms</text>
+<path class="sim-grid" d="M338.0 46 V262"/>
+<text class="sim-axis" x="338" y="280" text-anchor="middle">60 ms</text>
+<path class="sim-grid" d="M437.0 46 V262"/>
+<text class="sim-axis" x="437" y="280" text-anchor="middle">90 ms</text>
+<path class="sim-grid" d="M536.0 46 V262"/>
+<text class="sim-axis" x="536" y="280" text-anchor="middle">120 ms</text>
+<path class="sim-grid" d="M635.0 46 V262"/>
+<text class="sim-axis" x="635" y="280" text-anchor="middle">150 ms</text>
+<path class="sim-grid" d="M734.0 46 V262"/>
+<text class="sim-axis" x="734" y="280" text-anchor="middle">180 ms</text>
+<circle cx="16" cy="292" r="3" fill="var(--l-client)"/>
+<text class="dg-tiny" x="24" y="296" text-anchor="start">cada punto: un token para cada uno de los 64 usuarios</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.8.</b> Un prompt de 2000 tokens llega a una réplica con 64 usuarios en decode. Entero, frena a todos durante 96 ms; partido en trozos de 512, los frena menos cada vez, pero tarda más en terminar.</figcaption>
+      </figure>
+
+      <p>Con las cuentas de la calculadora:</p>
+      <ul>
+        <li><b>Solo decode:</b> un paso cada 11.6 ms, un token para cada uno de los 64 usuarios por paso.</li>
+        <li><b>El prefill entero en un paso:</b> 2000 tokens de prefill y 64 de decode, 96 ms. Los 64 usuarios esperan 96 ms por su siguiente token: un salto de TPOT de 8 veces, que con prompts más largos llega a segundos. La request nueva, en cambio, tiene su primer token a los 96 ms.</li>
+        <li><b>Chunked prefill de 512 tokens:</b> cuatro pasos de 31 ms, cada uno con un trozo y los 64 decodes. Los usuarios ven saltos de 31 ms en lugar de uno de 96; la request nueva termina su prefill a los 126 ms en lugar de a los 96.</li>
+      </ul>
+
+      <p>El tamaño del trozo reparte el dolor entre el TTFT del que llega y el TPOT de los que están: ese es el trade-off de <a href="m15-motores-inferencia.html#chunked">M15.5</a>. Cuando los dos SLOs son exigentes y los prompts son largos, la alternativa es no mezclarlos: un grupo de GPUs solo para prefill y otro solo para decode, con el KV cache viajando por la red entre ellos (<a href="m15-motores-inferencia.html#desagregado">M15.6</a>). Ahora se ve por qué esa separación tiene sentido: cada grupo trabaja siempre en el régimen para el que está dimensionado, cómputo en uno y memoria en el otro.</p>
+
+      <h2 id="muestreo"><span class="sec-num">12.1.9</span>Del logit al token</h2>
+
+      <p>La pasada termina con 128 256 logits por usuario: medio megabyte en FP32. El <dfn data-term="sampling">muestreo</dfn> convierte eso en un token, en la GPU, en cuatro pasos:</p>
+      <ol class="steps">
+        <li><span class="step-title">Temperatura</span>Divide cada logit por T. Con T &lt; 1 las diferencias crecen y la distribución se afila; con T &gt; 1 se aplana.</li>
+        <li><span class="step-title">Softmax</span>Convierte los logits en probabilidades que suman 1, como en la atención.</li>
+        <li><span class="step-title">Recortar</span>Top-k se queda con los k tokens más probables. Top-p (nucleus sampling) se queda con el grupo más chico de tokens, de más probable a menos, cuya probabilidad suma al menos p. <span class="badge badge--doc">Documentado</span> Después se <span class="no-autolink">vuelve a normalizar</span>.</li>
+        <li><span class="step-title">Sortear</span>Se elige un token al azar con esas probabilidades. Con temperatura 0 no se sortea: se toma el de mayor logit (greedy).</li>
+      </ol>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f1218t f1218d">
+<title id="f1218t">De los logits a la probabilidad de cada token</title>
+<desc id="f1218d">Cuatro candidatos con logits 5, 4, 3 y 1. Con temperatura 1, softmax les da 0.657, 0.242, 0.089 y 0.012. Con temperatura 0.5 la distribución se afila: 0.867, 0.117, 0.016 y 0.0003. Top-p 0.9 sobre temperatura 1 se queda con los tres primeros, que suman 0.988, y los vuelve a normalizar: 0.665, 0.245 y 0.090.</desc>
+<rect x="10" y="8" width="180" height="244" rx="10" fill="var(--bg-2)"/>
+<text class="dg-group" x="22" y="30" text-anchor="start">Logits</text>
+<rect x="26" y="83.3" width="28" height="116.7" rx="3" fill="var(--l-gpu)"/>
+<text class="sim-val" x="40" y="77.3333" text-anchor="middle" style="font-size:11px">5.0</text>
+<text class="dg-tiny" transform="translate(44 210) rotate(-35)" text-anchor="end">Guarda</text>
+<rect x="66" y="106.7" width="28" height="93.3" rx="3" fill="var(--l-gpu)"/>
+<text class="sim-val" x="80" y="100.667" text-anchor="middle" style="font-size:11px">4.0</text>
+<text class="dg-tiny" transform="translate(84 210) rotate(-35)" text-anchor="end">Es</text>
+<rect x="106" y="130.0" width="28" height="70.0" rx="3" fill="var(--l-gpu)"/>
+<text class="sim-val" x="120" y="124" text-anchor="middle" style="font-size:11px">3.0</text>
+<text class="dg-tiny" transform="translate(124 210) rotate(-35)" text-anchor="end">Almacena</text>
+<rect x="146" y="176.7" width="28" height="23.3" rx="3" fill="var(--l-gpu)"/>
+<text class="sim-val" x="160" y="170.667" text-anchor="middle" style="font-size:11px">1.0</text>
+<text class="dg-tiny" transform="translate(164 210) rotate(-35)" text-anchor="end">Hola</text>
+<path class="sim-axis" d="M20 200.5 H180" stroke="var(--separator-strong)"/>
+<rect x="202" y="8" width="180" height="244" rx="10" fill="var(--bg-2)"/>
+<text class="dg-group" x="214" y="30" text-anchor="start">Softmax, T = 1</text>
+<rect x="218" y="108.0" width="28" height="92.0" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="232" y="101.987" text-anchor="middle" style="font-size:11px">0.657</text>
+<text class="dg-tiny" transform="translate(236 210) rotate(-35)" text-anchor="end">Guarda</text>
+<rect x="258" y="166.2" width="28" height="33.8" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="272" y="160.15" text-anchor="middle" style="font-size:11px">0.242</text>
+<text class="dg-tiny" transform="translate(276 210) rotate(-35)" text-anchor="end">Es</text>
+<rect x="298" y="187.5" width="28" height="12.5" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="312" y="181.547" text-anchor="middle" style="font-size:11px">0.089</text>
+<text class="dg-tiny" transform="translate(316 210) rotate(-35)" text-anchor="end">Almacena</text>
+<rect x="338" y="198.3" width="28" height="1.7" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="352" y="192.315" text-anchor="middle" style="font-size:11px">0.012</text>
+<text class="dg-tiny" transform="translate(356 210) rotate(-35)" text-anchor="end">Hola</text>
+<path class="sim-axis" d="M212 200.5 H372" stroke="var(--separator-strong)"/>
+<rect x="394" y="8" width="180" height="244" rx="10" fill="var(--bg-2)"/>
+<text class="dg-group" x="406" y="30" text-anchor="start">Softmax, T = 0.5</text>
+<rect x="410" y="78.7" width="28" height="121.3" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="424" y="72.6814" text-anchor="middle" style="font-size:11px">0.867</text>
+<text class="dg-tiny" transform="translate(428 210) rotate(-35)" text-anchor="end">Guarda</text>
+<rect x="450" y="183.6" width="28" height="16.4" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="464" y="177.581" text-anchor="middle" style="font-size:11px">0.117</text>
+<text class="dg-tiny" transform="translate(468 210) rotate(-35)" text-anchor="end">Es</text>
+<rect x="490" y="197.8" width="28" height="2.2" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="504" y="191.778" text-anchor="middle" style="font-size:11px">0.016</text>
+<text class="dg-tiny" transform="translate(508 210) rotate(-35)" text-anchor="end">Almacena</text>
+<rect x="530" y="200.0" width="28" height="1.5" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="544" y="193.959" text-anchor="middle" style="font-size:11px">0.0003</text>
+<text class="dg-tiny" transform="translate(548 210) rotate(-35)" text-anchor="end">Hola</text>
+<path class="sim-axis" d="M404 200.5 H564" stroke="var(--separator-strong)"/>
+<rect x="586" y="8" width="180" height="244" rx="10" fill="var(--bg-2)"/>
+<text class="dg-group" x="598" y="30" text-anchor="start">Top-p 0.9 sobre T = 1</text>
+<rect x="602" y="106.9" width="28" height="93.1" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="616" y="100.866" text-anchor="middle" style="font-size:11px">0.665</text>
+<text class="dg-tiny" transform="translate(620 210) rotate(-35)" text-anchor="end">Guarda</text>
+<rect x="642" y="165.7" width="28" height="34.3" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="656" y="159.738" text-anchor="middle" style="font-size:11px">0.245</text>
+<text class="dg-tiny" transform="translate(660 210) rotate(-35)" text-anchor="end">Es</text>
+<rect x="682" y="187.4" width="28" height="12.6" rx="3" fill="var(--accent)"/>
+<text class="sim-val" x="696" y="181.396" text-anchor="middle" style="font-size:11px">0.090</text>
+<text class="dg-tiny" transform="translate(700 210) rotate(-35)" text-anchor="end">Almacena</text>
+<rect x="722" y="196" width="28" height="4" rx="1" fill="var(--separator-strong)"/>
+<text class="sim-val" x="736" y="194" text-anchor="middle" style="font-size:11px">fuera</text>
+<text class="dg-tiny" transform="translate(740 210) rotate(-35)" text-anchor="end">Hola</text>
+<path class="sim-axis" d="M596 200.5 H756" stroke="var(--separator-strong)"/>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 12.1.9.</b> Cuatro candidatos. La temperatura cambia cuánto pesa el favorito; top-p 0.9 descarta la cola: los dos primeros suman 0.899, apenas menos de 0.9, así que entra también el tercero.</figcaption>
+      </figure>
+
+      <p>La cuenta del ejemplo: con logits 5, 4, 3 y 1, e⁵ = 148.4, e⁴ = 54.6, e³ = 20.1 y e¹ = 2.7, que suman 225.8. Las probabilidades son 0.657, 0.242, 0.089 y 0.012. Con temperatura 0.5 los logits pasan a ser 10, 8, 6 y 2, y el favorito sube a 0.867. En código:</p>
+
+<pre data-lang="python"><code>import numpy as np
+
+rng = np.random.default_rng()
+
+def muestrear(logits, temperatura=1.0, top_p=1.0):
+    if temperatura == 0:
+        return int(np.argmax(logits))                  # greedy: siempre el mayor
+    z = logits / temperatura
+    p = np.exp(z - z.max())
+    p /= p.sum()                                       # softmax
+    orden = np.argsort(p)[::-1]                        # de más probable a menos
+    acumulada = np.cumsum(p[orden])
+    corte = np.searchsorted(acumulada, top_p) + 1      # el grupo más chico que llega a top_p
+    elegidos = orden[:corte]
+    return int(rng.choice(elegidos, p=p[elegidos] / p[elegidos].sum()))
+
+muestrear(np.array([5.0, 4.0, 3.0, 1.0]), temperatura=1.0, top_p=0.9)   # 0, 1 o 2; nunca 3</code></pre>
+
+      <p>Después de elegir, el motor revisa si tiene que parar: si salió el token de fin de la plantilla, si el texto terminó en una de las stop sequences de la request o si se llegó a <code>max_tokens</code>. Si la request pidió una salida con forma fija, como un JSON que cumpla un schema, el motor pone −∞ en los logits de los tokens que romperían la forma antes del softmax: es la decodificación restringida (<a href="m17-api-streaming.html#estructuradas">M17</a>). Y aun con temperatura 0, el resultado puede cambiar entre dos llamadas por el orden de las sumas en el batch, como ya viste en <a href="m12-llm-por-dentro.html#caja">M12.1</a>.</p>
+
+      <h2 id="bucle"><span class="sec-num">12.1.10</span>El bucle a mano</h2>
+
+      <p>Con la biblioteca <code>transformers</code> de Hugging Face se puede escribir el bucle de generación sin <code>generate()</code>, con el prefill y cada paso de decode a la vista. El programa usa Qwen2.5-0.5B-Instruct, un modelo de 500 millones de parámetros que corre en cualquier GPU con CUDA; necesita PyTorch y <code>transformers</code> 4.56 o posterior. Lo escribes y lo corres tú; los tiempos dependen de tu GPU.</p>
+
+<pre data-lang="python"><code>import time
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+nombre = "Qwen/Qwen2.5-0.5B-Instruct"
+tok = AutoTokenizer.from_pretrained(nombre)
+modelo = AutoModelForCausalLM.from_pretrained(nombre, dtype=torch.bfloat16).to("cuda").eval()
+
+mensajes = [{"role": "user", "content": "Explica qué es el KV cache en tres frases."}]
+ids = tok.apply_chat_template(mensajes, add_generation_prompt=True,
+                              return_tensors="pt", return_dict=True)["input_ids"].to("cuda")
+
+def ahora():
+    torch.cuda.synchronize()            # la GPU trabaja en paralelo: espera a que termine
+    return time.perf_counter()
+
+with torch.inference_mode():
+    t0 = ahora()
+    salida = modelo(input_ids=ids, use_cache=True)                 # prefill: el prompt entero
+    cache = salida.past_key_values                                 # el KV cache de todas las capas
+    siguiente = salida.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+    t1 = ahora()
+
+    generados = [siguiente.item()]
+    while len(generados) &lt; 200 and generados[-1] != tok.eos_token_id:
+        salida = modelo(input_ids=siguiente, past_key_values=cache, use_cache=True)   # decode
+        cache = salida.past_key_values
+        siguiente = salida.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+        generados.append(siguiente.item())
+    t2 = ahora()
+
+print(f"prompt: {ids.shape[1]} tokens, prefill: {(t1 - t0) * 1000:.1f} ms")
+print(f"decode: {(t2 - t1) * 1000 / (len(generados) - 1):.1f} ms por token")
+print(tok.decode(generados, skip_special_tokens=True))</code></pre>
+
+      <p>Qué mirar al correrlo:</p>
+      <ul>
+        <li><b>Córrelo dos veces.</b> La primera vez incluye la carga de los kernels y la reserva de memoria, y sus tiempos no sirven. Anota los de la segunda.</li>
+        <li><b>Agranda el prompt diez veces</b>, por ejemplo pegando un texto largo en el mensaje. El prefill tiene que crecer bastante; el tiempo por token de decode, poco. Si los dos crecen igual, revisa que el decode esté pasando <code>past_key_values</code>.</li>
+        <li><b>Quita el cache</b> en el decode: pasa la secuencia entera en cada paso (el prompt más los tokens generados, unidos con <code>torch.cat</code>) y no pases <code>past_key_values</code>. El tiempo por token tiene que crecer con cada token generado, como en el simulador de 12.1.4 sin cache.</li>
+        <li><b>Compara con <code>generate()</code></b>: <code>modelo.generate(ids, max_new_tokens=200, do_sample=False)</code> tiene que producir el mismo texto, porque hace el mismo bucle con greedy.</li>
+      </ul>
+
+      <h2 id="fallos"><span class="sec-num">12.1.11</span>Qué sale mal y cómo se nota</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Síntoma</th><th>Causa probable</th><th>Cómo confirmarlo</th><th>Qué hacer</th></tr></thead>
+          <tbody>
+            <tr><td>TTFT alto con la cola vacía</td><td>Prompts largos: el prefill crece con el largo, y la atención con su cuadrado</td><td>El span de prefill del trace y el largo del prompt suben juntos</td><td>Prefix caching, recortar contexto (M16), desagregación si el SLO lo pide</td></tr>
+            <tr><td>Saltos de TPOT de cientos de ms para todos a la vez</td><td>Prefills largos en el mismo paso que el decode, sin trocear el prefill</td><td>Los picos de TPOT coinciden con la llegada de prompts largos</td><td>Chunked prefill con un presupuesto de tokens por paso, o desagregación</td></tr>
+            <tr><td>El TPOT sube a lo largo de una conversación</td><td>Cada paso lee el KV de todo el contexto, que crece</td><td>El TPOT crece con el contexto, no con el tráfico</td><td>KV en FP8, menos usuarios por réplica con contextos largos, ventana deslizante</td></tr>
+            <tr><td>TPOT alto con un solo usuario en 8 GPUs</td><td>Latencia de los 160 all-reduce y del lanzamiento de kernels</td><td>Un profiler muestra la GPU ociosa entre kernels</td><td>CUDA graphs, menos GPUs por réplica, más réplicas</td></tr>
+            <tr><td>Falta de memoria con un prompt largo</td><td>La matriz de atención materializada o un prefill sin trocear</td><td>Pasa solo por encima de cierto largo de prompt</td><td>Un kernel tipo FlashAttention, chunked prefill, límite de contexto</td></tr>
+            <tr><td>Respuestas que repiten la misma frase</td><td>Greedy o temperatura muy baja en textos largos</td><td>Los parámetros de muestreo de la request</td><td>Temperatura mayor que 0 con top-p, o una penalización de repetición</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m121"></div>
+
+      <div data-exercise="m121-diagnostico"></div>
+
+      <div data-checkpoint="m121"></div>
+
+      <aside class="level-switch" data-toc="skip">
+        <p><b>Sigue con la ruta.</b> M13 explica la GPU que hace estas cuentas: sus tensor cores, su HBM y el modelo roofline completo. M15 toma las decisiones de este módulo (el batch, los trozos de prefill, el KV en páginas, la desagregación) y las convierte en un motor.</p>
+        <a class="btn" href="m12-llm-por-dentro.html">Volver a M12</a>
+      </aside>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m121.data.js"></script>
+<script src="../assets/js/data/exercises/m121.data.js"></script>
+<script src="../assets/js/data/llm.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-fwd.js"></script>
+</body>
+</html>

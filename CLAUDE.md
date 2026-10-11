@@ -9,7 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
-- **Parte IV:** ciberseguridad (M32–M37 y el Checkpoint E): firewalls, hardening de Linux, operación de SysAdmin, seguridad en bases de datos, criptografía y nube segura. Hoy solo existe el esqueleto (rutas `soon`); los módulos se escriben uno por pedido. Cuenta para el progreso. Currículo en `PLAN.md`.
+- **Parte IV:** ciberseguridad (M32–M38 y el Checkpoint E): firewalls, hardening de Linux, operación de SysAdmin, seguridad en bases de datos, criptografía, nube segura y Active Directory. Publicados M32 (firewalls) y M33 (hardening de Linux); el resto sigue en `soon` y se escribe uno por pedido. Cuenta para el progreso. Plan detallado en `PLAN_SEGURIDAD.md`. Currículo en `PLAN.md`.
 - **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo, y al final de la página los tutoriales de AI Engineering, en Python (IA01, IA02…). Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos" y "De los tutoriales de AI Engineering".
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
@@ -58,6 +58,7 @@ Quien lo usa habla español y tiene nivel backend intermedio (REST, SQL, Docker)
 - "Cómo conectar" nombra primero los tutoriales anteriores de la serie y, de forma opcional, las guías de la serie A que se juntan con este.
 
 ### De contenido
+- **Diagramas primero.** Quien usa el curso aprende de forma visual. Todo lo que se pueda explicar con un diagrama se explica con uno: cada fase, flujo, estructura de datos, forma de un tensor, línea de tiempo o comparación lleva su figura SVG (o un widget animado), y el texto la acompaña en lugar de reemplazarla. Si algo parece difícil de dibujar, se intenta igual (una rejilla, una pila de capas, dos líneas de tiempo lado a lado) antes de dejarlo solo en prosa. Vale para los módulos, los mapas, las guías de `proyectos/` y las ampliaciones de páginas publicadas.
 - Español con tú, sin voseo. Los términos técnicos quedan en inglés y se definen la primera vez que aparecen.
 - **Números:** punto decimal (`99.9`), miles con espacio fino (`128 000`; `SD.fmt.num` lo hace solo) y `&#8239;` antes de `%` (`99.9&#8239;%`).
 - **Honestidad:** toda afirmación sobre una empresa o un producto real lleva `<span class="badge badge--doc">Documentado</span>` si tiene fuente pública, o `<span class="badge badge--ref">Diseño de referencia</span>` si es una reconstrucción razonada. Las cifras se verifican y los ejemplos resueltos se comprueban con un cálculo.
@@ -100,7 +101,9 @@ Las guías de `proyectos/` tienen su propia regla de conexión: "Cómo conectar"
 
 ## Módulos en dos niveles
 
-Un tema muy complejo puede dividirse en una versión esencial y una a fondo. Hoy solo está dividido M06 (M06 y M06.1). No dividas otro módulo sin que el usuario lo pida.
+Un tema muy complejo puede dividirse en una versión esencial y una a fondo. Hoy están divididos M06 (M06 y M06.1) y M12 (M12 y M12.1). No dividas otro módulo sin que el usuario lo pida.
+
+- **A fondo enfocada (M12.1).** M12.1 "Prefill y decode a fondo" es una variante: no repite todo M12, sino que profundiza en sus secciones 12.3 a 12.5 (el forward pass pieza por pieza, la atención, GEMM contra GEMV, el KV cache por dentro, FlashAttention, el costo por pieza, el paso mixto y el muestreo) y enlaza a M12 para lo demás. Su quiz y su ejercicio guiado son propios (`quizzes/m121.data.js`, `exercises/m121.data.js`). M12 conserva su contenido y suma los `level-switch` y los `more-link` a M12.1. Usa este formato cuando la versión esencial ya está publicada y el pedido es más profundidad en una parte.
 
 - **Nombres.** La versión esencial conserva el id, la URL y el lugar en el progreso (`m06`, `m06-teoria-distribuida.html`). La versión a fondo es `mNN1` con número `MNN.1` (`m061`, `m061-teoria-distribuida-a-fondo.html`) y va en `course.data.js` justo después, con `kind: 'deep'`.
 - **Qué hace `kind: 'deep'`.** No cuenta para el progreso (`SD.countable`), no entra en el anterior/siguiente de los demás módulos (su propio pager vuelve a la versión esencial y sigue con el módulo siguiente), aparece en la ruta con la etiqueta "opcional", y la portada lo omite del mapa y lo marca "Opcional" en la lista por partes.
@@ -240,10 +243,10 @@ La tarjeta de definición completa (`callout--def`) suma `p.def-term` (con `span
 ### Código
 
 ```html
-<pre data-lang="python"><code>…</code></pre>      <!-- json | http | sse | sql | python -->
+<pre data-lang="python"><code>…</code></pre>      <!-- json | http | sse | sql | python | shell -->
 ```
 
-`sd.js` resalta el código solo. Dentro de `<code>` hay que escapar `&`, `<` y `>`.
+`sd.js` resalta el código solo. `shell` sirve para comandos y archivos de configuración (`sshd_config`, nftables, sysctl): resalta los comentarios con `#`, el prompt `$` y las cadenas. Dentro de `<code>` hay que escapar `&`, `<` y `>`.
 
 ### Figuras SVG
 
@@ -264,11 +267,35 @@ La tarjeta de definición completa (`callout--def`) suma `p.def-term` (con `span
 - Los ids (`f173t`, `f173d`, `f173a`) tienen que ser únicos en la página.
 - Clases de las figuras (`components.css`, sección "Figuras y diagramas SVG"):
   - cajas: `dg-box`, `dg-box--em`, `dg-layer` (con `style="--c: var(--l-gpu)"`), `dg-ok`, `dg-bad`, `dg-warnbox`, `hb-a`, `hb-b`, `hb-c`, `hb-lost`;
-  - texto: `dg-label`, `dg-small`, `dg-tiny`, `dg-num`, `dg-group`, `dg-big`, `dg-in`, `dg-fail-text`;
+  - texto: `dg-label`, `dg-small`, `dg-tiny`, `dg-num`, `dg-group`, `dg-big`, `dg-in`, `dg-fail-text`; `dg-mono` se suma a cualquiera para protocolos, métodos y rutas (`POST /v1/messages`);
   - líneas: `dg-edge`, `dg-feedback` (punteada; también sirve de guía entre una etiqueta y su flecha), `dg-frame`, `dg-arrow`;
   - gráficos: `sim-axis`, `sim-grid`, `sim-label`, `sim-val`.
 - Los diagramas de secuencia se generan con `tools/seqdiag.py`: `seq(id, titulo, desc, actores, mensajes)`, con mensajes de tipo `req`, `res`, `fail` o `async`, notas y cortes. Con más de cinco actores, las cajas se angostan solas. El parámetro opcional `footer={actor_id: "ejemplo"}` o `{actor_id: ("Nombre", "aclaración")}` dibuja cajas de "quién es quién" al pie de cada lifeline (así está la figura 10.1).
+- Estilo de las figuras: cajas planas con relleno tenue del color de su capa (`dg-layer` mezcla 8 % de `--c` con el fondo), bordes de 1.5 a 2 px, aristas en `--label-2` y `rx` entre 6 y 10. Nada de gradientes, sombras ni ilustraciones decorativas.
 - Deja al menos 12 px entre cajas y textos. Una etiqueta lejos de su flecha lleva una guía `dg-feedback`.
+
+### Lámina: una figura que presenta todos los términos
+
+Una **lámina** (como las de un atlas de anatomía) es una figura fija con marcas numeradas sobre el dibujo y, debajo, una clave con el término y su definición corta para cada número. Sirve para presentar de una vez el vocabulario de un módulo; la primera es la Lámina 11.A de M11 (`#lamina`). Se genera con un script de Python como cualquier figura.
+
+```html
+<figure class="figure plate">
+  <div class="figure-frame">
+<svg …>
+  …
+  <g class="pl-pin"><circle cx="330" cy="80" r="11"/><text x="330" y="84" text-anchor="middle">1</text></g>
+</svg>
+  </div>
+  <figcaption><b>Lámina 11.A.</b> Qué muestra.</figcaption>
+</figure>
+<ol class="plate-key">
+  <li><b>Término</b><span>Definición de una o dos líneas. <a href="#seccion">11.5</a></span></li>
+</ol>
+```
+
+- La clave numera sola (contador CSS) en el mismo orden que las marcas: el `li` número N corresponde a la marca N.
+- Cada definición termina con el enlace a la sección que lo explica a fondo. Los términos con glosario llevan `dfn` en esa sección, no en la clave.
+- Las marcas no tapan texto: ubícalas en una esquina de la caja que señalan.
 
 ### Pasos, pestañas, ADR
 
@@ -322,7 +349,7 @@ SD.defineExercise('m06-planificador', {
 
 - Los scripts: `data/exercises/<id>.data.js` después de los datos del quiz, y `core/exercise.js` después de `core/quiz.js` (usa `SD.quizKit`). Con `mkpage.py`, alcanza con `"exercises": true` en el META; en una página existente se agregan a mano (así está en M18).
 - El glosario no enlaza dentro de `[data-exercise]`: los términos se explican en el texto del módulo.
-- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21, cinco en M22 (incidentes), uno en M23, uno en M24 y uno en M25.
+- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21, cinco en M22 (incidentes), uno en M23, uno en M24, uno en M25, uno en M12.1 (diagnóstico de una réplica lenta) y uno en M33.
 
 ### Quiz y checkpoint
 
@@ -345,7 +372,7 @@ SD.defineQuiz('m17', {
 - Las opciones se barajan; `fixed: true` conserva el orden (por ejemplo, si son números).
 - `explain` dice por qué la respuesta es esa y adónde volver a leer. El `prompt` admite HTML.
 - **La longitud no da pistas.** Cada distractor es plausible y trae su propia justificación falsa pero creíble (un error de concepto real, nada absurdo), con un largo parecido al de la correcta. La correcta dice la idea y deja el "porque" largo para `explain`. En cada archivo, la correcta no es la opción más larga por sistema, ni la más corta: se reparte. Vale también para los ejercicios guiados y las decisiones de `projects/`. `node tools/test/quiz-bias.mjs` lo revisa.
-- Los módulos de las Partes I y II tienen 8 o 9 preguntas (el M06, ampliado, tiene 18); los casos de estudio, entre 16 y 20, y el Checkpoint A, 20.
+- Los módulos de las Partes I y II tienen 8 o 9 preguntas (el M06, ampliado, tiene 18); los casos de estudio, entre 16 y 20, y los Checkpoints A y B, 20.
 
 ### Término del glosario
 
@@ -364,11 +391,14 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
   - `groups`, `nodes` y `edges`, con las coordenadas del centro de cada nodo;
   - capas: `client`, `edge`, `service`, `queue`, `cache`, `db`, `gpu`, `external`;
   - `bus: true` con un `w` grande dibuja una barra, como un log de Kafka: cada arista llega de frente, a la altura o en la columna del otro nodo (así está en M30);
-  - cada nodo tiene cinco pestañas: `info.resp`, `info.api`, `info.data`, `info.fail` e `info.nums`;
+  - cada nodo tiene cinco pestañas: `info.resp`, `info.api`, `info.data`, `info.fail` e `info.nums`, y puede llevar `brief`, una frase de qué hace, que aparece en su detalle y como tooltip en el lienzo (sin `brief`, el tooltip muestra `sub`);
   - `scenarios` con `steps` de la forma `{from, to | at, kind, tag, ms, title, text, code, lang, down, up}`;
   - enlaces directos: `#node=<id>&scenario=<id>&step=<n>`.
-  - `stepPanel: true` en la definición hace que el panel lateral explique el escenario y el paso actual (ruta entre nodos, texto, payload y la lista de pasos) en lugar de la ayuda del mapa; abajo queda solo el título del paso. Lo usan M09 (`m09-objetos`) y M10 (`m10-identidad`).
+  - `stepPanel: true` en la definición hace que el panel lateral explique el escenario y el paso actual (ruta entre nodos, texto, payload y la lista de pasos) en lugar de la ayuda del mapa; abajo queda solo el título del paso. Lo usan M09 (`m09-objetos`), M10 (`m10-identidad`), M27 (`m27-pagos`) y el mapa de ChatGPT (`chatgpt`). Con `stepPanel`, el detalle de un nodo trae "← Volver al escenario", y en pantalla completa con el panel al costado se oculta también el título del paso de abajo, para que el lienzo gane alto.
+  - `pieces: true` suma al panel la lista plegable "Qué hace cada pieza": los nodos agrupados según el grupo que contiene su centro, cada uno con su `brief`. Marca las piezas del paso actual, resalta el nodo en el lienzo al pasar el mouse o con el foco, abre su detalle con un clic y recuerda si el lector la abrió o la cerró. Lo usa M27.
 - Deja pasillos de unos 150 px entre columnas de nodos para que las etiquetas de las aristas no se pisen.
+- El encuadre (`fit` y `home`) reserva 104 px abajo cuando el lienzo mide más de 640 px de ancho, para que el minimapa y la ayuda no tapen nodos. En pantalla completa con menos de 1000 px de ancho, el panel va debajo: el lienzo mide `max(320px, 64vh)` y el resto se desplaza.
+- **Mapa gigante de ChatGPT:** `maps/chatgpt.html` es la primera página de mapa suelta (no embebida en un módulo), en la carpeta `maps/`. Se arma como un módulo pero sin quiz ni checkpoint (`data-module="map-chatgpt"`, `data-root="../"`, scripts `map/map-engine.js` y `map/flow-sim.js`); sus datos están en `assets/js/data/maps/chatgpt.data.js` (24 nodos, 27 aristas y 9 escenarios: cliente y borde a la izquierda, chatapi al centro, inferencia a la derecha, datos y colas abajo, con Kafka sola en su fila, e imágenes en el extremo derecho). Es `kind: 'map'` en `course.data.js`, así que no cuenta para el progreso. Regla de sus escenarios: cada salto usa una arista real y la vuelta reusa la misma arista (`both: true`); no hay saltos sin arista.
 
 ### Widgets (calculadoras y simuladores)
 
@@ -383,7 +413,7 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="lease"` | `widgets/sim-lease.js` | Leases de caché como diagrama de secuencia animado, en cuatro casos (M04) |
 | `data-sim="stampede"` | `widgets/sim-cache.js` | Cache stampede animado: 20 instancias, la clave y la base, con la explicación de cada estrategia en la tarjeta (M04) |
 | `data-sim="isolation"`, `"quorum"`, `"ring"` | `widgets/sim-db.js` | Aislamiento, quórum y hashing consistente (M05) |
-| `data-sim="txlife"`, `"idxlookup"`, `"mvcc"`, `"replsync"`, `"quorumflow"` | `widgets/sim-dbflow.js` | Ciclo de vida de una transacción, búsqueda en índice clusterizado contra heap, MVCC, replicación síncrona y asíncrona, y quórum paso a paso; define `SD.flowAnim`, el motor genérico de nodos y mensajes con escenas (M05) |
+| `data-sim="txlife"`, `"idxlookup"`, `"mvcc"`, `"replsync"`, `"quorumflow"` | `widgets/sim-dbflow.js` | Ciclo de vida de una transacción, búsqueda en índice clusterizado contra heap, MVCC, replicación síncrona y asíncrona, y quórum paso a paso; define `SD.flowAnim`, el motor genérico de nodos y mensajes con escenas; cada paso acepta `deco` (SVG que se dibuja encima de la escena, como el waterfall de `sim-traceprop.js`) (M05) |
 | `data-sim="cqrs"`, `"twopc"`, `"saga"`, `data-calc="igid"` | `widgets/sim-dtx.js` | CQRS, two-phase commit, sagas coreografiadas y orquestadas, e id de 64 bits al estilo de Instagram; necesita `sim-dbflow.js` (M05) |
 | `data-sim="raft"` | `widgets/sim-raft.js` | Elecciones, log y particiones de Raft (M06) |
 | `data-sim="lin"` | `widgets/sim-lin.js` | ¿Es linealizable? Historias editables y verificador exhaustivo, linealizable y secuencial; lógica en `SD.linCore` (M06) |
@@ -394,7 +424,8 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-sim="jwt"`, `data-calc="pkce"` | `widgets/sim-jwt.js` | Laboratorio de JWT, y PKCE paso a paso (genera el verifier, calcula el challenge y canjea el código como app o como atacante; vector RFC 7636); necesita `sim-signurl.js` (M10) |
 | `data-sim="envelope"` | `widgets/sim-envelope.js` | Envelope encryption en cuatro escenas (cifrar, leer, rotar la KEK y borrado criptográfico) sobre `SD.flowAnim`; necesita `sim-dbflow.js` (M10) |
 | `data-sim="rls"` | `widgets/sim-rls.js` | Row-level security de PostgreSQL: una tabla de facturas con dos tenants; chips de rol de la conexión, tenant de la sesión y consulta, y qué filas devuelve la base y por qué (M05) |
-| `data-sim="trace"`, `"burnrate"` | `widgets/sim-obs.js` | Waterfall de traces y alertas por burn rate (M11) |
+| `data-sim="trace"`, `"burnrate"`, `data-calc="cardinality"` | `widgets/sim-obs.js` | Waterfall de traces, alertas por burn rate y cuántas series crea una métrica según sus etiquetas, con memoria, disco y churn por deploys (M11) |
+| `data-sim="traceprop"` | `widgets/sim-traceprop.js` | Un trace que se forma (spans que nacen mientras viaja el `traceparent`), un servicio que no propaga y cómo se sigue la request de la alerta al log, sobre `SD.flowAnim` con un waterfall que crece por paso; necesita `sim-dbflow.js` (M11) |
 | `data-sim="tokenizer"`, `"kvcache"` | `widgets/sim-llm.js` | Tokenizer y generación con KV cache (M12); usa `data/llm.data.js` |
 | `data-calc="gpusizing"`, `data-sim="roofline"` | `widgets/sim-gpu.js` | Sizing de GPUs y roofline (M13) |
 | `data-sim="quant"` | `widgets/sim-quant.js` | Cuantización de pesos (M14) |
@@ -406,9 +437,13 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-calc="pricing"`, `data-sim="credits"`, `"usagepipe"` | `widgets/sim-meter.js` | Costo de una request por tipo de token con redondeo por línea, saldo de créditos con streams en vuelo y reservas, y el viaje de un evento de uso (normal, duplicado, tardío, perdido); `usagepipe` necesita `sim-dbflow.js`; lógica en `SD.meterCore` (M21) |
 | `data-calc="evalsize"`, `data-sim="canarymodel"`, `"shadowflow"`, `"injection"` | `widgets/sim-modelops.js` | Ejemplos que hacen falta en un eval (independiente y pareado), canary con una regresión escondida, shadow traffic con y sin efectos, y prompt injection indirecta con dos defensas; los dos últimos necesitan `sim-dbflow.js`; lógica en `SD.opsCore` (M22) |
 | `data-calc="snowflake"`, `data-calc="fanout"` | `widgets/sim-feed.js` | Id Snowflake bit por bit, y escrituras y lecturas del fan-out en escritura, en lectura e híbrido (M30) |
+| `data-sim="firewall"` | `widgets/sim-firewall.js` | Un paquete contra la cadena de nftables: cuatro juegos de reglas (con estado, sin conntrack, una regla de más antes, salida sin filtrar) por nueve paquetes, con la primera coincidencia, las reglas que no se leen y la política (M32) |
+| `data-sim="hardening"` | `widgets/sim-harden.js` | Checklist de endurecimiento: 16 medidas con pesos didácticos, tres puntos de partida, un índice de 0 a 100 y lo que puede hacer el atacante por cada medida que falta (M33) |
 | `data-calc="imgtokens"`, `"imgfleet"`, `data-sim="imgjob"` | `widgets/sim-vision.js` | Tokens de una imagen por proveedor y modo con la grilla dibujada, GPUs y espera de un servicio de generación (Erlang C), y el viaje de un job en cuatro escenas; `imgjob` necesita `sim-dbflow.js`; lógica en `SD.visionCore` (M23) |
 | `data-calc="voicebudget"`, `data-sim="bargein"`, `"jitterbuf"` | `widgets/sim-voice.js` | Presupuesto de latencia voz a voz en cascada ingenua, en streaming y speech-to-speech; una interrupción con el truncado de lo que no sonó, en cuatro casos; y paquetes con jitter y pérdida contra el jitter buffer, fijo o adaptativo, con FEC; lógica en `SD.voiceCore` (M24) |
 | `data-sim="agentloop"`, `"durable"`, `data-calc="agentcost"`, `"trifecta"` | `widgets/sim-agent.js` | El bucle de un agente con presupuesto en cuatro escenarios (normal, bucle, herramienta caída, resultado gigante) y cinco defensas; costo de una tarea y de la flota con caché y la ley de Little; la trifecta con herramientas, defensas y ataques por día; y la ejecución durable en tres escenas; `durable` necesita `sim-dbflow.js`; lógica en `SD.agentCore` (M25) |
+| `data-sim="attnrows"`, `data-calc="fwdcost"` | `widgets/sim-fwd.js` | La matriz de atención de una cabeza pasada por pasada, con y sin KV cache (celdas y pares K, V calculados), y el costo de una pasada por pieza (proyecciones, atención, MLP y LM head) con FLOPs, bytes y qué la limita, para prefill, decode o un paso mixto; lógica en `SD.fwdCore`; usa `dModel`, `ffn` y `vocab` de `data/llm.data.js` (M12.1) |
+| `data-calc="trainmem"`, `"ckpt"` | `widgets/sim-train.js` | Memoria de un entrenamiento (16 B/param de Adam) y cuántas GPUs con data parallel vs ZeRO-3, e intervalo óptimo de checkpoint (Young/Daly); usa `data/llm.data.js`, que la página carga antes del widget (M26) |
 | `data-calc="bom" data-preset="m21\|m23\|m24\|m25\|m27\|m28\|m29\|m30"`, `data-calc="gateways"` | `widgets/sim-infra.js` | Factura mensual en AWS y dimensionamiento de gateways (módulos a fondo y casos de estudio) |
 
 Para escribir un widget nuevo:
@@ -437,6 +472,7 @@ Se necesitan Node 22 o superior (usa el WebSocket nativo) y Chrome instalado. No
 | `node tools/test/links.mjs [modules/x.html …]` | Qué enlazó el glosario en cada sección, enlaces anidados, anclas rotas y términos faltantes. Sin argumentos revisa todo el sitio. |
 | `node tools/test/shots.mjs <salida> <página> <light\|dark> <ancho> "<pasos>"` | Capturas guiadas: `@sel`, `hover:`, `click:`, `tap:`, `key:`, `eval:`, `shot` y `full`. |
 | `node tools/test/quiz-bias.mjs [archivo.data.js …]` | Sesgo de longitud en quizzes, ejercicios guiados y decisiones de proyectos: en cuántas preguntas la correcta es la opción más larga o la más corta (sin HTML; ignora `order`, `fixed` y las de opciones de menos de 30 caracteres). Falla si un archivo pasa del 40&#8239;% en cualquiera de las dos, o si el sitio pasa del 35&#8239;% de "más larga". No abre Chrome. Sin argumentos revisa todo. |
+| `node tools/test/map-lint.mjs [assets/js/data/maps/x.data.js …]` | Geometría de los mapas sin abrir Chrome: cajas a menos de 16 px, aristas (rectas o con `bend`) que atraviesan otra caja y etiquetas de aristas que se pisan con cajas o entre sí. Replica `boxPoint` y `edgePath` del motor. Sin argumentos revisa todos los mapas; sale con 1 si hay problemas. |
 
 Una página está lista cuando las pruebas dan cero errores de consola, cero términos faltantes, cero problemas de enlaces y ningún desborde a 390 px, y las capturas en claro y en oscuro se ven bien.
 
@@ -445,7 +481,7 @@ Una página está lista cuando las pruebas dan cero errores de consola, cero té
 - **Ediciones grandes o de varias líneas:** usa un script de Python con `assert s.count(viejo) == 1` antes de reemplazar. Las comillas anidadas en PowerShell suelen fallar.
 - **Node en Windows:** los `import` de ESM aceptan rutas relativas o URLs `file://`, no `C:/…`.
 - **Figuras en el teléfono:** a 390 px se desplazan dentro de su marco. El texto más chico de una figura de 770 px de ancho queda cerca de 9.6 px, así que no bajes de `dg-tiny` (11.5 px).
-- **Etiquetas de aristas en los mapas:** se pisan fácilmente. Mídelo con capturas y acomoda con `labelAt` o `bend`.
+- **Etiquetas de aristas en los mapas:** se pisan fácilmente. Mídelo con `map-lint.mjs` y con capturas, y acomoda con `labelAt` o `bend`.
 - **Alias del glosario:** los alias ambiguos generan enlaces falsos. Así pasó con "latencia de cola" usado como espera en una cola, y con "estampida" en M03. `links.mjs` los muestra. Por eso "liveness" no es alias de nada (M03 habla de liveness probes) y "máquina de estados" tampoco (M27 la usa para pagos).
 - **Barras invertidas:** el heredoc del Bash tool convierte `\\n` en `\n`. Para cualquier texto con barras invertidas (Python que genera SVG, regex, JS), usa Write o Edit en lugar de un heredoc.
 - **Gráficos de widgets en el teléfono:** los SVG de `.sim` se achican al ancho disponible. Si las etiquetas importan, dale un `min-width` al SVG dentro de `.sim-scroll`, como `.lin-chart svg { min-width: 560px; }`, y el gráfico se desplaza en su marco.
@@ -505,9 +541,12 @@ ia-system-desing
 │       │   │       m22.data.js
 │       │   │       m23.data.js
 │       │   │       m24.data.js
+│       │   │       m121.data.js
 │       │   │       m25.data.js
+│       │   │       m33.data.js
 │       │   │
 │       │   ├───maps
+│       │   │       chatgpt.data.js
 │       │   │       m01-request.data.js
 │       │   │       m04-cache.data.js
 │       │   │       m09-objetos.data.js
@@ -535,6 +574,7 @@ ia-system-desing
 │       │   │
 │       │   └───quizzes
 │       │           cpa.data.js
+│       │           cpb.data.js
 │       │           m00.data.js
 │       │           m01.data.js
 │       │           m02.data.js
@@ -549,6 +589,7 @@ ia-system-desing
 │       │           m10.data.js
 │       │           m11.data.js
 │       │           m12.data.js
+│       │           m121.data.js
 │       │           m13.data.js
 │       │           m14.data.js
 │       │           m15.data.js
@@ -562,10 +603,13 @@ ia-system-desing
 │       │           m23.data.js
 │       │           m24.data.js
 │       │           m25.data.js
+│       │           m26.data.js
 │       │           m27.data.js
 │       │           m28.data.js
 │       │           m29.data.js
 │       │           m30.data.js
+│       │           m32.data.js
+│       │           m33.data.js
 │       │
 │       ├───map
 │       │       flow-sim.js
@@ -591,6 +635,8 @@ ia-system-desing
 │               sim-dtx.js
 │               sim-engine.js
 │               sim-feed.js
+│               sim-firewall.js
+│               sim-harden.js
 │               sim-gpu.js
 │               sim-http.js
 │               sim-infra.js
@@ -611,11 +657,18 @@ ia-system-desing
 │               sim-signurl.js
 │               sim-slowstart.js
 │               sim-sse.js
+│               sim-traceprop.js
+│               sim-fwd.js
+│               sim-train.js
 │               sim-vision.js
 │               sim-voice.js
 │
+├───maps
+│       chatgpt.html
+│
 ├───modules
 │       checkpoint-a.html
+│       checkpoint-b.html
 │       m00-metodo.html
 │       m01-viaje-request.html
 │       m02-apis.html
@@ -629,6 +682,7 @@ ia-system-desing
 │       m09-objetos.html
 │       m10-seguridad.html
 │       m11-observabilidad.html
+│       m121-prefill-decode-a-fondo.html
 │       m12-llm-por-dentro.html
 │       m13-gpus.html
 │       m14-cuantizacion.html
@@ -643,10 +697,13 @@ ia-system-desing
 │       m23-multimodal.html
 │       m24-voz-tiempo-real.html
 │       m25-agentes.html
+│       m26-entrenamiento.html
 │       m27-pagos-stripe.html
 │       m28-cloudflare.html
 │       m29-whatsapp.html
 │       m30-twitter.html
+│       m32-firewalls.html
+│       m33-hardening-linux.html
 │
 ├───proyectos
 │       a00-laboratorio.html
@@ -670,6 +727,7 @@ ia-system-desing
     └───test
             cdp.mjs
             links.mjs
+            map-lint.mjs
             quiz-bias.mjs
             shots.mjs
             test-page.mjs

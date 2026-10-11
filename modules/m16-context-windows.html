@@ -98,6 +98,30 @@
 
       <p>Hay un cuarto límite, más sutil: que el modelo acepte 128 000 tokens no significa que los use todos igual de bien. El estudio "Lost in the Middle" (2023) mostró que los modelos encuentran mejor la información al principio y al final del contexto que en el medio, y el benchmark RULER (2024) encontró que el largo efectivo de muchos modelos es bastante menor que el anunciado. <span class="badge badge--doc">Documentado</span> Meter todo "por las dudas" empeora las respuestas además de encarecerlas.</p>
 
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f16n1t f16n1d">
+<title id="f16n1t">Dónde encuentra mejor un dato el modelo</title>
+<desc id="f16n1d">Curva cualitativa con la forma que encontró el estudio Lost in the Middle: el acierto es alto cuando el dato está al principio del contexto, baja cuando está en el medio y vuelve a subir cuando está al final. El eje vertical no tiene valores porque dependen del modelo y del largo del contexto.</desc>
+<rect x="300" y="40" width="220" height="150" fill="color-mix(in srgb, var(--warn) 12%, transparent)"/>
+<text class="dg-small" x="410" y="58" text-anchor="middle">el dato se pierde más en el medio</text>
+<path class="sim-grid" d="M110 32 V190 H730" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="100" y="46" text-anchor="end">más</text>
+<text class="dg-tiny" x="100" y="190" text-anchor="end">menos</text>
+<text class="sim-label" x="30" y="119" text-anchor="start">acierto</text>
+<path d="M120 62 C 220 150, 330 172, 410 170 S 610 140, 710 58" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+<path class="sim-grid" d="M120 190 V195" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-small" x="120" y="210" text-anchor="middle">principio</text>
+<path class="sim-grid" d="M410 190 V195" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-small" x="410" y="210" text-anchor="middle">medio</text>
+<path class="sim-grid" d="M710 190 V195" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-small" x="710" y="210" text-anchor="middle">final</text>
+<text class="sim-label" x="415" y="232" text-anchor="middle">posición del dato dentro de un contexto largo</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.2.</b> La forma de la curva es lo que importa: el medio de un contexto largo es la zona más débil. Lo que tiene que encontrar el modelo va al principio o al final del prompt. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <h2 id="costo"><span class="sec-num">16.2</span>El costo de una conversación larga</h2>
 
       <p>El modelo no guarda estado entre requests (M12): cada turno reenvía el prompt de sistema y toda la conversación anterior. Si cada turno agrega T tokens, el turno i envía unos i × T, y la suma de toda la conversación crece con el cuadrado de la cantidad de turnos:</p>
@@ -106,6 +130,99 @@
 
 20 turnos, sistema de 1500, usuario de 150 y respuesta de 350 por turno:
 20 × 1650 + 500 × 190 = 128 000 tokens de entrada, para 11 500 tokens de contenido real</code></pre>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f16n2t f16n2d">
+<title id="f16n2t">Cada turno reenvía todo lo anterior</title>
+<desc id="f16n2d">Veinte barras, una por turno, con los tokens de entrada que envía cada uno: el prompt de sistema de 1500 tokens, todo el historial anterior y el mensaje nuevo de 150. El historial crece 500 tokens por turno, así que la barra del turno 1 mide 1650 tokens y la del turno 20, 11 150. La suma de las veinte barras es 128 000 tokens de entrada para 11 500 tokens de contenido real.</desc>
+<rect x="110" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="110" y="233.875" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<text class="dg-tiny" x="120" y="225.875" text-anchor="middle">1 650</text>
+<text class="dg-tiny" x="120" y="278" text-anchor="middle">1</text>
+<rect x="140" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="140" y="228.333" width="20" height="7.91667" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="140" y="225.958" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="170" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="170" y="220.417" width="20" height="15.8333" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="170" y="218.042" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="200" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="200" y="212.5" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="200" y="210.125" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="230" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="230" y="204.583" width="20" height="31.6667" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="230" y="202.208" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<text class="dg-tiny" x="240" y="278" text-anchor="middle">5</text>
+<rect x="260" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="260" y="196.667" width="20" height="39.5833" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="260" y="194.292" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="290" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="290" y="188.75" width="20" height="47.5" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="290" y="186.375" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="320" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="320" y="180.833" width="20" height="55.4167" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="320" y="178.458" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="350" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="350" y="172.917" width="20" height="63.3333" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="350" y="170.542" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="380" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="380" y="165" width="20" height="71.25" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="380" y="162.625" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<text class="dg-tiny" x="390" y="154.625" text-anchor="middle">6 150</text>
+<text class="dg-tiny" x="390" y="278" text-anchor="middle">10</text>
+<rect x="410" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="410" y="157.083" width="20" height="79.1667" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="410" y="154.708" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="440" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="440" y="149.167" width="20" height="87.0833" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="440" y="146.792" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="470" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="470" y="141.25" width="20" height="95" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="470" y="138.875" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="500" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="500" y="133.333" width="20" height="102.917" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="500" y="130.958" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="530" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="530" y="125.417" width="20" height="110.833" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="530" y="123.042" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<text class="dg-tiny" x="540" y="278" text-anchor="middle">15</text>
+<rect x="560" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="560" y="117.5" width="20" height="118.75" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="560" y="115.125" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="590" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="590" y="109.583" width="20" height="126.667" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="590" y="107.208" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="620" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="620" y="101.667" width="20" height="134.583" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="620" y="99.2917" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="650" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="650" y="93.75" width="20" height="142.5" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="650" y="91.375" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<rect x="680" y="236.25" width="20" height="23.75" rx="1" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="0.8"/>
+<rect x="680" y="85.8333" width="20" height="150.417" rx="1" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="0.8"/>
+<rect x="680" y="83.4583" width="20" height="2.375" rx="1" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="0.8"/>
+<text class="dg-tiny" x="690" y="75.4583" text-anchor="middle">11 150</text>
+<text class="dg-tiny" x="690" y="278" text-anchor="middle">20</text>
+<path class="sim-grid" d="M102 260 H710" style="stroke: var(--label-3); fill: none"/>
+<text class="sim-label" x="410" y="300" text-anchor="middle">turno</text>
+<text class="sim-label" x="20" y="256" text-anchor="start">tokens</text>
+<text class="dg-tiny" x="20" y="272" text-anchor="start">de entrada</text>
+<rect x="110" y="22" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1"/>
+<text class="dg-tiny" x="130" y="33" text-anchor="start">sistema: 1 500</text>
+<rect x="225.6" y="22" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-cache) 45%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<text class="dg-tiny" x="245.6" y="33" text-anchor="start">historial reenviado: +500 por turno</text>
+<rect x="475.6" y="22" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-queue) 70%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="495.6" y="33" text-anchor="start">mensaje nuevo: 150</text>
+<rect class="dg-box" x="130" y="56" width="190" height="92" rx="10"/>
+<text class="dg-small" x="225" y="82" text-anchor="middle">Suma de las 20 barras</text>
+<text class="dg-label" x="225" y="104" text-anchor="middle">128 000 tokens</text>
+<text class="dg-small" x="225" y="124" text-anchor="middle">contenido real: 11 500</text>
+<text class="dg-tiny" x="225" y="140" text-anchor="middle">crece con N², no con N</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.3.</b> Cada barra es un turno y su altura, lo que se envía. El historial forma un triángulo: es la parte que crece con el cuadrado de los turnos y la que el prompt caching (16.6) cobra con descuento.</figcaption>
+      </figure>
 
       <p>Con los precios de ejemplo de la calculadora, esa conversación cuesta 0.39 USD, y 0.11 USD si el proveedor cobra con descuento los tokens que ya estaban en caché del turno anterior (16.6). Cambia los números:</p>
 
@@ -127,6 +244,141 @@
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f16n3t f16n3d">
+<title id="f16n3t">Qué envía cada estrategia cuando la conversación no entra</title>
+<desc id="f16n3d">Una conversación con el prompt de sistema y doce mensajes, donde el mensaje 1 tiene el dato que pide la última pregunta. Completa no entra en la ventana. Truncar envía los mensajes 5 a 12 y pierde el dato. La ventana deslizante de seis mensajes envía del 7 al 12 y también lo pierde. Resumir envía un resumen de los mensajes 1 a 8 y los cuatro últimos: el dato llega resumido. Recuperar envía fragmentos de los mensajes 1 y 4, parecidos a la pregunta, y los últimos: el dato llega si la búsqueda acierta. Memoria envía hechos estables y los últimos: el dato llega solo si era uno de esos hechos.</desc>
+<path class="dg-feedback" d="M454 30 V292"/>
+<text class="dg-tiny" x="454" y="24" text-anchor="middle">límite de la ventana</text>
+<text class="dg-small" x="620" y="24" text-anchor="start">El dato del mensaje 1</text>
+<text class="sim-label" x="20" y="64" text-anchor="start">Completa</text>
+<rect x="150" y="44" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="64" text-anchor="middle">S</text>
+<rect class="dg-box dg-box--em" x="184" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="199" y="64" text-anchor="middle">1</text>
+<rect class="dg-box" x="218" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="233" y="64" text-anchor="middle">2</text>
+<rect class="dg-box" x="252" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="64" text-anchor="middle">3</text>
+<rect class="dg-box" x="286" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="64" text-anchor="middle">4</text>
+<rect class="dg-box" x="320" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="64" text-anchor="middle">5</text>
+<rect class="dg-box" x="354" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="64" text-anchor="middle">6</text>
+<rect class="dg-box" x="388" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="403" y="64" text-anchor="middle">7</text>
+<rect class="dg-box" x="422" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="437" y="64" text-anchor="middle">8</text>
+<rect class="dg-box" x="456" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="471" y="64" text-anchor="middle">9</text>
+<rect class="dg-box" x="490" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="505" y="64" text-anchor="middle">10</text>
+<rect class="dg-box" x="524" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="539" y="64" text-anchor="middle">11</text>
+<rect class="dg-box" x="558" y="44" width="30" height="30" rx="5"/>
+<text class="dg-small" x="573" y="64" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="64" text-anchor="start">✗ no entra: error</text>
+<text class="sim-label" x="20" y="106" text-anchor="start">Truncar</text>
+<rect x="150" y="86" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="106" text-anchor="middle">S</text>
+<rect class="dg-box" x="184" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="199" y="106" text-anchor="middle">5</text>
+<rect class="dg-box" x="218" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="233" y="106" text-anchor="middle">6</text>
+<rect class="dg-box" x="252" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="106" text-anchor="middle">7</text>
+<rect class="dg-box" x="286" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="106" text-anchor="middle">8</text>
+<rect class="dg-box" x="320" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="106" text-anchor="middle">9</text>
+<rect class="dg-box" x="354" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="106" text-anchor="middle">10</text>
+<rect class="dg-box" x="388" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="403" y="106" text-anchor="middle">11</text>
+<rect class="dg-box" x="422" y="86" width="30" height="30" rx="5"/>
+<text class="dg-small" x="437" y="106" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="106" text-anchor="start">✗ se pierde</text>
+<text class="sim-label" x="20" y="148" text-anchor="start">Ventana de 6</text>
+<rect x="150" y="128" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="148" text-anchor="middle">S</text>
+<rect class="dg-box" x="184" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="199" y="148" text-anchor="middle">7</text>
+<rect class="dg-box" x="218" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="233" y="148" text-anchor="middle">8</text>
+<rect class="dg-box" x="252" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="148" text-anchor="middle">9</text>
+<rect class="dg-box" x="286" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="148" text-anchor="middle">10</text>
+<rect class="dg-box" x="320" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="148" text-anchor="middle">11</text>
+<rect class="dg-box" x="354" y="128" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="148" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="148" text-anchor="start">✗ se pierde</text>
+<text class="sim-label" x="20" y="190" text-anchor="start">Resumir</text>
+<rect x="150" y="170" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="190" text-anchor="middle">S</text>
+<rect x="184" y="170" width="64" height="30" rx="5" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="216" y="190" text-anchor="middle">resumen</text>
+<rect class="dg-box" x="252" y="170" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="190" text-anchor="middle">9</text>
+<rect class="dg-box" x="286" y="170" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="190" text-anchor="middle">10</text>
+<rect class="dg-box" x="320" y="170" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="190" text-anchor="middle">11</text>
+<rect class="dg-box" x="354" y="170" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="190" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="190" text-anchor="start">~ llega resumido</text>
+<text class="sim-label" x="20" y="232" text-anchor="start">Recuperar</text>
+<rect x="150" y="212" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="232" text-anchor="middle">S</text>
+<rect x="184" y="212" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-small" x="199" y="232" text-anchor="middle">1</text>
+<rect x="218" y="212" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="dg-small" x="233" y="232" text-anchor="middle">4</text>
+<rect class="dg-box" x="252" y="212" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="232" text-anchor="middle">9</text>
+<rect class="dg-box" x="286" y="212" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="232" text-anchor="middle">10</text>
+<rect class="dg-box" x="320" y="212" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="232" text-anchor="middle">11</text>
+<rect class="dg-box" x="354" y="212" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="232" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="232" text-anchor="start">~ si la búsqueda acierta</text>
+<text class="sim-label" x="20" y="274" text-anchor="start">Memoria</text>
+<rect x="150" y="254" width="30" height="30" rx="5" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="165" y="274" text-anchor="middle">S</text>
+<rect x="184" y="254" width="64" height="30" rx="5" fill="color-mix(in srgb, var(--l-edge) 35%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-tiny" x="216" y="274" text-anchor="middle">hechos</text>
+<rect class="dg-box" x="252" y="254" width="30" height="30" rx="5"/>
+<text class="dg-small" x="267" y="274" text-anchor="middle">9</text>
+<rect class="dg-box" x="286" y="254" width="30" height="30" rx="5"/>
+<text class="dg-small" x="301" y="274" text-anchor="middle">10</text>
+<rect class="dg-box" x="320" y="254" width="30" height="30" rx="5"/>
+<text class="dg-small" x="335" y="274" text-anchor="middle">11</text>
+<rect class="dg-box" x="354" y="254" width="30" height="30" rx="5"/>
+<text class="dg-small" x="369" y="274" text-anchor="middle">12</text>
+<text class="dg-small" x="620" y="274" text-anchor="start">~ si era un hecho estable</text>
+<rect x="20" y="316" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.2"/>
+<text class="dg-tiny" x="40" y="327" text-anchor="start">S: prompt de sistema</text>
+<rect class="dg-box" x="178" y="316" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="198" y="327" text-anchor="start">mensaje</text>
+<rect class="dg-box dg-box--em" x="255.4" y="316" width="14" height="14" rx="3"/>
+<text class="dg-tiny" x="275.4" y="327" text-anchor="start">mensaje 1, con el dato</text>
+<rect x="425.8" y="316" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-queue) 35%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.2"/>
+<text class="dg-tiny" x="445.8" y="327" text-anchor="start">resumen</text>
+<rect x="503.2" y="316" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--l-db)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="523.2" y="327" text-anchor="start">fragmento recuperado</text>
+<rect x="661.2" y="316" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-edge) 35%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.2"/>
+<text class="dg-tiny" x="681.2" y="327" text-anchor="start">memoria</text>
+<text class="dg-tiny" x="20" y="356" text-anchor="start">✗: no llega al modelo · ~: llega con condiciones. Lo que se recorta es lo que se envía; la base guarda todo.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.4.</b> Las cinco estrategias sobre la misma conversación, con el mismo límite de ventana. Ninguna conserva el dato del principio sin condiciones: elegir una es elegir qué se puede perder.</figcaption>
+      </figure>
 
       <p>Mira qué conserva cada una en una conversación cuya última pregunta depende de un detalle del principio:</p>
 
@@ -155,13 +407,309 @@
         </table>
       </div>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f16n4t f16n4d">
+<title id="f16n4t">RAG y contexto largo, paso a paso</title>
+<desc id="f16n4d">Arriba, RAG: al indexar, una sola vez, los documentos se parten en trozos, se calculan sus embeddings y se guardan en una base vectorial; en cada pregunta, se buscan los k trozos más parecidos y el prompt lleva el sistema, esos trozos y la pregunta, unos miles de tokens. Abajo, contexto largo: el prompt lleva el documento entero en cada pregunta; desde la segunda, ese prefijo sale del caché con descuento.</desc>
+<defs><marker id="f16n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="22" text-anchor="start">RAG</text>
+<text class="sim-label" x="20" y="52" text-anchor="start">Al indexar</text>
+<text class="dg-tiny" x="20" y="68" text-anchor="start">una vez</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="130" y="34" width="140" height="46" rx="10"/>
+<text class="dg-label" x="200" y="54" text-anchor="middle">Documentos</text>
+<text class="dg-tiny" x="200" y="71" text-anchor="middle">el corpus entero</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="34" width="140" height="46" rx="10"/>
+<text class="dg-label" x="360" y="54" text-anchor="middle">Trozos</text>
+<text class="dg-tiny" x="360" y="71" text-anchor="middle">de unos 300 tokens</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="450" y="34" width="140" height="46" rx="10"/>
+<text class="dg-label" x="520" y="54" text-anchor="middle">Embeddings</text>
+<text class="dg-tiny" x="520" y="71" text-anchor="middle">un vector por trozo</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="610" y="34" width="140" height="46" rx="10"/>
+<text class="dg-label" x="680" y="54" text-anchor="middle">Base vectorial</text>
+<text class="dg-tiny" x="680" y="71" text-anchor="middle">índice de vecinos</text>
+<path class="dg-edge" d="M271 57 H286" marker-end="url(#f16n4a)"/>
+<path class="dg-edge" d="M431 57 H446" marker-end="url(#f16n4a)"/>
+<path class="dg-edge" d="M591 57 H606" marker-end="url(#f16n4a)"/>
+<text class="sim-label" x="20" y="134" text-anchor="start">En cada</text>
+<text class="sim-label" x="20" y="150" text-anchor="start">pregunta</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="130" y="118" width="140" height="46" rx="10"/>
+<text class="dg-label" x="200" y="138" text-anchor="middle">Pregunta</text>
+<text class="dg-tiny" x="200" y="155" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="290" y="118" width="140" height="46" rx="10"/>
+<text class="dg-label" x="360" y="138" text-anchor="middle">Búsqueda</text>
+<text class="dg-tiny" x="360" y="155" text-anchor="middle">los k más parecidos</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="450" y="118" width="140" height="46" rx="10"/>
+<text class="dg-label" x="520" y="138" text-anchor="middle">Prompt</text>
+<text class="dg-tiny" x="520" y="155" text-anchor="middle">k trozos + pregunta</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="610" y="118" width="140" height="46" rx="10"/>
+<text class="dg-label" x="680" y="138" text-anchor="middle">Modelo</text>
+<text class="dg-tiny" x="680" y="155" text-anchor="middle">unos miles de tokens</text>
+<path class="dg-edge" d="M271 141 H286" marker-end="url(#f16n4a)"/>
+<path class="dg-edge" d="M431 141 H446" marker-end="url(#f16n4a)"/>
+<path class="dg-edge" d="M591 141 H606" marker-end="url(#f16n4a)"/>
+<path class="dg-edge" d="M680 81 V96 H360 V114" marker-end="url(#f16n4a)"/>
+<path class="sim-grid" d="M20 182 H750"/>
+<text class="dg-group" x="20" y="204" text-anchor="start">Contexto largo</text>
+<text class="sim-label" x="20" y="240" text-anchor="start">En cada</text>
+<text class="sim-label" x="20" y="256" text-anchor="start">pregunta</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="130" y="222" width="140" height="46" rx="10"/>
+<text class="dg-label" x="200" y="242" text-anchor="middle">Documento</text>
+<text class="dg-tiny" x="200" y="259" text-anchor="middle">entero, sin trozos</text>
+<rect x="290" y="222" width="60" height="46" rx="6" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="320" y="249" text-anchor="middle">sistema</text>
+<rect x="354" y="222" width="170" height="46" rx="6" fill="color-mix(in srgb, var(--l-external) 30%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="439" y="243" text-anchor="middle">documento completo</text>
+<text class="dg-tiny" x="439" y="259" text-anchor="middle">decenas de miles de tokens</text>
+<rect x="528" y="222" width="62" height="46" rx="6" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-tiny" x="559" y="249" text-anchor="middle">pregunta</text>
+<path class="dg-feedback" d="M290 276 V282 H524 V276"/>
+<text class="dg-tiny" x="407" y="296" text-anchor="middle">prefijo en caché desde la 2.ª pregunta (16.6)</text>
+<path class="dg-edge" d="M271 245 H286" marker-end="url(#f16n4a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="610" y="222" width="140" height="46" rx="10"/>
+<text class="dg-label" x="680" y="242" text-anchor="middle">Modelo</text>
+<text class="dg-tiny" x="680" y="259" text-anchor="middle">prefill largo: segundos</text>
+<path class="dg-edge" d="M591 245 H606" marker-end="url(#f16n4a)"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.5.</b> RAG paga una infraestructura de ingesta para enviar poco en cada pregunta; el contexto largo no necesita nada más y envía todo, con el caché como descuento.</figcaption>
+      </figure>
+
       <p>La respuesta habitual es combinar: RAG para elegir qué documentos o secciones importan, y contexto generoso para que el modelo los vea completos, no en fragmentos de 300 tokens. Para un documento que el usuario acaba de subir y sobre el que va a preguntar varias veces, meterlo entero con prompt caching suele ser más simple y mejor que indexarlo.</p>
 
       <h2 id="rope"><span class="sec-num">16.5</span>Cómo se extiende una ventana</h2>
 
       <p>El modelo sabe en qué posición está cada token gracias a la codificación posicional. La mayoría de los modelos abiertos usa <dfn data-term="rope">RoPE</dfn>, que rota los vectores de consulta y clave según la posición. Un modelo entrenado con 8000 tokens nunca vio rotaciones de la posición 100 000, y ahí falla. Las técnicas de extensión (Position Interpolation, escalado NTK, YaRN) estiran las rotaciones para que las posiciones nuevas caigan en rangos conocidos, y se completan con un entrenamiento corto con textos largos: así se llevó Llama 3.1 a 128 000 tokens. <span class="badge badge--doc">Documentado</span></p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 326" role="img" aria-labelledby="f16n5t f16n5d">
+<title id="f16n5t">RoPE: la posición como un ángulo, y cómo se estira</title>
+<desc id="f16n5d">A la izquierda, un par de dimensiones de un vector de consulta o de clave: RoPE lo gira un ángulo fijo por cada posición, así que el vector de la posición 5 está girado cinco veces. El producto entre la consulta de la posición m y la clave de la posición n depende solo de la diferencia m − n. A la derecha, un modelo entrenado hasta la posición 8000: sin extensión, las posiciones 16 000 a 32 000 dan ángulos que nunca vio; con Position Interpolation, cada posición se divide por 4 y las 32 000 caen dentro del rango entrenado.</desc>
+<defs><marker id="f16n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="22" text-anchor="start">Un par de dimensiones gira θ por posición</text>
+<circle cx="170" cy="150" r="92" fill="none" class="sim-grid"/>
+<path class="sim-grid" d="M68 150 H272"/>
+<path class="sim-grid" d="M170 48 V252"/>
+<path class="dg-edge" d="M170 150 L262.0 150.0" marker-end="url(#f16n5a)" style="stroke-width: 1.4"/>
+<text class="dg-small" x="278" y="154" text-anchor="middle">0</text>
+<path class="dg-edge" d="M170 150 L251.2 106.8" marker-end="url(#f16n5a)" style="stroke-width: 1.4"/>
+<text class="dg-small" x="265.4" y="103.3" text-anchor="middle">1</text>
+<path class="dg-edge" d="M170 150 L221.4 73.7" marker-end="url(#f16n5a)" style="stroke: var(--accent); stroke-width: 2.2"/>
+<text class="dg-small" x="230.4" y="64.5" text-anchor="middle">2</text>
+<path class="dg-edge" d="M170 150 L179.6 58.5" marker-end="url(#f16n5a)" style="stroke-width: 1.4"/>
+<text class="dg-small" x="181.3" y="46.6" text-anchor="middle">3</text>
+<path class="dg-edge" d="M170 150 L135.5 64.7" marker-end="url(#f16n5a)" style="stroke-width: 1.4"/>
+<text class="dg-small" x="129.5" y="53.9" text-anchor="middle">4</text>
+<path class="dg-edge" d="M170 150 L99.5 90.9" marker-end="url(#f16n5a)" style="stroke: var(--accent); stroke-width: 2.2"/>
+<text class="dg-small" x="87.3" y="84.6" text-anchor="middle">5</text>
+<path d="M192.4 116.8 A40 40 0 0 0 139.4 124.3" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+<text class="dg-small" x="168" y="102" text-anchor="end">3θ</text>
+<text class="dg-tiny" x="20" y="272" text-anchor="start">Entre la posición 2 y la 5 hay 3θ, estén donde estén:</text>
+<text class="dg-tiny" x="20" y="288" text-anchor="start">la atención ve la distancia, no la posición absoluta.</text>
+<path class="sim-grid" d="M368 20 V285"/>
+<text class="dg-group" x="390" y="22" text-anchor="start">Entrenado hasta 8000, usado hasta 32 000</text>
+<rect x="400" y="100" width="85.0" height="20" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<path class="sim-grid" d="M400 110 H740" style="stroke: var(--label-3); fill: none"/>
+<text class="sim-label" x="400" y="50" text-anchor="start">Sin extensión</text>
+<rect x="400" y="210" width="85.0" height="20" rx="4" fill="color-mix(in srgb, var(--l-service) 25%, var(--bg))" stroke="var(--l-service)"/>
+<path class="sim-grid" d="M400 220 H740" style="stroke: var(--label-3); fill: none"/>
+<text class="sim-label" x="400" y="276" text-anchor="start">Position Interpolation: posición ÷ 4</text>
+<rect x="485.0" y="100" width="255.0" height="20" rx="4" fill="color-mix(in srgb, var(--warn) 16%, transparent)"/>
+<text class="dg-small" x="612.5" y="72" text-anchor="middle">ángulos que el modelo nunca vio</text>
+<text class="dg-small" x="511" y="250" text-anchor="start">← todo cae en el rango entrenado</text>
+<circle cx="400.0" cy="110" r="4" fill="var(--label)"/>
+<circle cx="400.0" cy="220" r="4" fill="var(--label)"/>
+<path class="dg-feedback" d="M400.0 116 L400.0 214"/>
+<circle cx="485.0" cy="110" r="4" fill="var(--label)"/>
+<circle cx="421.2" cy="220" r="4" fill="var(--label)"/>
+<path class="dg-feedback" d="M485.0 116 L421.2 214"/>
+<circle cx="570.0" cy="110" r="4" fill="var(--label)"/>
+<circle cx="442.5" cy="220" r="4" fill="var(--label)"/>
+<path class="dg-feedback" d="M570.0 116 L442.5 214"/>
+<circle cx="655.0" cy="110" r="4" fill="var(--label)"/>
+<circle cx="463.8" cy="220" r="4" fill="var(--label)"/>
+<path class="dg-feedback" d="M655.0 116 L463.8 214"/>
+<circle cx="740.0" cy="110" r="4" fill="var(--label)"/>
+<circle cx="485.0" cy="220" r="4" fill="var(--label)"/>
+<path class="dg-feedback" d="M740.0 116 L485.0 214"/>
+<text class="dg-tiny" x="485" y="92" text-anchor="middle">8 000</text>
+<text class="dg-tiny" x="570" y="92" text-anchor="middle">16 000</text>
+<text class="dg-tiny" x="655" y="92" text-anchor="middle">24 000</text>
+<text class="dg-tiny" x="740" y="92" text-anchor="middle">32 000</text>
+<text class="dg-tiny" x="400" y="92" text-anchor="middle">0</text>
+<text class="dg-tiny" x="485" y="250" text-anchor="middle">8000</text>
+<text class="dg-tiny" x="400" y="250" text-anchor="middle">0</text>
+<text class="dg-tiny" x="390" y="300" text-anchor="start">Después, un entrenamiento corto con textos largos.</text>
+<text class="dg-tiny" x="390" y="316" text-anchor="start">NTK y YaRN estiran distinto cada frecuencia.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.6.</b> A la izquierda, por qué RoPE codifica distancias: la diferencia de ángulos entre dos posiciones depende solo de cuánto las separa. A la derecha, la idea de Position Interpolation con un ejemplo de factor 4.</figcaption>
+      </figure>
+
       <p>Otra familia reduce el costo en lugar de estirar la ventana. La atención de ventana deslizante hace que cada token mire solo los últimos miles (Mistral 7B usa 4096), y modelos como Gemma alternan capas locales, de ventana corta, con capas globales que ven todo. <span class="badge badge--doc">Documentado</span> Para el serving importa porque las capas locales guardan un KV cache acotado: la memoria por conversación crece mucho menos.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f16n6t f16n6d">
+<title id="f16n6t">Qué tokens mira cada tipo de atención y cuánto KV guarda</title>
+<desc id="f16n6d">Dos matrices de 8 por 8: cada fila es un token que se calcula y cada columna, un token que mira. Con atención causal completa, cada token mira a todos los anteriores, así que el KV cache guarda todo. Con ventana deslizante de 3, mira solo los 3 últimos y el KV guarda solo esos; Mistral 7B usa una ventana de 4096. A la derecha, la memoria de KV por conversación según su largo: la completa crece en línea recta, la de ventana se aplana al llenar la ventana, y la mezcla de capas locales y globales, como en Gemma, queda en el medio.</desc>
+<text class="dg-group" x="40" y="22" text-anchor="start">Causal completa</text>
+<rect x="41" y="45" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="75" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="92" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="109" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="126" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="143" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="62" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="62" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="92" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="109" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="126" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="143" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="109" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="126" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="143" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="109" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="126" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="143" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="109" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="126" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="143" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="109" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="126" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="143" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="160" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="109" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="126" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="143" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="160" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="41" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="58" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="75" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="92" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="109" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="126" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="143" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="160" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<text class="dg-small" x="108" y="202" text-anchor="middle">mira todo lo anterior</text>
+<text class="dg-tiny" x="108" y="218" text-anchor="middle">KV: guarda todo</text>
+<text class="dg-group" x="270" y="22" text-anchor="start">Ventana deslizante (w = 3)</text>
+<rect x="271" y="45" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="288" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="305" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="322" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="339" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="356" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="373" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="45" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="62" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="288" y="62" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="305" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="322" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="339" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="356" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="373" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="62" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="288" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="305" y="79" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="322" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="339" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="356" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="373" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="79" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="288" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="305" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="322" y="96" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="339" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="356" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="373" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="96" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="288" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="305" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="322" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="339" y="113" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="356" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="373" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="113" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="288" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="305" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="322" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="339" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="356" y="130" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="373" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="390" y="130" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="288" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="305" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="322" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="339" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="356" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="373" y="147" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="390" y="147" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="271" y="164" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="288" y="164" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="305" y="164" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="322" y="164" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="339" y="164" width="15" height="15" rx="2" fill="none" class="sim-grid"/>
+<rect x="356" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="373" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<rect x="390" y="164" width="15" height="15" rx="2" fill="color-mix(in srgb, var(--l-gpu) 55%, var(--bg))" stroke="var(--l-gpu)" stroke-width="0.8"/>
+<text class="dg-small" x="338" y="202" text-anchor="middle">mira los últimos w</text>
+<text class="dg-tiny" x="338" y="218" text-anchor="middle">KV: solo w (Mistral 7B: 4096)</text>
+<text class="dg-tiny" x="184" y="175" text-anchor="start">← token 8</text>
+<text class="dg-tiny" x="414" y="175" text-anchor="start">← token 8</text>
+<text class="dg-group" x="480" y="22" text-anchor="start">KV cache por conversación</text>
+<path class="sim-grid" d="M500 50 V200 H730" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="506" y="54" text-anchor="start">memoria</text>
+<text class="dg-tiny" x="615" y="234" text-anchor="middle">largo de la conversación</text>
+<path d="M500 200 L650 56" fill="none" stroke="var(--l-gpu)" stroke-width="2.5"/>
+<text class="dg-tiny" x="654" y="60" text-anchor="start">completa</text>
+<path d="M500 200 L560 142.4 H724" fill="none" stroke="var(--l-service)" stroke-width="2.5"/>
+<text class="dg-tiny" x="724" y="158.4" text-anchor="end">solo ventana</text>
+<path d="M500 200 L560 142.4 L650 116.5" fill="none" stroke="var(--l-queue)" stroke-width="2.5" stroke-dasharray="7 4"/>
+<text class="dg-tiny" x="654" y="120.48" text-anchor="start">local + global</text>
+<path class="sim-grid" d="M560 200 V205" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="560" y="217" text-anchor="middle">w</text>
+<text class="dg-tiny" x="20" y="282" text-anchor="start">Fila: el token que se calcula. Columna: los tokens que mira. Celda llena: entra en la atención y su KV tiene que estar en memoria.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 16.7.</b> La máscara decide qué tokens entran en la atención y, con eso, qué KV hay que guardar. La curva de la derecha es cualitativa: muestra la forma, no valores.</figcaption>
+      </figure>
 
       <h2 id="prompt-caching"><span class="sec-num">16.6</span>Prompt caching</h2>
 
@@ -172,29 +720,30 @@
 <svg viewBox="0 0 770 170" role="img" aria-labelledby="f162t f162d">
 <title id="f162t">Cómo ordenar un prompt para aprovechar el caché</title>
 <desc id="f162d">El prompt va de lo más estable a lo que cambia en cada turno: prompt de sistema, definiciones de herramientas, documentos, historial y, al final, el mensaje nuevo. El caché reutiliza el prefijo más largo que coincide exactamente, así que cualquier cambio al principio, como una fecha, invalida todo lo que viene después.</desc>
-<rect x="20.0" y="46" width="126.6" height="44" rx="6" fill="color-mix(in srgb, var(--label-3) 30%, var(--bg))" stroke="var(--label-3)" stroke-width="1.5"/>
-<text class="dg-label" x="84.8" y="66" text-anchor="middle" style="font-size:12.5px">Sistema</text>
-<text class="dg-tiny" x="84.8" y="82" text-anchor="middle">1 500 tokens</text>
-<rect x="149.6" y="46" width="100.7" height="44" rx="6" fill="color-mix(in srgb, var(--l-external) 30%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
-<text class="dg-label" x="201.4" y="66" text-anchor="middle" style="font-size:12.5px">Herramientas</text>
-<text class="dg-tiny" x="201.4" y="82" text-anchor="middle">1 200 tokens</text>
-<rect x="253.3" y="46" width="256.2" height="44" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
-<text class="dg-label" x="382.8" y="66" text-anchor="middle" style="font-size:12.5px">Documentos</text>
-<text class="dg-tiny" x="382.8" y="82" text-anchor="middle">3 000 tokens</text>
-<rect x="512.4" y="46" width="221.6" height="44" rx="6" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
-<text class="dg-label" x="624.7" y="66" text-anchor="middle" style="font-size:12.5px">Historial</text>
-<text class="dg-tiny" x="624.7" y="82" text-anchor="middle">2 600 tokens</text>
-<rect x="737.0" y="46" width="10.0" height="44" rx="6" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
-<text class="dg-label" x="743.5" y="66" text-anchor="middle" style="font-size:12.5px">Mensaje nuevo</text>
-<text class="dg-tiny" x="743.5" y="82" text-anchor="middle">150 tokens</text>
-<line x1="735.5" x2="735.5" y1="36" y2="100" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5 4"/>
-<text class="dg-small" x="729.0" y="118" text-anchor="end">prefijo en caché: se cobra con descuento y no se recalcula</text>
-<text class="dg-small" x="741.0" y="118">nuevo</text>
-<text class="dg-small" x="20" y="24">más estable</text><text class="dg-small" x="750" y="24" text-anchor="end">cambia en cada turno</text>
-<text class="dg-small" x="20" y="150">Una fecha o un ID al principio del prompt cambian el primer bloque y el caché no sirve para nada.</text>
+<rect x="20.0" y="46" width="106.3" height="44" rx="6" fill="color-mix(in srgb, var(--label-3) 30%, var(--bg))" stroke="var(--label-3)" stroke-width="1.5"/>
+<text class="dg-label" x="73.1" y="66" text-anchor="middle">Sistema</text>
+<text class="dg-tiny" x="73.1" y="82" text-anchor="middle">1 500 tokens</text>
+<rect x="130.3" y="46" width="85.0" height="44" rx="6" fill="color-mix(in srgb, var(--l-external) 30%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-label" x="172.8" y="66" text-anchor="middle">Herramientas</text>
+<text class="dg-tiny" x="172.8" y="82" text-anchor="middle">1 200 tokens</text>
+<rect x="219.3" y="46" width="212.5" height="44" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-label" x="325.5" y="66" text-anchor="middle">Documentos</text>
+<text class="dg-tiny" x="325.5" y="82" text-anchor="middle">3 000 tokens</text>
+<rect x="435.8" y="46" width="184.2" height="44" rx="6" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="527.9" y="66" text-anchor="middle">Historial</text>
+<text class="dg-tiny" x="527.9" y="82" text-anchor="middle">2 600 tokens</text>
+<line x1="630.0" x2="630.0" y1="36" y2="100" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5 4"/>
+<rect x="640.0" y="46" width="110.0" height="44" rx="6" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-label" x="695" y="66" text-anchor="middle">Mensaje nuevo</text>
+<text class="dg-tiny" x="695" y="82" text-anchor="middle">150 tokens</text>
+<text class="dg-small" x="624" y="118" text-anchor="end">prefijo en caché: se cobra con descuento y no se recalcula</text>
+<text class="dg-small" x="695" y="118" text-anchor="middle">se calcula</text>
+<text class="dg-small" x="20" y="24" text-anchor="start">más estable</text>
+<text class="dg-small" x="750" y="24" text-anchor="end">cambia en cada turno</text>
+<text class="dg-small" x="20" y="150" text-anchor="start">Una fecha o un ID al principio del prompt cambian el primer bloque y el caché no sirve para nada. El mensaje nuevo no está a escala.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 16.2.</b> El caché reutiliza el prefijo idéntico más largo. Lo estable va primero y lo que cambia, al final.</figcaption>
+        <figcaption><b>Figura 16.8.</b> El caché reutiliza el prefijo idéntico más largo. Lo estable va primero y lo que cambia, al final.</figcaption>
       </figure>
 
       <aside class="callout callout--fail">

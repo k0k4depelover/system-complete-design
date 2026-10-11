@@ -122,6 +122,7 @@ Los datos van en archivos `.js` que se registran en `window.SD`. No uso JSON con
 | # | Módulo | Contenido clave | Visual / interactivo |
 |---|---|---|---|
 | M12 | Un LLM visto por un ingeniero de sistemas | Tokens y tokenizer, forward pass, **prefill vs decode**, generación autoregresiva, **KV cache** (fórmula: `2 × capas × kv_heads × head_dim × bytes × tokens`), por qué decode está limitado por memoria, métricas **TTFT, TPOT/ITL**, throughput | Animación token a token mostrando cómo crece el KV cache |
+| M12.1 | Prefill y decode a fondo (opcional, `kind: 'deep'`) | El forward pass pieza por pieza (lámina con 14 marcas), parámetros de Llama 3.1 70B, GEMM contra GEMV e intensidad por tokens en la pasada, la atención con sus formas, GQA y NumPy con y sin cache, FlashAttention, prefill y decode paso a paso con rejillas capa por token, el KV cache por dentro, CUDA graphs y all-reduce, costo por pieza, paso mixto y chunked prefill, muestreo y el bucle a mano con transformers | Matriz de atención con y sin KV cache, y calculadora de costo de una pasada por pieza; diez figuras |
 | M13 | Hardware GPU | HBM y ancho de banda, FLOPs, arithmetic intensity, modelo roofline, NVLink vs InfiniBand, cuántas GPUs necesita un modelo de 8B, 70B o 400B | Calculadora de sizing GPU |
 | M14 | Cuantización | FP32/BF16/FP16/FP8/INT8/INT4, weight-only vs weight+activation, GPTQ, AWQ, SmoothQuant, cuantización del KV cache, calibración, impacto en calidad y en latencia | Calculadora de memoria por formato; comparativa visual de precisión |
 | M15 | Motores de inferencia | Static vs **continuous batching**, **PagedAttention**, prefix caching, chunked prefill, **speculative decoding**, FlashAttention, paralelismo tensor / pipeline / expert, MoE, **prefill/decode desagregado** | Simulador de batching: requests entrando y saliendo del batch por iteración |
@@ -158,7 +159,7 @@ Los datos van en archivos `.js` que se registran en `window.SD`. No uso JSON con
 
 ### Parte IV — Ciberseguridad
 
-Numerada después de la Parte III (M32 en adelante), con su propio checkpoint. **Cuenta para el progreso.** La premisa transversal: "si no haces esto, el atacante hace esto otro". Todo defensivo: se muestra el patrón vulnerable y su arreglo, nunca cadenas de explotación listas para usar. Hoy solo existe el esqueleto (rutas `soon` y este currículo); los módulos se escriben uno por pedido.
+Numerada después de la Parte III (M32 en adelante), con su propio checkpoint. **Cuenta para el progreso.** La premisa transversal: "si no haces esto, el atacante hace esto otro". Todo defensivo: se muestra el patrón vulnerable y su arreglo, nunca cadenas de explotación listas para usar. Publicados M32 y M33 (2026-10-07); los demás siguen en `soon` y se escriben uno por pedido, con el detalle de `PLAN_SEGURIDAD.md`.
 
 | # | Módulo | Contenido clave | Visual / interactivo (candidato) |
 |---|---|---|---|
@@ -168,6 +169,7 @@ Numerada después de la Parte III (M32 en adelante), con su propio checkpoint. *
 | M35 | **Seguridad en bases de datos** | Tablas de bitácora (triggers, pgAudit, CDC), RBAC, ABAC, ACLs, extensión de la **row-level security de M05**, cifrado de columnas, secretos y rotación de credenciales, mínimo privilegio por servicio | Simulador de RBAC/ABAC: un sujeto, una acción y un recurso contra las políticas |
 | M36 | **Criptografía desde cero** | Hash, HMAC, cifrado simétrico (AES-GCM), asimétrico, firmas, intercambio de claves, certificados y PKI, contraseñas (Argon2id, bcrypt), aleatoriedad, errores comunes. Reutiliza `SD.crypto` | Laboratorios con `SD.crypto`: hash, HMAC y firma paso a paso |
 | M37 | **Arquitecturas seguras en la nube** | IAM y mínimo privilegio, mTLS y SPIFFE, KMS/HSM, gestores de secretos, WAF, VPC y endpoints privados, zero trust, auditoría (CloudTrail), guardrails (SCP), respuesta a incidentes | Diagrama de una arquitectura zero trust; flujo de mTLS entre servicios |
+| M38 | **Active Directory: cómo se ataca y cómo se defiende** | Dominio, bosque, DC, GPO; Kerberos y NTLM paso a paso; los ataques conocidos a nivel de concepto (password spraying, kerberoasting, AS-REP roasting, pass-the-hash, relay de NTLM, abuso de ACL, delegación, AD CS, DCSync, Golden Ticket), qué rastro deja cada uno y qué lo corta; tiering y Enterprise Access Model; LAPS, gMSA, Protected Users, firma SMB/LDAP; eventos a vigilar; AD híbrido con Entra ID; recuperación (krbtgt dos veces, backups fuera de línea, Maersk) | Lámina de Kerberos con dónde actúa cada ataque; simulador de rutas de ataque donde cada control corta aristas |
 | **CP-E** | **Checkpoint E** | Examen integrador + endurecer una plataforma completa, del firewall a la nube, asumiendo que el atacante ya entró | — |
 
 Fuente base de M33: [How-To-Secure-A-Linux-Server](https://github.com/imthenachoman/How-To-Secure-A-Linux-Server), de Anchal Nigam (imthenachoman), licencia CC BY-SA 4.0. Se escribe prosa propia, se enlaza cada sección al original y se pone un recuadro de atribución arriba.
@@ -194,7 +196,7 @@ En cada checkpoint **me detengo** para que abras el sitio en el navegador y lo r
 | **CP8** | **Cloudflare** (módulo + mapa) + **Checkpoint C** | Los 6 escenarios |
 | **CP9** | Pulido: búsqueda global, glosario completo, móvil, accesibilidad, revisión técnica cruzada | Lighthouse ≥ 90 en accesibilidad; el sitio funciona en el móvil |
 | **CP10–12** | Fase 2: Twitter, Google Docs + Checkpoint D (WhatsApp ya está como M29) | — |
-| **CP13** | Parte IV: Ciberseguridad (M32–M37 + Checkpoint E). Hoy solo el esqueleto; los módulos se escriben uno por pedido | Cada módulo: 0 errores de consola, 0 términos faltantes, quiz aprobado, sin desborde a 390 px |
+| **CP13** | Parte IV: Ciberseguridad (M32–M38 + Checkpoint E). Publicados M32 y M33; el resto se escribe uno por pedido | Cada módulo: 0 errores de consola, 0 términos faltantes, quiz aprobado, sin desborde a 390 px |
 
 ---
 

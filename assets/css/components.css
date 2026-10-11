@@ -263,30 +263,33 @@ table.t { width: 100%; border-collapse: collapse; font-size: var(--fs-sub); line
 .figure figcaption { margin-top: var(--s-2); font-size: var(--fs-sm); color: var(--label-3); max-width: var(--measure); line-height: 1.5; }
 .figure figcaption b { color: var(--label-2); }
 
-.dg-box { fill: var(--bg); stroke: var(--separator-strong); stroke-width: 1; }
-.dg-box--em { stroke: var(--label); stroke-width: 1.6; }
+/* Diagramas: cajas planas con relleno tenue del color de su capa, borde sólido de 1.5 a 2 px y aristas
+   oscuras. Todo sale de los tokens, así que el modo oscuro y la paleta validada se conservan. */
+.dg-box { fill: var(--bg); stroke: var(--label-3); stroke-width: 1.5; }
+.dg-box--em { stroke: var(--label); stroke-width: 2; }
 .dg-num { fill: var(--label-3); font-family: var(--f-body); font-weight: 600; font-size: 12px; }
 .dg-label { fill: var(--label); font-family: var(--f-body); font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
 .dg-small { fill: var(--label-3); font-family: var(--f-body); font-size: 12px; }
 .dg-group { fill: var(--label-2); font-family: var(--f-body); font-weight: 600; font-size: 12.5px; }
-.dg-edge { fill: none; stroke: var(--label-3); stroke-width: 1.3; }
-.dg-feedback { fill: none; stroke: var(--label-3); stroke-width: 1.3; stroke-dasharray: 5 4; }
-.dg-frame { fill: none; stroke: var(--separator-strong); stroke-width: 1; stroke-dasharray: 3 4; }
-.dg-arrow { fill: var(--label-3); }
+.dg-edge { fill: none; stroke: var(--label-2); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.dg-feedback { fill: none; stroke: var(--label-3); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.dg-frame { fill: none; stroke: var(--separator-strong); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.dg-arrow { fill: var(--label-2); }
 .dg-arrow--soft { fill: var(--label-3); }
 .dg-tiny { fill: var(--label-2); font-family: var(--f-body); font-size: 11.5px; }
 .dg-in { fill: var(--label); font-weight: 600; }
 .dg-big { fill: var(--label); font-family: var(--f-head); font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.dg-mono { font-family: var(--f-mono); letter-spacing: 0; }   /* protocolos, métodos y rutas; se suma a dg-tiny, dg-small o dg-label */
 .dg-res { stroke: var(--accent); }
 .dg-fail-text { fill: var(--fail); }
-.hb-a { fill: var(--accent-tint); stroke: var(--accent); stroke-width: 1.2; }
-.hb-b { fill: var(--fill); stroke: var(--label-3); stroke-width: 1.2; }
-.hb-c { fill: color-mix(in srgb, var(--l-queue) 18%, transparent); stroke: var(--l-queue); stroke-width: 1.2; }
-.hb-lost { fill: var(--fail-tint); stroke: var(--fail); stroke-width: 1.2; stroke-dasharray: 4 3; }
-.dg-ok { fill: var(--ok-tint); stroke: var(--ok); stroke-width: 1.4; }
-.dg-bad { fill: var(--fail-tint); stroke: var(--fail); stroke-width: 1.4; }
-.dg-warnbox { fill: var(--warn-tint); stroke: var(--warn); stroke-width: 1.4; }
-.dg-layer { fill: var(--bg); stroke: var(--c); stroke-width: 2; }
+.hb-a { fill: var(--accent-tint); stroke: var(--accent); stroke-width: 1.5; }
+.hb-b { fill: var(--fill); stroke: var(--label-3); stroke-width: 1.5; }
+.hb-c { fill: color-mix(in srgb, var(--l-queue) 18%, transparent); stroke: var(--l-queue); stroke-width: 1.5; }
+.hb-lost { fill: var(--fail-tint); stroke: var(--fail); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.dg-ok { fill: var(--ok-tint); stroke: var(--ok); stroke-width: 1.5; }
+.dg-bad { fill: var(--fail-tint); stroke: var(--fail); stroke-width: 1.5; }
+.dg-warnbox { fill: var(--warn-tint); stroke: var(--warn); stroke-width: 1.5; }
+.dg-layer { fill: color-mix(in srgb, var(--c) 8%, var(--bg)); stroke: var(--c); stroke-width: 1.75; }
 
 /* ---------- Botones y controles ---------- */
 
@@ -907,6 +910,50 @@ details.exercise-sql summary { cursor: pointer; font-weight: 600; font-size: var
 .rls-result.is-ok { background: var(--ok-tint); color: var(--ok); }
 .rls-result.is-bad { background: var(--fail-tint); color: var(--fail); }
 
+/* ---------- Firewall: un paquete contra la cadena (M32) ---------- */
+
+.fw-pkt { margin: var(--s-2) 0 var(--s-4); padding: var(--s-3) var(--s-4); border-radius: var(--radius-s); background: var(--bg); border: 1px solid var(--separator); }
+.fw-desc { margin: 0 0 var(--s-2) !important; font-size: var(--fs-sub); }
+.fw-fields { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.fw-f { display: inline-flex; gap: 6px; align-items: baseline; font-size: var(--fs-sm); }
+.fw-k { color: var(--label-3); }
+.fw-rules { list-style: none; margin: 0 0 var(--s-2); padding: 0; counter-reset: fwr; }
+.fw-rule { counter-increment: fwr; display: grid; grid-template-columns: 1.6em minmax(0, 1fr); column-gap: 6px; padding: 8px 10px; border-radius: var(--radius-s); margin-bottom: 4px; background: var(--bg); border: 1px solid var(--separator); max-width: none; }
+.fw-rule::before { content: counter(fwr); grid-row: span 2; color: var(--label-3); font-size: var(--fs-sm); font-weight: 600; }
+.fw-rule.fw-policy::before { content: "·"; }
+.fw-rule code { font-size: var(--fs-sm); word-break: break-word; background: none; padding: 0; }
+.fw-why { font-size: var(--fs-sm); color: var(--label-2); margin-top: 2px; }
+.fw-rule.is-skip { opacity: 0.55; }
+.fw-rule.is-miss code { color: var(--label-2); }
+.fw-rule.is-match { border-width: 2px; }
+.fw-rule.is-match.v-accept { border-color: var(--ok); }
+.fw-rule.is-match.v-drop { border-color: var(--fail); }
+.fw-rule.is-match.v-accept .rls-tag { background: var(--ok-tint); color: var(--ok); }
+.fw-rule.is-match.v-drop .rls-tag { background: var(--fail-tint); color: var(--fail); }
+.fw-rule.is-match code { font-weight: 600; }
+
+/* ---------- Checklist de endurecimiento (M33) ---------- */
+.hd-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s-4); margin-top: var(--s-3); }
+.hd-list { list-style: none; margin: 0; padding: 0; }
+.hd-item { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 8px 4px; border-bottom: 1px solid var(--separator); cursor: pointer; font-size: 15px; line-height: 1.4; }
+.hd-item input { width: 18px; height: 18px; margin: 2px 0 0; flex: none; accent-color: var(--ok); }
+.hd-score { margin: 0 0 6px; font-variant-numeric: tabular-nums; }
+.hd-num { font-size: 40px; font-weight: 700; line-height: 1; }
+.hd-of { color: var(--label-3); font-size: 17px; }
+.hd-bar { display: block; height: 10px; border-radius: 5px; background: var(--fill); overflow: hidden; margin-bottom: 6px; }
+.hd-fill { display: block; height: 100%; border-radius: 5px; transition: width 0.3s ease; }
+.hd-fill.is-ok { background: var(--ok); } .hd-fill.is-warn { background: var(--warn); } .hd-fill.is-bad { background: var(--fail); }
+.hd-txt { display: block; font-size: 14px; color: var(--label-2); }
+.hd-risks-title { margin-top: var(--s-4) !important; }
+.hd-risks { margin: 0; padding-left: 1.4em; }
+.hd-risks li { margin-bottom: var(--s-2); }
+.hd-risk-t { margin: 0; font-size: 14.5px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.hd-sec { font-size: 13px; }
+.hd-risk-d { margin: 2px 0 0; font-size: 14px; color: var(--label-2); line-height: 1.45; }
+.hd-none { list-style: none; margin-left: -1.4em; color: var(--ok); font-size: 14.5px; }
+@media (max-width: 760px) { .hd-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .hd-fill { transition: none; } }
+
 /* ---------- Waterfall de traces ---------- */
 
 .trace-hit { fill: transparent; }
@@ -1117,3 +1164,47 @@ details.exercise-sql summary { cursor: pointer; font-weight: 600; font-size: var
 @media (max-width: 640px) { .cs-row { grid-template-columns: 1fr; } }
 .rl-pct { font-variant-numeric: tabular-nums; color: var(--label); }
 .rl-regs { margin-top: var(--s-2); }
+
+/* ---------- Lámina: figura fija con marcas numeradas y su clave (M11) ---------- */
+
+.pl-pin circle { fill: var(--link); stroke: var(--bg); stroke-width: 2; }
+.pl-pin text { fill: var(--bg); font-family: var(--f-body); font-weight: 700; font-size: 12px; }
+.content .plate-key { counter-reset: pl; list-style: none; margin: var(--s-4) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s-2); max-width: none; }
+.plate-key li { counter-increment: pl; position: relative; margin: 0; max-width: none; padding: 10px 14px 12px 50px; background: var(--bg-2); border-radius: var(--radius-m); font-size: var(--fs-sm); line-height: 1.45; }
+.plate-key li::before { content: counter(pl); position: absolute; left: 14px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--link); color: var(--bg); font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+.plate-key b { display: block; font-size: var(--fs-sub); margin-bottom: 2px; }
+.plate-key span { color: var(--label-2); }
+.plate-key a { white-space: nowrap; }
+
+/* Fórmula destacada en una línea */
+.content .formula { margin: var(--s-3) 0; padding: 12px 16px; background: var(--bg-2); border-radius: var(--radius-m); font-variant-numeric: tabular-nums; text-align: center; font-size: var(--fs-sub); }
+
+/* Calculadora de cardinalidad (M11) */
+.card-legend { margin: 0 0 6px !important; font-size: var(--fs-sm); font-weight: 500; color: var(--label-2); line-height: 1.3; }
+.card-rows { display: grid; gap: 6px; }
+.card-row { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) 7.5em; gap: 8px; align-items: center; }
+.card-row .chip-btn { font-family: var(--f-mono); justify-content: center; }
+.card-name { font-size: var(--fs-xs); color: var(--label-3); line-height: 1.3; }
+.card-row input { width: 100%; }
+.card-row.is-off .card-name { opacity: 0.6; }
+.card-verdict { margin: var(--s-2) 0 !important; padding: 10px 12px; border-radius: var(--radius-s); }
+.card-verdict.is-ok { background: var(--ok-tint); }
+.card-verdict.is-warn { background: var(--warn-tint); }
+.card-verdict.is-fail { background: var(--fail-tint); }
+@media (max-width: 520px) {
+  .card-row { grid-template-columns: 7em minmax(0, 1fr); row-gap: 2px; }
+  .card-name { grid-column: 1 / -1; grid-row: 2; margin-bottom: 4px; }
+}
+
+/* ---------- M12.1: matriz de atención y costo de una pasada (widgets/sim-fwd.js) ---------- */
+.attn-chart svg { min-width: 560px; }
+.fw-bar { display: flex; height: 28px; margin: var(--s-3) 0 var(--s-2); border-radius: var(--radius-s); overflow: hidden; background: var(--fill); }
+.fw-seg { display: block; height: 100%; background: var(--c); }
+.fw-seg + .fw-seg { box-shadow: inset 2px 0 0 var(--bg); }
+.fw-seg--mem { background: repeating-linear-gradient(135deg, var(--c) 0 6px, color-mix(in srgb, var(--c) 45%, var(--bg)) 6px 10px); }
+.content .fw-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 var(--s-2); font-size: var(--fs-xs); color: var(--label-2); max-width: none; }
+.fw-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.fw-dot { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; background: var(--c); vertical-align: -1px; }
+.fw-legend .fw-dot { margin-right: 0; }
+.fw-dot--mem { background: repeating-linear-gradient(135deg, var(--label-3) 0 3px, var(--bg) 3px 5px); }
+.fw-total td { border-top: 1px solid var(--separator-strong); }

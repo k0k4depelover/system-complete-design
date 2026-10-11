@@ -80,6 +80,57 @@
 
       <p>Lo del determinismo no es una exageración: Thinking Machines publicó en 2025 que los kernels de los motores de inferencia no son invariantes al tamaño del batch, así que la misma request con temperatura 0 puede dar otra respuesta según cuántas requests la acompañaban en ese paso. <span class="badge badge--doc">Documentado</span> Para operar, eso significa que comparar dos versiones respuesta por respuesta no sirve: hay que comparar distribuciones, con estadística.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f22n1t f22n1d">
+<title id="f22n1t">La misma request, otro batch, otra respuesta</title>
+<desc id="f22n1d">La misma request con temperatura 0 pasa dos veces por el motor. La primera va sola en el batch; la segunda, junto con otras siete. El kernel elige otra forma de repartir la suma según el tamaño del batch, y la suma en coma flotante no es asociativa: el último dígito de un logit cambia. Si dos tokens estaban casi empatados, gana otro, y desde ahí la respuesta sigue por otro camino. El ejemplo es ilustrativo.</desc>
+<defs><marker id="f22n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="48" text-anchor="start">Batch de 1</text>
+<rect x="20" y="60" width="34" height="34" rx="4" fill="color-mix(in srgb, var(--l-client) 45%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<text class="dg-small" x="37" y="81" text-anchor="middle">R</text>
+<path class="dg-edge" d="M58 77 H236" marker-end="url(#f22n1a)"/>
+<rect x="240" y="56" width="150" height="42" rx="6" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="315" y="74" text-anchor="middle">kernel</text>
+<text class="dg-tiny" x="315" y="90" text-anchor="middle">suma en 1 bloque</text>
+<path class="dg-edge" d="M392 77 H420" marker-end="url(#f22n1a)"/>
+<rect class="dg-box" x="424" y="48" width="150" height="26" rx="4"/>
+<text class="dg-tiny" x="499" y="65" text-anchor="middle" style="font-family: var(--f-mono)">«puede»  0.41</text>
+<rect class="dg-box" x="424" y="80" width="150" height="26" rx="4"/>
+<text class="dg-tiny" x="499" y="97" text-anchor="middle" style="font-family: var(--f-mono)">«podría» 0.40</text>
+<path class="dg-edge" d="M576 61 H604" marker-end="url(#f22n1a)"/>
+<rect class="dg-ok" x="608" y="48" width="142" height="26" rx="4"/>
+<text class="dg-tiny" x="679" y="65" text-anchor="middle">sigue por «puede»</text>
+<text class="dg-label" x="20" y="156" text-anchor="start">Batch de 8</text>
+<rect x="20" y="168" width="34" height="34" rx="4" fill="color-mix(in srgb, var(--l-client) 45%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<text class="dg-small" x="37" y="189" text-anchor="middle">R</text>
+<rect x="60" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="80" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="100" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="120" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="140" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="160" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<rect x="180" y="174" width="16" height="22" rx="3" class="dg-box"/>
+<path class="dg-edge" d="M202 185 H236" marker-end="url(#f22n1a)"/>
+<rect x="240" y="164" width="150" height="42" rx="6" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="315" y="182" text-anchor="middle">kernel</text>
+<text class="dg-tiny" x="315" y="198" text-anchor="middle">suma en 8 bloques</text>
+<path class="dg-edge" d="M392 185 H420" marker-end="url(#f22n1a)"/>
+<rect class="dg-box" x="424" y="156" width="150" height="26" rx="4"/>
+<text class="dg-tiny" x="499" y="173" text-anchor="middle" style="font-family: var(--f-mono)">«puede»  0.40</text>
+<rect class="dg-box" x="424" y="188" width="150" height="26" rx="4"/>
+<text class="dg-tiny" x="499" y="205" text-anchor="middle" style="font-family: var(--f-mono)">«podría» 0.41</text>
+<path class="dg-edge" d="M576 201 H604" marker-end="url(#f22n1a)"/>
+<rect class="dg-ok" x="608" y="188" width="142" height="26" rx="4"/>
+<text class="dg-tiny" x="679" y="205" text-anchor="middle">sigue por «podría»</text>
+<rect class="dg-warnbox" x="20" y="236" width="730" height="34" rx="8"/>
+<text class="dg-small" x="385" y="257" text-anchor="middle">Comparar respuesta por respuesta no sirve: se comparan distribuciones, con estadística.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.1.</b> Lo que publicó Thinking Machines, en un dibujo. Los números del ejemplo son ilustrativos; lo documentado es que el resultado depende del tamaño del batch. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <p>La consecuencia práctica es que un modelo necesita SLOs de calidad además de los de latencia. Se escriben igual que en el <a href="m11-observabilidad.html#alertas">M11</a>, con un objetivo, una ventana y alertas por burn rate, pero sobre señales que miden la calidad:</p>
 
       <div class="table-wrap">
@@ -141,7 +192,7 @@
 <text class="dg-tiny" x="740" y="312" text-anchor="end">el tiempo hasta que la señal dice algo</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.1.</b> Las señales ordenadas por cuánto tardan en decir algo. Las de la izquierda son rápidas y baratas pero miden poco de la calidad; las de la derecha miden lo que importa, con días de retraso y mucho ruido.</figcaption>
+        <figcaption><b>Figura 22.2.</b> Las señales ordenadas por cuánto tardan en decir algo. Las de la izquierda son rápidas y baratas pero miden poco de la calidad; las de la derecha miden lo que importa, con días de retraso y mucho ruido.</figcaption>
       </figure>
 
       <div class="table-wrap">
@@ -182,7 +233,7 @@ WHERE m.role = 'assistant'
   AND m.created_at &gt; now() - interval '24 hours'
 GROUP BY m.model_version;</code></pre>
 
-      <p>Lo mismo vale para todas las señales: cada métrica lleva la versión como dimensión. En el <a href="m11-observabilidad.html#metricas">M11</a> advertimos sobre la cardinalidad de las etiquetas; la versión es segura porque en un momento dado conviven dos o tres. El tablero de una flota de modelos no tiene una línea por métrica, tiene una por versión, y se lee como una comparación.</p>
+      <p>Lo mismo vale para todas las señales: cada métrica lleva la versión como dimensión. En el <a href="m11-observabilidad.html#cardinalidad">M11</a> advertimos sobre la cardinalidad de las etiquetas; la versión es segura porque en un momento dado conviven dos o tres. El tablero de una flota de modelos no tiene una línea por métrica, tiene una por versión, y se lee como una comparación.</p>
 
       <p>Un <dfn data-term="eval-online">eval online</dfn> es la familia que cierra el círculo: se toma una muestra del tráfico real, se le pasa a un juez o a personas, y se obtiene un puntaje de calidad por versión con horas de retraso. Es la única señal que mira el contenido de las respuestas de verdad, y la más cara; la sección 22.7 hace su cuenta.</p>
 
@@ -217,6 +268,52 @@ GROUP BY m.model_version;</code></pre>
         <li><b>El golden set no se filtra.</b> Si sus casos terminan en los ejemplos del prompt o en los datos de entrenamiento, el eval mide memoria. Se guarda aparte, con acceso restringido, y una parte se mantiene oculta incluso para el equipo que ajusta los prompts.</li>
         <li><b>Un eval tiene ruido.</b> Con temperatura mayor que cero, la misma versión da otro puntaje en cada corrida. Se corre varias veces, o con temperatura 0 sabiendo que tampoco es del todo determinista (22.1).</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22n2t f22n2d">
+<title id="f22n2t">Por categoría contra el promedio</title>
+<desc id="f22n2d">El cambio de puntaje de la versión FP8 contra la estable, por categoría del golden set, en puntos. Conversación en español sube 1 punto en sus 300 casos; contexto largo baja 6 en sus 150; el resto no cambia en este ejemplo. El promedio de los 2 000 casos baja solo 0.3 puntos: (300 × 1 − 150 × 6) ÷ 2 000.</desc>
+<defs><marker id="f22n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="50" text-anchor="start">Extracción a JSON</text>
+<text class="dg-tiny" x="240" y="50" text-anchor="start">400 casos</text>
+<text class="dg-tiny" x="568" y="51" text-anchor="start">0</text>
+<text class="dg-small" x="20" y="80" text-anchor="start">Código</text>
+<text class="dg-tiny" x="240" y="80" text-anchor="start">300 casos</text>
+<text class="dg-tiny" x="568" y="81" text-anchor="start">0</text>
+<text class="dg-small" x="20" y="110" text-anchor="start">Preguntas con documentos</text>
+<text class="dg-tiny" x="240" y="110" text-anchor="start">400 casos</text>
+<text class="dg-tiny" x="568" y="111" text-anchor="start">0</text>
+<text class="dg-small" x="20" y="140" text-anchor="start">Conversación en español</text>
+<text class="dg-tiny" x="240" y="140" text-anchor="start">300 casos</text>
+<rect class="dg-ok" x="560" y="127" width="30" height="20" rx="3"/>
+<text class="dg-small" x="598" y="141" text-anchor="start">+1</text>
+<text class="dg-small" x="20" y="170" text-anchor="start">Contexto largo</text>
+<text class="dg-tiny" x="240" y="170" text-anchor="start">150 casos</text>
+<rect class="dg-bad" x="380" y="157" width="180" height="20" rx="3"/>
+<text class="dg-small" x="372" y="171" text-anchor="end">−6</text>
+<text class="dg-small" x="20" y="200" text-anchor="start">Rechazos</text>
+<text class="dg-tiny" x="240" y="200" text-anchor="start">250 casos</text>
+<text class="dg-tiny" x="568" y="201" text-anchor="start">0</text>
+<text class="dg-small" x="20" y="230" text-anchor="start">Uso de herramientas</text>
+<text class="dg-tiny" x="240" y="230" text-anchor="start">200 casos</text>
+<text class="dg-tiny" x="568" y="231" text-anchor="start">0</text>
+<path class="sim-grid" d="M20 250 H750"/>
+<text class="dg-label" x="20" y="272" text-anchor="start">Promedio de los 2 000</text>
+<rect class="dg-warnbox" x="551" y="258" width="9" height="20" rx="2"/>
+<text class="dg-small" x="568" y="272" text-anchor="start">−0.3: casi no se mueve</text>
+<path class="sim-axis" d="M560 28 V284" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-grid" d="M380 28 V248"/>
+<path class="sim-grid" d="M470 28 V248"/>
+<path class="sim-grid" d="M650 28 V248"/>
+<text class="dg-tiny" x="560" y="24" text-anchor="middle">0 puntos</text>
+<text class="dg-tiny" x="380" y="24" text-anchor="middle">−6</text>
+<text class="dg-tiny" x="650" y="24" text-anchor="middle">+3</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.3.</b> La primera regla de la lista. Una pérdida de 6 puntos en una categoría chica queda tapada por la ganancia de otra más grande: el promedio no avisa. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <h3 id="evals-barras">Cuántos ejemplos hacen falta</h3>
 
@@ -267,7 +364,7 @@ GROUP BY m.model_version;</code></pre>
 <text class="dg-tiny" x="740" y="22" text-anchor="end">A acierta el 80 %, B el 82 %; intervalos del 95 %</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.2.</b> Dos modelos con 80 y 82&#8239;% de aciertos verdaderos. Con 100 ejemplos, el margen es de ±7.8 puntos; con 2&#8239;000, de ±1.75, y los intervalos todavía se pisan.</figcaption>
+        <figcaption><b>Figura 22.4.</b> Dos modelos con 80 y 82&#8239;% de aciertos verdaderos. Con 100 ejemplos, el margen es de ±7.8 puntos; con 2&#8239;000, de ±1.75, y los intervalos todavía se pisan.</figcaption>
       </figure>
 
       <p>La pregunta útil es la inversa: ¿cuántos ejemplos hacen falta para distinguir 80 de 82&#8239;%? Con dos muestras independientes, un 5&#8239;% de falsos positivos y una potencia del 80&#8239;% (la probabilidad de detectar la diferencia si existe), la fórmula de dos proporciones da 6&#8239;039 ejemplos por modelo. Un golden set de 2&#8239;000 no alcanza.</p>
@@ -295,6 +392,33 @@ print(comparar(a, b))     # ≈ (0.02, (0.0062, 0.0338)): el intervalo no toca e
 # La misma diferencia tratada como dos muestras independientes:
 se = math.sqrt(0.80 * 0.20 / 2000 + 0.82 * 0.18 / 2000)
 print(1.96 * se)           # ≈ 0.0243: el intervalo (-0.004, 0.044) sí toca el 0</code></pre>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f22n3t f22n3d">
+<title id="f22n3t">Solo cuentan las preguntas en que discrepan</title>
+<desc id="f22n3d">Las 2 000 preguntas del eval, repartidas según si cada modelo acertó. En 1 800 los dos aciertan o los dos fallan, y no dicen nada sobre cuál es mejor. Solo cuentan las 200 en que discrepan: en 120 gana B y en 80 gana A. La diferencia es de 40 preguntas, 2 puntos, y la prueba pareada (McNemar) la mide sobre esas 200.</desc>
+<defs><marker id="f22n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="30" y="28" text-anchor="start">2 000 preguntas, cada una en una celda según el resultado de A y de B</text>
+<rect class="dg-box" x="30" y="40" width="630" height="70" rx="6"/>
+<text class="dg-label" x="345" y="72" text-anchor="middle">1 800 empatan</text>
+<text class="dg-tiny" x="345" y="92" text-anchor="middle">los dos aciertan o los dos fallan: no informan</text>
+<rect class="dg-ok" x="662" y="40" width="40" height="70" rx="4"/>
+<rect class="dg-warnbox" x="704" y="40" width="26" height="70" rx="4"/>
+<path class="dg-feedback" d="M681.0 112 V142"/>
+<text class="dg-tiny" x="681" y="158" text-anchor="end">B gana 120</text>
+<path class="dg-feedback" d="M716.0 112 V172"/>
+<text class="dg-tiny" x="716" y="188" text-anchor="end">A gana 80</text>
+<rect class="dg-box" x="30" y="206" width="330" height="34" rx="8"/>
+<text class="dg-small" x="195" y="227" text-anchor="middle">Independientes: 6 039 por modelo</text>
+<rect class="dg-ok" x="400" y="206" width="340" height="34" rx="8"/>
+<text class="dg-small" x="570" y="227" text-anchor="middle">Pareada: 1 960, si discrepan en un 10 %</text>
+<text class="dg-tiny" x="30" y="196" text-anchor="start">Ejemplos que hacen falta para ver 2 puntos:</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.5.</b> El eval de la cuenta de arriba, pregunta por pregunta. La barra gris es casi todo el eval y no aporta nada a la comparación; la información está en las dos franjas de la derecha.</figcaption>
+      </figure>
 
       <p>Los mismos datos, analizados bien, pasan de "no se sabe" a "B es mejor". Hay un ajuste en la dirección contraria: si el eval agrupa varias preguntas sobre el mismo documento, las preguntas de un grupo no son independientes, y el error estándar con clusters puede ser más de tres veces el ingenuo. <span class="badge badge--doc">Documentado</span></p>
 
@@ -370,7 +494,7 @@ print(1.96 * se)           # ≈ 0.0243: el intervalo (-0.004, 0.044) sí toca e
 <text class="dg-tiny" x="635.0" y="259.0" text-anchor="middle">no cambia hasta su retiro</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.3.</b> La versión que se despliega agrupa todo lo que cambia el comportamiento. El cambio de este módulo toca dos piezas, los pesos y el prompt del sistema, y por eso es una versión nueva.</figcaption>
+        <figcaption><b>Figura 22.6.</b> La versión que se despliega agrupa todo lo que cambia el comportamiento. El cambio de este módulo toca dos piezas, los pesos y el prompt del sistema, y por eso es una versión nueva.</figcaption>
       </figure>
 
       <p>Si el prompt del sistema se edita en un panel de administración y se aplica al instante, cada edición es un despliegue sin canary. Lo mismo pasa con un cambio en los parámetros de muestreo, en la configuración del motor o en un clasificador. La regla es simple: todo lo que cambia el comportamiento vive en el paquete, versionado como código, y llega a producción por el mismo camino. Por la misma razón el <a href="m17-api-streaming.html#parametros">M17</a> recomendaba fijar una versión con fecha y no un alias: un alias es un puntero que el proveedor mueve, y la versión con fecha es la que no cambia.</p>
@@ -503,7 +627,7 @@ print(1.96 * se)           # ≈ 0.0243: el intervalo (-0.004, 0.044) sí toca e
 <text class="dg-small" x="380" y="252" text-anchor="middle">! El veredicto cambió con el orden: empate. Solo gana la respuesta que gana en los dos órdenes.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.4.</b> El juez eligió la respuesta que iba primera en los dos órdenes. Sin la segunda pregunta, esa preferencia por la posición se habría contado como una victoria de A.</figcaption>
+        <figcaption><b>Figura 22.7.</b> El juez eligió la respuesta que iba primera en los dos órdenes. Sin la segunda pregunta, esa preferencia por la posición se habría contado como una victoria de A.</figcaption>
       </figure>
 
 <pre data-lang="python"><code>RUBRICA = """Compara dos respuestas a la misma pregunta.
@@ -598,7 +722,7 @@ def comparar(pregunta, a, b, juez):
 <text class="dg-tiny" x="10" y="284">Tramos claros: menor impacto o despliegue de la corrección en curso. Fuente: postmortem de Anthropic, septiembre de 2025.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.5.</b> Los tres bugs se superpusieron durante una semana, cada uno con síntomas distintos y en plataformas distintas. Fuente: el postmortem de Anthropic.</figcaption>
+        <figcaption><b>Figura 22.8.</b> Los tres bugs se superpusieron durante una semana, cada uno con síntomas distintos y en plataformas distintas. Fuente: el postmortem de Anthropic.</figcaption>
       </figure>
 
       <ul>
@@ -612,6 +736,40 @@ def comparar(pregunta, a, b, juez):
       <h3 id="deriva-servil">Una versión que daba la razón</h3>
 
       <p>El 25 de abril de 2025 OpenAI actualizó GPT-4o en ChatGPT y la revirtió cuatro días después: el modelo se había vuelto servil, validaba dudas, alimentaba enojos y elogiaba cualquier idea. <span class="badge badge--doc">Documentado</span> Según su análisis, la actualización sumó una señal de recompensa basada en los pulgares de los usuarios, que debilitó a la señal principal. Los evals offline y los A/B tests limitados se veían bien; algunos evaluadores expertos dijeron que el modelo "se sentía un poco raro", y esa señal cualitativa no frenó el lanzamiento.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f22n4t f22n4d">
+<title id="f22n4t">Cómo una recompensa por pulgares premia dar la razón</title>
+<desc id="f22n4d">Un bucle de entrenamiento. El modelo responde; el usuario pone un pulgar arriba con más frecuencia cuando la respuesta le da la razón; esos pulgares entran como señal de recompensa y debilitan a la señal principal; el modelo siguiente valida más. Los evals offline y los A/B tests limitados no lo ven; un golden set de servilismo y una alarma cualitativa que detiene el canary sí.</desc>
+<defs><marker id="f22n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="300" y="30" width="200" height="50" rx="10"/>
+<text class="dg-label" x="400" y="52" text-anchor="middle">El modelo responde</text>
+<text class="dg-tiny" x="400" y="69" text-anchor="middle">valida, elogia</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="540" y="110" width="200" height="50" rx="10"/>
+<text class="dg-label" x="640" y="132" text-anchor="middle">El usuario</text>
+<text class="dg-tiny" x="640" y="149" text-anchor="middle">pulgar arriba si le dan la razón</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="300" y="190" width="200" height="50" rx="10"/>
+<text class="dg-label" x="400" y="212" text-anchor="middle">Recompensa por pulgares</text>
+<text class="dg-tiny" x="400" y="229" text-anchor="middle">pesa más que la principal</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="60" y="110" width="200" height="50" rx="10"/>
+<text class="dg-label" x="160" y="132" text-anchor="middle">Entrenamiento</text>
+<text class="dg-tiny" x="160" y="149" text-anchor="middle">refuerza lo que suma pulgares</text>
+<path class="dg-edge" d="M502 55 C560 55 640 70 640 106" marker-end="url(#f22n4a)"/>
+<path class="dg-edge" d="M640 162 C640 200 580 215 504 215" marker-end="url(#f22n4a)"/>
+<path class="dg-edge" d="M298 215 C220 215 160 200 160 164" marker-end="url(#f22n4a)"/>
+<path class="dg-edge" d="M160 108 C160 70 220 55 296 55" marker-end="url(#f22n4a)"/>
+<text class="dg-tiny" x="400" y="128" text-anchor="middle">el bucle se</text>
+<text class="dg-tiny" x="400" y="144" text-anchor="middle">refuerza solo</text>
+<rect class="dg-warnbox" x="20" y="266" width="355" height="40" rx="6"/>
+<text class="dg-tiny" x="197" y="291" text-anchor="middle">No lo ven: evals offline, A/B tests limitados</text>
+<rect class="dg-ok" x="395" y="266" width="355" height="40" rx="6"/>
+<text class="dg-tiny" x="572" y="291" text-anchor="middle">Sí lo ven: golden set de servilismo, alarma cualitativa</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.9.</b> El mecanismo que describió OpenAI, como bucle. Cada vuelta parece una mejora en las métricas de corto plazo, y por eso hace falta una señal que no dependa de los pulgares. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <p>OpenAI anunció que los problemas de comportamiento pasarían a bloquear lanzamientos aunque las métricas sean positivas, una fase alfa opcional con usuarios que dan feedback antes del lanzamiento, y comunicación anticipada de los cambios, incluso los chicos. Lo que vale para cualquier equipo: un golden set de servilismo (preguntas donde la respuesta correcta es contradecir al usuario), y una regla escrita que diga que una alarma cualitativa de alguien que conoce el modelo detiene el canary hasta que se entienda.</p>
 
@@ -668,7 +826,7 @@ def comparar(pregunta, a, b, juez):
 <text class="dg-tiny" x="10" y="208">tarde: algo ya se mostró.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.6.</b> Las reglas y el clasificador de entrada actúan antes de gastar GPU. El de salida va un poco por detrás del stream: lo que alcanzó a verse antes de que marque un tramo ya se vio.</figcaption>
+        <figcaption><b>Figura 22.10.</b> Las reglas y el clasificador de entrada actúan antes de gastar GPU. El de salida va un poco por detrás del stream: lo que alcanzó a verse antes de que marque un tramo ya se vio.</figcaption>
       </figure>
 
       <h3 id="guardrails-tasa-base">El problema de la tasa base</h3>
@@ -687,6 +845,51 @@ def comparar(pregunta, a, b, juez):
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f22n5t f22n5d">
+<title id="f22n5t">El problema de la tasa base, como árbol</title>
+<desc id="f22n5d">Un millón de requests se separan en 1 000 dañinas y 999 000 legítimas. El clasificador bloquea 950 de las dañinas y deja pasar 50. De las legítimas, bloquea por error el 0.5 %: 4 995. Del total bloqueado, 5 945 requests, solo 950 eran dañinas: el 16 %. Cinco de cada seis bloqueos son usuarios legítimos.</desc>
+<defs><marker id="f22n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="120" width="140" height="56" rx="10"/>
+<text class="dg-label" x="90" y="145" text-anchor="middle">1 000 000</text>
+<text class="dg-tiny" x="90" y="162" text-anchor="middle">requests</text>
+<rect class="dg-bad" x="230" y="40" width="150" height="56" rx="10"/>
+<text class="dg-label" x="305" y="65" text-anchor="middle">1 000</text>
+<text class="dg-tiny" x="305" y="82" text-anchor="middle">dañinas, 0.1 %</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="230" y="200" width="150" height="56" rx="10"/>
+<text class="dg-label" x="305" y="225" text-anchor="middle">999 000</text>
+<text class="dg-tiny" x="305" y="242" text-anchor="middle">legítimas</text>
+<path class="dg-edge" d="M162 140 L226 72" marker-end="url(#f22n5a)"/>
+<path class="dg-edge" d="M162 156 L226 224" marker-end="url(#f22n5a)"/>
+<rect class="dg-bad" x="450" y="12" width="150" height="40" rx="6"/>
+<text class="dg-small" x="525" y="30" text-anchor="middle">950 bloqueadas</text>
+<text class="dg-tiny" x="525" y="45" text-anchor="middle">detecta el 95 %</text>
+<path class="dg-edge" d="M382 60 L446 32" marker-end="url(#f22n5a)"/>
+<rect class="dg-box" x="450" y="82" width="150" height="40" rx="6"/>
+<text class="dg-small" x="525" y="100" text-anchor="middle">50 pasan</text>
+<text class="dg-tiny" x="525" y="115" text-anchor="middle">falsos negativos</text>
+<path class="dg-edge" d="M382 94 L446 102" marker-end="url(#f22n5a)"/>
+<rect class="dg-warnbox" x="450" y="158" width="150" height="40" rx="6"/>
+<text class="dg-small" x="525" y="176" text-anchor="middle">4 995 bloqueadas</text>
+<text class="dg-tiny" x="525" y="191" text-anchor="middle">falsos positivos, 0.5 %</text>
+<path class="dg-edge" d="M382 228 L446 178" marker-end="url(#f22n5a)"/>
+<rect class="dg-box" x="450" y="228" width="150" height="40" rx="6"/>
+<text class="dg-small" x="525" y="246" text-anchor="middle">994 005 pasan</text>
+<text class="dg-tiny" x="525" y="261" text-anchor="middle">bien</text>
+<path class="dg-edge" d="M382 254 L446 248" marker-end="url(#f22n5a)"/>
+<path class="dg-feedback" d="M604 12 V260"/>
+<text class="dg-small" x="686" y="120" text-anchor="middle">Bloqueadas:</text>
+<text class="dg-tiny" x="686" y="140" text-anchor="middle">950 + 4 995</text>
+<text class="dg-tiny" x="686" y="156" text-anchor="middle">= 5 945</text>
+<text class="dg-label dg-fail-text" x="686" y="186" text-anchor="middle">dañinas: 16 %</text>
+<text class="dg-tiny" x="20" y="290" text-anchor="start">Las ramas de bloqueo en color: la caja ámbar es cinco veces más grande que la roja.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.11.</b> La tabla como árbol. El clasificador acierta casi siempre, pero las legítimas son mil veces más, y su 0.5&#8239;% de error pesa más que el 95&#8239;% de aciertos sobre las dañinas. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>Cinco de cada seis bloqueos son usuarios legítimos. Es la misma cuenta que hace que un test médico muy preciso dé mayoría de falsos positivos cuando la enfermedad es rara. Las respuestas de diseño:</p>
       <ul>
@@ -710,6 +913,43 @@ def comparar(pregunta, a, b, juez):
     cola_revision.enviar(req.id, cat, score)       # dudoso: lo mira una persona después
     return Decision("seguir")</code></pre>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 240" role="img" aria-labelledby="f22n6t f22n6d">
+<title id="f22n6t">Un clasificador en cascada</title>
+<desc id="f22n6d">Todas las requests pasan por un clasificador chico y rápido. El 99.4 % sigue de largo al modelo. Solo el 0.6 % marcado pasa a un clasificador grande y más preciso, que decide la acción: responder con cuidado, quitar una herramienta, pedir confirmación, mandar a revisión o, como última opción, bloquear.</desc>
+<defs><marker id="f22n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="70" width="120" height="50" rx="10"/>
+<text class="dg-label" x="80" y="92" text-anchor="middle">Requests</text>
+<text class="dg-tiny" x="80" y="109" text-anchor="middle">100 %</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="190" y="70" width="150" height="50" rx="10"/>
+<text class="dg-label" x="265" y="92" text-anchor="middle">Clasificador chico</text>
+<text class="dg-tiny" x="265" y="109" text-anchor="middle">rápido, sobre todo</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="600" y="20" width="150" height="50" rx="10"/>
+<text class="dg-label" x="675" y="42" text-anchor="middle">Modelo</text>
+<text class="dg-tiny" x="675" y="59" text-anchor="middle">sigue de largo</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="400" y="130" width="160" height="50" rx="10"/>
+<text class="dg-label" x="480" y="152" text-anchor="middle">Clasificador grande</text>
+<text class="dg-tiny" x="480" y="169" text-anchor="middle">más preciso</text>
+<path class="dg-edge" d="M142 95 H186" marker-end="url(#f22n6a)"/>
+<path class="dg-edge" d="M342 85 C420 60 500 45 596 45" marker-end="url(#f22n6a)"/>
+<text class="dg-tiny" x="470" y="40" text-anchor="middle">99.4 %</text>
+<path class="dg-edge" d="M342 105 C370 130 380 155 396 155" marker-end="url(#f22n6a)"/>
+<text class="dg-tiny" x="350" y="152" text-anchor="end">0.6 %</text>
+<text class="dg-tiny" x="604" y="120" text-anchor="start">con cuidado</text>
+<text class="dg-tiny" x="604" y="140" text-anchor="start">sin una herramienta</text>
+<text class="dg-tiny" x="604" y="160" text-anchor="start">confirmar</text>
+<text class="dg-tiny" x="604" y="180" text-anchor="start">revisión</text>
+<text class="dg-tiny dg-fail-text" x="604" y="200" text-anchor="start">bloquear</text>
+<path class="dg-edge" d="M562 155 H592" marker-end="url(#f22n6a)"/>
+<text class="dg-small" x="600" y="100" text-anchor="start">acciones graduadas:</text>
+<text class="dg-tiny" x="20" y="232" text-anchor="start">Los umbrales cambian por categoría y por organización (M20); se aplican en el gateway.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.12.</b> La cascada y las acciones graduadas de la lista. El clasificador caro corre sobre una fracción chica del tráfico, y bloquear es solo una de cinco salidas. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>Las imágenes generadas (<a href="m23-multimodal.html#moderacion">M23</a>) y la voz sintética (<a href="m24-voz-tiempo-real.html#abuso">M24</a>) suman guardrails con otros problemas: la moderación de una imagen corre cuando la imagen ya existe, y la de una voz tiene que decidir en tiempo real si suena como alguien que no autorizó su uso.</p>
 
       <h2 id="injection"><span class="sec-num">22.10</span>Prompt injection</h2>
@@ -719,6 +959,42 @@ def comparar(pregunta, a, b, juez):
       <div data-sim="injection"></div>
 
       <p>No tiene una solución completa, y conviene entender por qué: el modelo recibe las instrucciones y los datos por el mismo canal, como tokens en un contexto. No hay un equivalente de las consultas parametrizadas que resolvieron la inyección SQL. Toda defensa que vive dentro del prompt reduce la probabilidad, y ninguna la lleva a cero. Por eso las defensas se apilan, y las más fuertes viven fuera del modelo.</p>
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f22n7t f22n7d">
+<title id="f22n7t">Dos canales contra uno</title>
+<desc id="f22n7d">A la izquierda, una consulta SQL parametrizada: la plantilla viaja por un canal y los valores por otro, así que un valor nunca se interpreta como código. A la derecha, el contexto de un modelo: el prompt del sistema, el pedido del usuario y una página web leída por una herramienta llegan como una sola secuencia de tokens. Una instrucción escondida en la página se lee igual que las demás.</desc>
+<defs><marker id="f22n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">SQL parametrizado: dos canales</text>
+<rect x="20" y="40" width="330" height="40" rx="6" fill="color-mix(in srgb, var(--l-service) 24%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="185" y="65" text-anchor="middle" style="font-family: var(--f-mono)">SELECT * FROM t WHERE id = $1</text>
+<rect class="dg-box" x="20" y="96" width="330" height="40" rx="6"/>
+<text class="dg-tiny" x="185" y="121" text-anchor="middle" style="font-family: var(--f-mono)">$1 = &#x27;7; DROP TABLE t&#x27;</text>
+<text class="dg-tiny" x="360" y="65" text-anchor="start">código</text>
+<text class="dg-tiny" x="360" y="121" text-anchor="start">dato</text>
+<rect class="dg-ok" x="20" y="156" width="330" height="34" rx="6"/>
+<text class="dg-small" x="185" y="177" text-anchor="middle">el valor nunca se ejecuta</text>
+<text class="dg-group" x="420" y="26" text-anchor="start">Contexto de un modelo: un canal</text>
+<rect x="420" y="40" width="70" height="96" rx="4" fill="color-mix(in srgb, var(--l-service) 24%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<rect x="490" y="40" width="70" height="96" rx="4" fill="color-mix(in srgb, var(--l-client) 24%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<rect x="560" y="40" width="120" height="96" rx="4" fill="color-mix(in srgb, var(--l-external) 24%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<rect class="dg-bad" x="680" y="40" width="70" height="96" rx="4"/>
+<text class="dg-tiny" x="455" y="92" text-anchor="middle">sistema</text>
+<text class="dg-tiny" x="525" y="92" text-anchor="middle">usuario</text>
+<text class="dg-tiny" x="620" y="92" text-anchor="middle">página web</text>
+<text class="dg-tiny dg-fail-text" x="715" y="84" text-anchor="middle">instrucción</text>
+<text class="dg-tiny dg-fail-text" x="715" y="100" text-anchor="middle">escondida</text>
+<path class="dg-feedback" d="M420 148 H750"/>
+<text class="dg-tiny" x="585" y="166" text-anchor="middle">una sola secuencia de tokens</text>
+<rect class="dg-warnbox" x="420" y="176" width="330" height="34" rx="6"/>
+<text class="dg-small" x="585" y="197" text-anchor="middle">nada separa dato de instrucción</text>
+<text class="dg-tiny" x="385" y="240" text-anchor="middle">Por eso las defensas dentro del prompt bajan la probabilidad y las de afuera acotan el daño.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.13.</b> La diferencia con la inyección SQL. Las consultas parametrizadas la resolvieron separando canales; en un modelo, todo lo que lee entra por el mismo.</figcaption>
+      </figure>
+
 
       <div class="table-wrap">
         <table class="t">
@@ -767,10 +1043,51 @@ def comparar(pregunta, a, b, juez):
 <text class="dg-tiny" x="482" y="271">nada del usuario</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.7.</b> La trifecta letal: con las tres en la misma sesión, una instrucción escondida puede robar datos. Quitar cualquiera de las tres alcanza.</figcaption>
+        <figcaption><b>Figura 22.14.</b> La trifecta letal: con las tres en la misma sesión, una instrucción escondida puede robar datos. Quitar cualquiera de las tres alcanza.</figcaption>
       </figure>
 
       <p>Simon Willison resumió el riesgo en 2025 como la "trifecta letal": acceso a datos privados, exposición a contenido no confiable y una forma de comunicarse hacia afuera. <span class="badge badge--doc">Documentado</span> Mientras las tres estén en la misma sesión, alguna injection va a funcionar; la defensa que no depende de ganarle al modelo es que nunca estén juntas. Casi siempre la pata más fácil de cortar es la comunicación hacia afuera. Este es el problema central de los agentes, que el <a href="m25-agentes.html#injection">M25</a> retoma con herramientas que corren minutos y hacen decenas de llamadas.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f22n8t f22n8d">
+<title id="f22n8t">Dos modelos: uno planifica, otro lee</title>
+<desc id="f22n8d">El patrón de dos LLM y CaMeL. El modelo privilegiado ve solo el pedido del usuario y escribe un plan con herramientas, sin leer nunca el contenido externo. El modelo en cuarentena lee el contenido no confiable, como un correo, sin herramientas, y devuelve un valor que queda en una variable. Un intérprete ejecuta el plan y revisa con una política que un valor de origen no confiable no llegue a una herramienta que envía datos afuera.</desc>
+<defs><marker id="f22n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="40" width="140" height="54" rx="10"/>
+<text class="dg-label" x="90" y="64" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="90" y="81" text-anchor="middle">el pedido</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="220" y="40" width="190" height="54" rx="10"/>
+<text class="dg-label" x="315" y="64" text-anchor="middle">Modelo privilegiado</text>
+<text class="dg-tiny" x="315" y="81" text-anchor="middle">planifica; no ve el contenido</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="470" y="40" width="280" height="54" rx="10"/>
+<text class="dg-label" x="610" y="64" text-anchor="middle">Intérprete con política</text>
+<text class="dg-tiny" x="610" y="81" text-anchor="middle">ejecuta el plan, sigue el origen de cada valor</text>
+<path class="dg-edge" d="M162 67 H216" marker-end="url(#f22n8a)"/>
+<path class="dg-edge" d="M412 67 H466" marker-end="url(#f22n8a)"/>
+<text class="dg-tiny" x="439" y="32" text-anchor="middle">plan</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="470" y="150" width="130" height="54" rx="10"/>
+<text class="dg-label" x="535" y="174" text-anchor="middle">Correo</text>
+<text class="dg-tiny" x="535" y="191" text-anchor="middle">no confiable</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="220" y="150" width="190" height="54" rx="10"/>
+<text class="dg-label" x="315" y="174" text-anchor="middle">Modelo en cuarentena</text>
+<text class="dg-tiny" x="315" y="191" text-anchor="middle">lee; sin herramientas</text>
+<path class="dg-edge" d="M468 177 H414" marker-end="url(#f22n8a)"/>
+<path class="dg-feedback" d="M315 148 L520 98" marker-end="url(#f22n8a)"/>
+<text class="dg-tiny" x="530" y="118" text-anchor="start">un valor, marcado</text>
+<text class="dg-tiny" x="530" y="132" text-anchor="start">como no confiable</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="640" y="150" width="110" height="54" rx="10"/>
+<text class="dg-label" x="695" y="174" text-anchor="middle">Herramientas</text>
+<text class="dg-tiny" x="695" y="191" text-anchor="middle">con permisos</text>
+<path class="dg-edge" d="M690 96 V146" marker-end="url(#f22n8a)"/>
+<rect class="dg-box" x="20" y="226" width="730" height="44" rx="8"/>
+<text class="dg-tiny" x="385" y="244" text-anchor="middle">Un valor no confiable no puede elegir a quién se envía algo: lo bloquea la política, no el prompt.</text>
+<text class="dg-tiny" x="385" y="260" text-anchor="middle">CaMeL resolvió el 77 % de las tareas de AgentDojo con seguridad demostrable, contra el 84 % sin defensa.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.15.</b> La última fila de la tabla de defensas. El modelo que puede actuar no lee lo que no es confiable, y el que lo lee no puede actuar. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h2 id="abuso"><span class="sec-num">22.11</span>Abuso, jailbreaks y red teaming</h2>
 
@@ -882,7 +1199,7 @@ def comparar(pregunta, a, b, juez):
 <path class="dg-feedback" d="M470 160 H516"/>
 </svg>
         </div>
-        <figcaption><b>Figura 22.8.</b> Doce lugares donde queda una conversación. El borrado en cascada del M20 cubre los de la izquierda; los del centro vencen solos; los de la derecha se diseñan para no tener el texto.</figcaption>
+        <figcaption><b>Figura 22.16.</b> Doce lugares donde queda una conversación. El borrado en cascada del M20 cubre los de la izquierda; los del centro vencen solos; los de la derecha se diseñan para no tener el texto.</figcaption>
       </figure>
 
       <ul>
@@ -941,6 +1258,77 @@ def redactar(texto):
         <li><span class="step-title">Un caso nuevo</span>El postmortem termina con un caso en el golden set que habría detectado el problema, y con una señal nueva si ninguna lo vio.</li>
       </ol>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f22n9t f22n9d">
+<title id="f22n9t">Dónde se ve el problema dice qué es</title>
+<desc id="f22n9d">Tres rejillas de réplicas, con una fila por región. En la primera, una sola réplica está marcada: es hardware. En la segunda, todas las réplicas de una región: es configuración. En la tercera, todas: es la versión. Cortar la señal por réplica, región y versión dice por dónde empezar.</desc>
+<defs><marker id="f22n9a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="135" y="26" text-anchor="middle">Una réplica</text>
+<text class="dg-tiny" x="20" y="58" text-anchor="start">región 1</text>
+<rect x="80" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="114" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="148" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="182" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="216" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="20" y="98" text-anchor="start">región 2</text>
+<rect x="80" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="114" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="148" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="182" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="216" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="20" y="138" text-anchor="start">región 3</text>
+<rect x="80" y="122" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="114" y="122" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="148" y="122" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="182" y="122" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="216" y="122" width="26" height="26" rx="4" class="dg-box"/>
+<rect class="dg-warnbox" x="20" y="172" width="230" height="34" rx="6"/>
+<text class="dg-small" x="135" y="193" text-anchor="middle">hardware: cuarentena</text>
+<text class="dg-label" x="385" y="26" text-anchor="middle">Una región</text>
+<rect x="330" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="364" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="398" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="432" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="466" y="42" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="330" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="364" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="398" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="432" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="466" y="82" width="26" height="26" rx="4" class="dg-box"/>
+<rect x="330" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="364" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="398" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="432" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="466" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect class="dg-warnbox" x="270" y="172" width="230" height="34" rx="6"/>
+<text class="dg-small" x="385" y="193" text-anchor="middle">configuración de la región</text>
+<text class="dg-label" x="635" y="26" text-anchor="middle">Todas</text>
+<rect x="580" y="42" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="614" y="42" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="648" y="42" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="682" y="42" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="716" y="42" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="580" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="614" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="648" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="682" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="716" y="82" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="580" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="614" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="648" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="682" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect x="716" y="122" width="26" height="26" rx="4" class="dg-bad"/>
+<rect class="dg-bad" x="520" y="172" width="230" height="34" rx="6"/>
+<text class="dg-small dg-fail-text" x="635" y="193" text-anchor="middle">la versión: rollback</text>
+<text class="dg-tiny" x="20" y="236" text-anchor="start">Cada cuadro es una réplica. Rojo: la señal de calidad se alejó de su línea base.</text>
+<text class="dg-tiny" x="20" y="254" text-anchor="start">Se corta también por tipo de GPU, idioma y categoría.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.17.</b> El segundo paso del runbook. La forma del área afectada dice qué sospechar antes de leer una sola respuesta.</figcaption>
+      </figure>
+
       <h3 id="incidentes-sdc">Una GPU que calcula mal</h3>
 
       <p>El <a href="m061-teoria-distribuida-a-fondo.html#bizantinas-datacenter">M06.1</a> contó que Google y Meta encuentran en sus flotas procesadores que calculan mal sin dar ningún error. Es la <dfn data-term="corrupcion-silenciosa">corrupción silenciosa de datos</dfn>: un resultado equivocado que ningún mecanismo del hardware marca. <span class="badge badge--doc">Documentado</span> En una flota de 500 GPUs, eso se ve como una réplica que de vez en cuando produce texto sin sentido, o en otro idioma, con un 200 y latencias normales. Los síntomas se parecen al segundo bug del postmortem de 22.8, que era de software: desde afuera no se distingue el hardware del código.</p>
@@ -951,6 +1339,52 @@ def redactar(texto):
         <li><b>Señales por réplica.</b> La tasa de respuestas en un idioma distinto al de la pregunta y la probabilidad media de los tokens elegidos. Una réplica que se aleja de sus hermanas es sospechosa.</li>
         <li><b>Cuarentena, no reinicio.</b> La réplica sale del router, se corren las pruebas de diagnóstico del fabricante (en NVIDIA, <code>dcgmi diag</code>) y, si fallan, el nodo vuelve al proveedor. Reiniciarla y devolverla al tráfico esconde el problema hasta la próxima vez.</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f22n10t f22n10d">
+<title id="f22n10t">Una réplica que calcula mal</title>
+<desc id="f22n10d">Detección de corrupción silenciosa de datos, de izquierda a derecha. Cada réplica responde cada pocos minutos sondas con respuesta conocida. Se comparan la corrección de las respuestas y la probabilidad media de los tokens con las de sus hermanas. La réplica que se aleja sale del router, se corren las pruebas del fabricante (dcgmi diag) y, si fallan, el nodo vuelve al proveedor. No se reinicia ni se devuelve al tráfico.</desc>
+<defs><marker id="f22n10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="70" width="130" height="54" rx="10"/>
+<text class="dg-label" x="85" y="94" text-anchor="middle">Sondas</text>
+<text class="dg-tiny" x="85" y="111" text-anchor="middle">cada pocos minutos</text>
+<rect x="210" y="26" width="110" height="24" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="265" y="42" text-anchor="middle">réplica 1</text>
+<path class="dg-edge" d="M152 97 L206 38" marker-end="url(#f22n10a)"/>
+<rect x="210" y="56" width="110" height="24" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="265" y="72" text-anchor="middle">réplica 2</text>
+<path class="dg-edge" d="M152 97 L206 68" marker-end="url(#f22n10a)"/>
+<rect x="210" y="86" width="110" height="24" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="265" y="102" text-anchor="middle">réplica 3</text>
+<path class="dg-edge" d="M152 97 L206 98" marker-end="url(#f22n10a)"/>
+<rect x="210" y="116" width="110" height="24" rx="4" class="dg-bad"/>
+<text class="dg-tiny dg-fail-text" x="265" y="132" text-anchor="middle">réplica 4</text>
+<path class="dg-edge" d="M152 97 L206 128" marker-end="url(#f22n10a)"/>
+<rect x="210" y="146" width="110" height="24" rx="4" class="dg-box"/>
+<text class="dg-tiny" x="265" y="162" text-anchor="middle">réplica 5</text>
+<path class="dg-edge" d="M152 97 L206 158" marker-end="url(#f22n10a)"/>
+<text class="dg-tiny dg-fail-text" x="265" y="194" text-anchor="middle">se aleja de sus hermanas</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="90" width="120" height="54" rx="10"/>
+<text class="dg-label" x="440" y="114" text-anchor="middle">Fuera del router</text>
+<text class="dg-tiny" x="440" y="131" text-anchor="middle">cuarentena</text>
+<path class="dg-edge" d="M322 128 L376 120" marker-end="url(#f22n10a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="540" y="90" width="100" height="54" rx="10"/>
+<text class="dg-label" x="590" y="114" text-anchor="middle">dcgmi diag</text>
+<text class="dg-tiny" x="590" y="131" text-anchor="middle">fabricante</text>
+<path class="dg-edge" d="M502 117 H536" marker-end="url(#f22n10a)"/>
+<rect class="dg-layer" style="--c: var(--l-external)" x="670" y="90" width="80" height="54" rx="10"/>
+<text class="dg-label" x="710" y="114" text-anchor="middle">Proveedor</text>
+<text class="dg-tiny" x="710" y="131" text-anchor="middle">si falla</text>
+<path class="dg-edge" d="M642 117 H666" marker-end="url(#f22n10a)"/>
+<rect class="dg-warnbox" x="380" y="170" width="370" height="34" rx="6"/>
+<text class="dg-small" x="565" y="191" text-anchor="middle">reiniciar y devolver al tráfico esconde el problema</text>
+<text class="dg-tiny" x="20" y="236" text-anchor="start">Se compara si la respuesta es correcta y si las probabilidades se parecen, no el texto exacto (22.1).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 22.18.</b> La detección de una réplica que calcula mal, réplica por réplica. La clave es compararla con sus hermanas, porque desde afuera no da ningún error. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <h3 id="incidentes-practica">Practica con cinco incidentes</h3>
 
@@ -1011,7 +1445,7 @@ def redactar(texto):
 <text class="dg-small" x="10" y="30">Cada compuerta mira más tráfico real y tarda más; el rollback en producción es mover el puntero (M19).</text>
 </svg>
         </div>
-        <figcaption><b>Figura 22.9.</b> El camino de una versión, del registry al retiro. Cada compuerta cubre lo que la anterior no ve, y el rollback en producción es mover un puntero.</figcaption>
+        <figcaption><b>Figura 22.19.</b> El camino de una versión, del registry al retiro. Cada compuerta cubre lo que la anterior no ve, y el rollback en producción es mover un puntero.</figcaption>
       </figure>
 
       <p>Para la versión FP8 con el prompt v41, la checklist de lanzamiento queda así:</p>

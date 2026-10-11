@@ -93,6 +93,67 @@ SD.defineQuiz('m11', {
       ],
       answer: 1,
       explain: 'Un cambio de configuración que llega a todos los servidores en segundos tiene el radio de impacto máximo. La caída de Cloudflare de julio de 2019 (una regla del WAF) y la de Facebook de octubre de 2021 (un comando de mantenimiento desconectó toda su red troncal y, en reacción, sus servidores DNS retiraron sus rutas BGP) son ejemplos documentados de cambios operativos que llegaron a todo a la vez.'
+    },
+    {
+      id: 'churn', type: 'single',
+      prompt: 'Un servicio con la etiqueta <code>pod</code> en sus histogramas pasa de 2 a 12 deploys por día. El tráfico no cambia. ¿Qué le pasa al sistema de métricas?',
+      options: [
+        'Nada: el costo depende del tráfico, y cada pod nuevo hereda las series del anterior.',
+        'Más churn: cada deploy deja series viejas y crea otras tantas, y la memoria sube.',
+        'Pierde las muestras de los pods viejos en cuanto termina el deploy, sin costo extra.',
+        'Sube el disco pero no la memoria, porque las series viejas se escriben a disco al instante.'
+      ],
+      answer: 1,
+      explain: 'Cada pod nuevo tiene otro nombre, así que sus series son filas nuevas. Las viejas siguen en el head block hasta que se compacta, y durante un rolling update conviven las dos. Por eso <code>pod</code> no va en las métricas de negocio (11.3, churn).'
+    },
+    {
+      id: 'exemplar', type: 'single',
+      prompt: '¿Por qué un exemplar no dispara la cardinalidad, aunque guarde un <code>trace_id</code> distinto en cada muestra?',
+      options: [
+        'Porque Prometheus lo convierte en una etiqueta solo en los buckets más lentos, que son pocos.',
+        'Porque el trace_id se guarda resumido con un hash de 8 bytes que se repite entre requests.',
+        'Porque no es una etiqueta: viaja al costado de la muestra en un buffer de tamaño fijo.',
+        'Porque se descarta al calcular el percentil y nunca llega al almacenamiento.'
+      ],
+      answer: 2,
+      explain: 'Una etiqueta define la identidad de la serie; el exemplar no. Prometheus guarda los exemplars en un buffer circular fijo, de unos 100 bytes cada uno, así que su costo no crece con los usuarios (11.5, exemplars).'
+    },
+    {
+      id: 'propagacion', type: 'single',
+      prompt: 'En los traces aparecen muchos traces <b>raíz</b> que empiezan en <code>moderation</code>, un servicio interno que no recibe tráfico de internet. ¿Qué indica?',
+      options: [
+        'Que moderation está muestreando por cola y guarda solo sus propios spans.',
+        'Que alguien llama a moderation sin propagar el header traceparent.',
+        'Que moderation es el servicio más lento y por eso el backend lo pone primero.',
+        'Que el Collector reparte los spans por servicio y no por trace_id.'
+      ],
+      answer: 1,
+      explain: 'Un servicio que no recibe contexto empieza un trace nuevo. Si un servicio interno aparece como raíz, quien lo llama usa un cliente sin instrumentar: el trace de la request original queda con un hueco sin explicar (11.5, la escena "Un servicio no propaga").'
+    },
+    {
+      id: 'sinrunbook', type: 'single',
+      prompt: 'Startup de cinco personas, 3 de la mañana, fallan los pagos y no hay ningún runbook. Hubo un deploy hace 40 minutos. ¿Qué haces primero, después de declarar el incidente?',
+      options: [
+        'Revertir el deploy y medir si vuelve a funcionar, antes de buscar la causa.',
+        'Leer el diff del deploy hasta encontrar la línea que rompe los pagos.',
+        'Reiniciar todos los servicios a la vez para descartar un estado corrupto.',
+        'Escribir el runbook de pagos antes de tocar nada, para no improvisar.'
+      ],
+      answer: 0,
+      explain: 'Primero se mitiga con la palanca más reversible, y el deploy reciente es el sospechoso número uno. Entender viene después, con el sistema estable. Reiniciar todo a la vez cambia muchas cosas juntas y borra pistas; el runbook se escribe esa misma semana (11.9).'
+    },
+    {
+      id: 'dora', type: 'multi',
+      prompt: '¿Cuáles de estas son métricas DORA del modelo actual?',
+      options: [
+        'Tiempo de recuperación de un deploy fallido',
+        'Porcentaje de cobertura de pruebas del repositorio',
+        'Tasa de cambios fallidos',
+        'Cantidad de líneas de código cambiadas por semana',
+        'Lead time desde el commit hasta producción'
+      ],
+      answer: [0, 2, 4],
+      explain: 'Las cinco son lead time del cambio, frecuencia de deploys, tiempo de recuperación de un deploy fallido, tasa de cambios fallidos y tasa de retrabajo. Cobertura y líneas de código no miden la entrega: se inflan sin que el sistema mejore (11.10).'
     }
   ]
 });

@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M33. Hardening de servidores Linux</title>
+<meta name="description" content="Cómo endurecer un servidor Linux expuesto a internet: modelo de amenaza, SSH con claves y segundo factor, sudo y cuentas, actualizaciones automáticas, contraseñas y PAM, Fail2Ban y CrowdSec, AppArmor y SELinux, AIDE, Lynis y auditoría, sysctl y qué asegurar aunque el firewall no alcance.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m33">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Hardening de servidores Linux</h1>
+        <p class="lead">Un servidor con una IP pública recibe intentos de entrada desde el primer minuto, y casi ninguno lo dirige una persona: son bots que recorren internet entera. Este módulo recorre, capa por capa, qué se configura en un Linux recién instalado para que esos bots no encuentren nada, y qué tiene que seguir en pie el día que algo falle.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M33</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M32</dd></div>
+          <div><dt>Estado</dt><dd data-status="m33">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Plantear el modelo de amenaza de un servidor expuesto y ordenar las medidas por lo que evitan, no por lo fáciles que son.</li>
+          <li>Configurar SSH solo con claves, sin root, con un grupo permitido y un segundo factor, sin quedarte afuera en el intento.</li>
+          <li>Mantener el sistema parchado, acotar sudo y las cuentas, y frenar los intentos repetidos con Fail2Ban o CrowdSec.</li>
+          <li>Contener un servicio comprometido con AppArmor, SELinux y el sandbox de systemd, y detectar cambios con AIDE, Lynis y logs fuera del servidor.</li>
+          <li>Hacer el inventario de lo que escucha un servidor y asegurar cada servicio como si el firewall no existiera.</li>
+        </ul>
+      </section>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Fuente y licencia</p>
+        <p>Este módulo sigue la estructura de la guía comunitaria <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server">How To Secure A Linux Server</a>, de Anchal Nigam, publicada con licencia <a href="https://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0</a>. El texto, los ejemplos, las figuras y el orden de prioridades son propios de este curso; cada sección enlaza a la parte correspondiente del original, que trae los pasos de cada herramienta con más detalle.</p>
+      </aside>
+
+      <h2 id="modelo"><span class="sec-num">33.1</span>El modelo de amenaza de un servidor expuesto</h2>
+
+      <p>El <dfn data-term="hardening">hardening</dfn> (endurecimiento) es reducir lo que un atacante puede hacer contra una máquina: cerrar lo que sobra, acotar lo que queda y asegurarse de enterarse cuando algo cambia. Como todo en seguridad, empieza por el <a href="m10-seguridad.html#basicos">modelo de amenaza</a> de M10: quién ataca, qué busca y por dónde puede entrar.</p>
+
+      <p>Para un servidor con IP pública (un VPS, una instancia con IP elástica), el atacante más probable no es una persona que te eligió. Son programas que recorren el espacio de direcciones de internet, prueban contraseñas comunes en SSH, buscan paneles de administración y bases sin contraseña, y explotan vulnerabilidades conocidas en cuanto se publican. Lo comprobarás el primer día: el log de SSH de un servidor nuevo se llena de intentos con usuarios como <code>root</code>, <code>admin</code> o <code>ubuntu</code>. La botnet Mirai, en 2016, armó su ejército con cámaras y routers que tenían las credenciales de fábrica. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>De ahí salen las prioridades. Lo automático ataca lo masivo: contraseñas débiles, servicios expuestos de más, software sin parchar. Esas tres cosas se cierran primero. Lo demás (contención, detección) importa para el día en que algo de lo primero falle, que es la idea de <dfn data-term="superficie-ataque">superficie de ataque</dfn>: cada servicio que escucha, cada cuenta que puede entrar y cada programa instalado es una puerta posible, y la forma más barata de defender una puerta es que no exista.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 364" role="img" aria-labelledby="f331t f331d">
+<title id="f331t">Capas de defensa de un servidor Linux</title>
+<desc id="f331d">Cinco capas, de afuera hacia adentro: red, acceso, sistema, contención y detección. Para cada una se indica qué medidas la forman y qué hace el atacante si esa capa falta.</desc>
+<defs><marker id="f331a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="6" y="22" text-anchor="start">Capa y qué la forma</text>
+<text class="dg-group" x="470" y="22" text-anchor="start">Si falta, el atacante…</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="6" y="44" width="440" height="52" rx="5"/>
+<text class="dg-label" x="20" y="66" text-anchor="start" style="font-size:14px">Red</text>
+<text class="dg-tiny" x="20" y="84" text-anchor="start">firewall con drop por defecto, salida filtrada (M32)</text>
+<path class="dg-feedback" d="M448 70.0 H462"/>
+<rect class="dg-bad" x="466" y="50" width="298" height="40" rx="4"/>
+<text class="dg-tiny" x="476" y="67.0" text-anchor="start">llega a cada servicio que escuche, y desde</text>
+<text class="dg-tiny" x="476" y="82.0" text-anchor="start">adentro sale a donde quiera</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="14" y="106" width="432" height="52" rx="5"/>
+<text class="dg-label" x="28" y="128" text-anchor="start" style="font-size:14px">Acceso</text>
+<text class="dg-tiny" x="28" y="146" text-anchor="start">SSH solo con claves, sin root, MFA, AllowGroups</text>
+<path class="dg-feedback" d="M448 132.0 H462"/>
+<rect class="dg-bad" x="466" y="112" width="298" height="40" rx="4"/>
+<text class="dg-tiny" x="476" y="129.0" text-anchor="start">adivina o reutiliza una contraseña y entra</text>
+<text class="dg-tiny" x="476" y="144.0" text-anchor="start">como un usuario más</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="22" y="168" width="424" height="52" rx="5"/>
+<text class="dg-label" x="36" y="190" text-anchor="start" style="font-size:14px">Sistema</text>
+<text class="dg-tiny" x="36" y="208" text-anchor="start">parches al día, sudo acotado, servicios a localhost, sysctl</text>
+<path class="dg-feedback" d="M448 194.0 H462"/>
+<rect class="dg-bad" x="466" y="174" width="298" height="40" rx="4"/>
+<text class="dg-tiny" x="476" y="191.0" text-anchor="start">explota un fallo ya corregido o sube a root</text>
+<text class="dg-tiny" x="476" y="206.0" text-anchor="start">por un permiso de más</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="30" y="230" width="416" height="52" rx="5"/>
+<text class="dg-label" x="44" y="252" text-anchor="start" style="font-size:14px">Contención</text>
+<text class="dg-tiny" x="44" y="270" text-anchor="start">AppArmor o SELinux, sandbox de systemd, un usuario por servicio</text>
+<path class="dg-feedback" d="M448 256.0 H462"/>
+<rect class="dg-bad" x="466" y="236" width="298" height="40" rx="4"/>
+<text class="dg-tiny" x="476" y="253.0" text-anchor="start">desde un servicio comprometido lee claves,</text>
+<text class="dg-tiny" x="476" y="268.0" text-anchor="start">configs y datos de otros</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="38" y="292" width="408" height="52" rx="5"/>
+<text class="dg-label" x="52" y="314" text-anchor="start" style="font-size:14px">Detección</text>
+<text class="dg-tiny" x="52" y="332" text-anchor="start">logs fuera del servidor, AIDE, Fail2Ban, auditd, Lynis</text>
+<path class="dg-feedback" d="M448 318.0 H462"/>
+<rect class="dg-bad" x="466" y="298" width="298" height="40" rx="4"/>
+<text class="dg-tiny" x="476" y="315.0" text-anchor="start">se queda meses sin que nadie lo note y borra</text>
+<text class="dg-tiny" x="476" y="330.0" text-anchor="start">su rastro del log local</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 33.1.</b> Las capas de un servidor, de afuera hacia adentro. Ninguna alcanza sola: cada una cubre lo que la anterior deja pasar, y la última, la detección, es la que te avisa de que todas las demás fallaron.</figcaption>
+      </figure>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Las organizaciones no inventan su lista: parten de una referencia como los <dfn data-term="cis-benchmark">CIS Benchmarks</dfn>, guías de configuración por sistema operativo con cientos de controles, en dos niveles según cuánto se quiera apretar. <span class="badge badge--doc">Documentado</span> Y no endurecen cada servidor a mano: lo hacen una vez en una imagen base (con Ansible, Packer o la imagen endurecida del proveedor) y despliegan todo desde ella. Este módulo te da el criterio para leer esas listas y saber por qué está cada control.</p>
+      </aside>
+
+      <h2 id="ssh"><span class="sec-num">33.2</span>SSH: la puerta de entrada</h2>
+
+      <p>SSH es casi siempre el único servicio de administración expuesto, y por eso el más atacado. Tres decisiones lo resuelven casi todo: entrar con claves y no con contraseñas, no dejar entrar a root y limitar quién puede entrar.</p>
+
+      <h3 id="ssh-claves">Claves en lugar de contraseñas</h3>
+
+      <p>Una <dfn data-term="clave-ssh">clave SSH</dfn> es un par de claves asimétricas, como las de los certificados de <a href="m01-viaje-request.html#cripto">M01</a>. La privada se queda en tu laptop; la pública se copia al servidor, en <code>~/.ssh/authorized_keys</code>. Al conectarte, el servidor te pide que firmes algo ligado a esa sesión, y verifica la firma con la pública. Ningún secreto viaja por la red, y no hay nada que un bot pueda adivinar.</p>
+
+      <div class="tabs" data-tabs="Contraseña y clave">
+        <section data-tab="Con contraseña">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 436" role="img" aria-labelledby="f332at f332ad">
+<title id="f332at">SSH con contraseña: el bot prueba y Fail2Ban lo frena</title>
+<desc id="f332ad">Un bot prueba contraseñas contra el sshd de tu VPS. Cada intento fallido queda en el log. Fail2Ban lee el log, cuenta cinco fallos en diez minutos y agrega una regla al firewall que bloquea esa IP por diez minutos. Otro bot, desde otra IP, vuelve a empezar.</desc>
+<defs><marker id="f332a-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f332a-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f332a-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f332a-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Bot</text>
+<path class="dg-frame" d="M70.0 40 V378"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">sshd</text>
+<path class="dg-frame" d="M385.0 40 V378"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Fail2Ban</text>
+<path class="dg-frame" d="M700.0 40 V378"/>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 72 L380.0 72" marker-end="url(#f332a-f)"/>
+<rect x="178.6" y="55" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">root / 123456</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M388.0 106 L695.0 106" marker-end="url(#f332a-q)"/>
+<rect x="470.5" y="89" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="100" text-anchor="middle">log: Failed password</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 140 L380.0 140" marker-end="url(#f332a-f)"/>
+<rect x="178.6" y="123" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">admin / admin</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M388.0 174 L695.0 174" marker-end="url(#f332a-q)"/>
+<rect x="470.5" y="157" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="168" text-anchor="middle">log: Failed password</text>
+<rect x="502.0" y="194" width="188" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="512.0" y="210">5 fallos en 10 min → ban</text>
+<path class="dg-edge" d="M697.0 242 L390.0 242" marker-end="url(#f332a-a)"/>
+<rect x="421.0" y="225" width="243.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="236" text-anchor="middle">regla en el firewall: drop a esa IP</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 276 L380.0 276" marker-end="url(#f332a-f)"/>
+<rect x="152.2" y="259" width="150.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="270" text-anchor="middle">intento 6: descartado</text>
+<path d="M20 308 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="297" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="312" text-anchor="middle" style="fill:var(--fail)">otro bot, otra IP: vuelve a empezar</text>
+<rect class="dg-box dg-box--em" x="323.0" y="390" width="124" height="38" rx="4"/>
+<text class="dg-small" x="385.0" y="406" text-anchor="middle" style="font-weight:700">tu VPS</text>
+<text class="dg-tiny" x="385.0" y="421" text-anchor="middle">203.0.113.10:22</text>
+</svg>
+
+            </div>
+            <figcaption><b>Figura 33.2a.</b> Con contraseñas, cada bot tiene intentos. Fail2Ban los acota por IP, pero el siguiente bot llega desde otra IP. La defensa solo es tan buena como la peor contraseña del servidor.</figcaption>
+          </figure>
+        </section>
+        <section data-tab="Con clave">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 402" role="img" aria-labelledby="f332bt f332bd">
+<title id="f332bt">SSH con clave: no hay nada que adivinar</title>
+<desc id="f332bd">Tu laptop ofrece su clave pública, el servidor comprueba que está en authorized_keys y le pide una firma ligada a esa sesión. La laptop firma con la clave privada, que nunca sale de ella, y el servidor verifica la firma. Un bot que prueba contraseñas recibe Permission denied (publickey) sin que haya ninguna contraseña que adivinar.</desc>
+<defs><marker id="f332b-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f332b-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f332b-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f332b-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Tu laptop</text>
+<path class="dg-frame" d="M70.0 40 V344"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">sshd</text>
+<path class="dg-frame" d="M385.0 40 V344"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Bot</text>
+<path class="dg-frame" d="M700.0 40 V344"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f332b-a)"/>
+<rect x="119.2" y="55" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">ofrece la clave pública ed25519</text>
+<rect x="395.0" y="92" width="230" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="108">está en ~/.ssh/authorized_keys</text>
+<path class="dg-edge" d="M73.0 140 L380.0 140" marker-end="url(#f332b-a)"/>
+<rect x="142.3" y="123" width="170.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">firma ligada a la sesión</text>
+<rect x="395.0" y="160" width="188" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="176">verifica la firma: entra</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 208 L75.0 208" marker-end="url(#f332b-r)"/>
+<rect x="205.0" y="191" width="45.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="202" text-anchor="middle">shell</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M697.0 242 L390.0 242" marker-end="url(#f332b-f)"/>
+<rect x="493.6" y="225" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="236" text-anchor="middle">root / 123456</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M388.0 276 L695.0 276" marker-end="url(#f332b-r)"/>
+<rect x="440.8" y="259" width="203.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="270" text-anchor="middle">Permission denied (publickey)</text>
+<rect class="dg-box dg-box--em" x="8.0" y="356" width="124" height="38" rx="4"/>
+<text class="dg-small" x="70.0" y="372" text-anchor="middle" style="font-weight:700">clave privada</text>
+<text class="dg-tiny" x="70.0" y="387" text-anchor="middle">nunca sale de aquí</text>
+<rect class="dg-box dg-box--em" x="323.0" y="356" width="124" height="38" rx="4"/>
+<text class="dg-small" x="385.0" y="372" text-anchor="middle" style="font-weight:700">tu VPS</text>
+<text class="dg-tiny" x="385.0" y="387" text-anchor="middle">203.0.113.10:22</text>
+</svg>
+
+            </div>
+            <figcaption><b>Figura 33.2b.</b> Con claves, el servidor ni siquiera ofrece el método de contraseña. El bot recibe <code>Permission denied (publickey)</code> y no tiene nada que probar.</figcaption>
+          </figure>
+        </section>
+      </div>
+
+<pre data-lang="shell"><code># En tu laptop: genera el par (ed25519 es el tipo recomendado hoy) con una frase de paso
+$ ssh-keygen -t ed25519 -C "ana@laptop"
+# Copia la pública al servidor, al usuario con el que vas a entrar
+$ ssh-copy-id -i ~/.ssh/id_ed25519.pub ana@203.0.113.10
+# Prueba que entras con la clave antes de tocar nada más
+$ ssh -i ~/.ssh/id_ed25519 ana@203.0.113.10</code></pre>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>El error clásico es desactivar las contraseñas antes de comprobar que la clave funciona, o reiniciar <code>sshd</code> con un error de sintaxis, y quedarse afuera del servidor. Tres hábitos lo evitan: <code>sudo sshd -t</code> antes de reiniciar (valida la configuración), dejar abierta una sesión mientras pruebas desde una segunda terminal, y tener a mano la consola del proveedor, que no depende de SSH.</p>
+      </aside>
+
+      <h3 id="ssh-config">La configuración del servidor</h3>
+
+      <p>Los valores por defecto de OpenSSH están pensados para que todo funcione, no para un servidor expuesto. <span class="badge badge--doc">Documentado</span> Esto es lo que cambia:</p>
+
+      <div class="tabs" data-tabs="sshd_config">
+        <section data-tab="Por defecto">
+<pre data-lang="shell"><code># Lo que hace OpenSSH si no le dices nada (valores por defecto de sshd_config)
+PermitRootLogin prohibit-password    # root entra, con clave
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+PubkeyAuthentication yes
+MaxAuthTries 6
+LoginGraceTime 120                   # segundos para autenticarse
+X11Forwarding no
+AllowTcpForwarding yes
+AllowAgentForwarding yes
+ClientAliveInterval 0                # nunca comprueba si el cliente sigue vivo
+# sin AllowUsers ni AllowGroups: entra cualquier cuenta con credenciales</code></pre>
+        </section>
+        <section data-tab="Endurecido">
+<pre data-lang="shell"><code># /etc/ssh/sshd_config.d/10-hardening.conf
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no      # vuelve a yes si usas el segundo factor de más abajo
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+AllowGroups sshusers                 # solo las cuentas de este grupo
+MaxAuthTries 3
+LoginGraceTime 30
+X11Forwarding no
+AllowTcpForwarding no                # sin túneles, salvo que los uses
+AllowAgentForwarding no
+ClientAliveInterval 300              # corta las sesiones de clientes que dejaron de responder
+ClientAliveCountMax 2</code></pre>
+        </section>
+      </div>
+
+<pre data-lang="shell"><code>$ sudo groupadd sshusers && sudo usermod -aG sshusers ana
+$ sudo sshd -t                                   # sin salida: la configuración es válida
+$ sudo sshd -T | grep -Ei 'passwordauth|permitroot|allowgroups'   # lo que sshd aplica de verdad
+$ sudo systemctl reload ssh                      # en RHEL y Fedora el servicio se llama sshd</code></pre>
+
+      <p>Un detalle que hace perder horas: en <code>sshd_config</code>, para cada opción vale el <b>primer</b> valor que se lee, no el último. <span class="badge badge--doc">Documentado</span> Debian y Ubuntu incluyen los archivos de <code>sshd_config.d/</code> al principio, en orden alfabético, y algunas imágenes de nube traen ahí un archivo propio que activa las contraseñas. Por eso el archivo se llama <code>10-…</code>, y por eso se comprueba con <code>sshd -T</code>, que muestra la configuración que quedó en efecto, no la que crees haber escrito.</p>
+
+      <p>Dos ajustes más que trae la guía original: borrar de <code>/etc/ssh/moduli</code> los grupos de Diffie-Hellman de menos de 3&#8239;072 bits, que solo se usan con clientes viejos, y no cambiar el puerto 22 creyendo que eso protege. Mover el puerto reduce el ruido en el log, pero un escaneo lo encuentra igual; es una comodidad, no una defensa.</p>
+
+      <h3 id="ssh-mfa">Segundo factor</h3>
+
+      <p>Con claves, lo que queda por robar es la clave misma: de una laptop comprometida, de un backup, de un repositorio donde alguien la subió por error. La <dfn data-term="mfa">MFA</dfn> (autenticación multifactor) agrega algo que la clave sola no tiene. Hay dos formas en SSH:</p>
+      <ul>
+        <li><b>Llave de hardware FIDO2.</b> <code>ssh-keygen -t ed25519-sk</code> crea una clave cuya parte privada vive en una llave USB y exige tocarla en cada conexión. Disponible desde OpenSSH 8.2. <span class="badge badge--doc">Documentado</span> Es la opción más fuerte y la más simple de usar: no hay códigos que tipear.</li>
+        <li><b>Códigos TOTP</b>, con un módulo de PAM como <code>libpam-google-authenticator</code> y <code>AuthenticationMethods publickey,keyboard-interactive</code>: primero la clave y después el código de la app. Exige volver a activar <code>KbdInteractiveAuthentication</code>, y que la hora del servidor esté bien (33.4).</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Cuantas más máquinas, menos sentido tiene repartir claves a mano en cada <code>authorized_keys</code>. Las alternativas son los certificados SSH firmados por una autoridad interna (vencen solos y se revocan en un lugar), un bastión que graba las sesiones, o no abrir SSH en absoluto y entrar por un acceso gestionado del proveedor, como Session Manager en AWS. Las tres se tratan con la nube segura, en M37.</p>
+      </aside>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#the-ssh-server">The SSH Server</a>, con las secciones de claves, <code>AllowGroups</code>, <code>sshd_config</code>, Diffie-Hellman y 2FA.</p>
+
+      <h2 id="cuentas"><span class="sec-num">33.3</span>Cuentas, sudo y su</h2>
+
+      <p>Una vez adentro, la pregunta es qué puede hacer cada cuenta. El objetivo: cada persona entra con su usuario, sube a root solo cuando lo necesita y queda registrado quién hizo qué.</p>
+
+      <ul>
+        <li><b>Una cuenta por persona, nunca compartida.</b> Con una cuenta <code>deploy</code> que usan cinco personas, el log dice "deploy" y nadie sabe quién fue.</li>
+        <li><b>sudo acotado a un grupo.</b> Solo los miembros de <code>sudo</code> (Debian, Ubuntu) o <code>wheel</code> (RHEL) pueden usarlo. Se edita siempre con <code>visudo</code>, que valida la sintaxis: un <code>sudoers</code> roto te deja sin sudo. Cada uso queda en el log del sistema con el usuario y el comando.</li>
+        <li><b>su limitado.</b> Con el módulo <code>pam_wheel</code> en <code>/etc/pam.d/su</code>, solo un grupo puede usar <code>su</code>; el resto no puede convertirse en otro usuario aunque sepa la contraseña.</li>
+        <li><b>Root sin contraseña conocida.</b> En Ubuntu, root viene bloqueado y se trabaja con sudo. Si root tiene contraseña, que no la sepa nadie de memoria y viva en un gestor de secretos, para la consola de emergencia.</li>
+        <li><b>Cuentas de servicio sin shell.</b> El usuario de una aplicación (<code>app</code>, <code>postgres</code>) lleva <code>/usr/sbin/nologin</code>: puede ser dueño de archivos y correr procesos, pero nadie inicia sesión con él.</li>
+        <li><b>Cuentas que sobran, bloqueadas.</b> La de alguien que se fue, la de una prueba: <code>sudo usermod -L -e 1 usuario</code> la bloquea y la vence sin borrar sus archivos, que pueden hacer falta para una investigación.</li>
+      </ul>
+
+<pre data-lang="shell"><code>$ getent group sudo                   # quién puede usar sudo
+$ sudo -l -U ana                      # qué puede hacer ana con sudo
+$ awk -F: '$7 !~ /nologin|false/' /etc/passwd   # cuentas con un shell válido
+$ lastlog | grep -v 'Never logged'    # quién entró y cuándo fue la última vez</code></pre>
+
+      <p>Los permisos de sudo pueden ser finos (<code>ana ALL=(postgres) /usr/bin/psql</code> deja a ana correr solo <code>psql</code> como <code>postgres</code>). Es la misma idea de <a href="m05-bases-de-datos.html#roles-grant">los roles de la base</a> en M05: cada uno con lo que necesita. El principio de mínimo privilegio, aplicado de punta a punta, vuelve en M35.</p>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#limit-who-can-use-sudo">Limit Who Can Use sudo</a> y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#limit-who-can-use-su">Limit Who Can Use su</a>.</p>
+
+      <h2 id="actualizaciones"><span class="sec-num">33.4</span>Actualizaciones y hora</h2>
+
+      <p>Cuando se corrige una vulnerabilidad, el aviso dice qué versión estaba afectada, y eso le sirve tanto a quien defiende como a quien ataca. A partir de ese momento, cada servidor sin parchar es un blanco conocido. Un ejemplo: en julio de 2024, Qualys publicó "regreSSHion" (CVE-2024-6387), una falla en el servidor de OpenSSH, en las versiones 8.5p1 a 9.7p1, que en Linux con glibc podía permitir ejecutar código como root sin autenticarse. Se corrigió en OpenSSH 9.8p1, y las distribuciones publicaron sus paquetes corregidos en los días siguientes. <span class="badge badge--doc">Documentado</span> Un servidor con actualizaciones automáticas de seguridad lo tenía resuelto sin que nadie hiciera nada.</p>
+
+      <p>En Debian y Ubuntu lo hace <code>unattended-upgrades</code>. Ubuntu Server lo trae instalado y activo, con los repositorios de seguridad habilitados, y por defecto no reinicia el servidor. <span class="badge badge--doc">Documentado</span> En RHEL y Fedora el equivalente es <code>dnf-automatic</code>.</p>
+
+<pre data-lang="shell"><code>$ sudo apt install unattended-upgrades
+$ sudo dpkg-reconfigure -plow unattended-upgrades     # lo activa
+$ sudo unattended-upgrade --dry-run --debug           # qué instalaría ahora, sin instalar
+$ cat /var/run/reboot-required 2&gt;/dev/null            # si existe, un paquete pide reiniciar
+$ sudo needrestart -r l                               # qué servicios siguen corriendo con librerías viejas</code></pre>
+
+      <p>El detalle está en el reinicio. Un parche del kernel o de una librería como OpenSSL no protege hasta que el proceso que la usa se reinicia. Hay tres maneras de resolverlo, y todas son válidas si son una decisión y no un olvido: reiniciar automáticamente en una ventana (<code>Automatic-Reboot "true"</code> con <code>Automatic-Reboot-Time</code>), reiniciar los servicios afectados con <code>needrestart</code>, o reemplazar el servidor por uno nuevo con la imagen al día, que es lo habitual en una flota detrás de un balanceador.</p>
+
+      <h3 id="ntp">La hora</h3>
+
+      <p>Un reloj desfasado parece un detalle hasta que hace falta reconstruir un incidente: los logs de dos máquinas con minutos de diferencia no se pueden ordenar. Además fallan la validación de certificados, los tokens con vencimiento como los <a href="m10-seguridad.html#tokens">JWT</a> de M10 y los códigos TOTP del segundo factor. Las distribuciones actuales traen <code>systemd-timesyncd</code> o <code>chrony</code>; <code>timedatectl</code> muestra si el reloj está sincronizado.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Si no lo haces</p>
+        <p>El servidor corre la versión vulnerable hasta que alguien se acuerda de actualizar, y las vulnerabilidades más explotadas son, en general, las que ya tenían parche. Las listas de vulnerabilidades explotadas que publica CISA (KEV) están llenas de fallas corregidas hace meses o años. <span class="badge badge--doc">Documentado</span></p>
+      </aside>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#automatic-security-updates-and-alerts">Automatic Security Updates and Alerts</a> y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#ntp-client">NTP Client</a>.</p>
+
+      <h2 id="contrasenas"><span class="sec-num">33.5</span>Contraseñas y PAM</h2>
+
+      <p>Si SSH ya no acepta contraseñas, siguen existiendo: para sudo, para la consola del proveedor, para un servicio que autentica contra las cuentas del sistema. En Linux, todo eso pasa por <b>PAM</b> (Pluggable Authentication Modules), una pila de módulos configurable por servicio en <code>/etc/pam.d/</code>. Dos módulos hacen casi todo el trabajo:</p>
+
+      <ul>
+        <li><b><code>pam_pwquality</code></b> rechaza las contraseñas débiles al crearlas: largo mínimo, clases de caracteres, palabras de diccionario, parecido con la anterior. Se configura en <code>/etc/security/pwquality.conf</code>. La recomendación actual del NIST (SP 800-63B) favorece el largo y el control contra listas de contraseñas filtradas por sobre las reglas de composición, y desaconseja obligar a cambiarlas cada tanto sin motivo. <span class="badge badge--doc">Documentado</span></li>
+        <li><b><code>pam_faillock</code></b> bloquea una cuenta después de varios intentos fallidos. Sus valores por defecto son 3 fallos en 15 minutos y un bloqueo de 10 minutos, y no bloquea a root salvo que se lo pidas. <span class="badge badge--doc">Documentado</span> <code>faillock --user ana</code> muestra los intentos y <code>--reset</code> desbloquea.</li>
+      </ul>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>El bloqueo por intentos fallidos protege contra el que prueba contraseñas, pero también le da a cualquiera la forma de bloquear una cuenta legítima a propósito. Por eso el bloqueo es temporal y no permanente, y por eso no se aplica a la cuenta que necesitas para entrar en una emergencia.</p>
+      </aside>
+
+      <p>La guía original incluye además una "contraseña de pánico": una segunda contraseña que, en lugar de rechazarte, deja entrar y ejecuta un script (por ejemplo, avisar o borrar datos sensibles), pensada para quien puede ser obligado a dar su contraseña. Es una medida para un modelo de amenaza muy particular; en un servidor de una empresa, el riesgo de dispararla por error suele ser mayor que el beneficio.</p>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#force-accounts-to-use-secure-passwords">Force Accounts To Use Secure Passwords</a> y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#add-panicsecondaryfake-password-login-security-system">Add Panic/Secondary/Fake password Login Security System</a>.</p>
+
+      <h2 id="red"><span class="sec-num">33.6</span>La red del servidor</h2>
+
+      <p>El firewall del host es el de <a href="m32-firewalls.html#frontends">M32</a>: UFW o nftables con política <code>drop</code> de entrada, SSH solo desde donde administras, y la salida filtrada si puedes (<a href="m32-firewalls.html#entrada-salida">32.5</a>). Recuerda los dos agujeros de esa misma página: los puertos que publica Docker no pasan por UFW, y las reglas tienen que cubrir IPv6 (<a href="m32-firewalls.html#docker">32.9</a>). Sobre esa base, se suma lo que reacciona a lo que pasa.</p>
+
+      <h3 id="fail2ban">Fail2Ban y CrowdSec</h3>
+
+      <p><dfn data-term="fail2ban">Fail2Ban</dfn> lee los logs, cuenta los fallos de autenticación por IP y, cuando una IP pasa el límite, agrega una regla al firewall que la bloquea por un tiempo. Sus valores por defecto son 5 fallos en 10 minutos y un bloqueo de 10 minutos. <span class="badge badge--doc">Documentado</span> La configuración propia nunca va en <code>jail.conf</code>, que se pisa al actualizar el paquete: va en <code>jail.local</code> o en <code>jail.d/</code>.</p>
+
+<pre data-lang="shell"><code># /etc/fail2ban/jail.local
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+bantime.increment = true            # cada reincidencia, un bloqueo más largo
+ignoreip = 127.0.0.1/8 ::1 203.0.113.0/24   # tu oficina nunca queda bloqueada
+
+[sshd]
+enabled = true</code></pre>
+
+<pre data-lang="shell"><code>$ sudo fail2ban-client status sshd        # fallos actuales e IPs bloqueadas
+$ sudo fail2ban-client set sshd unbanip 198.51.100.7</code></pre>
+
+      <p>Con SSH solo por claves, Fail2Ban deja de proteger contra adivinar contraseñas (ya no hay ninguna) y pasa a ser higiene: menos ruido en el log y menos carga. Donde sigue siendo valioso es en los servicios que sí aceptan contraseñas, como el login de tu aplicación o un panel web, con un filtro que lea su log. <b>CrowdSec</b> hace lo mismo con un giro: comparte las IPs que cada instalación detecta y recibe a cambio una lista de bloqueo de la comunidad, así que bloquea a muchos atacantes antes de su primer intento contra ti. Separa la detección (el <span class="no-autolink">agente</span> que lee logs) de la acción (los "bouncers" que bloquean en el firewall, en nginx o en Cloudflare). <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="hidepid">/proc y lo que ven los demás usuarios</h3>
+
+      <p>Por defecto, cualquier usuario del sistema puede ver los procesos de todos los demás en <code>/proc</code>, incluidos los argumentos con que se lanzaron, que a veces llevan una contraseña o un token. Montar <code>/proc</code> con <code>hidepid=invisible</code> (o el antiguo <code>hidepid=2</code>) hace que cada usuario vea solo sus procesos. Algunas herramientas de monitoreo necesitan ver todo: se les da un grupo de excepción con la opción <code>gid=</code>. Y la regla de fondo sigue en pie: los secretos no van en la línea de comandos sino en variables de entorno protegidas o en un gestor de secretos (<a href="m10-seguridad.html#credenciales-detalle">M10</a>).</p>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#the-network">The Network</a> (UFW, psad, Fail2Ban, CrowdSec) y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#securing-proc">Securing /proc</a>.</p>
+
+      <h2 id="mac"><span class="sec-num">33.7</span>Contener un servicio comprometido</h2>
+
+      <p>Los permisos clásicos de Linux son discrecionales: un proceso puede hacer todo lo que puede hacer su usuario. Si alguien toma el control de nginx, lee todo lo que el usuario <code>www-data</code> puede leer. El <dfn data-term="mac-control">control de acceso obligatorio</dfn> (MAC) agrega una política del sistema que el proceso no puede saltarse: aunque los permisos del archivo lo permitan, si la política dice que nginx no lee <code>/home</code>, no lo lee.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>AppArmor</th><th>SELinux</th></tr></thead>
+          <tbody>
+            <tr><td><b>Dónde viene activo</b></td><td>Ubuntu, Debian, SUSE</td><td>RHEL, Fedora, Rocky, Alma</td></tr>
+            <tr><td><b>Cómo describe la política</b></td><td>Perfiles por programa, con rutas de archivos</td><td>Etiquetas en cada archivo y proceso, y reglas entre etiquetas</td></tr>
+            <tr><td><b>Lo bueno</b></td><td>Fácil de leer y de ajustar</td><td>Muy fino; cubre todo el sistema por defecto</td></tr>
+            <tr><td><b>Ver el estado</b></td><td><code>sudo aa-status</code></td><td><code>getenforce</code>, <code>sestatus</code></td></tr>
+            <tr><td><b>Ver qué bloqueó</b></td><td>Mensajes <code>apparmor="DENIED"</code> en el log del kernel</td><td><code>ausearch -m avc</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>El consejo más repetido en internet para "arreglar" un error de permisos en RHEL es <code>setenforce 0</code>, que apaga SELinux. Funciona, y deja el servidor sin la capa que habría contenido una intrusión. El arreglo correcto es leer el rechazo, y casi siempre resulta ser una etiqueta equivocada (<code>restorecon -Rv</code> la corrige) o un booleano que hay que activar (<code>setsebool -P httpd_can_network_connect on</code>). Lo mismo con AppArmor: un perfil en modo <code>complain</code> para aprender, nunca desactivado para siempre.</p>
+      </aside>
+
+      <h3 id="systemd-sandbox">El sandbox de systemd</h3>
+
+      <p>Para tus propios servicios hay una herramienta más directa: las opciones de aislamiento de systemd. Cada línea quita algo que el servicio no necesita, sin escribir una política aparte:</p>
+
+<pre data-lang="shell"><code># /etc/systemd/system/facturas.service (fragmento de [Service])
+User=facturas                 # un usuario propio, sin shell
+NoNewPrivileges=yes           # ni setuid ni sudo pueden darle más permisos
+ProtectSystem=strict          # todo el sistema de archivos, de solo lectura…
+ReadWritePaths=/var/lib/facturas   # …salvo su directorio de datos
+ProtectHome=yes               # no ve /home ni /root
+PrivateTmp=yes                # su propio /tmp
+PrivateDevices=yes
+CapabilityBoundingSet=        # ninguna capacidad de root
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX</code></pre>
+
+      <p><code>systemd-analyze security facturas.service</code> evalúa cada servicio y lista lo que todavía podría restringirse. Para aplicaciones de escritorio o herramientas que no son servicios, la guía original propone Firejail, que aplica una idea parecida al lanzar un programa.</p>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#run-applications-in-a-sandbox-with-firejail">Run Applications in a Sandbox with Firejail</a>.</p>
+
+      <h2 id="auditoria"><span class="sec-num">33.8</span>Detección y auditoría</h2>
+
+      <p>Todo lo anterior intenta que no entren. Esta sección parte de que alguien ya entró y pregunta: ¿cómo te enteras? Un atacante que se quiere quedar cambia binarios, agrega una clave en <code>authorized_keys</code> o una tarea en cron, y borra sus rastros del log local.</p>
+
+      <h3 id="aide">Integridad de archivos con AIDE</h3>
+
+      <p><dfn data-term="aide">AIDE</dfn> (Advanced Intrusion Detection Environment) saca una foto del sistema: el hash, los permisos y el dueño de cada archivo que importa. Después compara el disco con esa foto y reporta cada diferencia.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 272" role="img" aria-labelledby="f334t f334d">
+<title id="f334t">AIDE: una foto del sistema y la comparación</title>
+<desc id="f334d">El día cero, con el servidor recién endurecido, aide --init guarda los hashes, permisos y dueños de los archivos del sistema en una base de datos que se copia fuera del servidor. Cada día, aide --check compara el disco con esa base y reporta lo que cambió: un binario con otro hash, un archivo nuevo en cron, una clave agregada a authorized_keys.</desc>
+<defs><marker id="f334a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="6" y="22" text-anchor="start">Día 0: el servidor recién endurecido</text>
+<rect class="dg-box" x="6" y="36" width="190" height="72" rx="5"/>
+<text class="dg-label" x="101.0" y="58" text-anchor="middle" style="font-size:13.5px">Archivos del sistema</text>
+<text class="dg-tiny" x="101.0" y="76" text-anchor="middle">/usr/bin, /etc, /boot,</text>
+<text class="dg-tiny" x="101.0" y="91" text-anchor="middle">/root/.ssh…</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="250" y="36" width="120" height="72" rx="5"/>
+<text class="dg-label" x="310.0" y="58" text-anchor="middle" style="font-size:13.5px">aide --init</text>
+<text class="dg-tiny" x="310.0" y="76" text-anchor="middle">hash, permisos,</text>
+<text class="dg-tiny" x="310.0" y="91" text-anchor="middle">dueño, tamaño</text>
+<rect class="dg-box dg-box--em" x="424" y="36" width="200" height="72" rx="5"/>
+<text class="dg-label" x="524.0" y="58" text-anchor="middle" style="font-size:13.5px">Base de datos de AIDE</text>
+<text class="dg-tiny" x="524.0" y="76" text-anchor="middle">copia fuera del servidor</text>
+<text class="dg-tiny" x="524.0" y="91" text-anchor="middle">o en un medio de solo lectura</text>
+<path class="dg-edge" d="M198 72 H247" marker-end="url(#f334a)"/>
+<path class="dg-edge" d="M372 72 H421" marker-end="url(#f334a)"/>
+<text class="dg-group" x="6" y="146" text-anchor="start">Cada día: la comparación</text>
+<rect class="dg-box" x="6" y="160" width="190" height="72" rx="5"/>
+<text class="dg-label" x="101.0" y="182" text-anchor="middle" style="font-size:13.5px">Archivos de hoy</text>
+<text class="dg-tiny" x="101.0" y="200" text-anchor="middle">lo que hay en el disco</text>
+<text class="dg-tiny" x="101.0" y="215" text-anchor="middle">ahora</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="250" y="160" width="120" height="72" rx="5"/>
+<text class="dg-label" x="310.0" y="182" text-anchor="middle" style="font-size:13.5px">aide --check</text>
+<text class="dg-tiny" x="310.0" y="200" text-anchor="middle">compara uno</text>
+<text class="dg-tiny" x="310.0" y="215" text-anchor="middle">por uno</text>
+<path class="dg-edge" d="M198 196 H247" marker-end="url(#f334a)"/>
+<path class="dg-feedback" d="M524 110 V140 H310 V157" marker-end="url(#f334a)"/>
+<text class="dg-tiny" x="530" y="132" text-anchor="start">la foto del día 0</text>
+<path class="dg-edge" d="M372 196 H421" marker-end="url(#f334a)"/>
+<rect class="dg-warnbox" x="424" y="152" width="340" height="88" rx="5"/>
+<text class="dg-label" x="436" y="172" text-anchor="start" style="font-size:13.5px">Reporte: 3 cambios</text>
+<text class="dg-tiny" x="436" y="192" text-anchor="start" style="font-family: var(--f-mono)">changed: /usr/bin/ss (otro hash)</text>
+<text class="dg-tiny" x="436" y="207" text-anchor="start" style="font-family: var(--f-mono)">added: /etc/cron.d/.update</text>
+<text class="dg-tiny" x="436" y="222" text-anchor="start" style="font-family: var(--f-mono)">changed: /root/.ssh/authorized_keys</text>
+<text class="dg-small" x="385" y="262" text-anchor="middle">AIDE no sabe si un cambio es malo: sabe que algo cambió y te obliga a explicarlo</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 33.4.</b> La foto se toma con el servidor recién endurecido y se guarda fuera de él. Un atacante con root puede modificar AIDE y su base si están en el mismo disco; por eso la base buena vive en otro lado.</figcaption>
+      </figure>
+
+<pre data-lang="shell"><code>$ sudo aideinit                    # Debian y Ubuntu; en RHEL: sudo aide --init
+$ sudo cp /var/lib/aide/aide.db /ruta/fuera/del/servidor/   # la copia buena
+$ sudo aide --check                # compara el disco con la base
+$ sudo aide --update               # después de un cambio legítimo, nueva foto</code></pre>
+
+      <p>El trabajo real de AIDE es operativo: cada actualización de paquetes cambia binarios, y si nadie actualiza la base después, el reporte se llena de cambios legítimos y se deja de leer. Se ajusta qué vigilar (binarios, <code>/etc</code>, claves SSH, cron) y qué ignorar (logs, cachés), y se corre la comparación en un cron diario que manda el reporte afuera.</p>
+
+      <h3 id="rootkits">Rootkits, antivirus y análisis de logs</h3>
+
+      <ul>
+        <li><b>rkhunter y chkrootkit</b> buscan las huellas de un <dfn data-term="rootkit">rootkit</dfn> conocido: archivos, módulos del kernel y comportamientos típicos de herramientas que esconden a un intruso. Son útiles como red de seguridad, pero un rootkit que corre en el kernel puede engañar a cualquier herramienta que corra en ese mismo kernel, y los dos dan falsos positivos después de actualizar. Un hallazgo se confirma desde afuera, con el disco montado en otra máquina.</li>
+        <li><b>ClamAV</b> es un antivirus de código abierto. En un servidor tiene sentido sobre todo donde entran archivos de terceros: los adjuntos de un servidor de correo, las subidas de usuarios de <a href="m09-objetos.html#arquitectura">M09</a>.</li>
+        <li><b>Logwatch</b> resume los logs del día en un correo: entradas por SSH, uso de sudo, errores. Es la forma más barata de que alguien mire, aunque sea de reojo.</li>
+        <li><b>auditd</b> registra eventos del kernel con detalle: quién ejecutó qué, quién abrió un archivo sensible, quién cambió una regla. Es la base de las auditorías formales.</li>
+        <li><b>OSSEC y Wazuh</b> son sistemas de <a href="m32-firewalls.html#ngfw-waf">detección de intrusiones</a> de host: un <span class="no-autolink">agente</span> en cada servidor manda logs, integridad de archivos y alertas a un servidor central.</li>
+      </ul>
+
+      <h3 id="lynis">Lynis: la auditoría de todo lo anterior</h3>
+
+      <p><dfn data-term="lynis">Lynis</dfn> revisa la configuración del sistema contra cientos de controles (SSH, kernel, cuentas, servicios, permisos, firewall) y termina con una lista de advertencias, sugerencias y un "hardening index" de 0 a 100. No cambia nada: solo informa. Sirve para dos cosas: encontrar lo que se te pasó, y comparar un servidor contra sí mismo en el tiempo.</p>
+
+<pre data-lang="shell"><code>$ sudo lynis audit system
+$ sudo grep -E 'warning|suggestion' /var/log/lynis-report.dat | head</code></pre>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Ninguna de estas herramientas sirve si el log vive solo en el servidor que vigila. Lo primero que hace un intruso con root es borrar o editar sus rastros. Los logs se mandan a otro sistema en el momento en que se escriben (rsyslog, el envío de journald, el <span class="no-autolink">agente</span> de tu plataforma de <a href="m11-observabilidad.html#logs">logs</a>), donde el servidor puede escribir pero no borrar, y las <a href="m11-observabilidad.html#alertas">alertas</a> salen de ahí: un login de root, un usuario nuevo, un cambio en <code>sudoers</code>, un reporte de AIDE con diferencias.</p>
+      </aside>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#the-auditing">The Auditing</a> (AIDE, ClamAV, rkhunter, chkrootkit, Logwatch, ss, Lynis y OSSEC).</p>
+
+      <h2 id="sysctl"><span class="sec-num">33.9</span>El kernel, el arranque y lo que sobra</h2>
+
+      <p>La guía original llama a esta parte "la zona de peligro": son ajustes con buen rendimiento de seguridad, pero que pueden romper cosas si se copian sin entender. Por eso cada línea de abajo lleva su porqué.</p>
+
+<pre data-lang="shell"><code># /etc/sysctl.d/90-hardening.conf
+kernel.kptr_restrict = 2              # oculta direcciones del kernel a todos
+kernel.dmesg_restrict = 1             # solo root lee el log del kernel
+kernel.yama.ptrace_scope = 1          # un proceso solo puede inspeccionar a sus hijos
+kernel.unprivileged_bpf_disabled = 1
+fs.protected_hardlinks = 1            # cierra trucos con enlaces en directorios compartidos como /tmp
+fs.protected_symlinks = 1
+fs.suid_dumpable = 0                  # los programas setuid no vuelcan memoria a disco
+net.ipv4.tcp_syncookies = 1           # resiste un SYN flood (M28)
+net.ipv4.conf.all.rp_filter = 1       # descarta paquetes con origen imposible por esa interfaz
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.all.log_martians = 1</code></pre>
+
+<pre data-lang="shell"><code>$ sudo sysctl --system                       # aplica todos los archivos de /etc/sysctl.d
+$ sysctl net.ipv4.conf.all.accept_redirects  # comprueba un valor</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Grupo</th><th>Qué evita</th><th>Lo que puede romper</th></tr></thead>
+          <tbody>
+            <tr><td><code>kptr_restrict</code>, <code>dmesg_restrict</code></td><td>Que un usuario sin privilegios lea direcciones de memoria que ayudan a explotar un fallo del kernel</td><td>Herramientas de depuración y de perfilado sin sudo</td></tr>
+            <tr><td><code>ptrace_scope</code></td><td>Que un proceso comprometido lea la memoria de otro del mismo usuario (claves de un <span class="no-autolink">agente</span> SSH, por ejemplo)</td><td>Adjuntar un depurador a un proceso que ya está corriendo</td></tr>
+            <tr><td>Redirecciones y source route</td><td>Que alguien en la red cambie tus rutas con paquetes ICMP falsos</td><td>Nada, salvo que el servidor sea un router</td></tr>
+            <tr><td><code>rp_filter</code></td><td>Paquetes con IP de origen falsificada</td><td>Rutas asimétricas en hosts con varias interfaces</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Lo que <b>no</b> se toca sin pensar: <code>net.ipv4.ip_forward</code>. Un host con Docker o Kubernetes lo necesita en 1, como viste en <a href="m32-firewalls.html#docker">M32</a>, y apagarlo deja sin red a todos los contenedores.</p>
+
+      <h3 id="grub-umask">Arranque, umask y software huérfano</h3>
+
+      <ul>
+        <li><b>Contraseña de GRUB.</b> Sin ella, quien tiene acceso a la consola (física o la del proveedor) puede editar la línea de arranque y entrar como root sin contraseña. Se genera con <code>grub-mkpasswd-pbkdf2</code>. En la nube aporta poco, porque la consola ya exige tu cuenta del proveedor; en una máquina física, mucho.</li>
+        <li><b>umask.</b> Define los permisos de los archivos nuevos. Con el valor habitual, <code>022</code>, cualquier usuario puede leer lo que creas; con <code>027</code>, solo tu grupo. Cambiarlo para todo el sistema puede romper instaladores que asumen lo contrario; es más seguro ajustarlo por servicio (<code>UMask=0027</code> en la unidad de systemd).</li>
+        <li><b>Lo que sobra.</b> Cada paquete instalado es código que puede tener una vulnerabilidad. <code>apt autoremove</code> quita dependencias que nadie usa, <code>systemctl list-unit-files --state=enabled</code> muestra lo que arranca con el sistema, y lo que no se usa se deshabilita y se desinstala.</li>
+      </ul>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#the-danger-zone">The Danger Zone</a> (sysctl, GRUB, root, umask) y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#orphaned-software">Orphaned Software</a>.</p>
+
+      <h2 id="sin-firewall"><span class="sec-num">33.10</span>Si el firewall no alcanza</h2>
+
+      <p>Esta sección parte de un supuesto incómodo: el perímetro ya falló. Alguien abrió de más un security group, Docker publicó un puerto por fuera de UFW, una regla quedó solo para IPv4. No importa cómo: hay que diseñar cada servidor para que siga siendo difícil de atacar aunque todos sus puertos fueran alcanzables. Es la defensa en profundidad llevada al servidor, y la idea que <a href="m28-cloudflare.html#zero-trust">Zero Trust</a> lleva a toda la red.</p>
+
+      <h3 id="inventario">1. Saber qué escucha</h3>
+
+      <p>No se puede proteger lo que no sabes que existe. <code>ss -tulpen</code> lista cada socket que escucha (TCP y UDP), con el proceso dueño. Lo que importa es la dirección local: <code>127.0.0.1</code> o <code>[::1]</code> solo se alcanzan desde la máquina; <code>0.0.0.0</code>, <code>[::]</code> o <code>*</code> escuchan en todas las interfaces, y su única protección es el firewall.</p>
+
+<pre data-lang="shell"><code>$ sudo ss -tulpen     # salida de ejemplo, con columnas recortadas
+Netid Local Address:Port   Process
+udp   127.0.0.53%lo:53     users:(("systemd-resolve",…))
+tcp   0.0.0.0:22           users:(("sshd",…))
+tcp   [::]:22              users:(("sshd",…))
+tcp   127.0.0.1:5432       users:(("postgres",…))
+tcp   0.0.0.0:6379         users:(("redis-server",…))
+tcp   *:8080               users:(("java",…))</code></pre>
+      <p class="sim-note">Salida ilustrativa de un servidor típico. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Socket</th><th>¿Expuesto si el firewall falla?</th><th>Qué hacer</th></tr></thead>
+          <tbody>
+            <tr><td><code>sshd</code> en <code>0.0.0.0:22</code> y <code>[::]:22</code></td><td>Sí, y es intencional</td><td>Que sea seguro aunque esté abierto a todos: claves, sin root, MFA (33.2)</td></tr>
+            <tr><td><code>postgres</code> en <code>127.0.0.1:5432</code></td><td>No</td><td>Bien. La aplicación se conecta por localhost o por un socket Unix</td></tr>
+            <tr><td><code>redis-server</code> en <code>0.0.0.0:6379</code></td><td>Sí, y no debería</td><td><code>bind 127.0.0.1 ::1</code>, <code>protected-mode yes</code> y contraseña o ACL</td></tr>
+            <tr><td><code>java</code> en <code>*:8080</code></td><td>Sí, en IPv4 e IPv6</td><td>Si nginx hace de proxy delante, escuchar solo en <code>127.0.0.1</code></td></tr>
+            <tr><td><code>systemd-resolve</code> en <code>127.0.0.53</code></td><td>No</td><td>Bien: es el resolver local</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="superficie">2. Reducir y atar a localhost</h3>
+
+      <p>Cada servicio que solo usan otros procesos de la misma máquina escucha en localhost. En PostgreSQL es <code>listen_addresses = 'localhost'</code>; en Redis, <code>bind 127.0.0.1 ::1</code>, con <code>protected-mode</code> activo (Redis lo trae así desde la versión 3.2, justamente porque muchas instancias quedaban abiertas a internet sin contraseña <span class="badge badge--doc">Documentado</span>); en un contenedor, <code>-p 127.0.0.1:…</code> o ningún <code>-p</code> (<a href="m32-firewalls.html#docker">32.9</a>). Si el servicio tiene que atender a otras máquinas, escucha solo en la interfaz privada, nunca en todas. Y además pide autenticación: "solo está en la red interna" no es una contraseña.</p>
+
+      <h3 id="contener">3. Contener y no dejar salir</h3>
+
+      <p>Si algo expuesto cae, lo que sigue depende de lo que ese proceso puede hacer. Usuario propio y sin shell (33.3), sandbox de systemd y AppArmor o SELinux (33.7), y una salida filtrada que no deje llegar a ningún destino fuera de la lista (<a href="m32-firewalls.html#entrada-salida">32.5</a>). Con las tres, una intrusión en Redis queda encerrada en un proceso que no puede leer el resto del disco ni hablar con internet.</p>
+
+      <h3 id="responder">4. Detectar y responder</h3>
+
+      <p>Lo último es tener un plan para el día en que la detección (33.8) avise. El plan de <a href="m11-observabilidad.html#incidentes">incidentes</a> de M11 aplica tal cual, con cuatro particularidades de seguridad:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Aislar sin apagar</span>Se corta la red del servidor (un security group sin reglas, la salida cerrada) pero no se apaga: en memoria hay evidencia que se pierde al apagar.</li>
+        <li><span class="step-title">Conservar la evidencia</span>Un snapshot del disco y una copia de los logs centralizados, antes de tocar nada. Sirven para saber por dónde entraron y qué se llevaron.</li>
+        <li><span class="step-title">Rotar todo lo que el servidor conocía</span>Claves SSH, contraseñas de bases, tokens de API y credenciales de la nube. Hay que suponer que el intruso las leyó.</li>
+        <li><span class="step-title">Reconstruir, no limpiar</span>Un servidor comprometido no se "desinfecta": se reemplaza por uno nuevo, desde la imagen base, con la falla que permitió la entrada ya corregida. Nunca se sabe con certeza todo lo que cambió.</li>
+      </ol>
+
+      <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#ss---seeing-ports-your-server-is-listening-on">ss - Seeing Ports Your Server Is Listening On</a>.</p>
+
+      <h2 id="checklist"><span class="sec-num">33.11</span>La lista completa</h2>
+
+      <p>Todo el módulo en un lugar. Marca lo que tiene un servidor que conozcas, o empieza por uno de los puntos de partida, y mira qué le queda abierto al atacante por cada medida que falta.</p>
+
+      <div data-sim="hardening"></div>
+
+      <p>El orden importa tanto como la lista. Para un servidor recién creado, con una IP pública:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Parchar</span>Actualizar todo y activar las actualizaciones automáticas de seguridad, antes de instalar nada más.</li>
+        <li><span class="step-title">Tu usuario y tu clave</span>Crear tu cuenta con sudo, copiar la clave pública y comprobar que entras con ella desde otra terminal.</li>
+        <li><span class="step-title">Cerrar SSH</span>Sin contraseñas, sin root, <code>AllowGroups</code>; <code>sshd -t</code> y recargar con una sesión abierta.</li>
+        <li><span class="step-title">Firewall</span>Política <code>drop</code> de entrada, SSH desde donde administras, los puertos públicos del servicio, IPv6 incluido.</li>
+        <li><span class="step-title">Servicios</span>Instalar lo que hace falta, cada uno en localhost o en la red privada, con su usuario y su sandbox.</li>
+        <li><span class="step-title">Detección</span>Logs afuera, Fail2Ban o CrowdSec, AIDE con la base fuera del servidor una vez que todo está instalado.</li>
+        <li><span class="step-title">Auditar</span>Lynis, revisar sus advertencias, y guardar el resultado para comparar el mes que viene.</li>
+      </ol>
+
+      <p>Lo que sigue en esta parte: mantener vivo un servidor endurecido (systemd y journald, discos, backups con pruebas de restauración y el diagnóstico de CPU, memoria, disco y red) es el tema de M34, y la base de datos, con sus roles, su bitácora y su cifrado, el de M35.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m33"></div>
+
+      <div data-exercise="m33-hardening"></div>
+
+      <div data-checkpoint="m33"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m33.data.js"></script>
+<script src="../assets/js/data/exercises/m33.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-harden.js"></script>
+</body>
+</html>

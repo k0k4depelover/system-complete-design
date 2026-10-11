@@ -78,6 +78,52 @@
 
       <p>Ahora, la flota. En el pico hay 6&#8239;000 conversaciones generando a la vez. A 64 por réplica hacen falta 94 réplicas, y con un objetivo de uso del 75&#8239;% para absorber ráfagas, 125. Son 500 H100: a 4 dólares por GPU y hora, 1.46 millones de dólares por mes. Con números así, cada punto porcentual de eficiencia vale unos 15&#8239;000 dólares por mes, y el router y el autoscaler son las dos piezas que más la mueven.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="f19n1t f19n1d">
+<title id="f19n1t">De 6 000 conversaciones a 1.46 millones de dólares</title>
+<desc id="f19n1d">Una cadena de cálculos: 6 000 conversaciones generando a la vez en el pico, divididas por 64 streams por réplica, dan 94 réplicas. Con un objetivo de uso del 75 %, 125 réplicas. A 4 GPUs H100 por réplica, 500 GPUs. A 4 dólares por GPU y hora durante 730 horas, 1.46 millones de dólares por mes, así que cada punto porcentual de eficiencia vale unos 15 000 dólares por mes.</desc>
+<defs><marker id="f19n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="30" width="116" height="96" rx="10" fill="color-mix(in srgb, var(--l-client) 22%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-big" x="78" y="66" text-anchor="middle">6 000</text>
+<text class="dg-small" x="78" y="88" text-anchor="middle">conversaciones</text>
+<text class="dg-tiny" x="78" y="106" text-anchor="middle">en el pico</text>
+<path class="dg-edge" d="M139 78 H173" marker-end="url(#f19n1a)"/>
+<text class="dg-tiny" x="156" y="22" text-anchor="middle">÷ 64</text>
+<path class="dg-feedback" d="M156.0 26 V72"/>
+<rect x="176" y="30" width="116" height="96" rx="10" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-big" x="234" y="66" text-anchor="middle">94</text>
+<text class="dg-small" x="234" y="88" text-anchor="middle">réplicas</text>
+<text class="dg-tiny" x="234" y="106" text-anchor="middle">a 64 streams</text>
+<path class="dg-edge" d="M295 78 H329" marker-end="url(#f19n1a)"/>
+<text class="dg-tiny" x="312" y="22" text-anchor="middle">÷ 0.75</text>
+<path class="dg-feedback" d="M312.0 26 V72"/>
+<rect x="332" y="30" width="116" height="96" rx="10" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-big" x="390" y="66" text-anchor="middle">125</text>
+<text class="dg-small" x="390" y="88" text-anchor="middle">réplicas</text>
+<text class="dg-tiny" x="390" y="106" text-anchor="middle">al 75 % de uso</text>
+<path class="dg-edge" d="M451 78 H485" marker-end="url(#f19n1a)"/>
+<text class="dg-tiny" x="468" y="22" text-anchor="middle">× 4</text>
+<path class="dg-feedback" d="M468.0 26 V72"/>
+<rect x="488" y="30" width="116" height="96" rx="10" fill="color-mix(in srgb, var(--l-gpu) 22%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-big" x="546" y="66" text-anchor="middle">500</text>
+<text class="dg-small" x="546" y="88" text-anchor="middle">H100</text>
+<text class="dg-tiny" x="546" y="106" text-anchor="middle">4 por réplica</text>
+<path class="dg-edge" d="M607 78 H641" marker-end="url(#f19n1a)"/>
+<text class="dg-tiny" x="624" y="22" text-anchor="middle">× 4 USD/h</text>
+<path class="dg-feedback" d="M624.0 26 V72"/>
+<rect x="644" y="30" width="116" height="96" rx="10" fill="color-mix(in srgb, var(--l-external) 22%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-big" x="702" y="66" text-anchor="middle">1.46 M</text>
+<text class="dg-small" x="702" y="88" text-anchor="middle">USD por mes</text>
+<text class="dg-tiny" x="702" y="106" text-anchor="middle">por 730 h al mes</text>
+<rect class="dg-box" x="160" y="148" width="450" height="40" rx="8"/>
+<text class="dg-small" x="385" y="173" text-anchor="middle">1 % de eficiencia ≈ 14 600 USD por mes: el router y el autoscaler la mueven</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.1.</b> La cuenta del párrafo, paso a paso. Cada eslabón es una decisión de diseño: los 64 streams salen del TPOT objetivo, y el 75&#8239;% es el colchón contra ráfagas. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>Una flota tiene problemas que una réplica sola no tiene:</p>
       <ul>
         <li><b>Requests muy desiguales.</b> Una de 300 tokens y otra de 100&#8239;000 cuestan tres órdenes de magnitud distinto (M18): contar requests no mide la carga.</li>
@@ -151,7 +197,7 @@
 <text class="dg-small" x="10" y="446">ni desplegar, pero las requests se siguen atendiendo. Esa propiedad se llama estabilidad estática.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.1.</b> El plano de control publica decisiones (la tabla de rutas, las réplicas que tiene que haber) y lee métricas. El plano de datos solo lee lo último que recibió: no le pregunta nada al de control en cada request.</figcaption>
+        <figcaption><b>Figura 19.2.</b> El plano de control publica decisiones (la tabla de rutas, las réplicas que tiene que haber) y lee métricas. El plano de datos solo lee lo último que recibió: no le pregunta nada al de control en cada request.</figcaption>
       </figure>
 
       <p>La regla que ordena todo: el plano de datos no depende del plano de control para atender una request. El router guarda en memoria la última tabla de rutas que recibió. Si el servicio de despliegues o el autoscaler caen, la flota sigue sirviendo con lo que tenía: no puede crecer ni cambiar de versión, pero responde. AWS llama a esta propiedad <dfn data-term="estabilidad-estatica">estabilidad estática</dfn> y la usa como principio de diseño de sus propios servicios. <span class="badge badge--doc">Documentado</span></p>
@@ -214,9 +260,98 @@
         <p>Mantener la versión anterior entera durante el canary cuesta GPUs: con 125 réplicas, un canary del 5&#8239;% necesita 7 réplicas más, y la cuenta crece con cada escalón. La alternativa es ir reemplazando réplicas de la versión vieja por la nueva. Ahorra GPUs, pero hace lento el rollback: volver atrás obliga a recargar pesos durante minutos, justo cuando algo anda mal.</p>
       </aside>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f19n2t f19n2d">
+<title id="f19n2t">Alias, snapshots y un canary por organización</title>
+<desc id="f19n2d">A la izquierda, el registry: el alias que ven los clientes es una fila que apunta a una versión fija, la estable en estado ga. La versión nueva está en canary. A la derecha, el router calcula un hash de la organización: las que caen en el 5 % reciben la versión nueva en todos sus turnos, y las demás, la estable. Una conversación nunca cambia de versión entre turnos, y el KV cache de cada versión no se mezcla.</desc>
+<defs><marker id="f19n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Registry</text>
+<rect class="dg-box" x="20" y="44" width="150" height="44" rx="8"/>
+<text class="dg-tiny" x="95" y="63" text-anchor="middle">alias</text>
+<text class="dg-small" x="95" y="80" text-anchor="middle" style="font-family: var(--f-mono)">llama-70b</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="220" y="40" width="160" height="54" rx="8"/>
+<text class="dg-small" x="300" y="61" text-anchor="middle">versión estable</text>
+<text class="dg-tiny" x="300" y="80" text-anchor="middle" style="font-family: var(--f-mono)">state = ga</text>
+<path class="dg-edge" d="M172 66 H216" marker-end="url(#f19n2a)"/>
+<text class="dg-tiny" x="194" y="58" text-anchor="middle">apunta</text>
+<rect x="220" y="116" width="160" height="54" rx="8" fill="color-mix(in srgb, var(--l-db) 14%, var(--bg))" stroke="var(--l-db)" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text class="dg-small" x="300" y="137" text-anchor="middle">versión nueva</text>
+<text class="dg-tiny" x="300" y="156" text-anchor="middle" style="font-family: var(--f-mono)">state = canary</text>
+<text class="dg-tiny" x="200" y="196" text-anchor="middle">Una versión publicada no se modifica:</text>
+<text class="dg-tiny" x="200" y="212" text-anchor="middle">pesos, dtype o motor nuevos = otra versión.</text>
+<text class="dg-tiny" x="200" y="236" text-anchor="middle">Mover el alias es una decisión</text>
+<text class="dg-tiny" x="200" y="252" text-anchor="middle">del plano de control.</text>
+<path class="sim-grid" d="M410 20 V280"/>
+<text class="dg-group" x="430" y="26" text-anchor="start">Router: versión por organización</text>
+<rect class="dg-box" x="430" y="44" width="320" height="40" rx="8"/>
+<text class="dg-small" x="590" y="69" text-anchor="middle" style="font-family: var(--f-mono)">hash(org) mod 100 &lt; 5 ?</text>
+<rect class="dg-box" x="430" y="108" width="80" height="30" rx="6"/>
+<text class="dg-small" x="470" y="128" text-anchor="middle">org A</text>
+<path class="dg-edge" d="M512 123 H580" marker-end="url(#f19n2a)"/>
+<rect x="584" y="108" width="166" height="30" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.2"/>
+<text class="dg-tiny" x="667" y="128" text-anchor="middle">estable</text>
+<rect class="dg-box" x="430" y="148" width="80" height="30" rx="6"/>
+<text class="dg-small" x="470" y="168" text-anchor="middle">org B</text>
+<path class="dg-edge" d="M512 163 H580" marker-end="url(#f19n2a)"/>
+<rect x="584" y="148" width="166" height="30" rx="6" fill="color-mix(in srgb, var(--l-db) 14%, var(--bg))" stroke="var(--l-db)" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text class="dg-tiny" x="667" y="168" text-anchor="middle">nueva, todos sus turnos</text>
+<rect class="dg-box" x="430" y="188" width="80" height="30" rx="6"/>
+<text class="dg-small" x="470" y="208" text-anchor="middle">org C</text>
+<path class="dg-edge" d="M512 203 H580" marker-end="url(#f19n2a)"/>
+<rect x="584" y="188" width="166" height="30" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.2"/>
+<text class="dg-tiny" x="667" y="208" text-anchor="middle">estable</text>
+<rect class="dg-box" x="430" y="228" width="80" height="30" rx="6"/>
+<text class="dg-small" x="470" y="248" text-anchor="middle">org D</text>
+<path class="dg-edge" d="M512 243 H580" marker-end="url(#f19n2a)"/>
+<rect x="584" y="228" width="166" height="30" rx="6" fill="color-mix(in srgb, var(--l-db) 30%, var(--bg))" stroke="var(--l-db)" stroke-width="1.2"/>
+<text class="dg-tiny" x="667" y="248" text-anchor="middle">estable</text>
+<text class="dg-tiny" x="590" y="284" text-anchor="middle">Canary 1–5 %, comparar, subir por escalones o volver a 0 %</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.3.</b> El alias se mueve, las versiones no cambian. El canary se asigna por organización, no por request, para que una conversación no salte de modelo y el KV cache de cada versión sirva a sus propias conversaciones. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <h2 id="elegir"><span class="sec-num">19.5</span>Elegir réplica</h2>
 
       <p>El router decide en capas. El modelo lo pide el cliente; la versión sale de la tabla de rutas; la región, de dónde llegó la request y de cuánta capacidad queda. Esas tres son reglas. La última capa, la réplica, es el problema interesante.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 210" role="img" aria-labelledby="f19n3t f19n3d">
+<title id="f19n3t">El router decide en capas</title>
+<desc id="f19n3d">Cuatro decisiones en orden. El modelo lo pide el cliente. La versión sale de la tabla de rutas. La región, de dónde llegó la request y de la capacidad que queda. Las tres son reglas. La réplica es la decisión difícil: hay que combinar señales de carga, de memoria y de prefijo en caché.</desc>
+<defs><marker id="f19n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="40" width="164" height="80" rx="10"/>
+<text class="dg-label" x="102" y="70" text-anchor="middle">Modelo</text>
+<text class="dg-tiny" x="102" y="90" text-anchor="middle">lo pide el cliente</text>
+<text class="dg-tiny" x="102" y="106" text-anchor="middle">regla</text>
+<path class="dg-edge" d="M187 80 H205" marker-end="url(#f19n3a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="208" y="40" width="164" height="80" rx="10"/>
+<text class="dg-label" x="290" y="70" text-anchor="middle">Versión</text>
+<text class="dg-tiny" x="290" y="90" text-anchor="middle">tabla de rutas (19.4)</text>
+<text class="dg-tiny" x="290" y="106" text-anchor="middle">regla</text>
+<path class="dg-edge" d="M375 80 H393" marker-end="url(#f19n3a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="396" y="40" width="164" height="80" rx="10"/>
+<text class="dg-label" x="478" y="70" text-anchor="middle">Región</text>
+<text class="dg-tiny" x="478" y="90" text-anchor="middle">origen y capacidad (19.10)</text>
+<text class="dg-tiny" x="478" y="106" text-anchor="middle">regla</text>
+<path class="dg-edge" d="M563 80 H581" marker-end="url(#f19n3a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="584" y="40" width="164" height="80" rx="10"/>
+<text class="dg-label" x="666" y="70" text-anchor="middle">Réplica</text>
+<text class="dg-tiny" x="666" y="90" text-anchor="middle">carga, KV cache, prefijo</text>
+<text class="dg-tiny" x="666" y="106" text-anchor="middle">el problema difícil</text>
+<path class="sim-grid" d="M20 146 H560"/>
+<text class="dg-tiny" x="290" y="168" text-anchor="middle">reglas: un dato de la request y una tabla en memoria</text>
+<path class="sim-grid" d="M584 146 H748"/>
+<text class="dg-tiny" x="666" y="168" text-anchor="middle">señales con retraso</text>
+<text class="dg-tiny" x="666" y="184" text-anchor="middle">que cambian cada 100 ms</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.4.</b> Las tres primeras capas son búsquedas en una tabla. Toda la complejidad del router está en la última: elegir réplica con señales que llegan tarde.</figcaption>
+      </figure>
 
       <p>El M03 recomendaba, para requests de duración variable, elegir la réplica con menos requests en curso o usar power of two choices, nunca round robin. En un LLM ni siquiera contar requests alcanza, porque dos requests pueden diferir mil veces en trabajo. Cada señal mide una parte:</p>
 
@@ -236,6 +371,80 @@
       <p>El Gateway API Inference Extension de Kubernetes, por ejemplo, elige réplica con un componente que lee de cada servidor el uso de KV cache, el largo de la cola y los adaptadores LoRA que tiene cargados. <span class="badge badge--doc">Documentado</span></p>
 
       <p>Las métricas llegan con retraso: cada réplica las publica cada 100 a 500 ms. Si veinte routers ven la misma réplica vacía en el mismo instante, los veinte le mandan requests y la saturan. Dos defensas lo evitan. Cada router suma a la métrica lo que él mismo mandó desde la última lectura. Y cuando dos réplicas empatan, elige entre dos al azar en lugar de ir siempre a la "mejor".</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f19n4t f19n4d">
+<title id="f19n4t">Veinte routers y una métrica vieja</title>
+<desc id="f19n4d">A la izquierda, sin defensa: la réplica 3 publicó hace 300 ms que estaba vacía, y los veinte routers la ven como la mejor al mismo tiempo; todos le mandan su request y la saturan. A la derecha, con las dos defensas: cada router suma a la métrica lo que él mismo mandó desde la última lectura, y entre las candidatas elige dos al azar y se queda con la mejor de esas dos; las requests se reparten entre las réplicas libres.</desc>
+<defs><marker id="f19n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Sin defensa</text>
+<rect class="dg-box" x="20" y="44" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="60" y="62" text-anchor="middle">router 1</text>
+<rect class="dg-box" x="20" y="80" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="60" y="98" text-anchor="middle">router 2</text>
+<rect class="dg-box" x="20" y="116" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="60" y="134" text-anchor="middle">router 3</text>
+<rect class="dg-box" x="20" y="152" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="60" y="170" text-anchor="middle">router 4</text>
+<rect class="dg-box" x="20" y="188" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="60" y="206" text-anchor="middle">… 20</text>
+<rect class="dg-box" x="270" y="50" width="100" height="36" rx="6"/>
+<text class="dg-small" x="320" y="66" text-anchor="middle">réplica 1</text>
+<text class="dg-tiny" x="320" y="80" text-anchor="middle">ocupada</text>
+<rect class="dg-box" x="270" y="100" width="100" height="36" rx="6"/>
+<text class="dg-small" x="320" y="116" text-anchor="middle">réplica 2</text>
+<text class="dg-tiny" x="320" y="130" text-anchor="middle">libre</text>
+<rect class="dg-bad" x="270" y="150" width="100" height="36" rx="6"/>
+<text class="dg-small" x="320" y="166" text-anchor="middle">réplica 3</text>
+<text class="dg-tiny" x="320" y="180" text-anchor="middle">saturada</text>
+<rect class="dg-box" x="270" y="200" width="100" height="36" rx="6"/>
+<text class="dg-small" x="320" y="216" text-anchor="middle">réplica 4</text>
+<text class="dg-tiny" x="320" y="230" text-anchor="middle">libre</text>
+<path class="dg-edge" d="M102 57 L266 168" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M102 93 L266 168" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M102 129 L266 168" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M102 165 L266 168" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M102 201 L266 168" marker-end="url(#f19n4a)"/>
+<text class="dg-group" x="400" y="26" text-anchor="start">Con las dos defensas</text>
+<rect class="dg-box" x="400" y="44" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="440" y="62" text-anchor="middle">router 1</text>
+<rect class="dg-box" x="400" y="80" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="440" y="98" text-anchor="middle">router 2</text>
+<rect class="dg-box" x="400" y="116" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="440" y="134" text-anchor="middle">router 3</text>
+<rect class="dg-box" x="400" y="152" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="440" y="170" text-anchor="middle">router 4</text>
+<rect class="dg-box" x="400" y="188" width="80" height="26" rx="6"/>
+<text class="dg-tiny" x="440" y="206" text-anchor="middle">… 20</text>
+<rect class="dg-box" x="650" y="50" width="100" height="36" rx="6"/>
+<text class="dg-small" x="700" y="66" text-anchor="middle">réplica 1</text>
+<text class="dg-tiny" x="700" y="80" text-anchor="middle">ocupada</text>
+<rect class="dg-box" x="650" y="100" width="100" height="36" rx="6"/>
+<text class="dg-small" x="700" y="116" text-anchor="middle">réplica 2</text>
+<text class="dg-tiny" x="700" y="130" text-anchor="middle">libre</text>
+<rect class="dg-box" x="650" y="150" width="100" height="36" rx="6"/>
+<text class="dg-small" x="700" y="166" text-anchor="middle">réplica 3</text>
+<text class="dg-tiny" x="700" y="180" text-anchor="middle">libre</text>
+<rect class="dg-box" x="650" y="200" width="100" height="36" rx="6"/>
+<text class="dg-small" x="700" y="216" text-anchor="middle">réplica 4</text>
+<text class="dg-tiny" x="700" y="230" text-anchor="middle">libre</text>
+<path class="dg-edge" d="M482 57 L646 118" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M482 93 L646 168" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M482 129 L646 218" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M482 165 L646 118" marker-end="url(#f19n4a)"/>
+<path class="dg-edge" d="M482 201 L646 218" marker-end="url(#f19n4a)"/>
+<text class="dg-tiny" x="195" y="258" text-anchor="middle">todos ven «réplica 3: vacía» de hace 300 ms</text>
+<text class="dg-tiny" x="195" y="274" text-anchor="middle">y le mandan su request al mismo tiempo</text>
+<text class="dg-tiny" x="575" y="258" text-anchor="middle">suma lo que mandó desde la última lectura</text>
+<text class="dg-tiny" x="575" y="274" text-anchor="middle">y elige la mejor entre dos al azar</text>
+<text class="dg-tiny" x="385" y="306" text-anchor="middle">Las métricas de cada réplica llegan cada 100 a 500 ms.</text>
+<path class="sim-grid" d="M385 20 V290"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.5.</b> El efecto manada: veinte decisiones correctas con la misma información vieja dan una réplica saturada. Contar lo propio y elegir entre dos al azar rompe la sincronía.</figcaption>
+      </figure>
 
       <h2 id="prefijo"><span class="sec-num">19.6</span>Routing consciente del prefijo</h2>
 
@@ -272,7 +481,7 @@
 <text class="dg-small" x="10" y="338">Mandar este turno a la réplica 2 ahorra el 96&#8239;% del prefill. Mandarlo a la réplica 3 lo cuesta todo.</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.2.</b> La misma request cuesta 21 ms o 610 ms de prefill según la réplica que la reciba. La diferencia no está en la réplica: está en lo que tiene en su KV cache.</figcaption>
+        <figcaption><b>Figura 19.6.</b> La misma request cuesta 21 ms o 610 ms de prefill según la réplica que la reciba. La diferencia no está en la réplica: está en lo que tiene en su KV cache.</figcaption>
       </figure>
 
       <p>Con 125 réplicas y round robin, el turno siguiente cae en la misma réplica una vez cada 125. Hay tres formas de mejorar eso:</p>
@@ -312,11 +521,135 @@ def match(index, hashes, replicas):
         hits[r] = n
     return hits</code></pre>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f19n5t f19n5d">
+<title id="f19n5t">Dos formas de saber qué tiene cada réplica</title>
+<desc id="f19n5d">Arriba, el router recuerda lo que mandó: su árbol dice que la réplica tiene los bloques A, B, C y D, pero la réplica ya expulsó C y D para hacer lugar; el índice es optimista y la request paga parte del prefill. Abajo, la réplica avisa con un evento cada vez que guarda o expulsa bloques, y el índice refleja lo que hay. En los dos casos el índice es una pista: si se equivoca, la respuesta es igual de correcta, solo más lenta.</desc>
+<defs><marker id="f19n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="30" text-anchor="start">El router recuerda lo que mandó</text>
+<text class="dg-tiny" x="253.2" y="30" text-anchor="start">SGLang</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="40" width="130" height="70" rx="8"/>
+<text class="dg-label" x="85" y="62" text-anchor="middle">Router</text>
+<text class="dg-tiny" x="85" y="80" text-anchor="middle">índice de la</text>
+<text class="dg-tiny" x="85" y="94" text-anchor="middle">réplica 7</text>
+<rect x="170" y="62" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="187" y="80" text-anchor="middle">A</text>
+<rect x="210" y="62" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="227" y="80" text-anchor="middle">B</text>
+<rect x="250" y="62" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="267" y="80" text-anchor="middle">C</text>
+<rect x="290" y="62" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="307" y="80" text-anchor="middle">D</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="40" width="190" height="70" rx="8"/>
+<text class="dg-small" x="655" y="58" text-anchor="middle">Réplica 7: KV cache</text>
+<rect x="575" y="70" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="592" y="88" text-anchor="middle">A</text>
+<rect x="615" y="70" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="632" y="88" text-anchor="middle">B</text>
+<rect x="655" y="70" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 10%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="672" y="88" text-anchor="middle">C</text>
+<rect x="695" y="70" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 10%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="712" y="88" text-anchor="middle">D</text>
+<path class="dg-feedback" d="M558 75 H344" marker-end="url(#f19n5a)"/>
+<text class="dg-tiny" x="450" y="68" text-anchor="middle">nadie avisa</text>
+<text class="dg-tiny" x="170" y="126" text-anchor="start">cree que están C y D: el índice se equivoca hacia el optimismo</text>
+<text class="dg-group" x="20" y="160" text-anchor="start">La réplica avisa</text>
+<text class="dg-tiny" x="145.2" y="160" text-anchor="start">llm-d, Dynamo</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="20" y="170" width="130" height="70" rx="8"/>
+<text class="dg-label" x="85" y="192" text-anchor="middle">Router</text>
+<text class="dg-tiny" x="85" y="210" text-anchor="middle">índice de la</text>
+<text class="dg-tiny" x="85" y="224" text-anchor="middle">réplica 7</text>
+<rect x="170" y="192" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="187" y="210" text-anchor="middle">A</text>
+<rect x="210" y="192" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="227" y="210" text-anchor="middle">B</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="170" width="190" height="70" rx="8"/>
+<text class="dg-small" x="655" y="188" text-anchor="middle">Réplica 7: KV cache</text>
+<rect x="575" y="200" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="592" y="218" text-anchor="middle">A</text>
+<rect x="615" y="200" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="632" y="218" text-anchor="middle">B</text>
+<rect x="655" y="200" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 10%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="672" y="218" text-anchor="middle">C</text>
+<rect x="695" y="200" width="34" height="26" rx="4" fill="color-mix(in srgb, var(--l-cache) 10%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="712" y="218" text-anchor="middle">D</text>
+<path class="dg-edge" d="M558 205 H264" marker-end="url(#f19n5a)"/>
+<text class="dg-tiny" x="410" y="198" text-anchor="middle">evento de KV cache</text>
+<text class="dg-tiny" x="170" y="256" text-anchor="start">evento «expulsé C, D»: el índice refleja lo que hay</text>
+<text class="dg-tiny" x="20" y="290" text-anchor="start">Bloques punteados: expulsados por la réplica para hacer lugar.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.7.</b> Los dos índices de prefijos. El que recuerda lo enviado no se entera de lo que la réplica expulsó; el que escucha eventos sí, a cambio de un canal más que operar. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <p>El índice es una pista, no una fuente de verdad. Si dice que una réplica tiene un prefijo que ya expulsó, la request paga el prefill completo y la respuesta es igual de correcta. Por eso puede vivir en la memoria de cada router, sin replicación ni consenso.</p>
 
       <h3 id="carga-acotada">Afinidad con carga acotada</h3>
 
       <p>Afinidad pura y balanceo puro son los dos extremos. El punto medio viene de un trabajo de Google de 2016: en el <dfn data-term="bounded-load">hashing consistente con carga acotada</dfn>, cada servidor acepta hasta (1 + ε) veces la carga promedio, y si el servidor que le toca a una clave está lleno, la clave pasa al siguiente. Vimeo lo implementó en HAProxy, con la opción <code>hash-balance-factor</code>, y redujo casi 8 veces el ancho de banda entre sus cachés. <span class="badge badge--doc">Documentado</span> El router de este módulo aplica la misma idea al prefijo: entre las réplicas con menos de 1.25 veces la carga promedio, la que tiene el prefijo más largo.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f19n6t f19n6d">
+<title id="f19n6t">Afinidad con carga acotada</title>
+<desc id="f19n6d">Ocho réplicas con su carga en barras, el promedio y el techo de 1.25 veces el promedio. Encima de cada barra, cuánto del prefijo de la request tiene en su KV cache. La réplica 3 tiene el prefijo completo pero está sobre el techo, así que se descarta. Entre las que están debajo, gana la réplica 6, que tiene el prefijo más largo. Las alturas son ilustrativas.</desc>
+<defs><marker id="f19n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="dg-feedback" d="M80 140.7 H710"/>
+<path class="dg-edge" d="M80 113.4 H710" style="stroke: var(--fail); stroke-dasharray: 6 4"/>
+<rect class="dg-box" x="90" y="151" width="50" height="99" rx="4"/>
+<text class="dg-small" x="115" y="268" text-anchor="middle">R1</text>
+<rect x="94" y="129" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="109" y="129" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="124" y="129" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-box" x="170" y="162" width="50" height="88" rx="4"/>
+<text class="dg-small" x="195" y="268" text-anchor="middle">R2</text>
+<rect x="174" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="189" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="204" y="140" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-bad" x="250" y="90.5" width="50" height="159.5" rx="4"/>
+<text class="dg-small" x="275" y="268" text-anchor="middle">R3</text>
+<rect x="254" y="68.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="269" y="68.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="284" y="68.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-box" x="330" y="140" width="50" height="110" rx="4"/>
+<text class="dg-small" x="355" y="268" text-anchor="middle">R4</text>
+<rect x="334" y="118" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="349" y="118" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="364" y="118" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-box" x="410" y="173" width="50" height="77" rx="4"/>
+<text class="dg-small" x="435" y="268" text-anchor="middle">R5</text>
+<rect x="414" y="151" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="429" y="151" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="444" y="151" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-ok" x="490" y="134.5" width="50" height="115.5" rx="4"/>
+<text class="dg-small" x="515" y="268" text-anchor="middle">R6</text>
+<rect x="494" y="112.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="509" y="112.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="524" y="112.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-box" x="570" y="129" width="50" height="121" rx="4"/>
+<text class="dg-small" x="595" y="268" text-anchor="middle">R7</text>
+<rect x="574" y="107" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="589" y="107" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="604" y="107" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect class="dg-box" x="650" y="145.5" width="50" height="104.5" rx="4"/>
+<text class="dg-small" x="675" y="268" text-anchor="middle">R8</text>
+<rect x="654" y="123.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="669" y="123.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<rect x="684" y="123.5" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 6%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<text class="dg-tiny" x="76" y="144.688" text-anchor="end">promedio</text>
+<text class="dg-tiny" x="76" y="117.359" text-anchor="end">1.25 ×</text>
+<text class="dg-tiny dg-fail-text" x="275" y="61.3594" text-anchor="middle">prefijo completo, sobre el techo: no</text>
+<text class="dg-tiny" x="515" y="286" text-anchor="middle">debajo del techo y con el prefijo más largo: gana</text>
+<rect x="560" y="24" width="12" height="14" rx="2" fill="color-mix(in srgb, var(--l-cache) 40%, var(--bg))" stroke="var(--l-cache)" stroke-width="1"/>
+<text class="dg-tiny" x="578" y="35" text-anchor="start">bloque del prefijo en caché</text>
+<text class="sim-label" x="20" y="35" text-anchor="start">carga de cada réplica</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.8.</b> La regla del router de este módulo: primero el techo de carga, después el prefijo más largo. La réplica que tiene todo el prefijo pierde si ya está sobrecargada.</figcaption>
+      </figure>
 
       <p>Compara las políticas con las mismas conversaciones: ocho réplicas, cuatro apps con prompts de sistema de distinto largo y conversaciones de varios turnos.</p>
 
@@ -361,6 +694,65 @@ def match(index, hashes, replicas):
 
       <p>El Horizontal Pod Autoscaler de Kubernetes calcula <code>deseadas = ceil(actuales × métrica / objetivo)</code>, ignora las diferencias menores al 10&#8239;% y, para bajar, toma la recomendación más alta de los últimos 300 segundos. <span class="badge badge--doc">Documentado</span> Con 100 réplicas, un uso de KV cache del 92&#8239;% y un objetivo del 75&#8239;%: ceil(100 × 0.92 / 0.75) = 123 réplicas.</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f19n7t f19n7d">
+<title id="f19n7t">La utilización de GPU no mide la carga</title>
+<desc id="f19n7d">Dos réplicas durante un segundo. La de arriba atiende una request y la de abajo, 64. En las dos, algún kernel está corriendo casi todo el tiempo, así que nvidia-smi marca casi lo mismo en ambas, aunque una hace 64 veces más trabajo útil. Abajo, la fórmula del Horizontal Pod Autoscaler con el uso de KV cache como métrica: ceil(100 × 0.92 ÷ 0.75) = 123 réplicas.</desc>
+<defs><marker id="f19n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="60" text-anchor="start">1 request</text>
+<text class="dg-tiny" x="20" y="78" text-anchor="start">nvidia-smi: casi igual</text>
+<rect x="171" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="202.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="234.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="266" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="297.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="329.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="361" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="424.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="456" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="487.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="519.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="551" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="582.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="614.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="646" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="677.667" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="709.333" y="76" width="27.6667" height="8" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="sim-grid" d="M170 86 H740" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-label" x="20" y="130" text-anchor="start">64 requests</text>
+<text class="dg-tiny" x="20" y="148" text-anchor="start">nvidia-smi: casi igual</text>
+<rect x="171" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="202.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="234.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="266" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="297.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="329.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="361" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="424.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="456" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="487.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="519.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="551" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="582.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="614.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="646" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="677.667" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="709.333" y="114" width="27.6667" height="40" rx="2" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="sim-grid" d="M170 156 H740" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="170" y="108" text-anchor="start">cada barra: un paso de decode; la altura, la cantidad de requests en el paso</text>
+<rect class="dg-box" x="170" y="186" width="570" height="76" rx="10"/>
+<text class="dg-small" x="455" y="208" text-anchor="middle">deseadas = ceil(actuales × métrica ÷ objetivo)</text>
+<text class="dg-small" x="455" y="230" text-anchor="middle" style="font-family: var(--f-mono)">ceil(100 × 0.92 ÷ 0.75) = ceil(122.7) = 123</text>
+<text class="dg-tiny" x="455" y="250" text-anchor="middle">con el uso de KV cache como métrica, no la utilización de GPU</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.9.</b> La utilización de GPU mide si hay un kernel corriendo, no cuántas requests caben todavía. Por eso el autoscaler escala con el uso de KV cache o con la cola. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
       <p>La fórmula responde cuántas réplicas, pero no cuándo llegan. Si la réplica nueva tarda casi nueve minutos en estar lista, la demanda sigue subiendo mientras tanto:</p>
 
       <figure class="figure">
@@ -404,7 +796,7 @@ def match(index, hashes, replicas):
 <text class="dg-tiny" x="75.3" y="235.1">demanda</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.3.</b> La demanda crece un 3&#8239;% por minuto. El autoscaler reacciona en el minuto 20, pero las réplicas llegan en el minuto 29: la zona roja es demanda que espera en cola o recibe un 503. Con 30 réplicas de colchón ya corriendo, la capacidad nunca queda por debajo.</figcaption>
+        <figcaption><b>Figura 19.10.</b> La demanda crece un 3&#8239;% por minuto. El autoscaler reacciona en el minuto 20, pero las réplicas llegan en el minuto 29: la zona roja es demanda que espera en cola o recibe un 503. Con 30 réplicas de colchón ya corriendo, la capacidad nunca queda por debajo.</figcaption>
       </figure>
 
       <p>Hay tres formas de cerrar esa brecha, y se combinan:</p>
@@ -478,7 +870,7 @@ def match(index, hashes, replicas):
 <text class="dg-tiny" x="638" y="262">inicializar el motor</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.4.</b> En un nodo nuevo, la mayor parte del arranque es conseguir el nodo. Con un nodo listo, dominan los pesos y el motor. Un pool precalentado los reduce a segundos.</figcaption>
+        <figcaption><b>Figura 19.11.</b> En un nodo nuevo, la mayor parte del arranque es conseguir el nodo. Con un nodo listo, dominan los pesos y el motor. Un pool precalentado los reduce a segundos.</figcaption>
       </figure>
 
       <ul>
@@ -559,7 +951,7 @@ def match(index, hashes, replicas):
 <text class="dg-small" x="385.0" y="380" text-anchor="middle" style="fill:var(--fail)">la nube apaga el nodo de A</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.5.</b> El drenaje convierte un corte en una pausa. Los streams largos se continúan antes de que la nube apague el nodo, no después.</figcaption>
+        <figcaption><b>Figura 19.12.</b> El drenaje convierte un corte en una pausa. Los streams largos se continúan antes de que la nube apague el nodo, no después.</figcaption>
       </figure>
 
       <p>Kubernetes, al apagar un pod, le manda <code>SIGTERM</code> y espera <code>terminationGracePeriodSeconds</code>, 30 segundos por defecto, antes de matarlo. <span class="badge badge--doc">Documentado</span> Para un servidor de inferencia, ese valor tiene que cubrir la respuesta más larga que estés dispuesto a esperar, y el servidor tiene que tomar el <code>SIGTERM</code> como "dejar de aceptar", no como "terminar ya". Es el connection draining del M03, con conexiones que duran minutos.</p>
@@ -567,6 +959,58 @@ def match(index, hashes, replicas):
       <h3 id="spot-continuar">Continuar una respuesta en otra réplica</h3>
 
       <p>El router reenvía cada token al cliente, así que conoce el prompt y todo lo que ya se generó. Para continuar, manda a otra réplica el prompt más los tokens generados como comienzo de la respuesta, con <code>max_tokens</code> reducido en lo que ya salió. La réplica nueva hace el prefill de todo, unos 0.6 s para 8&#8239;700 tokens, y sigue generando en el mismo stream. El cliente ve una pausa, no un error. El mismo mecanismo salva una réplica que muere sin aviso: el escenario "Muere una réplica a mitad del decode" del mapa.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 444" role="img" aria-labelledby="f19n8t f19n8d">
+<title id="f19n8t">Continuar una respuesta en otra réplica</title>
+<desc id="f19n8d">El router reenvía al cliente los tokens que genera la réplica A y los guarda. Llega el aviso de que A se apaga. El router manda a la réplica B el prompt más los tokens ya generados, con max_tokens reducido. B hace el prefill de unos 8 700 tokens en unos 0.6 s y sigue generando. El router reenvía los tokens nuevos por el mismo stream: el cliente ve una pausa, no un error, y se le cobran los tokens que recibió.</desc>
+<defs><marker id="f19n8-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f19n8-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f19n8-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f19n8-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M70.0 40 V434"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Router</text>
+<path class="dg-frame" d="M280.0 40 V434"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica A</text>
+<path class="dg-frame" d="M490.0 40 V434"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Réplica B</text>
+<path class="dg-frame" d="M700.0 40 V434"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f19n8-a)"/>
+<rect x="106.30000000000001" y="55" width="137.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">POST … stream: true</text>
+<path class="dg-edge" d="M283.0 106 L485.0 106" marker-end="url(#f19n8-a)"/>
+<rect x="359.2" y="89" width="51.599999999999994" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">prompt</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 140 L285.0 140" marker-end="url(#f19n8-r)"/>
+<rect x="339.4" y="123" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">tokens 1 … n</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 174 L75.0 174" marker-end="url(#f19n8-r)"/>
+<rect x="79.9" y="157" width="190.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="168" text-anchor="middle">tokens 1 … n (y los guarda)</text>
+<path d="M20 206 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="195" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="210" text-anchor="middle" style="fill:var(--fail)">aviso de spot o falla: A se va</text>
+<path class="dg-edge" d="M283.0 242 L695.0 242" marker-end="url(#f19n8-a)"/>
+<rect x="358.6" y="225" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="236" text-anchor="middle">prompt + tokens 1 … n · max_tokens − n</text>
+<rect x="446.0" y="262" width="244" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="456.0" y="278">prefill de ~8 700 tokens: ~0.6 s</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 310 L285.0 310" marker-end="url(#f19n8-r)"/>
+<rect x="444.4" y="293" width="91.19999999999999" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="490.0" y="304" text-anchor="middle">tokens n+1 …</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 344 L75.0 344" marker-end="url(#f19n8-r)"/>
+<rect x="66.7" y="327" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="338" text-anchor="middle">tokens n+1 … en el mismo stream</text>
+<rect x="80.0" y="364" width="174" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="90.0" y="380">una pausa, no un error</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 19.13.</b> La continuación vista como secuencia. El cliente nunca abre otra conexión: el router cambia de réplica por detrás y el stream sigue. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>No hay que confundirlo con el stream reanudable del M17, en el que el cliente se reconecta. Acá el cliente no se entera de nada. Tres detalles cambian el resultado:</p>
       <ul>
@@ -632,7 +1076,7 @@ def match(index, hashes, replicas):
 <text class="dg-tiny" x="460" y="298">recortado</text>
 </svg>
         </div>
-        <figcaption><b>Figura 19.6.</b> Tres regiones al 70&#8239;% no sobreviven a la caída de una sin recortar: las otras dos quedan al 105&#8239;%. Recortar una sexta parte del tráfico gratuito deja el pago intacto.</figcaption>
+        <figcaption><b>Figura 19.14.</b> Tres regiones al 70&#8239;% no sobreviven a la caída de una sin recortar: las otras dos quedan al 105&#8239;%. Recortar una sexta parte del tráfico gratuito deja el pago intacto.</figcaption>
       </figure>
 
       <p>Desbordar a otra región tiene dos costos: suma la ida y vuelta entre regiones, de 70 a 150 ms entre continentes, y pierde el KV cache, porque la conversación paga el prefill completo en la región nueva. Y a veces no se puede: OpenAI ofrece residencia de datos en Europa para su API, con las requests procesadas en la región. <span class="badge badge--doc">Documentado</span> El tráfico de esos clientes no puede desbordarse fuera de la región aunque haya GPUs libres del otro lado.</p>

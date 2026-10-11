@@ -33,7 +33,7 @@ window.SD.course = {
           summary: 'Arquitectura tipo S3, signed URLs paso a paso, subidas directas y multipart.' },
         { id: 'm10', num: 'M10', title: 'Seguridad e identidad', short: 'Seguridad', mins: 85, href: 'modules/m10-seguridad.html', status: 'ready',
           summary: 'JWT con estado y revocación, OAuth2/OIDC con PKCE, API keys, mTLS, KMS y borrado criptográfico, multi-tenant, los ataques del OWASP API Top 10 y el log de auditoría.' },
-        { id: 'm11', num: 'M11', title: 'Observabilidad y operación', short: 'Observabilidad', mins: 60, href: 'modules/m11-observabilidad.html', status: 'ready',
+        { id: 'm11', num: 'M11', title: 'Observabilidad y operación', short: 'Observabilidad', mins: 110, href: 'modules/m11-observabilidad.html', status: 'ready',
           summary: 'Logs, métricas y traces, alertas sobre SLOs, despliegues canary y migraciones sin downtime.' },
         { id: 'cpa', num: 'CP-A', kind: 'checkpoint', title: 'Checkpoint A: fundamentos', short: 'Checkpoint A', mins: 90, href: 'modules/checkpoint-a.html', status: 'ready',
           summary: 'Examen integrador y diseño de un acortador de URLs a escala.' }
@@ -45,6 +45,8 @@ window.SD.course = {
       items: [
         { id: 'm12', num: 'M12', title: 'Un LLM visto por un ingeniero de sistemas', short: 'LLM por dentro', mins: 70, href: 'modules/m12-llm-por-dentro.html', status: 'ready',
           summary: 'Tokens, prefill vs decode, KV cache y las métricas que importan: TTFT, TPOT y throughput.' },
+        { id: 'm121', num: 'M12.1', kind: 'deep', title: 'Prefill y decode a fondo', short: 'A fondo: prefill y decode', mins: 150, href: 'modules/m121-prefill-decode-a-fondo.html', status: 'ready',
+          summary: 'Opcional. El forward pass pieza por pieza, la atención con sus formas, GEMM contra GEMV, el KV cache por dentro, FlashAttention, dónde se va el tiempo de cada pasada, el paso mixto y el muestreo, con diagramas de cada fase.' },
         { id: 'm13', num: 'M13', title: 'Hardware GPU', short: 'GPUs', mins: 60, href: 'modules/m13-gpus.html', status: 'ready',
           summary: 'HBM, FLOPs, roofline, NVLink e InfiniBand; cuántas GPUs necesita un modelo.' },
         { id: 'm14', num: 'M14', title: 'Cuantización', short: 'Cuantización', mins: 60, href: 'modules/m14-cuantizacion.html', status: 'ready',
@@ -71,11 +73,11 @@ window.SD.course = {
           summary: 'Cascada o speech-to-speech, WebRTC y SIP, jitter buffer, SFU, fin de turno, STT, LLM y TTS en streaming, el presupuesto de 800 ms, interrupciones y truncado, costo por minuto y fallas.' },
         { id: 'm25', num: 'M25', title: 'Agentes y herramientas', short: 'Agentes', mins: 150, href: 'modules/m25-agentes.html', status: 'ready',
           summary: 'El bucle y su costo, workflows contra agentes, herramientas y MCP, topes por tarea, contexto largo, ejecución durable, aprobación humana, sandbox, la regla de dos, evals de trayectoria y fallas.' },
-        { id: 'm26', num: 'M26', title: 'Entrenamiento y fine-tuning', short: 'Entrenamiento', mins: 80, href: 'modules/m26-entrenamiento.html', status: 'soon',
+        { id: 'm26', num: 'M26', title: 'Entrenamiento y fine-tuning', short: 'Entrenamiento', mins: 85, href: 'modules/m26-entrenamiento.html', status: 'ready',
           summary: 'Clústeres de miles de GPUs, paralelismo, checkpoints y fallas, LoRA, RLHF y DPO, y el camino a producción.' },
-        { id: 'map-chatgpt', num: 'Mapa', kind: 'map', title: 'Mapa gigante de ChatGPT', short: 'Mapa de ChatGPT', mins: 60, href: 'maps/chatgpt.html', status: 'soon',
+        { id: 'map-chatgpt', num: 'Mapa', kind: 'map', title: 'Mapa gigante de ChatGPT', short: 'Mapa de ChatGPT', mins: 60, href: 'maps/chatgpt.html', status: 'ready',
           summary: 'Todo conectado en un lienzo explorable con nueve escenarios animados, caídas incluidas.' },
-        { id: 'cpb', num: 'CP-B', kind: 'checkpoint', title: 'Checkpoint B: serving de LLMs', short: 'Checkpoint B', mins: 90, href: 'modules/checkpoint-b.html', status: 'soon',
+        { id: 'cpb', num: 'CP-B', kind: 'checkpoint', title: 'Checkpoint B: serving de LLMs', short: 'Checkpoint B', mins: 90, href: 'modules/checkpoint-b.html', status: 'ready',
           summary: 'Diseña el serving de un modelo de 70B para 10 000 usuarios concurrentes con un presupuesto dado.' }
       ]
     },
@@ -95,11 +97,11 @@ window.SD.course = {
     },
     {
       id: 'p4', label: 'Parte IV', title: 'Ciberseguridad', line: '--line-p4',
-      intro: 'El perímetro, el servidor, la base y la nube, con la premisa de que el atacante ya está probando. De los firewalls al hardening de un servidor Linux, la operación diaria de un SysAdmin, la seguridad de las bases de datos, la criptografía desde cero y las arquitecturas seguras en la nube.',
+      intro: 'El perímetro, el servidor, la base y la nube, con la premisa de que el atacante ya está probando. De los firewalls al hardening de un servidor Linux, la operación diaria de un SysAdmin, la seguridad de las bases de datos, la criptografía desde cero, las arquitecturas seguras en la nube y Active Directory, el directorio que todo atacante quiere controlar.',
       items: [
-        { id: 'm32', num: 'M32', title: 'Firewalls a fondo', short: 'Firewalls', mins: 90, href: 'modules/m32-firewalls.html', status: 'soon',
+        { id: 'm32', num: 'M32', title: 'Firewalls a fondo', short: 'Firewalls', mins: 90, href: 'modules/m32-firewalls.html', status: 'ready',
           summary: 'Stateless vs stateful, nftables, iptables, UFW y firewalld, filtrado de salida, host vs red, Security Groups y NACLs, NGFW, segmentación, Docker y el firewall, e IPv6.' },
-        { id: 'm33', num: 'M33', title: 'Hardening de servidores Linux', short: 'Hardening Linux', mins: 150, href: 'modules/m33-hardening-linux.html', status: 'soon',
+        { id: 'm33', num: 'M33', title: 'Hardening de servidores Linux', short: 'Hardening Linux', mins: 150, href: 'modules/m33-hardening-linux.html', status: 'ready',
           summary: 'SSH, sudo, actualizaciones, contraseñas, Fail2Ban y CrowdSec, AIDE, rkhunter, Lynis, sysctl, GRUB y qué asegurar aunque el firewall no alcance; basado en How-To-Secure-A-Linux-Server.' },
         { id: 'm34', num: 'M34', title: 'Operación y troubleshooting para SysAdmin', short: 'SysAdmin y troubleshooting', mins: 150, href: 'modules/m34-sysadmin.html', status: 'soon',
           summary: 'Usuarios y permisos, systemd y journald, discos y LVM, backups con pruebas de restauración, diagnóstico de CPU, RAM, disco y red, runbooks y parches.' },
@@ -109,6 +111,8 @@ window.SD.course = {
           summary: 'Hash, HMAC, cifrado simétrico (AES-GCM) y asimétrico, firmas, intercambio de claves, certificados y PKI, contraseñas con Argon2, aleatoriedad y los errores más comunes.' },
         { id: 'm37', num: 'M37', title: 'Arquitecturas seguras en la nube', short: 'Nube segura', mins: 120, href: 'modules/m37-nube-segura.html', status: 'soon',
           summary: 'IAM y mínimo privilegio, mTLS y SPIFFE, KMS y HSM, gestores de secretos, WAF, VPC y endpoints privados, zero trust, auditoría con CloudTrail, guardrails e respuesta a incidentes.' },
+        { id: 'm38', num: 'M38', title: 'Active Directory: cómo se ataca y cómo se defiende', short: 'Active Directory', mins: 150, href: 'modules/m38-active-directory.html', status: 'soon',
+          summary: 'Kerberos y NTLM paso a paso, los ataques conocidos a nivel de concepto y el rastro que deja cada uno, tiering, LAPS, gMSA, Protected Users, eventos a vigilar, AD híbrido y cómo se recupera un dominio comprometido.' },
         { id: 'cpe', num: 'CP-E', kind: 'checkpoint', title: 'Checkpoint E: endurece una plataforma', short: 'Checkpoint E', mins: 90, href: 'modules/checkpoint-e.html', status: 'soon',
           summary: 'Examen integrador y endurecimiento de una plataforma completa, del firewall a la nube, asumiendo que el atacante ya entró.' }
       ]

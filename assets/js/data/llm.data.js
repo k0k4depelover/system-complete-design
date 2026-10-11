@@ -1,15 +1,16 @@
 /* Datos de referencia de modelos y GPUs para las calculadoras de la Parte II.
    Modelos: configuración publicada en sus model cards o papers. KV por token = 2 (K y V) × capas × kv_heads × head_dim
    valores; con MLA (DeepSeek) se guarda un vector latente comprimido por capa (kvElems) en lugar de K y V por cabeza.
+   dModel, ffn y vocab (hidden_size, intermediate_size y vocab_size del config.json) los usa el costo por pieza de M12.1.
    GPUs: especificaciones del fabricante; FLOPS densos, sin sparsity. nvlink = ancho de banda por GPU sumando ambos sentidos.
    Unidades: bytes y FLOPS en unidades SI (1 GB = 1e9 bytes). */
 window.SD = window.SD || {};
 SD.data = SD.data || {};
 SD.data.llm = {
   models: {
-    llama8b:  { name: 'Llama 3.1 8B', params: 8.03e9, layers: 32, heads: 32, kvHeads: 8, headDim: 128, ctx: 131072 },
-    llama70b: { name: 'Llama 3.1 70B', params: 70.6e9, layers: 80, heads: 64, kvHeads: 8, headDim: 128, ctx: 131072 },
-    llama405b: { name: 'Llama 3.1 405B', params: 405e9, layers: 126, heads: 128, kvHeads: 8, headDim: 128, ctx: 131072 },
+    llama8b:  { name: 'Llama 3.1 8B', params: 8.03e9, layers: 32, heads: 32, kvHeads: 8, headDim: 128, ctx: 131072, dModel: 4096, ffn: 14336, vocab: 128256 },
+    llama70b: { name: 'Llama 3.1 70B', params: 70.6e9, layers: 80, heads: 64, kvHeads: 8, headDim: 128, ctx: 131072, dModel: 8192, ffn: 28672, vocab: 128256 },
+    llama405b: { name: 'Llama 3.1 405B', params: 405e9, layers: 126, heads: 128, kvHeads: 8, headDim: 128, ctx: 131072, dModel: 16384, ffn: 53248, vocab: 128256 },
     gpt3:     { name: 'GPT-3 175B (sin GQA)', params: 175e9, layers: 96, heads: 96, kvHeads: 96, headDim: 128, ctx: 2048 },
     mixtral:  { name: 'Mixtral 8x7B (MoE)', params: 46.7e9, active: 12.9e9, layers: 32, heads: 32, kvHeads: 8, headDim: 128, ctx: 32768 },
     dsv3:     { name: 'DeepSeek-V3 (MoE con MLA)', params: 671e9, active: 37e9, layers: 61, kvElems: 576, ctx: 131072 }

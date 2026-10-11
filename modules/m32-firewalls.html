@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M32. Firewalls a fondo</title>
+<meta name="description" content="Qué hace y qué no hace un firewall, filtros sin estado y con estado (conntrack), nftables con sus tablas, cadenas y hooks, UFW y firewalld, filtrado de salida, firewall de host y de red con DMZ y segmentación, security groups y NACL en AWS, NGFW, IDS/IPS y WAF, el agujero de Docker con UFW e IPv6, y cómo se evita un perímetro, cómo se detecta y cómo se responde suponiendo la brecha.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m32">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Firewalls a fondo</h1>
+        <p class="lead">Un firewall decide, paquete por paquete, qué entra y qué sale de una máquina o de una red. Es la primera capa de defensa y la más malentendida: protege mucho menos de lo que se cree si está solo, y mucho más de lo que se cree si también filtra la salida. Este módulo lo recorre desde el kernel de Linux hasta la nube.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M32</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M03, M08</dd></div>
+          <div><dt>Estado</dt><dd data-status="m32">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar qué capas ve un firewall de puertos, qué ve un WAF y qué ataques pasan por los dos sin que los noten.</li>
+          <li>Distinguir un filtro sin estado de uno con estado y escribir un conjunto de reglas de nftables con política <code>drop</code> en la entrada y en la salida.</li>
+          <li>Elegir entre nftables, UFW y firewalld, y filtrar la salida de un servidor para cortar lo que viene después de una intrusión.</li>
+          <li>Combinar security groups y NACL en una VPC, y ubicar una DMZ, la segmentación y los NGFW en una arquitectura.</li>
+          <li>Reconocer los dos agujeros más comunes en servidores reales: los puertos que Docker publica por fuera de UFW y las reglas que solo existen para IPv4.</li>
+          <li>Clasificar cómo se evita un firewall o un reverse proxy (túneles de salida, la capa que no se inspecciona, saltarse el WAF, el acceso de confianza y el propio equipo de borde), detectarlo con señales de salida y responder suponiendo la brecha.</li>
+        </ul>
+      </section>
+
+      <h2 id="que-es"><span class="sec-num">32.1</span>Qué hace y qué no hace un firewall</h2>
+
+      <p>Un <dfn data-term="firewall">firewall</dfn> es un filtro que mira cada paquete de red y decide si lo deja pasar, lo descarta o lo rechaza, según una lista de reglas. Las reglas hablan de lo que viaja en las cabeceras del paquete: la <a href="m01-viaje-request.html#ip">dirección IP</a> de origen y de destino, el <a href="m01-viaje-request.html#puertos">puerto</a>, el protocolo (TCP, UDP, ICMP) y, en los firewalls con estado, si el paquete pertenece a una conexión ya abierta. Es decir, trabaja en las capas 3 y 4 que viste en <a href="m01-viaje-request.html#capas">M01</a>, las mismas que mira un <a href="m03-balanceo-gateways.html#l4-l7">balanceador L4</a>.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>El firewall es el portero de un edificio de oficinas. Mira el sobre: quién lo manda, a qué piso y a qué oficina va. Puede rechazar todo lo que no vaya a la recepción, o lo que venga de un remitente que conoce. Lo que no hace es abrir el sobre y leer la carta. Una carta con instrucciones para robar la caja fuerte, dirigida correctamente a la recepción, pasa.</p>
+      </aside>
+
+      <p>La regla de oro se llama <b>denegar por defecto</b>: la cadena termina en "descartar todo" y solo se abre, una por una, lo que el servicio necesita. Es la recomendación de la guía de firewalls del NIST (SP 800-41) <span class="badge badge--doc">Documentado</span>, y es lo contrario de lo que trae un servidor recién instalado, que en general no filtra nada. La alternativa, "permitir todo y bloquear lo malo", obliga a conocer de antemano todo lo malo.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 262" role="img" aria-labelledby="f321t f321d">
+<title id="f321t">Qué ve cada capa de defensa</title>
+<desc id="f321d">Cinco capas de izquierda a derecha: internet, el firewall de red, el firewall del host, el proxy L7 con WAF y la aplicación. Para cada una se indica con qué datos decide y qué no puede ver. Ninguna capa sola alcanza.</desc>
+<defs><marker id="f321a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f321f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="6.0" y="40" width="140" height="62" rx="5"/>
+<text class="dg-label" x="76.0" y="66" text-anchor="middle" style="font-size:14px">Internet</text>
+<text class="dg-tiny" x="76.0" y="86" text-anchor="middle">clientes, bots, escáneres</text>
+<path class="dg-edge" d="M147.0 71 H156.5" marker-end="url(#f321a)"/>
+<text class="dg-small" x="76.0" y="130" text-anchor="middle">decide con:</text>
+<text class="dg-tiny dg-in" x="76.0" y="148" text-anchor="middle">cualquiera puede</text>
+<text class="dg-tiny dg-in" x="76.0" y="164" text-anchor="middle">mandar un paquete</text>
+<text class="dg-small" x="76.0" y="196" text-anchor="middle">no puede ver:</text>
+<text class="dg-tiny" x="76.0" y="214" text-anchor="middle">—</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="158.5" y="40" width="140" height="62" rx="5"/>
+<text class="dg-label" x="228.5" y="66" text-anchor="middle" style="font-size:14px">Firewall de red</text>
+<text class="dg-tiny" x="228.5" y="86" text-anchor="middle">NACL, perimetral</text>
+<path class="dg-edge" d="M299.5 71 H309.0" marker-end="url(#f321a)"/>
+<text class="dg-small" x="228.5" y="130" text-anchor="middle">decide con:</text>
+<text class="dg-tiny dg-in" x="228.5" y="148" text-anchor="middle">IP y puerto,</text>
+<text class="dg-tiny dg-in" x="228.5" y="164" text-anchor="middle">protocolo</text>
+<text class="dg-small" x="228.5" y="196" text-anchor="middle">no puede ver:</text>
+<text class="dg-tiny" x="228.5" y="214" text-anchor="middle">qué proceso</text>
+<text class="dg-tiny" x="228.5" y="230" text-anchor="middle">escucha en el host</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="311.0" y="40" width="140" height="62" rx="5"/>
+<text class="dg-label" x="381.0" y="66" text-anchor="middle" style="font-size:14px">Firewall del host</text>
+<text class="dg-tiny" x="381.0" y="86" text-anchor="middle">nftables, UFW</text>
+<path class="dg-edge" d="M452.0 71 H461.5" marker-end="url(#f321a)"/>
+<text class="dg-small" x="381.0" y="130" text-anchor="middle">decide con:</text>
+<text class="dg-tiny dg-in" x="381.0" y="148" text-anchor="middle">IP, puerto, estado</text>
+<text class="dg-tiny dg-in" x="381.0" y="164" text-anchor="middle">de la conexión</text>
+<text class="dg-small" x="381.0" y="196" text-anchor="middle">no puede ver:</text>
+<text class="dg-tiny" x="381.0" y="214" text-anchor="middle">el HTTP: viaja</text>
+<text class="dg-tiny" x="381.0" y="230" text-anchor="middle">cifrado con TLS</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="463.5" y="40" width="140" height="62" rx="5"/>
+<text class="dg-label" x="533.5" y="66" text-anchor="middle" style="font-size:14px">Proxy L7 + WAF</text>
+<text class="dg-tiny" x="533.5" y="86" text-anchor="middle">termina TLS</text>
+<path class="dg-edge" d="M604.5 71 H614.0" marker-end="url(#f321a)"/>
+<text class="dg-small" x="533.5" y="130" text-anchor="middle">decide con:</text>
+<text class="dg-tiny dg-in" x="533.5" y="148" text-anchor="middle">URL, headers</text>
+<text class="dg-tiny dg-in" x="533.5" y="164" text-anchor="middle">y cuerpo</text>
+<text class="dg-small" x="533.5" y="196" text-anchor="middle">no puede ver:</text>
+<text class="dg-tiny" x="533.5" y="214" text-anchor="middle">si el objeto es</text>
+<text class="dg-tiny" x="533.5" y="230" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="616.0" y="40" width="140" height="62" rx="5"/>
+<text class="dg-label" x="686.0" y="66" text-anchor="middle" style="font-size:14px">Tu aplicación</text>
+<text class="dg-tiny" x="686.0" y="86" text-anchor="middle">autenticación, permisos</text>
+<text class="dg-small" x="686.0" y="130" text-anchor="middle">decide con:</text>
+<text class="dg-tiny dg-in" x="686.0" y="148" text-anchor="middle">identidad</text>
+<text class="dg-tiny dg-in" x="686.0" y="164" text-anchor="middle">y permisos</text>
+<text class="dg-small" x="686.0" y="196" text-anchor="middle">no puede ver:</text>
+<text class="dg-tiny" x="686.0" y="214" text-anchor="middle">(es la última</text>
+<text class="dg-tiny" x="686.0" y="230" text-anchor="middle">barrera)</text>
+<text class="dg-group" x="6" y="22" text-anchor="start">De internet a tu código</text>
+<path class="dg-frame" d="M6 240 H764"/>
+<text class="dg-small" x="385" y="256" text-anchor="middle">cada capa ataja lo que las anteriores no pueden ver: por eso se apilan</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 32.1.</b> Cada capa decide con lo que puede ver. El firewall no ve el contenido HTTP, que viaja cifrado; el WAF no sabe si la factura que pides es tuya. Por eso las capas se apilan en lugar de reemplazarse.</figcaption>
+      </figure>
+
+      <p>Lo que un firewall de puertos <b>no</b> resuelve, y conviene tenerlo claro antes de confiar en él:</p>
+      <ul>
+        <li><b>Ataques dentro de una conexión permitida.</b> Una inyección SQL llega al puerto 443, que tiene que estar abierto. Para el firewall es una conexión HTTPS como cualquier otra. Los ataques de aplicación de <a href="m10-seguridad.html#ataques">M10</a> pasan todos por aquí.</li>
+        <li><b>Credenciales robadas.</b> Si alguien entra con la clave SSH de un administrador, desde la red permitida, el firewall lo deja pasar: no sabe quién está detrás del teclado.</li>
+        <li><b>Lo que ya está adentro.</b> Un servidor comprometido habla con los demás desde la red interna, que suele tener reglas mucho más laxas. Sección 32.6.</li>
+        <li><b>Un servicio mal configurado.</b> Si la base escucha en todas las interfaces, el firewall es lo único que la protege; basta un error en una regla para exponerla. La defensa del propio servidor, sin contar con el firewall, es el tema de <a href="m33-hardening-linux.html#sin-firewall">M33</a>.</li>
+      </ul>
+
+      <p>Estos cuatro caminos no son casos raros: son la forma habitual en que un atacante con oficio evita un perímetro. La <a href="#evasion">§&#8239;32.10</a> los retoma uno por uno, con la señal que delata cada uno y el control que lo cierra.</p>
+
+      <h3 id="drop-reject">Descartar o rechazar</h3>
+
+      <p>Una regla que no deja pasar puede hacerlo de dos maneras. <code>drop</code> descarta el paquete en silencio: el cliente no recibe nada y espera hasta su timeout, que en Linux es de unos dos minutos para abrir una conexión (es la fila "un firewall descarta los paquetes" de la tabla de fallos de <a href="m01-viaje-request.html#fallos">M01</a>). <code>reject</code> contesta con un TCP RST o un ICMP de "inalcanzable": el cliente falla al instante con <code>connection refused</code>.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th><code>drop</code></th><th><code>reject</code></th></tr></thead>
+          <tbody>
+            <tr><td><b>Qué ve el que escanea</b></td><td>Nada: no sabe si hay una máquina</td><td>Que hay una máquina y el puerto está cerrado</td></tr>
+            <tr><td><b>Qué ve un cliente legítimo mal configurado</b></td><td>Un cuelgue largo, difícil de diagnosticar</td><td>Un error inmediato y claro</td></tr>
+            <tr><td><b>Dónde se usa</b></td><td>Hacia internet</td><td>Dentro de tu red, entre tus servicios</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="stateless-stateful"><span class="sec-num">32.2</span>Sin estado y con estado</h2>
+
+      <p>Un filtro <b>sin estado</b> evalúa cada paquete aislado, sin memoria. El problema aparece con las respuestas. Cuando un navegador abre una conexión a tu puerto 443, lo hace desde un <a href="m01-viaje-request.html#puertos">puerto efímero</a> suyo, por ejemplo el 51234. Tu respuesta sale desde el 443 hacia el 51234. Si el filtro de salida solo permite lo que tú decidiste, esa respuesta no tiene regla y se descarta. Para que funcione hay que permitir "salida desde el 443 hacia cualquier puerto alto", y con eso cualquier paquete que diga venir del 443 pasa, sea o no una respuesta.</p>
+
+      <p>Un <dfn data-term="stateful-firewall">firewall con estado</dfn> resuelve eso recordando las conexiones. En Linux lo hace el módulo de seguimiento de conexiones del kernel, <b>conntrack</b>: cuando un paquete permitido abre una conexión, anota la tupla de origen, destino, puertos y protocolo, y desde ese momento clasifica cada paquete en uno de estos estados:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Estado</th><th>Qué significa</th><th>Qué se hace habitualmente</th></tr></thead>
+          <tbody>
+            <tr><td><code>NEW</code></td><td>Abre una conexión que no estaba anotada</td><td>Lo deciden tus reglas de puertos</td></tr>
+            <tr><td><code>ESTABLISHED</code></td><td>Pertenece a una conexión que ya vio tráfico en las dos direcciones</td><td>Aceptar, con una sola regla al principio</td></tr>
+            <tr><td><code>RELATED</code></td><td>Es nueva, pero la provocó una conexión existente (un ICMP de error sobre ella)</td><td>Aceptar junto con <code>ESTABLISHED</code></td></tr>
+            <tr><td><code>INVALID</code></td><td>No encaja con ninguna conexión conocida: un ACK suelto, flags imposibles</td><td>Descartar</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="tabs" data-tabs="Con y sin estado">
+        <section data-tab="Sin estado">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 342" role="img" aria-labelledby="f322at f322ad">
+<title id="f322at">Un firewall sin estado rompe las respuestas</title>
+<desc id="f322ad">El cliente abre una conexión al puerto 443. El firewall sin estado deja entrar el SYN por la regla del 443, pero el SYN-ACK de vuelta sale hacia un puerto efímero del cliente y no hay regla que lo permita: se descarta y la conexión nunca se abre.</desc>
+<defs><marker id="f322a-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f322a-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f322a-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f322a-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M70.0 40 V332"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Firewall sin estado</text>
+<path class="dg-frame" d="M385.0 40 V332"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor web</text>
+<path class="dg-frame" d="M700.0 40 V332"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f322a-a)"/>
+<rect x="188.5" y="55" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">SYN → :443</text>
+<rect x="395.0" y="92" width="265" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="108">entrada: regla tcp dport 443 accept</text>
+<path class="dg-edge" d="M388.0 140 L695.0 140" marker-end="url(#f322a-a)"/>
+<rect x="526.6" y="123" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="134" text-anchor="middle">SYN</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 174 L390.0 174" marker-end="url(#f322a-r)"/>
+<rect x="447.4" y="157" width="190.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="542.5" y="168" text-anchor="middle">SYN-ACK desde :443 → :51234</text>
+<rect x="395.0" y="194" width="251" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="210">salida: ninguna regla para :51234</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M385.0 234 h40 v14 h-38" marker-end="url(#f322a-f)"/>
+<text class="dg-tiny" x="431.0" y="245">drop</text>
+<path d="M20 274 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="263" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="278" text-anchor="middle" style="fill:var(--fail)">el cliente reintenta y al final da timeout</text>
+</svg>
+
+            </div>
+            <figcaption><b>Figura 32.2a.</b> Sin estado, la regla que deja entrar el SYN no dice nada de la respuesta. El SYN-ACK sale hacia un puerto efímero del cliente y se descarta.</figcaption>
+          </figure>
+        </section>
+        <section data-tab="Con estado">
+          <figure class="figure">
+            <div class="figure-frame">
+<svg viewBox="0 0 770 376" role="img" aria-labelledby="f322bt f322bd">
+<title id="f322bt">Un firewall con estado recuerda la conexión</title>
+<desc id="f322bd">El firewall con estado anota la conexión cuando entra el SYN permitido. El SYN-ACK de vuelta coincide con esa entrada y pasa como ESTABLISHED sin regla propia. Un ACK suelto que no pertenece a ninguna conexión conocida se marca INVALID y se descarta.</desc>
+<defs><marker id="f322b-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f322b-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f322b-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f322b-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Otro equipo</text>
+<path class="dg-frame" d="M70.0 40 V366"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente</text>
+<path class="dg-frame" d="M280.0 40 V366"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">Firewall con estado</text>
+<path class="dg-frame" d="M490.0 40 V366"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor web</text>
+<path class="dg-frame" d="M700.0 40 V366"/>
+<path class="dg-edge" d="M283.0 72 L485.0 72" marker-end="url(#f322b-a)"/>
+<rect x="346.0" y="55" width="78.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="66" text-anchor="middle">SYN → :443</text>
+<rect x="500.0" y="92" width="265" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="510.0" y="108">regla del 443 → conntrack anota NEW</text>
+<path class="dg-edge" d="M493.0 140 L695.0 140" marker-end="url(#f322b-a)"/>
+<rect x="579.1" y="123" width="31.799999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="134" text-anchor="middle">SYN</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 174 L495.0 174" marker-end="url(#f322b-r)"/>
+<rect x="565.9" y="157" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="168" text-anchor="middle">SYN-ACK</text>
+<rect x="201.0" y="194" width="279" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="211.0" y="210">coincide con la entrada → ESTABLISHED</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M487.0 242 L285.0 242" marker-end="url(#f322b-r)"/>
+<rect x="355.9" y="225" width="58.199999999999996" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="236" text-anchor="middle">SYN-ACK</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M73.0 276 L485.0 276" marker-end="url(#f322b-f)"/>
+<rect x="171.7" y="259" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="280.0" y="270" text-anchor="middle">ACK suelto, sin conexión previa</text>
+<rect x="208.0" y="296" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="218.0" y="312">no coincide con nada → INVALID: drop</text>
+</svg>
+
+            </div>
+            <figcaption><b>Figura 32.2b.</b> Con estado, conntrack anota la conexión al entrar el SYN, y la respuesta pasa como <code>ESTABLISHED</code>. Un paquete que no pertenece a nada se marca <code>INVALID</code>.</figcaption>
+          </figure>
+        </section>
+      </div>
+
+      <p>Por eso casi todo conjunto de reglas real empieza igual: "acepta lo <code>established</code> y <code>related</code>, descarta lo <code>invalid</code>". Esas dos líneas resuelven todas las respuestas, de entrada y de salida, y dejan las demás reglas para decidir solo sobre conexiones nuevas. También son las más rápidas de evaluar, porque la mayoría de los paquetes de un servidor pertenecen a conexiones ya abiertas.</p>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>La tabla de conntrack tiene un tamaño máximo (<code>net.netfilter.nf_conntrack_max</code>). Cuando se llena, el kernel descarta los paquetes que abrirían conexiones nuevas y deja en el log <code>nf_conntrack: table full, dropping packet</code>. Pasa con picos de tráfico legítimo en servidores con muchísimas conexiones cortas, y con los SYN floods que viste en <a href="m28-cloudflare.html#ddos">M28</a>. Se vigila el uso (<code>conntrack -C</code> contra el máximo) y, en servidores que atienden tráfico masivo, se sube el límite o se excluye del seguimiento el tráfico que no lo necesita.</p>
+      </aside>
+
+      <h2 id="nftables"><span class="sec-num">32.3</span>nftables: tablas, cadenas y reglas</h2>
+
+      <p>El firewall de Linux vive en el kernel, en un subsistema llamado netfilter. <dfn data-term="nftables">nftables</dfn> es su interfaz actual: reemplazó a iptables, ip6tables, arptables y ebtables con una sola herramienta (<code>nft</code>) y una sola sintaxis. Debian, Ubuntu, RHEL y Fedora lo usan por debajo desde hace años. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>netfilter ofrece <b>hooks</b>, puntos fijos del camino de un paquete por el kernel donde se pueden enganchar reglas:</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f323t f323d">
+<title id="f323t">Los hooks de netfilter: dónde se engancha cada cadena</title>
+<desc id="f323d">Un paquete entra por la tarjeta de red, pasa por el hook prerouting y llega a la decisión de ruteo. Si es para esta máquina sube por input hasta el proceso local; lo que el proceso envía baja por output. Si es para otra máquina va por forward. Todo lo que sale pasa por postrouting. Las cadenas de una tabla inet filter cuelgan de input, forward y output.</desc>
+<defs><marker id="f323a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f323f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<rect class="dg-box" x="6" y="196" width="96" height="50" rx="5"/>
+<text class="dg-label" x="54.0" y="219.0" text-anchor="middle" style="font-size:13.5px">Entra</text>
+<text class="dg-tiny" x="54.0" y="235.0" text-anchor="middle">por la tarjeta</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="122" y="196" width="102" height="50" rx="5"/>
+<text class="dg-label" x="173.0" y="219.0" text-anchor="middle" style="font-size:13.5px">prerouting</text>
+<text class="dg-tiny" x="173.0" y="235.0" text-anchor="middle">antes de rutear</text>
+<rect class="dg-box dg-box--em" x="244" y="196" width="116" height="50" rx="5"/>
+<text class="dg-label" x="302.0" y="219.0" text-anchor="middle" style="font-size:13.5px">Ruteo</text>
+<text class="dg-tiny" x="302.0" y="235.0" text-anchor="middle">¿es para mí?</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="420" y="196" width="100" height="50" rx="5"/>
+<text class="dg-label" x="470.0" y="219.0" text-anchor="middle" style="font-size:13.5px">forward</text>
+<text class="dg-tiny" x="470.0" y="235.0" text-anchor="middle">de paso</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="580" y="196" width="110" height="50" rx="5"/>
+<text class="dg-label" x="635.0" y="219.0" text-anchor="middle" style="font-size:13.5px">postrouting</text>
+<text class="dg-tiny" x="635.0" y="235.0" text-anchor="middle">a punto de salir</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="252" y="64" width="100" height="50" rx="5"/>
+<text class="dg-label" x="302.0" y="87.0" text-anchor="middle" style="font-size:13.5px">input</text>
+<text class="dg-tiny" x="302.0" y="103.0" text-anchor="middle">hacia un proceso</text>
+<rect class="dg-box" x="392" y="64" width="150" height="50" rx="5"/>
+<text class="dg-label" x="467.0" y="87.0" text-anchor="middle" style="font-size:13.5px">Proceso local</text>
+<text class="dg-tiny" x="467.0" y="103.0" text-anchor="middle">nginx, sshd, tu app</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="585" y="64" width="100" height="50" rx="5"/>
+<text class="dg-label" x="635.0" y="87.0" text-anchor="middle" style="font-size:13.5px">output</text>
+<text class="dg-tiny" x="635.0" y="103.0" text-anchor="middle">lo que envía</text>
+<path class="dg-edge" d="M104 221 H119" marker-end="url(#f323a)"/>
+<path class="dg-edge" d="M226 221 H241" marker-end="url(#f323a)"/>
+<path class="dg-edge" d="M362 221 H417" marker-end="url(#f323a)"/>
+<text class="dg-tiny" x="390" y="188" text-anchor="middle">no</text>
+<path class="dg-edge" d="M522 221 H577" marker-end="url(#f323a)"/>
+<path class="dg-edge" d="M692 221 H760" marker-end="url(#f323a)"/>
+<text class="dg-tiny" x="727" y="214" text-anchor="middle">a la red</text>
+<path class="dg-edge" d="M302 194 V117" marker-end="url(#f323a)"/>
+<text class="dg-tiny" x="312" y="162" text-anchor="start">sí</text>
+<path class="dg-edge" d="M354 89 H389" marker-end="url(#f323a)"/>
+<path class="dg-edge" d="M544 89 H582" marker-end="url(#f323a)"/>
+<path class="dg-edge" d="M635 116 V193" marker-end="url(#f323a)"/>
+<text class="dg-group" x="6" y="22" text-anchor="start">Hooks del kernel por los que pasa un paquete (familias ip, ip6 e inet)</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="6" y="270" width="18" height="14" rx="3"/>
+<text class="dg-tiny" x="32" y="281" text-anchor="start">hook donde se puede colgar una cadena base: type filter hook input priority 0; policy drop;</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 32.3.</b> Lo que va a un proceso de esta máquina pasa por <code>prerouting</code> e <code>input</code>; lo que el proceso envía, por <code>output</code> y <code>postrouting</code>; lo que solo está de paso (un router, un host de contenedores), por <code>forward</code>. Las familias <code>inet</code> y <code>netdev</code> suman un hook <code>ingress</code>, todavía antes de <code>prerouting</code>.</figcaption>
+      </figure>
+
+      <p>Sobre esos hooks, nftables organiza todo en tres niveles:</p>
+      <ul>
+        <li><b>Tabla:</b> un contenedor con nombre y una familia. La familia dice qué tráfico ve: <code>ip</code> (IPv4), <code>ip6</code> (IPv6), <code>inet</code> (las dos a la vez, la que conviene casi siempre), <code>arp</code>, <code>bridge</code> y <code>netdev</code>. Las tablas no tienen significado propio; puedes llamarla <code>filter</code> o <code>mi_servidor</code>.</li>
+        <li><b>Cadena:</b> una lista ordenada de reglas. Una cadena <b>base</b> se cuelga de un hook con un tipo (<code>filter</code>, <code>nat</code>, <code>route</code>), una prioridad (el orden entre cadenas del mismo hook) y una política (<code>accept</code> o <code>drop</code>) para lo que ninguna regla decidió. Una cadena normal no tiene hook: se llega a ella con <code>jump</code>, como a una función.</li>
+        <li><b>Regla:</b> condiciones y un veredicto. <code>tcp dport 443 accept</code> es una regla. Las reglas se evalúan en orden, y la primera que da un veredicto final (<code>accept</code>, <code>drop</code>, <code>reject</code>) termina la evaluación de esa cadena.</li>
+      </ul>
+
+      <p>Este es un conjunto de reglas completo para un servidor web que se administra por SSH desde una red de oficina. Va en <code>/etc/nftables.conf</code>, que el servicio <code>nftables</code> carga al arrancar:</p>
+
+<pre data-lang="shell"><code>#!/usr/sbin/nft -f
+flush ruleset
+
+table inet filter {
+  set oficina {                      # un set con nombre: se edita sin tocar las reglas
+    type ipv4_addr; flags interval
+    elements = { 203.0.113.0/24 }
+  }
+
+  chain input {
+    type filter hook input priority 0; policy drop;
+    ct state established,related accept
+    ct state invalid drop
+    iif "lo" accept                    # los procesos locales hablándose entre sí
+    meta l4proto { icmp, ipv6-icmp } accept   # ping, errores de MTU y, en IPv6, el descubrimiento de vecinos
+    tcp dport { 80, 443 } accept
+    ip saddr @oficina tcp dport 22 accept
+    limit rate 5/minute log prefix "nft-drop-in: "   # deja rastro de lo que se descarta, sin inundar el log
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy drop;   # este servidor no rutea para nadie
+  }
+
+  chain output {
+    type filter hook output priority 0; policy drop;
+    ct state established,related accept
+    oif "lo" accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    ip daddr 10.0.0.2 meta l4proto { tcp, udp } th dport 53 accept   # DNS, solo a tu resolver
+    tcp dport { 80, 443 } accept       # repositorios de paquetes y APIs
+    udp dport 123 accept               # NTP
+  }
+}</code></pre>
+
+      <p>Tres detalles que suelen olvidarse. Primero, <b>no se bloquea todo el ICMP</b>: sin los mensajes de "paquete demasiado grande", las conexiones con paquetes grandes se cuelgan sin error (el "agujero negro de MTU"), y en IPv6 sin ICMPv6 ni siquiera funciona el descubrimiento de vecinos. Segundo, los <b>sets</b> (<code>{ 80, 443 }</code>, <code>@oficina</code>) se evalúan como una sola búsqueda, en lugar de una regla por elemento; con miles de IPs bloqueadas la diferencia se nota. Tercero, para decidir según un valor hay <b>verdict maps</b>: <code>tcp dport vmap { 22 : jump ssh, 443 : accept }</code> salta a una cadena distinta según el puerto, en un solo paso.</p>
+
+      <p>Los comandos de todos los días:</p>
+
+<pre data-lang="shell"><code>$ sudo nft -c -f /etc/nftables.conf     # comprueba la sintaxis sin aplicar nada
+$ sudo nft -f /etc/nftables.conf        # aplica el archivo completo, de forma atómica
+$ sudo nft list ruleset                 # lo que el kernel tiene cargado ahora
+$ sudo systemctl enable --now nftables  # que se cargue también después de reiniciar</code></pre>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>En un servidor remoto, un error en la regla del SSH te deja afuera. Antes de aplicar reglas nuevas, ten a mano la consola del proveedor (la que no depende de la red), o programa la vuelta atrás: aplica, y si en dos minutos no confirmas que sigues adentro, un temporizador recarga el archivo anterior. Y versiona <code>/etc/nftables.conf</code> como cualquier otro código: un cambio de firewall sin historial es imposible de auditar.</p>
+      </aside>
+
+      <h3 id="iptables">nftables e iptables</h3>
+
+      <p>Vas a seguir viendo iptables en tutoriales, en Docker y en Kubernetes. En las distribuciones actuales, el comando <code>iptables</code> suele ser <code>iptables-nft</code>: acepta la sintaxis vieja pero escribe reglas de nftables en el kernel. La regla práctica es no mezclar herramientas sobre las mismas reglas, y saber quién más escribe en tu firewall: Docker, kube-proxy, Fail2Ban y los frontends de la sección siguiente crean sus propias cadenas. <code>nft list ruleset</code> muestra todas, las escriba quien las escriba, y <code>iptables-translate</code> convierte una regla vieja a la sintaxis nueva.</p>
+
+      <h3 id="orden">El orden decide</h3>
+
+      <p>Las reglas se leen de arriba hacia abajo, y la primera que decide gana. Una regla demasiado amplia arriba anula a las específicas de abajo sin ningún aviso. Prueba los cuatro juegos de reglas con cada paquete: el recomendado, el mismo sin conntrack, uno con una regla "temporal" de más y uno con la salida sin filtrar.</p>
+
+      <div data-sim="firewall"></div>
+
+      <h2 id="frontends"><span class="sec-num">32.4</span>UFW y firewalld</h2>
+
+      <p>Escribir nftables a mano da control total, pero para un servidor común hay dos frontends que generan las reglas por ti. Los dos hacen lo mismo por debajo: traducen órdenes simples a reglas de netfilter.</p>
+
+      <p><b>UFW</b> (<span class="no-autolink">Uncomplicated Firewall</span>) viene en Ubuntu y Debian. Se piensa en "permitir este puerto desde aquí":</p>
+
+<pre data-lang="shell"><code>$ sudo ufw default deny incoming
+$ sudo ufw default allow outgoing        # el valor por defecto: la salida queda abierta (32.5)
+$ sudo ufw allow 80,443/tcp
+$ sudo ufw allow from 203.0.113.0/24 to any port 22 proto tcp
+$ sudo ufw enable
+$ sudo ufw status verbose</code></pre>
+
+      <p>Tiene un atajo útil para SSH: <code>ufw limit 22/tcp</code> rechaza a una IP que intenta abrir 6 o más conexiones en 30 segundos. <span class="badge badge--doc">Documentado</span> No reemplaza a Fail2Ban, que mira los intentos fallidos en los logs (<a href="m33-hardening-linux.html#fail2ban">M33</a>), pero frena a los bots más torpes sin instalar nada.</p>
+
+      <p><b>firewalld</b> es el de RHEL, Fedora y derivados. Se piensa en <b>zonas</b>: cada interfaz o red de origen pertenece a una zona (<code>public</code>, <code>internal</code>, <code>trusted</code>, <code>drop</code>…) y cada zona tiene los servicios que permite. Distingue la configuración en ejecución de la permanente, lo que permite probar un cambio y perderlo al recargar si salió mal:</p>
+
+<pre data-lang="shell"><code>$ sudo firewall-cmd --get-active-zones
+$ sudo firewall-cmd --zone=public --add-service=https             # solo en ejecución: se pierde al recargar
+$ sudo firewall-cmd --permanent --zone=public --add-service=https # también en la configuración guardada
+$ sudo firewall-cmd --permanent --zone=internal --add-source=10.0.0.0/16
+$ sudo firewall-cmd --reload</code></pre>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Herramienta</th><th>Cuándo conviene</th><th>Lo que hay que saber</th></tr></thead>
+          <tbody>
+            <tr><td><b>nftables directo</b></td><td>Reglas versionadas como código, filtrado de salida fino, routers y hosts con mucho tráfico</td><td>Tú escribes y ordenas todo; nadie te protege de una regla mal puesta</td></tr>
+            <tr><td><b>UFW</b></td><td>Un servidor Ubuntu o Debian con pocos servicios</td><td>La salida queda abierta por defecto, y Docker se salta sus reglas (32.9)</td></tr>
+            <tr><td><b>firewalld</b></td><td>RHEL y Fedora, máquinas con varias interfaces y redes de distinta confianza</td><td>Si cambias algo sin <code>--permanent</code>, desaparece en el próximo reinicio o recarga</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="entrada-salida"><span class="sec-num">32.5</span>Entrada y salida: el filtrado de egress</h2>
+
+      <p>Casi todos los servidores filtran lo que entra y dejan salir cualquier cosa. Es el valor por defecto de UFW, de los security groups de AWS y de una cadena <code>output</code> sin reglas. El <dfn data-term="egress-filtering">filtrado de salida</dfn> (egress filtering) invierte eso: el servidor solo puede abrir conexiones hacia los destinos que necesita.</p>
+
+      <p>¿Por qué importa, si el peligro viene de afuera? Porque una intrusión casi nunca termina en el primer paso. Quien logra ejecutar código en un servidor necesita después recibir órdenes, bajar herramientas y sacar los datos, y para todo eso el servidor tiene que poder conectarse hacia afuera. Una salida cerrada no evita que entren, pero convierte una intrusión en un callejón sin salida, y además hace ruido: cada intento bloqueado queda en el log.</p>
+
+      <p>Un caso conocido: el código malicioso que se insertó en las actualizaciones de SolarWinds Orion en 2020 (SUNBURST) contactaba a su servidor de control desde los servidores de las víctimas, primero por DNS y después por HTTPS. <span class="badge badge--doc">Documentado</span> La directiva de emergencia de CISA de ese diciembre ordenó a las agencias de Estados Unidos desconectar o apagar esos servidores. Un servidor de monitoreo interno no necesita conectarse a dominios arbitrarios de internet; con la salida restringida, ese canal no existe.</p>
+
+      <p>Qué necesita de verdad un servidor típico hacia afuera, y cómo permitirlo sin abrir todo:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Necesidad</th><th>Cómo se permite</th></tr></thead>
+          <tbody>
+            <tr><td>DNS</td><td>Solo hacia tus resolvers; así todas las consultas pasan por un lugar que registras. DNS libre es el canal de salida que nadie mira.</td></tr>
+            <tr><td>Hora (NTP)</td><td>UDP 123, mejor hacia tus servidores de hora o los del proveedor.</td></tr>
+            <tr><td>Paquetes y actualizaciones</td><td>Un mirror interno, o un proxy de salida con una lista de dominios permitidos.</td></tr>
+            <tr><td>APIs de terceros (Stripe, un proveedor de modelos)</td><td>Por el proxy de salida, con la lista de dominios. Filtrar por IP no alcanza: las APIs grandes cambian de IP y comparten las de su CDN.</td></tr>
+            <tr><td>Correo</td><td>Solo hacia tu relay de SMTP, nunca el puerto 25 a cualquier lugar.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Un destino merece mención aparte: el servicio de metadatos de la nube, en <code>169.254.169.254</code>. Es el que dio credenciales en el caso de Capital One de <a href="m10-seguridad.html#ataques">M10</a>. Si tus contenedores o tus usuarios no tienen por qué hablarle, una regla de salida que lo bloquee para ellos cierra el camino de un SSRF hacia las credenciales del servidor.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>La salida cerrada rompe cosas que nadie sabía que existían: un <span class="no-autolink">agente</span> de monitoreo que reporta a su nube, una librería que baja certificados, un cron que llama a una API. Se introduce en dos pasos: primero una regla final que solo registra lo que se descartaría, durante una o dos semanas, para armar la lista real; después la política <code>drop</code>. Y la lista se mantiene: cada destino nuevo es un cambio revisado, no una excepción permanente.</p>
+      </aside>
+
+      <h2 id="host-vs-red"><span class="sec-num">32.6</span>Firewall de host, de red y segmentación</h2>
+
+      <p>Hay dos lugares donde poner un firewall, y en un sistema serio hay los dos. El <b>firewall de red</b> está en el camino entre redes: un equipo dedicado, un router, el firewall de la nube. Protege a todo lo que está detrás, incluso a equipos que no pueden filtrar por sí mismos (una impresora, un switch, un servicio administrado). El <b>firewall de host</b> corre en cada máquina, como el nftables de la sección 32.3. Viaja con el servidor, conoce sus procesos y su configuración, y sigue ahí si alguien cambia la red.</p>
+
+      <p>Tener los dos es <b>defensa en profundidad</b>, el principio de <a href="m10-seguridad.html#basicos">M10</a>: si uno queda mal configurado, el otro sigue. Y protege de lo que el perímetro no ve, el movimiento lateral. En una red plana, donde todas las máquinas internas se hablan libremente, un solo servidor comprometido llega a todos los demás.</p>
+
+      <p>De ahí salen dos ideas de diseño:</p>
+      <ul>
+        <li><b>DMZ.</b> Una <dfn data-term="dmz">DMZ</dfn> (zona desmilitarizada) es una red intermedia para lo que tiene que estar expuesto a internet: el balanceador, el proxy inverso, el servidor de correo. Internet llega a la DMZ, la DMZ llega a la red de aplicaciones por puertos concretos, y la red de datos solo acepta conexiones de la de aplicaciones. Si cae una máquina de la DMZ, el atacante todavía tiene dos fronteras por delante.</li>
+        <li><b>Segmentación y microsegmentación.</b> Llevar la idea al extremo: en lugar de zonas grandes, una regla por carga de trabajo. La <dfn data-term="micro-segmentacion">microsegmentación</dfn> dice "el servicio de facturas puede hablar con la base de facturas por el 5432, y nada más", y lo dice por identidad (una etiqueta, un security group, una cuenta de servicio) en lugar de por IP, que en la nube cambia todo el tiempo. Es lo que hacen las NetworkPolicies de Kubernetes y la autorización con mTLS de un <a href="m03-balanceo-gateways.html#mesh-identidad">service mesh</a>, y es la base de <a href="m28-cloudflare.html#zero-trust">Zero Trust</a>: ninguna red se considera confiable por sí misma.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Desde</th><th>Hacia</th><th>Se permite</th><th>Por qué</th></tr></thead>
+          <tbody>
+            <tr><td>Internet</td><td>DMZ (balanceador)</td><td>TCP 443 (y 80 solo para redirigir)</td><td>Es lo único público</td></tr>
+            <tr><td>DMZ</td><td>Aplicaciones</td><td>El puerto de cada servicio</td><td>El balanceador no necesita SSH a nada</td></tr>
+            <tr><td>Aplicaciones</td><td>Datos</td><td>5432, 6379, solo desde los servicios dueños de cada base</td><td>Una base, un dueño</td></tr>
+            <tr><td>Red de administración</td><td>Todo</td><td>SSH</td><td>Una sola puerta de entrada, registrada</td></tr>
+            <tr><td>Cualquiera</td><td>Internet</td><td>Por el proxy de salida, con lista de destinos</td><td>Sección 32.5</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="nube"><span class="sec-num">32.7</span>En la nube: security groups y NACL</h2>
+
+      <p>En AWS no administras el firewall de red: la VPC te da dos filtros, y conviene entender en qué se diferencian porque se comportan al revés. Un <dfn data-term="security-group">security group</dfn> es un firewall con estado asociado a cada interfaz de red (una instancia, una base RDS, un balanceador). Una <dfn data-term="nacl">NACL</dfn> (network ACL) es un filtro sin estado asociado a una subred entera.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th></th><th>Security group</th><th>NACL</th></tr></thead>
+          <tbody>
+            <tr><td><b>Dónde actúa</b></td><td>En cada interfaz asociada</td><td>En el borde de la subred, para todo lo que entra y sale de ella</td></tr>
+            <tr><td><b>Tipo de reglas</b></td><td>Solo allow</td><td>Allow y deny</td></tr>
+            <tr><td><b>Cómo evalúa</b></td><td>Todas las reglas; alcanza con que una permita</td><td>En orden, del número más bajo al más alto, hasta la primera que coincide</td></tr>
+            <tr><td><b>La respuesta</b></td><td>Pasa sola: tiene estado</td><td>Necesita su propia regla: no tiene estado</td></tr>
+            <tr><td><b>Por defecto</b></td><td>Uno nuevo no tiene reglas de entrada y permite toda la salida</td><td>La de la VPC permite todo; una creada por ti niega todo hasta que agregues reglas</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sim-note">Fuente: documentación de Amazon VPC, "Compare security groups and network ACLs". <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 364" role="img" aria-labelledby="f324t f324d">
+<title id="f324t">Security groups y NACL en una VPC</title>
+<desc id="f324d">Una VPC con una subred pública y una privada. Cada subred tiene una NACL en su borde: sin estado, con reglas numeradas de allow y deny, que evalúa por separado lo que entra y lo que sale. Cada instancia tiene un security group: con estado, solo reglas de allow, y la respuesta pasa sola. El security group de la base acepta el 5432 solo desde el security group de los servidores web.</desc>
+<defs><marker id="f324a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f324f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<text class="dg-group" x="6" y="22" text-anchor="start">Dos filtros distintos en el camino de un mismo paquete</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="6" y="128" width="96" height="50" rx="5"/>
+<text class="dg-label" x="54" y="150" text-anchor="middle" style="font-size:13.5px">Internet</text>
+<text class="dg-tiny" x="54" y="166" text-anchor="middle">cliente :443</text>
+<rect class="dg-frame" x="128" y="38" width="636" height="316" rx="8"/>
+<text class="dg-small" x="140" y="56" text-anchor="start">VPC 10.0.0.0/16</text>
+<rect class="dg-frame" x="158" y="70" width="270" height="212" rx="6"/>
+<text class="dg-small" x="188" y="88" text-anchor="start">Subred pública 10.0.1.0/24</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="150" y="100" width="16" height="156" rx="3"/>
+<text class="dg-tiny dg-in" x="158" y="272" text-anchor="middle">NACL A</text>
+<rect class="dg-frame" x="472" y="70" width="270" height="212" rx="6"/>
+<text class="dg-small" x="502" y="88" text-anchor="start">Subred privada 10.0.2.0/24</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="464" y="100" width="16" height="156" rx="3"/>
+<text class="dg-tiny dg-in" x="472" y="272" text-anchor="middle">NACL B</text>
+<rect x="202" y="108" width="170" height="64" rx="7" fill="none" stroke="var(--l-cache)" stroke-width="1.4" stroke-dasharray="5 3"/>
+<rect class="dg-box" x="212" y="118" width="150" height="44" rx="5"/>
+<text class="dg-label" x="287" y="145" text-anchor="middle" style="font-size:13.5px">web-1</text>
+<text class="dg-tiny" x="362" y="104" text-anchor="end" style="fill: var(--l-cache)">sg-web</text>
+<rect x="202" y="202" width="170" height="64" rx="7" fill="none" stroke="var(--l-cache)" stroke-width="1.4" stroke-dasharray="5 3"/>
+<rect class="dg-box" x="212" y="212" width="150" height="44" rx="5"/>
+<text class="dg-label" x="287" y="239" text-anchor="middle" style="font-size:13.5px">web-2</text>
+<text class="dg-tiny" x="362" y="198" text-anchor="end" style="fill: var(--l-cache)">sg-web</text>
+<rect x="530" y="140" width="170" height="64" rx="7" fill="none" stroke="var(--l-cache)" stroke-width="1.4" stroke-dasharray="5 3"/>
+<rect class="dg-box" x="540" y="150" width="150" height="44" rx="5"/>
+<text class="dg-label" x="615" y="177" text-anchor="middle" style="font-size:13.5px">base de datos</text>
+<text class="dg-tiny" x="690" y="136" text-anchor="end" style="fill: var(--l-cache)">sg-db</text>
+<path class="dg-edge" d="M104 153 H146" marker-end="url(#f324a)"/>
+<path class="dg-edge" d="M168 153 C185 153 188 140 199 140" marker-end="url(#f324a)"/>
+<path class="dg-edge" d="M362 162 C400 162 430 172 459 172" marker-end="url(#f324a)"/>
+<path class="dg-edge" d="M482 172 H527" marker-end="url(#f324a)"/>
+<text class="dg-tiny" x="420" y="150" text-anchor="middle">:5432</text>
+<text class="dg-tiny" x="600" y="228" text-anchor="middle">entra el 5432 solo si viene de sg-web</text>
+<text class="dg-tiny" x="146" y="306" text-anchor="start">NACL: por subred, sin estado, reglas numeradas de allow y deny; la respuesta necesita su propia regla</text>
+<text class="dg-tiny" x="146" y="326" text-anchor="start" style="fill: var(--l-cache)">Security group: por interfaz, con estado, solo allow; la respuesta pasa sola y puede nombrar otro SG</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 32.4.</b> Un paquete de internet a <code>web-1</code> pasa primero por la NACL de la subred y después por el security group de la instancia. El de la base no menciona ninguna IP: acepta el 5432 de lo que tenga asociado <code>sg-web</code>, cuantas instancias sean.</figcaption>
+      </figure>
+
+      <p>La consecuencia práctica de que la NACL no tenga estado es la misma de la sección 32.2: para cada regla de entrada hace falta una de salida para la respuesta, hacia los puertos efímeros del cliente. Y cada sistema usa un rango distinto: muchos kernels de Linux usan del 32&#8239;768 al 61&#8239;000, Windows Server 2008 y posteriores del 49&#8239;152 al 65&#8239;535, y los balanceadores de AWS, el NAT gateway y Lambda del 1&#8239;024 al 65&#8239;535. <span class="badge badge--doc">Documentado</span> Por eso, en la práctica, las NACL abren del 1&#8239;024 al 65&#8239;535 para las respuestas, y se usan como red de seguridad gruesa (bloquear un rango de IPs, separar subredes), mientras el control fino vive en los security groups.</p>
+
+      <p>Tres reglas para los security groups, que AWS también recomienda <span class="badge badge--doc">Documentado</span>:</p>
+      <ul>
+        <li><b>Nunca 22 ni 3389 abiertos a <code>0.0.0.0/0</code>.</b> El acceso de administración va desde un rango concreto o, mejor, sin abrir puertos, con un acceso gestionado como Session Manager (M37).</li>
+        <li><b>Referenciar otros security groups en lugar de IPs.</b> "El 5432 desde <code>sg-web</code>" sigue siendo correcto cuando el autoscaling agrega diez instancias. Es microsegmentación por identidad, como en la sección anterior.</li>
+        <li><b>Rangos de puertos chicos.</b> "Del 0 al 65&#8239;535 desde la VPC" es una red plana con otro nombre.</li>
+      </ul>
+
+      <p>Dos cosas que ninguno de los dos filtra: el tráfico hacia el DNS de la VPC (Route 53 Resolver) y hacia el servicio de metadatos de la instancia. <span class="badge badge--doc">Documentado</span> Para controlar el DNS existe el DNS Firewall de Route 53, y el acceso a los metadatos se limita en la configuración de la instancia (IMDSv2, que viste en M10) o con el firewall del host. Las otras nubes tienen equivalentes con la misma idea: las reglas de firewall de VPC de Google Cloud y los network security groups de Azure, los dos con estado.</p>
+
+      <h2 id="ngfw-waf"><span class="sec-num">32.8</span>NGFW, IDS/IPS y WAF</h2>
+
+      <p>Un firewall de puertos sabe que algo va al 443, no qué es. Las capas siguientes miran más adentro, a cambio de más CPU y de tener que descifrar.</p>
+
+      <ul>
+        <li><b>NGFW.</b> Un <dfn data-term="ngfw">NGFW</dfn> (next-generation firewall) suma al filtrado por puertos la identificación de aplicaciones por su tráfico (sabe que es SSH aunque vaya al 443), las reglas por usuario o grupo del directorio, el filtrado de URLs y un sistema de prevención de intrusiones. Para ver dentro de HTTPS necesita descifrarlo: actúa como intermediario con un certificado propio en el que confían los equipos de la empresa. Es habitual en redes corporativas y en el borde entre redes; en la nube, el equivalente administrado es un servicio como AWS Network Firewall.</li>
+        <li><b>IDS e IPS.</b> La <dfn data-term="ids-ips">detección de intrusiones</dfn> compara el tráfico (o la actividad de un host) contra firmas de ataques conocidos y contra comportamientos anómalos. Un IDS solo avisa; un IPS está en el camino y bloquea. Suricata y Snort son los motores de red más conocidos; OSSEC y Wazuh, los de host (<a href="m33-hardening-linux.html#rootkits">M33</a>).</li>
+        <li><b>WAF.</b> El firewall de aplicaciones ya lo conoces: en <a href="m03-balanceo-gateways.html#waf">M03</a> viste cómo evalúa cada request HTTP contra reglas como el OWASP CRS, y en <a href="m28-cloudflare.html#ddos">M28</a> cómo lo opera Cloudflare en el borde. Vive donde termina TLS, porque necesita la request en claro. Su diseño en la nube, con el resto de los controles, sigue en M37.</li>
+      </ul>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Lo que intenta el atacante</th><th>Quién lo ataja</th></tr></thead>
+          <tbody>
+            <tr><td>Recorrer tus puertos buscando qué está abierto</td><td>El firewall de puertos: con denegar por defecto, ve muy poco</td></tr>
+            <tr><td>Conectarse a la base desde internet</td><td>El firewall (y, en <a href="m33-hardening-linux.html#superficie">M33</a>, que la base ni siquiera escuche hacia afuera)</td></tr>
+            <tr><td>Explotar una vulnerabilidad conocida de un producto</td><td>El IPS o el WAF con firmas, mientras llega el parche</td></tr>
+            <tr><td>Una inyección SQL en un parámetro</td><td>El WAF, en parte, y sobre todo las consultas parametrizadas de la aplicación</td></tr>
+            <tr><td>Pedir la factura de otro cliente (BOLA)</td><td>Solo la aplicación: es una request perfectamente válida (<a href="m10-seguridad.html#bola-detalle">M10</a>)</td></tr>
+            <tr><td>Sacar los datos desde un servidor ya comprometido</td><td>El filtrado de salida (32.5)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="docker"><span class="sec-num">32.9</span>Docker, el firewall e IPv6</h2>
+
+      <p>Este es probablemente el agujero más común en servidores pequeños. Configuras UFW con política de entrada <code>deny</code>, levantas una base con <code>docker run -p 5432:5432 postgres</code> y crees que el puerto está cerrado porque nunca lo abriste en UFW. Está abierto a internet.</p>
+
+      <p>La documentación de Docker lo dice sin rodeos: Docker y UFW usan las reglas del firewall de formas que los hacen incompatibles, y el tráfico hacia un contenedor se desvía antes de pasar por las reglas de UFW. <span class="badge badge--doc">Documentado</span> El motivo está en la figura 32.3: Docker cambia el destino del paquete en <code>prerouting</code>, con NAT, hacia la IP interna del contenedor. Para el kernel, el paquete ya no es para esta máquina, así que va por <code>forward</code> y nunca pasa por <code>input</code>, que es donde UFW pone sus reglas.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f325t f325d">
+<title id="f325t">Por qué un puerto publicado por Docker no pasa por UFW</title>
+<desc id="f325d">Un paquete llega al puerto 8080 del host. En prerouting, la regla de NAT de Docker cambia el destino a la IP del contenedor. Como el destino ya no es el host, el paquete sigue por forward, donde Docker lo acepta, y nunca pasa por input, que es donde UFW tiene sus reglas. La cadena DOCKER-USER va antes que las reglas de Docker y es el lugar para filtrar.</desc>
+<defs><marker id="f325a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f325f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker></defs>
+<text class="dg-group" x="6" y="22" text-anchor="start">docker run -p 8080:80 nginx, con ufw deny 8080 activo</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="6" y="50" width="104" height="64" rx="5"/>
+<text class="dg-label" x="58.0" y="72" text-anchor="middle" style="font-size:13.5px">Paquete</text>
+<text class="dg-tiny" x="58.0" y="90" text-anchor="middle">a host:8080</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="134" y="50" width="150" height="64" rx="5"/>
+<text class="dg-label" x="209.0" y="72" text-anchor="middle" style="font-size:13.5px">prerouting (nat)</text>
+<text class="dg-tiny" x="209.0" y="90" text-anchor="middle">Docker: DNAT a</text>
+<text class="dg-tiny" x="209.0" y="105" text-anchor="middle">172.17.0.2:80</text>
+<rect class="dg-frame" x="306" y="38" width="300" height="88" rx="6"/>
+<text class="dg-small" x="316" y="54" text-anchor="start">forward</text>
+<rect class="dg-ok" x="318" y="62" width="130" height="56" rx="5"/>
+<text class="dg-label" x="383.0" y="84" text-anchor="middle" style="font-size:13.5px">DOCKER-USER</text>
+<text class="dg-tiny" x="383.0" y="102" text-anchor="middle">tus reglas, primero</text>
+<rect class="dg-box" x="466" y="62" width="128" height="56" rx="5"/>
+<text class="dg-label" x="530.0" y="84" text-anchor="middle" style="font-size:13.5px">DOCKER</text>
+<text class="dg-tiny" x="530.0" y="102" text-anchor="middle">acepta lo publicado</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="630" y="50" width="134" height="64" rx="5"/>
+<text class="dg-label" x="697.0" y="72" text-anchor="middle" style="font-size:13.5px">Contenedor</text>
+<text class="dg-tiny" x="697.0" y="90" text-anchor="middle">nginx :80</text>
+<path class="dg-edge" d="M112 82 H131" marker-end="url(#f325a)"/>
+<path class="dg-edge" d="M286 90 H315" marker-end="url(#f325a)"/>
+<path class="dg-edge" d="M450 90 H463" marker-end="url(#f325a)"/>
+<path class="dg-edge" d="M596 90 H627" marker-end="url(#f325a)"/>
+<rect x="134" y="166" width="300" height="60" rx="5" fill="var(--paper-2)" stroke="var(--separator-strong)" stroke-dasharray="4 4"/>
+<text class="dg-label" x="284" y="188" text-anchor="middle" style="font-size:13.5px;fill:var(--label-3)">input: aquí están las reglas de UFW</text>
+<text class="dg-tiny" x="284" y="208" text-anchor="middle">ufw deny 8080 nunca se evalúa para este paquete</text>
+<path class="dg-feedback" d="M209 116 V162" marker-end="url(#f325f)" style="stroke: var(--fail)"/>
+<text class="dg-tiny dg-fail-text" x="218" y="146" text-anchor="start">el destino ya no es el host: no pasa por acá</text>
+<text class="dg-tiny dg-in" x="456" y="246" text-anchor="middle">Arreglo: filtra en DOCKER-USER, o publica solo en 127.0.0.1 (-p 127.0.0.1:8080:80)</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 32.5.</b> El paquete al 8080 se redirige al contenedor antes de que UFW lo vea. Las reglas que sí se evalúan están en <code>forward</code>, y la primera cadena ahí es <code>DOCKER-USER</code>, la que Docker deja para ti.</figcaption>
+      </figure>
+
+      <p>Además, Docker publica los puertos en todas las direcciones del host, <code>0.0.0.0</code> y <code>[::]</code>, salvo que digas otra cosa, y su propia documentación advierte que publicar puertos de un contenedor es inseguro por defecto. <span class="badge badge--doc">Documentado</span> Los arreglos, de más simple a más general:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">No publicar lo que no es público</span>Una base o una caché que solo usan otros contenedores no necesita <code>-p</code>: los contenedores de la misma red de Docker se hablan por el nombre del servicio. En Compose, eso es no poner <code>ports</code>.</li>
+        <li><span class="step-title">Publicar solo en localhost</span><code>-p 127.0.0.1:8080:80</code> (o <code>"127.0.0.1:8080:80"</code> en los <code>ports</code> de Compose) deja el puerto accesible solo desde el propio host, por ejemplo para un nginx que hace de proxy inverso. Con versiones de Docker anteriores a la 28.0.0, otros equipos del mismo segmento de red podían llegar igual a esos puertos, así que conviene estar actualizado. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Filtrar en DOCKER-USER</span>Es la cadena que Docker evalúa antes que las suyas. El ejemplo de su documentación deja entrar por la interfaz externa solo a una IP: <code>iptables -I DOCKER-USER -i ext_if ! -s 192.0.2.2 -j DROP</code>. Para UFW existe un proyecto comunitario, <code>ufw-docker</code>, que agrega reglas ahí para que <code>ufw</code> vuelva a mandar.</li>
+        <li><span class="step-title">Un firewall delante del host</span>Un security group o el firewall del proveedor no se entera de lo que haga Docker adentro: es la defensa en profundidad de la sección 32.6 resolviendo un caso real.</li>
+      </ol>
+
+      <p>Docker también tiene un backend de nftables, todavía experimental, que se elige con la opción <code>firewall-backend</code> del daemon. <span class="badge badge--doc">Documentado</span> El problema de fondo no cambia: Docker escribe sus propias reglas, y hay que saber dónde.</p>
+
+      <h3 id="ipv6">IPv6: el firewall que nadie configuró</h3>
+
+      <p>El otro olvido clásico. Muchos servidores tienen hoy una dirección IPv6 pública que nadie pidió, y sus servicios escuchan en <code>[::]</code> igual que en <code>0.0.0.0</code>. Si las reglas se escribieron solo para IPv4, con iptables, por IPv6 todo está abierto: ip6tables es otra tabla, con otras reglas, que empieza vacía.</p>
+
+      <ul>
+        <li>En nftables, la familia <code>inet</code> cubre las dos versiones con las mismas reglas. Es la razón principal para usarla.</li>
+        <li>En UFW, <code>IPV6=yes</code> en <code>/etc/default/ufw</code> hace que cada regla se cree también para IPv6; <code>ufw status</code> las muestra con <code>(v6)</code>.</li>
+        <li>En AWS, las NACL evalúan IPv4 e IPv6 por separado: ninguna regla de IPv4 aplica a IPv6, y los security groups necesitan sus reglas con <code>::/0</code> aparte. <span class="badge badge--doc">Documentado</span></li>
+        <li>No bloquees todo ICMPv6: sin él no funciona ni el descubrimiento de vecinos ni la detección de MTU, y la red IPv6 deja de andar.</li>
+      </ul>
+
+      <p>La comprobación es simple: desde otra máquina, prueba tus puertos contra la dirección IPv6 del servidor, no solo contra la IPv4.</p>
+
+      <h2 id="evasion"><span class="sec-num">32.10</span>Cuando el firewall no alcanza: cómo se evita un perímetro y cómo se detecta</h2>
+
+      <p>Un firewall y un reverse proxy son controles, no muros. Un atacante con oficio rara vez "rompe" la pared de frente: busca un camino que el control da por legítimo, o ataca una capa que el control no mira. Esta sección clasifica esos caminos con un solo fin, <b>detectarlos y cerrarlos</b>. Es la contraparte de red de <a href="m33-hardening-linux.html#sin-firewall">M33&#8239;§&#8239;33.10</a>, que endurece el servidor suponiendo que el perímetro ya cedió. No hay recetas de intrusión: hay patrones para reconocer y arreglos para aplicar.</p>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">Mentalidad: asume la brecha</p>
+        <p>Un firewall es prevención, y la prevención a veces falla. Contra un atacante bueno, la pregunta deja de ser "¿cómo evito que entre?" y pasa a ser "cuando encuentre un camino, ¿en cuánto tiempo lo veo y cuánto puede hacer antes de que lo corte?". De ahí salen las tres piezas de esta sección: capas que se estorban entre sí (<a href="#host-vs-red">§&#8239;32.6</a>), señales que delatan el camino, y una respuesta ensayada. La métrica que importa es el tiempo hasta detectar, no la altura del muro.</p>
+      </aside>
+
+      <p>Los caminos conocidos caen en cinco grupos. Para cada uno vale la misma estructura: cómo se ve el patrón, con qué señal se detecta y con qué control se cierra.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>El camino</th><th>Cómo se ve el patrón</th><th>Cómo se detecta</th><th>Cómo se cierra</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Salir por un puerto que ya está abierto</b><br><span class="dg-small">Un equipo comprometido habla hacia afuera por 443 o por DNS, los puertos que todos dejan salir. Es el canal de control y la vía para sacar datos.</span></td>
+              <td>Tráfico que parece HTTPS o DNS, pero con un destino nuevo, a intervalos regulares (<i>beaconing</i>), con volúmenes de DNS altos o dominios recién registrados.</td>
+              <td>Registro de DNS y de conexiones de salida. Un destino raro que se repite cada pocos minutos salta a la vista. El egress es el mejor detector que tienes (<a href="#entrada-salida">§&#8239;32.5</a>).</td>
+              <td>Lista de permitidos de salida, DNS forzado a un resolver propio con registro, proxy de salida con inspección y bloqueo de DNS-over-HTTPS no autorizado.</td>
+            </tr>
+            <tr>
+              <td><b>Atacar la capa que el firewall no inspecciona</b><br><span class="dg-small">El firewall deja pasar el 443, y dentro va una inyección SQL, un SSRF o una deserialización. El paquete es válido; el problema está en la aplicación.</span></td>
+              <td>Picos de errores de la aplicación, consultas a la base fuera de lo normal, o salidas del servidor hacia <code>169.254.169.254</code> (el metadata de la nube) que antes no existían.</td>
+              <td>Registro del WAF y de la aplicación, correlacionados. Un WAF cuenta lo que bloquea; la aplicación cuenta lo que llegó a ejecutarse.</td>
+              <td>Arreglar en la aplicación (consultas parametrizadas, validar destinos de salida), WAF por delante como segunda capa y egress que corte el acceso al metadata.</td>
+            </tr>
+            <tr>
+              <td><b>Saltarse el reverse proxy o el WAF</b><br><span class="dg-small">En vez de pasar por el proxy que filtra, el atacante llega directo al servidor de origen, o aprovecha que el proxy y el origen interpretan una misma petición de forma distinta.</span></td>
+              <td>Peticiones que llegan al origen sin venir del proxy, discrepancias entre lo que registra el proxy y lo que registra el origen, respuestas que no cuadran con la petición.</td>
+              <td>Comparar los registros del proxy con los del origen. Una petición en el origen sin su par en el proxy es la señal.</td>
+              <td>Que solo el proxy alcance el origen (grupo de seguridad, mTLS o un secreto compartido), ocultar la IP del origen, y <span class="no-autolink">normalizar</span> las peticiones. Más abajo, el detalle.</td>
+            </tr>
+            <tr>
+              <td><b>Abusar de un acceso de confianza</b><br><span class="dg-small">Con credenciales robadas, un token de sesión o un punto de apoyo en la red "interna", el atacante usa caminos que para el firewall son de un usuario legítimo.</span></td>
+              <td>Inicios de sesión desde lugares u horarios inusuales, un servicio que de pronto habla con otro con el que nunca habló, uso de credenciales de servicio fuera de su patrón.</td>
+              <td>Registro de accesos y de identidad, correlacionado con la línea de base de cada cuenta y servicio (<a href="m10-seguridad.html#credenciales-detalle">M10</a>).</td>
+              <td>Zero Trust (<a href="m28-cloudflare.html#zero-trust">M28</a>): no confiar en la red de origen, MFA, microsegmentación (<a href="#host-vs-red">§&#8239;32.6</a>) y mínimo privilegio por servicio.</td>
+            </tr>
+            <tr>
+              <td><b>El propio equipo de seguridad como entrada</b><br><span class="dg-small">El firewall, la VPN o el WAF son software, y han tenido fallos críticos muy explotados. El dispositivo del borde, al estar expuesto por diseño, es un blanco de primera.</span></td>
+              <td>Versiones sin parchear en el inventario, comportamiento raro del propio equipo, y los avisos de los fabricantes sobre fallos explotados en el momento.</td>
+              <td>Vigilar los boletines del fabricante y la integridad del equipo. Un fallo en el borde se explota a los días de publicarse.</td>
+              <td>Parchar el borde con urgencia, sacar la interfaz de gestión de internet, MFA en la VPN y reducir lo que el equipo expone.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="origen">El reverse proxy y el WAF: que no se los salten</h3>
+
+      <p>Un reverse proxy con WAF solo protege si <b>todo</b> el tráfico pasa por él. Dos descuidos lo anulan. El primero es dejar el servidor de origen accesible por su cuenta: si el atacante averigua su IP, pide directo y el WAF ni se entera. El arreglo es de red, no de aplicación: el grupo de seguridad del origen acepta solo al balanceador o al proxy (<a href="#nube">§&#8239;32.7</a>), y además el origen exige una prueba de que la petición vino del proxy, con mTLS o con un encabezado secreto que el proxy agrega y el origen verifica. Ocultar la IP del origen ayuda, pero no es la defensa; la defensa es que el origen rechace a cualquiera que no sea el proxy.</p>
+
+      <p>El segundo descuido es más sutil. El proxy y el servidor de origen pueden interpretar de forma distinta dónde empieza y dónde termina una misma petición HTTP. Cuando esa interpretación no coincide, lo que el proxy ve como una petición el origen lo ve como dos, y el WAF filtra una cosa mientras el origen procesa otra. Es la familia del <i>request smuggling</i>. No hace falta saber fabricar esas peticiones para defenderse; basta con cerrar la discrepancia: usar HTTP/2 de <span class="no-autolink">extremo a extremo</span>, rechazar las peticiones ambiguas en lugar de "arreglarlas", y que el proxy y el origen usen la misma biblioteca o la misma versión de parseo. La señal que lo delata ya está en la tabla: una petición en el origen que no tiene su par exacto en el registro del proxy.</p>
+
+      <h3 id="deteccion">Detección: señales, no muros</h3>
+
+      <p>Contra un atacante que ya evita el perímetro, la defensa deja de ser una pared y pasa a ser la capacidad de ver. Tres ideas la sostienen. Primero, centralizar las señales fuera de los servidores: registros de conexiones de salida, de DNS, del WAF, de identidad y del endpoint, todos en un mismo lugar donde el atacante no pueda borrarlos (<a href="m33-hardening-linux.html#auditoria">M33&#8239;§&#8239;33.8</a>). Segundo, correlacionar: un inicio de sesión raro, seguido de un servicio que habla con otro nuevo, seguido de una salida a un destino desconocido, cuenta una historia que cada señal por separado no cuenta. Tercero, la caza de amenazas (<i>threat hunting</i>): en vez de esperar la alarma, buscar a mano los patrones de la tabla sobre los datos, suponiendo que el atacante ya está dentro.</p>
+
+      <p>De todas las señales, la salida es la más barata y la más delatora. Un atacante puede entrar de mil formas, pero casi siempre necesita hablar hacia afuera para recibir órdenes y para sacar los datos. Un egress bien filtrado y bien registrado (<a href="#entrada-salida">§&#8239;32.5</a>) convierte ese paso obligado en el lugar donde lo atrapas. Es la misma lógica que la observabilidad del curso: la alerta útil es la que mide síntomas con sentido, no la que grita por cada paquete (<a href="m11-observabilidad.html#alertas">M11</a>).</p>
+
+      <h3 id="responder-evasion">Responder a un atacante con oficio</h3>
+
+      <p>Cuando la señal aparece, la respuesta también estaba ensayada o no sirve. Cuatro principios. La <b>defensa en profundidad</b>: ninguna capa se confía a sí misma, de modo que saltar el firewall deja al atacante frente al servidor endurecido, al mínimo privilegio y al egress. <b>Contener sin avisar</b>: aislar el equipo comprometido de la red, pero con cuidado de no espantar al atacante antes de entender qué tocó, igual que en la respuesta a incidentes del curso (<a href="m11-observabilidad.html#incidentes">M11</a>) y en <a href="m33-hardening-linux.html#responder">M33&#8239;§&#8239;33.10</a>. <b>Rotar y reconstruir</b>: dar por quemadas las credenciales que ese equipo podía ver y levantar la máquina de nuevo desde una imagen conocida, porque un atacante bueno deja más de una puerta. Y <b>cerrar el camino</b>, no solo el síntoma: si entró por un servicio expuesto de más, la corrección es quitar la exposición, no bloquear una sola IP. Zero Trust, el WAF administrado y la defensa de borde a escala vuelven en M37.</p>
+
+      <h2 id="fallos"><span class="sec-num">32.11</span>Fallos típicos</h2>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Síntoma</th><th>Causa</th><th>Cómo se evita</th></tr></thead>
+          <tbody>
+            <tr><td>Te quedas afuera del servidor después de un cambio</td><td>La regla del SSH quedó mal o después de un <code>drop</code></td><td>Consola del proveedor a mano, <code>nft -c</code> y una vuelta atrás automática</td></tr>
+            <tr><td>Las reglas desaparecen al reiniciar</td><td>Se cargaron a mano y nunca se guardaron</td><td>Archivo versionado y <code>systemctl enable nftables</code> (o <code>--permanent</code> en firewalld)</td></tr>
+            <tr><td>Una base aparece abierta a internet con UFW activo</td><td>Docker publicó el puerto por <code>forward</code></td><td>No publicar, publicar en <code>127.0.0.1</code> o filtrar en <code>DOCKER-USER</code></td></tr>
+            <tr><td>Todo está cerrado por IPv4 y abierto por IPv6</td><td>Reglas solo de iptables</td><td>Familia <code>inet</code>, <code>IPV6=yes</code>, probar las dos direcciones</td></tr>
+            <tr><td>Conexiones que se cuelgan al mandar respuestas grandes</td><td>Se bloqueó todo ICMP y se rompió la detección de MTU</td><td>Permitir ICMP y ICMPv6 de error</td></tr>
+            <tr><td>Conexiones nuevas que fallan en un pico</td><td>La tabla de conntrack se llenó</td><td>Vigilar su uso, subir el límite, excluir del seguimiento lo que no lo necesita</td></tr>
+            <tr><td>Una regla nueva "no hace nada"</td><td>Hay otra más amplia antes, o la escribió otra herramienta</td><td><code>nft list ruleset</code> completo, no solo lo que escribiste tú</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Lo que sigue en esta parte: el firewall es una capa, y <a href="m33-hardening-linux.html">M33</a> se ocupa de qué hacer con el servidor mismo, suponiendo que esa capa falla. Los firewalls administrados de la nube, el WAF y Zero Trust vuelven en M37.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m32"></div>
+
+      <section class="exercise" aria-labelledby="ej-m32">
+        <p class="exercise-title" id="ej-m32">Ejercicio de diseño: las reglas de una aplicación web con base de datos</p>
+        <p>Tienes una aplicación en AWS: un balanceador público, dos servidores de aplicación en una subred privada que atienden en el puerto 8080, y un PostgreSQL en otra subred privada. Los servidores llaman a la API de Stripe y bajan actualizaciones. El equipo administra todo desde la VPN de la empresa (10.8.0.0/16). Un auditor te pide la lista de reglas de entrada y de salida de cada pieza, dónde va el WAF y qué pasa con IPv6.</p>
+        <details>
+          <summary>Ver la solución de referencia</summary>
+          <ul>
+            <li><b>Security group del balanceador (<code>sg-lb</code>):</b> entrada TCP 443 desde <code>0.0.0.0/0</code> y <code>::/0</code>, y 80 solo para redirigir a HTTPS. Salida: TCP 8080 hacia <code>sg-app</code>, nada más.</li>
+            <li><b>WAF:</b> asociado al balanceador, donde termina TLS, con el conjunto de reglas administrado y límites de tasa. No sustituye la validación de la aplicación ni los controles de autorización.</li>
+            <li><b>Security group de la aplicación (<code>sg-app</code>):</b> entrada TCP 8080 solo desde <code>sg-lb</code>, y SSH solo desde 10.8.0.0/16 (mejor todavía: sin SSH, con Session Manager). Salida: TCP 5432 hacia <code>sg-db</code>, y HTTPS solo a través de un proxy de salida o un firewall con lista de dominios (la API de Stripe y los repositorios), nunca 443 a todo internet.</li>
+            <li><b>Security group de la base (<code>sg-db</code>):</b> entrada TCP 5432 solo desde <code>sg-app</code>. Salida: nada que no sea la respuesta, que pasa sola por el estado. La base no tiene IP pública.</li>
+            <li><b>NACL:</b> las de las subredes privadas como red gruesa: entrada solo desde los rangos de la VPC y de la VPN, salida hacia esos rangos y los puertos efímeros de 1&#8239;024 a 65&#8239;535 para las respuestas. Recuerda que no tienen estado.</li>
+            <li><b>Firewall de host:</b> en los servidores de aplicación, nftables con política <code>drop</code> en entrada y salida que repite lo esencial (8080 desde la subred del balanceador, 5432 hacia la base, DNS solo al resolver de la VPC). Si alguien abre de más un security group, el host sigue cerrado. Y bloqueo del acceso a <code>169.254.169.254</code> para todo lo que no sea el <span class="no-autolink">agente</span> que lo necesita, con IMDSv2 obligatorio.</li>
+            <li><b>IPv6:</b> si la VPC tiene IPv6, cada regla con <code>0.0.0.0/0</code> tiene su par con <code>::/0</code> solo donde corresponde (el balanceador), y las NACL llevan sus reglas de IPv6 aparte. Se verifica con una prueba desde afuera contra las dos direcciones.</li>
+            <li><b>Registro:</b> VPC Flow Logs y los logs del WAF a un almacenamiento centralizado, con alertas para los rechazos de salida: un servidor de aplicación que intenta conectarse a un destino que no está en la lista es una señal de compromiso.</li>
+          </ul>
+        </details>
+      </section>
+
+      <div data-checkpoint="m32"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m32.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-firewall.js"></script>
+</body>
+</html>

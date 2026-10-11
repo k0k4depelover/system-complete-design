@@ -76,7 +76,102 @@
   </table>
 </div>
 
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 310" role="img" aria-labelledby="f20n1t f20n1d">
+<title id="f20n1t">Las piezas alrededor del modelo</title>
+<desc id="f20n1d">La API de chat en el centro. A la izquierda, el cliente; a la derecha, la inferencia (el motor del M15, la flota del M19 y las cuotas del M18). Arriba, las conversaciones guardadas como árbol, los archivos con su índice y el sandbox de código. Abajo, el buffer de streams, la memoria entre conversaciones y la moderación con el feedback. Cada caja dice en qué sección se trata.</desc>
+<defs><marker id="f20n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="130" width="120" height="50" rx="10"/>
+<text class="dg-label" x="80" y="152" text-anchor="middle">Cliente</text>
+<text class="dg-tiny" x="80" y="169" text-anchor="middle">navegador, app</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="300" y="124" width="170" height="62" rx="10"/>
+<text class="dg-label" x="385" y="144" text-anchor="middle">API de chat</text>
+<text class="dg-tiny" x="385" y="161" text-anchor="middle">arma el contexto</text>
+<text class="dg-tiny" x="385" y="176" text-anchor="middle">y reenvía el stream (M17)</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="630" y="124" width="120" height="62" rx="10"/>
+<text class="dg-label" x="690" y="144" text-anchor="middle">Inferencia</text>
+<text class="dg-tiny" x="690" y="161" text-anchor="middle">motor M15, flota M19</text>
+<text class="dg-tiny" x="690" y="176" text-anchor="middle">cuotas M18</text>
+<path class="dg-edge" d="M142 155 H296" marker-end="url(#f20n1a)"/>
+<path class="dg-edge" d="M472 155 H626" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="140" y="26" width="160" height="50" rx="10"/>
+<text class="dg-label" x="220" y="48" text-anchor="middle">Conversaciones</text>
+<text class="dg-tiny" x="220" y="65" text-anchor="middle">árbol de mensajes · 20.2</text>
+<path class="dg-edge" d="M324 122 L220 80" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="315" y="26" width="160" height="50" rx="10"/>
+<text class="dg-label" x="395" y="48" text-anchor="middle">Archivos y RAG</text>
+<text class="dg-tiny" x="395" y="65" text-anchor="middle">índice vectorial · 20.5</text>
+<path class="dg-edge" d="M385 122 L395 80" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-external)" x="490" y="26" width="160" height="50" rx="10"/>
+<text class="dg-label" x="570" y="48" text-anchor="middle">Sandbox de código</text>
+<text class="dg-tiny" x="570" y="65" text-anchor="middle">microVM · 20.6</text>
+<path class="dg-edge" d="M446 122 L570 80" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="140" y="234" width="160" height="50" rx="10"/>
+<text class="dg-label" x="220" y="256" text-anchor="middle">Buffer de streams</text>
+<text class="dg-tiny" x="220" y="273" text-anchor="middle">reanudar · 20.4</text>
+<path class="dg-edge" d="M324 188 L220 230" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="315" y="234" width="160" height="50" rx="10"/>
+<text class="dg-label" x="395" y="256" text-anchor="middle">Memoria</text>
+<text class="dg-tiny" x="395" y="273" text-anchor="middle">entre conversaciones · 20.7</text>
+<path class="dg-edge" d="M385 188 L395 230" marker-end="url(#f20n1a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="490" y="234" width="160" height="50" rx="10"/>
+<text class="dg-label" x="570" y="256" text-anchor="middle">Moderación</text>
+<text class="dg-tiny" x="570" y="273" text-anchor="middle">y feedback · 20.8</text>
+<path class="dg-edge" d="M446 188 L570 230" marker-end="url(#f20n1a)"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.1.</b> La tabla de arriba como mapa. El modelo está a la derecha, detrás de la API de chat; casi todo lo demás es backend clásico, con datos de una forma nueva.</figcaption>
+      </figure>
+
 <p>Para dimensionar: OpenAI informó en octubre de 2025 más de 800 millones de usuarios semanales de ChatGPT. <span class="badge badge--doc">Documentado</span> Si cada uno tiene 3 conversaciones por semana de 8 turnos (16 mensajes), son 2&#8239;400 millones de conversaciones y 38&#8239;400 millones de mensajes por semana: unas 4&#8239;000 conversaciones nuevas y 63&#8239;500 mensajes escritos por segundo en promedio, y con 2&#8239;KB por mensaje, 77&#8239;TB nuevos por semana. <span class="badge badge--ref">Diseño de referencia</span> Esos números piden particionar desde el primer día, y la clave natural es la conversación: casi toda lectura y escritura toca una sola.</p>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="f20n2t f20n2d">
+<title id="f20n2t">De 800 millones de usuarios a 77 TB por semana</title>
+<desc id="f20n2d">Una cadena de cálculos: 800 millones de usuarios por semana, con 3 conversaciones cada uno, son 2 400 millones de conversaciones; con 16 mensajes cada una, 38 400 millones de mensajes por semana. Una semana tiene 604 800 segundos: unas 4 000 conversaciones nuevas y 63 500 mensajes por segundo. Con 2 KB por mensaje, 77 TB nuevos por semana.</desc>
+<defs><marker id="f20n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="14" y="34" width="124" height="96" rx="10" fill="color-mix(in srgb, var(--l-client) 22%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-big" x="76" y="70" text-anchor="middle">800 M</text>
+<text class="dg-small" x="76" y="92" text-anchor="middle">usuarios</text>
+<text class="dg-tiny" x="76" y="110" text-anchor="middle">por semana</text>
+<path class="dg-edge" d="M141 82 H167" marker-end="url(#f20n2a)"/>
+<text class="dg-tiny" x="154" y="22" text-anchor="middle">× 3</text>
+<path class="dg-feedback" d="M154.0 26 V76"/>
+<rect x="170" y="34" width="124" height="96" rx="10" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-big" x="232" y="70" text-anchor="middle">2 400 M</text>
+<text class="dg-small" x="232" y="92" text-anchor="middle">conversaciones</text>
+<text class="dg-tiny" x="232" y="110" text-anchor="middle">por semana</text>
+<path class="dg-edge" d="M297 82 H323" marker-end="url(#f20n2a)"/>
+<text class="dg-tiny" x="310" y="22" text-anchor="middle">× 16</text>
+<path class="dg-feedback" d="M310.0 26 V76"/>
+<rect x="326" y="34" width="124" height="96" rx="10" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-big" x="388" y="70" text-anchor="middle">38 400 M</text>
+<text class="dg-small" x="388" y="92" text-anchor="middle">mensajes</text>
+<text class="dg-tiny" x="388" y="110" text-anchor="middle">por semana</text>
+<path class="dg-edge" d="M453 82 H479" marker-end="url(#f20n2a)"/>
+<text class="dg-tiny" x="466" y="22" text-anchor="middle">÷ 604 800 s</text>
+<path class="dg-feedback" d="M466.0 26 V76"/>
+<rect x="482" y="34" width="124" height="96" rx="10" fill="color-mix(in srgb, var(--l-service) 22%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-big" x="544" y="70" text-anchor="middle">63 500</text>
+<text class="dg-small" x="544" y="92" text-anchor="middle">mensajes/s</text>
+<text class="dg-tiny" x="544" y="110" text-anchor="middle">4 000 conversaciones/s</text>
+<path class="dg-edge" d="M609 82 H635" marker-end="url(#f20n2a)"/>
+<text class="dg-tiny" x="622" y="22" text-anchor="middle">× 2 KB</text>
+<path class="dg-feedback" d="M622.0 26 V76"/>
+<rect x="638" y="34" width="124" height="96" rx="10" fill="color-mix(in srgb, var(--l-external) 22%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-big" x="700" y="70" text-anchor="middle">77 TB</text>
+<text class="dg-small" x="700" y="92" text-anchor="middle">nuevos</text>
+<text class="dg-tiny" x="700" y="110" text-anchor="middle">por semana</text>
+<rect class="dg-box" x="130" y="150" width="510" height="40" rx="8"/>
+<text class="dg-small" x="385" y="175" text-anchor="middle">Casi toda lectura y escritura toca una sola conversación: es la clave de partición.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.2.</b> La cuenta del párrafo anterior, eslabón por eslabón. Solo los 800 millones son un dato publicado; las conversaciones por usuario, los mensajes y los 2 KB son supuestos del diseño. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
 <h2 id="esquema"><span class="sec-num">20.2</span>El esquema de datos</h2>
 
@@ -109,6 +204,68 @@
   <p class="callout-label">Trade-off</p>
   <p>El historial lateral ("mis conversaciones") se consulta por usuario, pero las conversaciones se particionan por id. Un índice global por <code>user_id</code> obliga a consultar todas las particiones; la salida habitual es una tabla aparte, particionada por usuario, que guarda solo id, título y fecha, y se actualiza con cada turno. Es una desnormalización: dos escrituras por turno a cambio de una lectura que toca una sola partición.</p>
 </aside>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f20n3t f20n3d">
+<title id="f20n3t">Dos tablas, dos escrituras por turno</title>
+<desc id="f20n3d">A la izquierda, la tabla de conversaciones particionada por id: las cuatro conversaciones de un usuario quedan repartidas en cuatro particiones, y listar su historial obliga a consultarlas todas. A la derecha, una tabla aparte particionada por usuario, con solo id, título y fecha: el historial del usuario vive en una sola partición. Cada turno escribe en las dos.</desc>
+<defs><marker id="f20n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">conversations, partición por id</text>
+<rect class="dg-box" x="20" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="59" y="58" text-anchor="middle">partición 1</text>
+<rect x="28" y="68" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="28" y="94" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="28" y="120" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="28" y="146" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect class="dg-box" x="108" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="147" y="58" text-anchor="middle">partición 2</text>
+<rect x="116" y="68" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="116" y="94" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="116" y="120" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="116" y="146" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect class="dg-box" x="196" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="235" y="58" text-anchor="middle">partición 3</text>
+<rect x="204" y="68" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="204" y="94" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="204" y="120" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="204" y="146" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect class="dg-box" x="284" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="323" y="58" text-anchor="middle">partición 4</text>
+<rect x="292" y="68" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="292" y="94" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="292" y="120" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="292" y="146" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<text class="dg-tiny dg-fail-text" x="190" y="200" text-anchor="middle">el historial de un usuario toca las cuatro</text>
+<text class="dg-group" x="450" y="26" text-anchor="start">historial por usuario, partición por user_id</text>
+<rect class="dg-box" x="450" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="489" y="58" text-anchor="middle">partición de U</text>
+<rect x="458" y="68" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="458" y="94" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="458" y="120" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect x="458" y="146" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1.2"/>
+<rect class="dg-box" x="540" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="579" y="58" text-anchor="middle">otra</text>
+<rect x="548" y="68" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="548" y="94" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="548" y="120" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="548" y="146" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect class="dg-box" x="630" y="40" width="78" height="136" rx="6"/>
+<text class="dg-tiny" x="669" y="58" text-anchor="middle">otra</text>
+<rect x="638" y="68" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="638" y="94" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="638" y="120" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<rect x="638" y="146" width="62" height="20" rx="3" fill="none" stroke="var(--separator-strong)"/>
+<text class="dg-tiny" x="580" y="200" text-anchor="middle">solo id, título y fecha: una partición</text>
+<rect x="20" y="222" width="14" height="14" rx="3" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<text class="dg-tiny" x="40" y="233" text-anchor="start">conversaciones del usuario U</text>
+<rect class="dg-warnbox" x="200" y="248" width="370" height="40" rx="8"/>
+<text class="dg-small" x="385" y="273" text-anchor="middle">cada turno: escribe en las dos tablas</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.3.</b> La desnormalización del trade-off: la tabla grande se parte por conversación y una tabla chica, por usuario. Se paga una escritura más por turno para que el historial lateral lea una sola partición. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
 <h2 id="arbol"><span class="sec-num">20.3</span>Los mensajes son un árbol</h2>
 
@@ -166,7 +323,7 @@
 <text class="dg-small" x="680" y="322" text-anchor="middle" style="font-weight:600">current_node</text>
 </svg>
   </div>
-  <figcaption><b>Figura 20.1.</b> Regenerar agrega una respuesta hermana y editar agrega un mensaje hermano. Lo que se muestra, y lo que se manda al modelo, es el camino desde la raíz hasta <code>current_node</code> (resaltado).</figcaption>
+  <figcaption><b>Figura 20.4.</b> Regenerar agrega una respuesta hermana y editar agrega un mensaje hermano. Lo que se muestra, y lo que se manda al modelo, es el camino desde la raíz hasta <code>current_node</code> (resaltado).</figcaption>
 </figure>
 
 <figure class="schema">
@@ -275,7 +432,7 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
 <text class="dg-tiny" x="306.25" y="406" text-anchor="middle">INSERT respuesta, current_node</text>
 </svg>
   </div>
-  <figcaption><b>Figura 20.2.</b> El mensaje se guarda antes de llamar al modelo, los tokens se copian a un buffer mientras se reenvían, y la respuesta completa se guarda al final. Una desconexión no pierde nada: el cliente reanuda desde el último evento.</figcaption>
+  <figcaption><b>Figura 20.5.</b> El mensaje se guarda antes de llamar al modelo, los tokens se copian a un buffer mientras se reenvían, y la respuesta completa se guarda al final. Una desconexión no pierde nada: el cliente reanuda desde el último evento.</figcaption>
 </figure>
 
 <ol class="steps">
@@ -285,6 +442,58 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
   <li><span class="step-title">Reenviar y copiar cada evento</span>Cada evento SSE lleva un id creciente y se agrega a un stream de Redis con la clave del mensaje (<code>XADD</code>), con un TTL de minutos.</li>
   <li><span class="step-title">Cerrar el turno</span>Al terminar, una sola escritura guarda el contenido, <code>status = complete</code> y mueve <code>current_node</code>. Si el usuario canceló, se guarda lo generado con <code>status = interrupted</code>.</li>
 </ol>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f20n4t f20n4d">
+<title id="f20n4t">Un envío idempotente y los estados de una respuesta</title>
+<desc id="f20n4d">A la izquierda, el cliente genera el id del mensaje y lo envía. La red falla y el cliente reintenta con el mismo id: el INSERT choca con la clave primaria y la API devuelve el turno que ya está en curso, sin generar una segunda respuesta. A la derecha, los estados de la respuesta: nace como in_progress; termina en complete, que guarda el contenido y mueve current_node, o en interrupted, si el usuario canceló, con lo generado hasta ahí. Si el servidor muere, queda in_progress, visible.</desc>
+<defs><marker id="f20n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">El id lo genera el cliente</text>
+<rect class="dg-box" x="20" y="40" width="110" height="40" rx="6"/>
+<text class="dg-small" x="75" y="64" text-anchor="middle">Cliente</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="250" y="40" width="110" height="40" rx="6"/>
+<text class="dg-small" x="305" y="64" text-anchor="middle">API</text>
+<path class="dg-edge" d="M132 54 H246" marker-end="url(#f20n4a)"/>
+<text class="dg-tiny" x="190" y="48" text-anchor="middle" style="font-family: var(--f-mono)">POST id=m7</text>
+<text class="dg-tiny" x="305" y="100" text-anchor="middle">INSERT m7: ok</text>
+<text class="dg-tiny" x="305" y="114" text-anchor="middle">empieza el turno</text>
+<path class="dg-edge" d="M20 132 H370" style="stroke: var(--fail); stroke-dasharray: 6 5"/>
+<text class="dg-tiny dg-fail-text" x="195" y="126" text-anchor="middle">la red falla antes de la respuesta</text>
+<rect class="dg-box" x="20" y="146" width="110" height="40" rx="6"/>
+<text class="dg-small" x="75" y="170" text-anchor="middle">Cliente</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="250" y="146" width="110" height="40" rx="6"/>
+<text class="dg-small" x="305" y="170" text-anchor="middle">API</text>
+<path class="dg-edge" d="M132 160 H246" marker-end="url(#f20n4a)"/>
+<text class="dg-tiny" x="190" y="154" text-anchor="middle" style="font-family: var(--f-mono)">POST id=m7</text>
+<rect class="dg-ok" x="170" y="200" width="200" height="60" rx="8"/>
+<text class="dg-tiny" x="270" y="220" text-anchor="middle">INSERT choca con la PK</text>
+<text class="dg-tiny" x="270" y="236" text-anchor="middle">devuelve el turno en curso:</text>
+<text class="dg-tiny" x="270" y="252" text-anchor="middle">una sola respuesta</text>
+<path class="dg-edge" d="M305 188 V196" marker-end="url(#f20n4a)"/>
+<path class="sim-grid" d="M395 16 V286"/>
+<text class="dg-group" x="420" y="26" text-anchor="start">status de la respuesta</text>
+<rect class="dg-warnbox" x="510" y="46" width="150" height="40" rx="20"/>
+<text class="dg-small" x="585" y="71" text-anchor="middle" style="font-family: var(--f-mono)">in_progress</text>
+<path class="dg-edge" d="M440 66 H506" marker-end="url(#f20n4a)"/>
+<text class="dg-tiny" x="430" y="58" text-anchor="start">nace</text>
+<path class="dg-edge" d="M550 88 L495 150" marker-end="url(#f20n4a)"/>
+<path class="dg-edge" d="M620 88 L675 150" marker-end="url(#f20n4a)"/>
+<rect class="dg-ok" x="420" y="154" width="150" height="40" rx="20"/>
+<text class="dg-small" x="495" y="179" text-anchor="middle" style="font-family: var(--f-mono)">complete</text>
+<rect class="dg-box" x="600" y="154" width="150" height="40" rx="20"/>
+<text class="dg-small" x="675" y="179" text-anchor="middle" style="font-family: var(--f-mono)">interrupted</text>
+<text class="dg-tiny" x="495" y="214" text-anchor="middle">guarda el contenido</text>
+<text class="dg-tiny" x="495" y="230" text-anchor="middle">y mueve current_node</text>
+<text class="dg-tiny" x="675" y="214" text-anchor="middle">el usuario canceló:</text>
+<text class="dg-tiny" x="675" y="230" text-anchor="middle">guarda lo generado</text>
+<text class="dg-tiny" x="585" y="266" text-anchor="middle">si el servidor muere, queda in_progress:</text>
+<text class="dg-tiny" x="585" y="282" text-anchor="middle">una marca visible, no un hueco</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.6.</b> Los pasos 1, 2 y 5 de la lista. El id generado por el cliente vuelve idempotente el envío, y el status deja una marca honesta de cómo terminó cada respuesta. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
 <aside class="callout callout--fail">
   <p class="callout-label">Qué pasa si falla</p>
@@ -303,7 +512,131 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
   <li><span class="step-title">Indexar</span>Los vectores van a una <dfn data-term="vector-db">base de datos vectorial</dfn>, con un índice aproximado (HNSW o IVF) y el filtro por dueño: una búsqueda nunca tiene que devolver fragmentos de otro usuario.</li>
 </ol>
 
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f20n5t f20n5d">
+<title id="f20n5t">El pipeline de archivos y la búsqueda</title>
+<desc id="f20n5d">Arriba, lo que pasa al subir un archivo, de forma asíncrona: el navegador lo sube a S3 con una signed URL, un evento entra en una cola, un worker lo parsea (con OCR si hace falta), lo parte en fragmentos de 800 tokens que avanzan de a 400 y calcula sus embeddings, que van a un índice vectorial con filtro por dueño. Abajo, lo que pasa en cada pregunta: búsqueda vectorial y por palabras (BM25) en el índice, reordenamiento con un modelo chico, y 10 fragmentos, unos 8 000 tokens, que entran al prompt.</desc>
+<defs><marker id="f20n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="14" y="24" text-anchor="start">Al subir: asíncrono, puede tardar minutos</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="14" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="64" y="60" text-anchor="middle">Navegador</text>
+<text class="dg-tiny" x="64" y="77" text-anchor="middle">signed URL</text>
+<path class="dg-edge" d="M116 63 H142" marker-end="url(#f20n5a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="144" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="194" y="60" text-anchor="middle">S3</text>
+<text class="dg-tiny" x="194" y="77" text-anchor="middle">hasta 512 MB</text>
+<path class="dg-edge" d="M246 63 H272" marker-end="url(#f20n5a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="274" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="324" y="60" text-anchor="middle">Cola</text>
+<text class="dg-tiny" x="324" y="77" text-anchor="middle">archivo subido</text>
+<path class="dg-edge" d="M376 63 H402" marker-end="url(#f20n5a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="404" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="454" y="60" text-anchor="middle">Parsear</text>
+<text class="dg-tiny" x="454" y="77" text-anchor="middle">CPU, OCR</text>
+<path class="dg-edge" d="M506 63 H532" marker-end="url(#f20n5a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="534" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="584" y="60" text-anchor="middle">Fragmentar</text>
+<text class="dg-tiny" x="584" y="77" text-anchor="middle">800 / 400</text>
+<path class="dg-edge" d="M636 63 H662" marker-end="url(#f20n5a)"/>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="664" y="38" width="100" height="50" rx="10"/>
+<text class="dg-label" x="714" y="60" text-anchor="middle">Embeddings</text>
+<text class="dg-tiny" x="714" y="77" text-anchor="middle">256 dim.</text>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="200" y="128" width="170" height="50" rx="10"/>
+<text class="dg-label" x="285" y="150" text-anchor="middle">Índice vectorial</text>
+<text class="dg-tiny" x="285" y="167" text-anchor="middle">HNSW · filtro por dueño</text>
+<path class="dg-edge" d="M714.0 90 V108 H285 V124" marker-end="url(#f20n5a)"/>
+<text class="dg-group" x="14" y="208" text-anchor="start">En cada pregunta</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="14" y="222" width="120" height="54" rx="10"/>
+<text class="dg-label" x="74" y="246" text-anchor="middle">Pregunta</text>
+<text class="dg-tiny" x="74" y="263" text-anchor="middle">del usuario</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="180" y="222" width="210" height="54" rx="10"/>
+<text class="dg-label" x="285" y="246" text-anchor="middle">Búsqueda</text>
+<text class="dg-tiny" x="285" y="263" text-anchor="middle">vector + BM25, filtro por dueño</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="430" y="222" width="130" height="54" rx="10"/>
+<text class="dg-label" x="495" y="246" text-anchor="middle">Rerank</text>
+<text class="dg-tiny" x="495" y="263" text-anchor="middle">un modelo chico</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="600" y="222" width="156" height="54" rx="10"/>
+<text class="dg-label" x="678" y="246" text-anchor="middle">Al prompt</text>
+<text class="dg-tiny" x="678" y="263" text-anchor="middle">10 fragmentos ≈ 8 000 tokens</text>
+<path class="dg-edge" d="M136 249 H176" marker-end="url(#f20n5a)"/>
+<path class="dg-edge" d="M392 249 H426" marker-end="url(#f20n5a)"/>
+<path class="dg-edge" d="M562 249 H596" marker-end="url(#f20n5a)"/>
+<path class="dg-edge" d="M285 180 V218" marker-end="url(#f20n5a)"/>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.7.</b> Dos caminos sobre el mismo índice. La ingesta corre una vez por archivo y puede tardar minutos; la búsqueda corre en cada pregunta y suma unos 8&#8239;000 tokens al prompt. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
 <p>Los números del ejemplo: 200 páginas a unos 500 tokens por página son 100&#8239;000 tokens. Con fragmentos de 800 que avanzan de a 400, salen unos 250 fragmentos y 200&#8239;000 tokens embebidos; a 0.13 dólares por millón con <code>text-embedding-3-large</code>, 2.6 centavos. Cada vector de 256 dimensiones en float32 ocupa 1&#8239;KB: 250&#8239;KB de vectores para todo el documento. El costo real está en el parsing y en lo que se agrega al prompt de cada pregunta: 10 fragmentos son 8&#8239;000 tokens de entrada por turno.</p>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f20n6t f20n6d">
+<title id="f20n6t">Fragmentos solapados</title>
+<desc id="f20n6d">El texto del documento como una barra de tokens. Cada fragmento mide 800 tokens y el siguiente empieza 400 tokens después, así que cada token cae en dos fragmentos. Para 200 páginas, unos 100 000 tokens: 250 fragmentos y 200 000 tokens embebidos, 2.6 centavos a 0.13 dólares por millón, y 250 KB de vectores de 256 dimensiones en float32.</desc>
+<text class="dg-group" x="40" y="26" text-anchor="start">texto del documento, en tokens</text>
+<rect x="40" y="36" width="680" height="18" rx="3" fill="color-mix(in srgb, var(--l-client) 20%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<path class="sim-grid" d="M40.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="40" y="76" text-anchor="middle">0</text>
+<path class="sim-grid" d="M120.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="120" y="76" text-anchor="middle">400</text>
+<path class="sim-grid" d="M200.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="200" y="76" text-anchor="middle">800</text>
+<path class="sim-grid" d="M280.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="280" y="76" text-anchor="middle">1 200</text>
+<path class="sim-grid" d="M360.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="360" y="76" text-anchor="middle">1 600</text>
+<path class="sim-grid" d="M440.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="440" y="76" text-anchor="middle">2 000</text>
+<path class="sim-grid" d="M520.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="520" y="76" text-anchor="middle">2 400</text>
+<path class="sim-grid" d="M600.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="600" y="76" text-anchor="middle">2 800</text>
+<path class="sim-grid" d="M680.0 56 V62" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="680" y="76" text-anchor="middle">3 200</text>
+<rect x="41" y="90" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="120" y="105" text-anchor="middle">fragmento 1</text>
+<rect x="121" y="120" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="200" y="135" text-anchor="middle">fragmento 2</text>
+<rect x="201" y="90" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="280" y="105" text-anchor="middle">fragmento 3</text>
+<rect x="281" y="120" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="360" y="135" text-anchor="middle">fragmento 4</text>
+<rect x="361" y="90" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="440" y="105" text-anchor="middle">fragmento 5</text>
+<rect x="441" y="120" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="520" y="135" text-anchor="middle">fragmento 6</text>
+<rect x="521" y="90" width="158" height="22" rx="4" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.2"/>
+<text class="dg-tiny" x="600" y="105" text-anchor="middle">fragmento 7</text>
+<text class="dg-label" x="730" y="50" text-anchor="start">…</text>
+<text class="dg-tiny" x="40" y="168" text-anchor="start">Cada fragmento: 800 tokens. El siguiente empieza 400 después: cada token queda en dos fragmentos.</text>
+<rect class="dg-box" x="20" y="188" width="136" height="86" rx="8"/>
+<text class="dg-big" x="88" y="218" text-anchor="middle">100 000</text>
+<text class="dg-small" x="88" y="240" text-anchor="middle">tokens</text>
+<text class="dg-tiny" x="88" y="258" text-anchor="middle">200 páginas × 500</text>
+<rect class="dg-box" x="168" y="188" width="136" height="86" rx="8"/>
+<text class="dg-big" x="236" y="218" text-anchor="middle">250</text>
+<text class="dg-small" x="236" y="240" text-anchor="middle">fragmentos</text>
+<text class="dg-tiny" x="236" y="258" text-anchor="middle">100 000 ÷ 400</text>
+<rect class="dg-box" x="316" y="188" width="136" height="86" rx="8"/>
+<text class="dg-big" x="384" y="218" text-anchor="middle">200 000</text>
+<text class="dg-small" x="384" y="240" text-anchor="middle">tokens embebidos</text>
+<text class="dg-tiny" x="384" y="258" text-anchor="middle">250 × 800</text>
+<rect class="dg-box" x="464" y="188" width="136" height="86" rx="8"/>
+<text class="dg-big" x="532" y="218" text-anchor="middle">2.6 ¢</text>
+<text class="dg-small" x="532" y="240" text-anchor="middle">en embeddings</text>
+<text class="dg-tiny" x="532" y="258" text-anchor="middle">0.13 USD por millón</text>
+<rect class="dg-box" x="612" y="188" width="136" height="86" rx="8"/>
+<text class="dg-big" x="680" y="218" text-anchor="middle">250 KB</text>
+<text class="dg-small" x="680" y="240" text-anchor="middle">de vectores</text>
+<text class="dg-tiny" x="680" y="258" text-anchor="middle">256 × 4 B = 1 KB c/u</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.8.</b> El solapamiento de 400 tokens duplica lo que se embebe, pero evita que una cláusula quede partida justo en el borde de dos fragmentos sin aparecer entera en ninguno. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
 <aside class="callout callout--prod">
   <p class="callout-label">En producción real</p>
@@ -313,6 +646,52 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
 <h2 id="herramientas"><span class="sec-num">20.6</span>Herramientas y código en sandbox</h2>
 
 <p>Con herramientas, un turno deja de ser una sola llamada al modelo. El modelo pide una herramienta (el <dfn data-term="tool-calling">tool calling</dfn> del M17), la API la ejecuta, agrega el resultado como un mensaje <code>tool</code> y vuelve a llamar al modelo. Un turno con búsqueda web y análisis de datos puede hacer cinco o seis vueltas, y cada vuelta es un mensaje más en el árbol.</p>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f20n7t f20n7d">
+<title id="f20n7t">Un turno con herramientas son varias vueltas</title>
+<desc id="f20n7d">Un turno con búsqueda web y análisis de datos, como cadena de mensajes del árbol. El mensaje del usuario; una respuesta del modelo que pide buscar; el resultado de la búsqueda como mensaje tool; otra respuesta que pide correr Python; su resultado; y la respuesta final. Cada respuesta del modelo es una llamada a inferencia con todo lo anterior, y cada resultado lo ejecuta la API. Un turno así puede dar cinco o seis vueltas.</desc>
+<defs><marker id="f20n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-client) 26%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="70" y="62" text-anchor="middle" style="font-family: var(--f-mono)">user</text>
+<text class="dg-tiny" x="70" y="82" text-anchor="middle">la pregunta</text>
+<path class="dg-edge" d="M122 68 H148" marker-end="url(#f20n7a)"/>
+<rect x="150" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="200" y="62" text-anchor="middle" style="font-family: var(--f-mono)">assistant</text>
+<text class="dg-tiny" x="200" y="82" text-anchor="middle">pide buscar</text>
+<text class="dg-tiny" x="200" y="118" text-anchor="middle">llamada al modelo</text>
+<path class="dg-edge" d="M252 68 H278" marker-end="url(#f20n7a)"/>
+<rect x="280" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-external) 26%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="330" y="62" text-anchor="middle" style="font-family: var(--f-mono)">tool</text>
+<text class="dg-tiny" x="330" y="82" text-anchor="middle">resultados</text>
+<text class="dg-tiny" x="330" y="118" text-anchor="middle">la API ejecuta</text>
+<path class="dg-edge" d="M382 68 H408" marker-end="url(#f20n7a)"/>
+<rect x="410" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="460" y="62" text-anchor="middle" style="font-family: var(--f-mono)">assistant</text>
+<text class="dg-tiny" x="460" y="82" text-anchor="middle">pide Python</text>
+<text class="dg-tiny" x="460" y="118" text-anchor="middle">llamada al modelo</text>
+<path class="dg-edge" d="M512 68 H538" marker-end="url(#f20n7a)"/>
+<rect x="540" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-external) 26%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="590" y="62" text-anchor="middle" style="font-family: var(--f-mono)">tool</text>
+<text class="dg-tiny" x="590" y="82" text-anchor="middle">tabla, gráfico</text>
+<text class="dg-tiny" x="590" y="118" text-anchor="middle">la API ejecuta</text>
+<path class="dg-edge" d="M642 68 H668" marker-end="url(#f20n7a)"/>
+<rect x="670" y="40" width="100" height="56" rx="8" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="720" y="62" text-anchor="middle" style="font-family: var(--f-mono)">assistant</text>
+<text class="dg-tiny" x="720" y="82" text-anchor="middle">respuesta final</text>
+<text class="dg-tiny" x="720" y="118" text-anchor="middle">llamada al modelo</text>
+<text class="dg-group" x="20" y="26" text-anchor="start">mensajes de la rama, en orden (cada flecha: parent → hijo)</text>
+<path class="dg-feedback" d="M150 136 H750"/>
+<path class="dg-feedback" d="M150 130 V142 M750 130 V142"/>
+<text class="dg-tiny" x="450" y="158" text-anchor="middle">el mismo turno: 3 llamadas al modelo en este ejemplo, hasta 5 o 6 con más herramientas</text>
+<rect class="dg-box" x="120" y="176" width="530" height="40" rx="8"/>
+<text class="dg-small" x="385" y="201" text-anchor="middle">Cada llamada relee la rama entera: los resultados de herramientas también son contexto.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.9.</b> Un turno con herramientas es una cadena de mensajes, no uno. Cada vuelta suma un mensaje al árbol y una llamada al modelo con todo lo anterior.</figcaption>
+      </figure>
 
 <p>La herramienta más delicada corre código que escribió el modelo, con archivos del usuario. Ese código no es confiable: puede intentar leer otros archivos, abrir conexiones o quedarse en un bucle. Un <dfn data-term="sandbox-codigo">sandbox de código</dfn> lo aísla:</p>
 
@@ -328,6 +707,51 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
   <p>Arrancar una microVM tarda del orden de cien milisegundos; instalar pandas en ella, segundos. Por eso se usa una imagen con las librerías ya instaladas y un pool de sandboxes precalentados, como el pool de réplicas del M19. Mantener una sesión viva entre turnos guarda las variables del usuario, pero ocupa memoria mientras el usuario lee.</p>
 </aside>
 
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f20n8t f20n8d">
+<title id="f20n8t">Contenedor, gVisor y microVM</title>
+<desc id="f20n8d">Tres pilas, de abajo hacia arriba. En un contenedor común, el código del modelo hace sus syscalls directo al kernel del host, compartido con todo lo demás. Con gVisor, un kernel escrito en espacio de usuario atiende las syscalls y solo usa unas pocas del host. Con una microVM de Firecracker, el código tiene su propio kernel invitado y la frontera es el hipervisor (KVM). Abajo, lo que se agrega en los tres casos: sin red o con lista cerrada, límites de recursos y una sesión por conversación.</desc>
+<defs><marker id="f20n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="135" y="52" text-anchor="middle">Contenedor común</text>
+<rect x="20" y="196" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-external) 26%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="135" y="218" text-anchor="middle">Hardware</text>
+<rect class="dg-bad" x="20" y="154" width="230" height="34" rx="6"/>
+<text class="dg-small" x="135" y="176" text-anchor="middle">Kernel del host, compartido</text>
+<rect x="20" y="112" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-service) 26%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="135" y="134" text-anchor="middle">Runtime de contenedores</text>
+<rect x="20" y="70" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-client) 26%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="135" y="92" text-anchor="middle">Código del modelo</text>
+<text class="dg-tiny" x="135" y="252" text-anchor="middle">syscalls directo al kernel compartido</text>
+<text class="dg-label" x="385" y="52" text-anchor="middle">gVisor</text>
+<rect x="270" y="196" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-external) 26%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="218" text-anchor="middle">Hardware</text>
+<rect x="270" y="154" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-db) 26%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="176" text-anchor="middle">Kernel del host</text>
+<rect x="270" y="112" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-service) 26%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="134" text-anchor="middle">Kernel en espacio de usuario</text>
+<rect x="270" y="70" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-client) 26%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="92" text-anchor="middle">Código del modelo</text>
+<text class="dg-tiny" x="385" y="252" text-anchor="middle">un kernel reimplementado filtra syscalls</text>
+<text class="dg-label" x="635" y="52" text-anchor="middle">microVM (Firecracker)</text>
+<rect x="520" y="196" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-external) 26%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-small" x="635" y="218" text-anchor="middle">Hardware</text>
+<rect x="520" y="154" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-db) 26%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="635" y="176" text-anchor="middle">Kernel del host + KVM</text>
+<rect x="520" y="112" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-service) 26%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="635" y="134" text-anchor="middle">Kernel invitado propio</text>
+<rect x="520" y="70" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--l-client) 26%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="635" y="92" text-anchor="middle">Código del modelo</text>
+<text class="dg-tiny" x="635" y="252" text-anchor="middle">la frontera es el hipervisor</text>
+<rect class="dg-box" x="20" y="272" width="730" height="44" rx="8"/>
+<text class="dg-tiny" x="385" y="290" text-anchor="middle">En los tres: sin red o con una lista cerrada de destinos · límites de CPU, memoria, disco y tiempo</text>
+<text class="dg-tiny" x="385" y="306" text-anchor="middle">una sesión por conversación, con los archivos montados, que se destruye tras un rato sin uso</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.10.</b> Lo que separa al código del modelo del resto de la máquina. En un contenedor común, un fallo del kernel compartido alcanza al host; gVisor y la microVM ponen otra capa en el medio. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
 <h2 id="memoria"><span class="sec-num">20.7</span>Memoria entre conversaciones</h2>
 
 <p>ChatGPT puede recordar datos del usuario entre conversaciones: memorias guardadas que el usuario ve y borra, y referencias al historial de chats. <span class="badge badge--doc">Documentado</span> Para el sistema, la memoria es otra fuente de contexto, como los archivos:</p>
@@ -339,6 +763,53 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
 
 <p>Lo difícil no es guardar sino borrar. Si el usuario borra una memoria o una conversación, tiene que desaparecer también de los índices derivados: el vector de su resumen, los caches. Un borrado que llega a la tabla pero no al índice vectorial sigue apareciendo en las respuestas. <span class="badge badge--ref">Diseño de referencia</span></p>
 
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f20n9t f20n9d">
+<title id="f20n9t">Borrar es recorrer todo lo derivado</title>
+<desc id="f20n9d">El usuario borra una conversación o una memoria. La fila recibe deleted_at, y un job de borrado recorre, dentro del plazo de retención, todo lo que se derivó de ella: los mensajes, los archivos en S3, los vectores del índice, las memorias, los caches y el feedback. Si se salta uno, por ejemplo el índice vectorial, el dato borrado sigue apareciendo en las respuestas.</desc>
+<defs><marker id="f20n9a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="112" width="130" height="60" rx="10"/>
+<text class="dg-label" x="85" y="139" text-anchor="middle">El usuario</text>
+<text class="dg-tiny" x="85" y="156" text-anchor="middle">borra</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="200" y="112" width="160" height="60" rx="10"/>
+<text class="dg-label" x="280" y="139" text-anchor="middle">Job de borrado</text>
+<text class="dg-tiny" x="280" y="156" text-anchor="middle">deleted_at, plazo</text>
+<path class="dg-edge" d="M152 142 H196" marker-end="url(#f20n9a)"/>
+<rect x="440" y="20" width="170" height="36" rx="6" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="452" y="36" text-anchor="start">Mensajes</text>
+<text class="dg-tiny" x="452" y="50" text-anchor="start">filas de la partición</text>
+<path class="dg-edge" d="M362 142 L436 38" marker-end="url(#f20n9a)"/>
+<rect x="440" y="64" width="170" height="36" rx="6" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="452" y="80" text-anchor="start">Archivos</text>
+<text class="dg-tiny" x="452" y="94" text-anchor="start">objetos en S3</text>
+<path class="dg-edge" d="M362 142 L436 82" marker-end="url(#f20n9a)"/>
+<rect class="dg-warnbox" x="440" y="108" width="170" height="36" rx="6"/>
+<text class="dg-small" x="452" y="124" text-anchor="start">Índice vectorial</text>
+<text class="dg-tiny" x="452" y="138" text-anchor="start">vectores y resúmenes</text>
+<path class="dg-edge" d="M362 142 L436 126" marker-end="url(#f20n9a)"/>
+<rect x="440" y="152" width="170" height="36" rx="6" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="452" y="168" text-anchor="start">Memorias</text>
+<text class="dg-tiny" x="452" y="182" text-anchor="start">tabla por usuario</text>
+<path class="dg-edge" d="M362 142 L436 170" marker-end="url(#f20n9a)"/>
+<rect x="440" y="196" width="170" height="36" rx="6" fill="color-mix(in srgb, var(--l-cache) 22%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.5"/>
+<text class="dg-small" x="452" y="212" text-anchor="start">Caches</text>
+<text class="dg-tiny" x="452" y="226" text-anchor="start">contexto, títulos</text>
+<path class="dg-edge" d="M362 142 L436 214" marker-end="url(#f20n9a)"/>
+<rect x="440" y="240" width="170" height="36" rx="6" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="452" y="256" text-anchor="start">Feedback</text>
+<text class="dg-tiny" x="452" y="270" text-anchor="start">votos con su contexto</text>
+<path class="dg-edge" d="M362 142 L436 258" marker-end="url(#f20n9a)"/>
+<text class="dg-tiny" x="626" y="108" text-anchor="start">el que se olvida:</text>
+<text class="dg-tiny" x="626" y="124" text-anchor="start">si falta, el dato</text>
+<text class="dg-tiny" x="626" y="140" text-anchor="start">sigue en las respuestas</text>
+<text class="dg-tiny" x="20" y="290" text-anchor="start">La política de retención vive en la organización (20.2); el job la aplica a todo lo derivado.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.11.</b> Un borrado es un fan-out. La tabla es lo fácil; el índice vectorial y los caches son los que se olvidan, y por ellos un dato borrado vuelve a aparecer. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
 <h2 id="moderacion"><span class="sec-num">20.8</span>Moderación y feedback</h2>
 
 <p>La moderación revisa lo que entra y lo que sale. OpenAI ofrece un endpoint de moderación gratuito, con el modelo <code>omni-moderation-latest</code>, que clasifica texto e imágenes por categoría. <span class="badge badge--doc">Documentado</span> El problema de sistemas es dónde ubicarlo sin sumar latencia:</p>
@@ -348,6 +819,46 @@ SELECT role, content FROM rama ORDER BY created_at;</code></pre>
   <li><b>Salida:</b> el stream no puede esperar a la respuesta completa. Se clasifica por tramos mientras se genera; si un tramo se marca, se corta el stream y se reemplaza lo mostrado. Es un trade-off explícito entre latencia y lo que alcanza a verse.</li>
   <li><b>Asíncrona:</b> los casos dudosos van a una cola para revisión posterior, sin bloquear al usuario.</li>
 </ul>
+
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f20n10t f20n10d">
+<title id="f20n10t">Dónde corre la moderación</title>
+<desc id="f20n10d">Tres carriles en el tiempo. En el turno: armar el contexto, el prefill y el decode en streaming. La entrada se clasifica en paralelo con el armado del contexto, así que no suma latencia. La salida se clasifica por tramos mientras se genera; si un tramo se marca, se corta el stream y se reemplaza lo mostrado. Los casos dudosos van a una cola de revisión, sin bloquear al usuario. Las duraciones son cualitativas.</desc>
+<defs><marker id="f20n10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="62" text-anchor="start">Turno</text>
+<path class="sim-grid" d="M170 84 H750"/>
+<text class="dg-label" x="20" y="132" text-anchor="start">Moderación</text>
+<path class="sim-grid" d="M170 154 H750"/>
+<text class="dg-label" x="20" y="202" text-anchor="start">Revisión</text>
+<path class="sim-grid" d="M170 224 H750"/>
+<rect x="170" y="40" width="110" height="34" rx="6" fill="color-mix(in srgb, var(--l-service) 26%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="225" y="61" text-anchor="middle">armar contexto</text>
+<rect x="286" y="40" width="70" height="34" rx="6" fill="color-mix(in srgb, var(--l-gpu) 45%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="321" y="61" text-anchor="middle">prefill</text>
+<rect x="362" y="40" width="388" height="34" rx="6" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="556" y="61" text-anchor="middle">decode en streaming</text>
+<rect class="dg-ok" x="170" y="110" width="90" height="34" rx="6"/>
+<text class="dg-tiny" x="215" y="131" text-anchor="middle">entrada</text>
+<rect class="dg-ok" x="366" y="110" width="88" height="34" rx="6"/>
+<text class="dg-tiny" x="410" y="131" text-anchor="middle">tramo 1</text>
+<rect class="dg-ok" x="462" y="110" width="88" height="34" rx="6"/>
+<text class="dg-tiny" x="506" y="131" text-anchor="middle">tramo 2</text>
+<rect class="dg-ok" x="558" y="110" width="88" height="34" rx="6"/>
+<text class="dg-tiny" x="602" y="131" text-anchor="middle">tramo 3</text>
+<rect class="dg-warnbox" x="654" y="110" width="88" height="34" rx="6"/>
+<text class="dg-tiny" x="698" y="131" text-anchor="middle">tramo 4</text>
+<text class="dg-tiny" x="215" y="162" text-anchor="middle">en paralelo: decenas de ms</text>
+<text class="dg-tiny" x="558" y="162" text-anchor="middle">si un tramo se marca: cortar y reemplazar</text>
+<rect x="600" y="182" width="150" height="34" rx="6" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="675" y="203" text-anchor="middle">cola: casos dudosos</text>
+<path class="dg-feedback" d="M698 146 L684 178" marker-end="url(#f20n10a)"/>
+<text class="dg-tiny" x="20" y="244" text-anchor="start">En ámbar, el tramo marcado: lo que se vio antes del corte es el precio de no esperar.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 20.12.</b> La moderación no se pone delante del stream sino al costado: la entrada en paralelo con el contexto, la salida por tramos y lo dudoso, después.</figcaption>
+      </figure>
 
 <p>El feedback (el pulgar arriba o abajo y la comparación entre dos respuestas) es una tabla más, con el id del mensaje, el modelo que contestó y el voto. Su valor está en lo que se puede reconstruir: el contexto exacto que vio el modelo. Por eso los mensajes guardan qué modelo contestó y el árbol no se pisa.</p>
 

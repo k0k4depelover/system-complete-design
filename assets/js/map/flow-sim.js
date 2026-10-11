@@ -242,6 +242,12 @@
     });
     inner.appendChild(ol);
 
+    /* Qué hace cada pieza: abierta antes de empezar; durante el escenario, plegada y con las piezas del paso marcadas */
+    if (this.def.pieces) {
+      var cur = i >= 0 ? sc.steps[i] : null;
+      inner.appendChild(this.piecesBlock(i < 0, cur ? [cur.at, cur.from, cur.to].filter(Boolean) : []));
+    }
+
     var help = h('details', { class: 'sdm-sp-help' }, [h('summary', { text: 'Cómo usar el mapa' })]);
     var tmp = { def: this.def, panel: h('div') };
     baseDefaultPanel.call(tmp);

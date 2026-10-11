@@ -424,6 +424,59 @@ class UsageEvent:
 
       <p>Las dos tienen la misma consecuencia: el outbox publica <em>al menos una vez</em>. Si el gateway publicó y murió antes de marcar el evento como enviado, al volver lo publica de nuevo. Ese duplicado no lo detecta Kafka, porque viene de una sesión de productor distinta; lo detecta el <code>event_id</code> (21.5).</p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 320" role="img" aria-labelledby="f21n1t f21n1d">
+<title id="f21n1t">El outbox publica al menos una vez</title>
+<desc id="f21n1d">Arriba, el gateway escribe el evento en un spool en su disco, un hilo lo publica en Kafka y el gateway muere antes de marcarlo como enviado. Al volver, lo publica de nuevo: Kafka recibe dos copias, de dos sesiones de productor distintas. Abajo, dos formas de armar el id. Con un id determinista, req_9f2c41:final, las dos copias tienen el mismo id y el procesador descarta la segunda. Con un UUID generado al emitir, cada copia tiene un id nuevo y las dos se cuentan.</desc>
+<defs><marker id="f21n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">El gateway muere entre publicar y marcar</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="40" width="130" height="50" rx="10"/>
+<text class="dg-label" x="85" y="62" text-anchor="middle">Gateway</text>
+<text class="dg-tiny" x="85" y="79" text-anchor="middle">cierra el stream</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="200" y="40" width="130" height="50" rx="10"/>
+<text class="dg-label" x="265" y="62" text-anchor="middle">Spool local</text>
+<text class="dg-tiny" x="265" y="79" text-anchor="middle">archivo en disco</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380" y="40" width="130" height="50" rx="10"/>
+<text class="dg-label" x="445" y="62" text-anchor="middle">Hilo de envío</text>
+<text class="dg-tiny" x="445" y="79" text-anchor="middle">publica, marca</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="600" y="40" width="150" height="50" rx="10"/>
+<text class="dg-label" x="675" y="62" text-anchor="middle">Kafka, usage</text>
+<text class="dg-tiny" x="675" y="79" text-anchor="middle">dos copias</text>
+<path class="dg-edge" d="M152 65 H196" marker-end="url(#f21n1a)"/>
+<path class="dg-edge" d="M332 65 H376" marker-end="url(#f21n1a)"/>
+<path class="dg-edge" d="M512 58 H596" marker-end="url(#f21n1a)"/>
+<text class="dg-tiny" x="554" y="50" text-anchor="middle">1.ª</text>
+<path class="dg-edge" d="M512 76 H596" marker-end="url(#f21n1a)"/>
+<text class="dg-tiny" x="554" y="92" text-anchor="middle">2.ª, al volver</text>
+<rect class="dg-bad" x="380" y="104" width="130" height="24" rx="6"/>
+<text class="dg-tiny dg-fail-text" x="445" y="120" text-anchor="middle">muere antes de marcar</text>
+<path class="sim-grid" d="M20 150 H750"/>
+<text class="dg-group" x="20" y="176" text-anchor="start">Qué pasa con la copia, según el id</text>
+<text class="dg-label" x="20" y="200" text-anchor="start">Id determinista</text>
+<rect class="dg-box" x="20" y="212" width="210" height="26" rx="5"/>
+<text class="dg-tiny" x="125" y="229" text-anchor="middle" style="font-family: var(--f-mono)">req_9f2c41:final</text>
+<text class="dg-tiny" x="236" y="229" text-anchor="start">copia 1</text>
+<rect class="dg-box" x="20" y="244" width="210" height="26" rx="5"/>
+<text class="dg-tiny" x="125" y="261" text-anchor="middle" style="font-family: var(--f-mono)">req_9f2c41:final</text>
+<text class="dg-tiny" x="236" y="261" text-anchor="start">copia 2</text>
+<rect class="dg-ok" x="20" y="280" width="355" height="30" rx="6"/>
+<text class="dg-small" x="197" y="299" text-anchor="middle">mismo id: se descarta la copia</text>
+<text class="dg-label" x="395" y="200" text-anchor="start">UUID al emitir</text>
+<rect class="dg-box" x="395" y="212" width="210" height="26" rx="5"/>
+<text class="dg-tiny" x="500" y="229" text-anchor="middle" style="font-family: var(--f-mono)">3f1c…a07</text>
+<text class="dg-tiny" x="611" y="229" text-anchor="start">copia 1</text>
+<rect class="dg-box" x="395" y="244" width="210" height="26" rx="5"/>
+<text class="dg-tiny" x="500" y="261" text-anchor="middle" style="font-family: var(--f-mono)">9b42…e1d</text>
+<text class="dg-tiny" x="611" y="261" text-anchor="start">copia 2</text>
+<rect class="dg-bad" x="395" y="280" width="355" height="30" rx="6"/>
+<text class="dg-small dg-fail-text" x="572" y="299" text-anchor="middle">ids distintos: se cuenta dos veces</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.3.</b> El outbox convierte una caída en un duplicado, nunca en una pérdida. El duplicado se descarta solo si el id sale igual en cada intento: por eso se arma con el request_id. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <h3 id="emitir-cortes">Streams cancelados, largos y huérfanos</h3>
 
       <div class="table-wrap">
@@ -455,6 +508,66 @@ class UsageEvent:
         spool.append(UsageEvent(req.id, "final", 0, req.org, req.project, req.key,
                                 req.model_version, utc_now(), usage), status=status)</code></pre>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f21n2t f21n2d">
+<title id="f21n2t">Un stream largo emite por tramos</title>
+<desc id="f21n2d">Un stream de 20 minutos, como un agente, en una línea de tiempo. Arriba, sin eventos parciales: el único evento es el final, y si el gateway muere a mitad, se pierde todo el uso hasta ahí. Abajo, con un evento partial cada 30 segundos o cada 4 000 tokens: el saldo y el tope ven el gasto mientras ocurre, y si el gateway muere, se pierde solo el tramo en curso, que la conciliación reconstruye después.</desc>
+<defs><marker id="f21n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="74" text-anchor="start">Solo final</text>
+<text class="dg-label" x="20" y="164" text-anchor="start">Con parciales</text>
+<path class="sim-axis" d="M150 214 H740" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M150.0 214 V220" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="150" y="236" text-anchor="middle">0 min</text>
+<path class="sim-axis" d="M297.5 214 V220" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="297.5" y="236" text-anchor="middle">5 min</text>
+<path class="sim-axis" d="M445.0 214 V220" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="445" y="236" text-anchor="middle">10 min</text>
+<path class="sim-axis" d="M592.5 214 V220" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="592.5" y="236" text-anchor="middle">15 min</text>
+<path class="sim-axis" d="M740.0 214 V220" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="740" y="236" text-anchor="middle">20 min</text>
+<path class="dg-edge" d="M533.5 40 V206" style="stroke: var(--fail); stroke-dasharray: 5 4"/>
+<text class="dg-tiny dg-fail-text" x="539.5" y="34" text-anchor="start">el gateway muere</text>
+<rect class="dg-bad" x="150" y="54" width="383.5" height="30" rx="5"/>
+<text class="dg-tiny dg-fail-text" x="341.75" y="73" text-anchor="middle">todo este uso, sin evento</text>
+<text class="dg-tiny" x="543.5" y="73" text-anchor="start">el final nunca se emite</text>
+<rect x="151" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="165.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="180.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="195.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="210" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="224.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="239.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="254.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="269" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="283.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="298.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="313.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="328" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="342.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="357.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="372.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="387" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="401.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="416.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="431.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="446" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="460.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="475.5" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="490.25" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="505" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="519.75" y="140" width="12.75" height="30" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<rect x="534.5" y="140" width="12.8" height="30" rx="3" class="dg-bad"/>
+<text class="dg-tiny" x="209" y="190" text-anchor="start">cada tramo: un evento partial (30 s o 4 000 tokens)</text>
+<text class="dg-tiny" x="556.25" y="152" text-anchor="start">se pierde un tramo;</text>
+<text class="dg-tiny" x="556.25" y="168" text-anchor="start">la conciliación lo reconstruye</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.4.</b> Con eventos parciales, la caída de un gateway cuesta un tramo en lugar del stream entero, y el saldo y el tope siguen el gasto de un agente mientras trabaja. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <aside class="callout callout--tradeoff">
         <p class="callout-label">Trade-off</p>
         <p>Emitir desde el motor parece más exacto, porque es quien cuenta. Pero obliga a pasarle al motor la identidad del cliente, lo acopla al modelo de cobro y deja sin registrar lo que el gateway cobra por su cuenta, como las herramientas. Emitir desde el gateway mantiene el motor simple, a cambio de depender de que el gateway sobreviva hasta el final del stream. La conciliación con el registro del motor cubre ese hueco.</p>
@@ -463,6 +576,65 @@ class UsageEvent:
       <h2 id="dedupe"><span class="sec-num">21.5</span>Exactamente una vez, en la práctica</h2>
 
       <p>El <a href="m07-mensajeria.html#semanticas">M07</a> dejó la regla: la red solo ofrece entregas de a lo sumo una vez o de al menos una vez. Lo que se construye encima es un <dfn data-term="exactly-once-efectivo">exactamente una vez efectivo</dfn>: un mensaje puede llegar varias veces, pero su efecto se aplica una sola. En el metering se logra con cuatro capas, y cada una cubre un hueco distinto.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f21n3t f21n3d">
+<title id="f21n3t">Cuatro capas para contar una vez</title>
+<desc id="f21n3d">Las cuatro capas del exactamente una vez efectivo, de izquierda a derecha en el camino del evento: el productor idempotente de Kafka, las transacciones de Kafka, la deduplicación por event_id en el procesador y las escrituras que se pueden repetir en el almacén. Debajo de cada una, qué copia descarta y qué hueco le deja a la siguiente.</desc>
+<defs><marker id="f21n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="20" y="34" width="172" height="76" rx="8" fill="color-mix(in srgb, var(--l-queue) 24%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="106" y="56" text-anchor="middle">1. Productor idempotente</text>
+<text class="dg-tiny" x="106" y="78" text-anchor="middle">Kafka: id de productor y</text>
+<text class="dg-tiny" x="106" y="94" text-anchor="middle">número de lote</text>
+<path class="dg-edge" d="M193 72 H205" marker-end="url(#f21n3a)"/>
+<rect class="dg-ok" x="20" y="126" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="106" y="146" text-anchor="middle">descarta:</text>
+<text class="dg-tiny" x="106" y="164" text-anchor="middle">reintento tras un timeout</text>
+<rect class="dg-warnbox" x="20" y="188" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="106" y="208" text-anchor="middle">no cubre:</text>
+<text class="dg-tiny" x="106" y="226" text-anchor="middle">un productor que se reinicia</text>
+<path class="dg-feedback" d="M182 240 C196 262 206 262 218 242" marker-end="url(#f21n3a)"/>
+<rect x="206" y="34" width="172" height="76" rx="8" fill="color-mix(in srgb, var(--l-queue) 24%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="292" y="56" text-anchor="middle">2. Transacciones</text>
+<text class="dg-tiny" x="292" y="78" text-anchor="middle">confirma escrituras y</text>
+<text class="dg-tiny" x="292" y="94" text-anchor="middle">offsets juntos</text>
+<path class="dg-edge" d="M379 72 H391" marker-end="url(#f21n3a)"/>
+<rect class="dg-ok" x="206" y="126" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="292" y="146" text-anchor="middle">descarta:</text>
+<text class="dg-tiny" x="292" y="164" text-anchor="middle">un procesador que se cae</text>
+<rect class="dg-warnbox" x="206" y="188" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="292" y="208" text-anchor="middle">no cubre:</text>
+<text class="dg-tiny" x="292" y="226" text-anchor="middle">lo que se escribe fuera</text>
+<path class="dg-feedback" d="M368 240 C382 262 392 262 404 242" marker-end="url(#f21n3a)"/>
+<rect x="392" y="34" width="172" height="76" rx="8" fill="color-mix(in srgb, var(--l-service) 24%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="478" y="56" text-anchor="middle">3. Dedupe por event_id</text>
+<text class="dg-tiny" x="478" y="78" text-anchor="middle">estado por partición,</text>
+<text class="dg-tiny" x="478" y="94" text-anchor="middle">ventana de 48 h</text>
+<path class="dg-edge" d="M565 72 H577" marker-end="url(#f21n3a)"/>
+<rect class="dg-ok" x="392" y="126" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="478" y="146" text-anchor="middle">descarta:</text>
+<text class="dg-tiny" x="478" y="164" text-anchor="middle">reenvíos del outbox</text>
+<rect class="dg-warnbox" x="392" y="188" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="478" y="208" text-anchor="middle">no cubre:</text>
+<text class="dg-tiny" x="478" y="226" text-anchor="middle">copias más viejas que la ventana</text>
+<path class="dg-feedback" d="M554 240 C568 262 578 262 590 242" marker-end="url(#f21n3a)"/>
+<rect x="578" y="34" width="172" height="76" rx="8" fill="color-mix(in srgb, var(--l-db) 24%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="664" y="56" text-anchor="middle">4. Escrituras repetibles</text>
+<text class="dg-tiny" x="664" y="78" text-anchor="middle">escribir el valor</text>
+<text class="dg-tiny" x="664" y="94" text-anchor="middle">con versión</text>
+<rect class="dg-ok" x="578" y="126" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="664" y="146" text-anchor="middle">descarta:</text>
+<text class="dg-tiny" x="664" y="164" text-anchor="middle">reintentos al almacén</text>
+<rect class="dg-warnbox" x="578" y="188" width="172" height="50" rx="6"/>
+<text class="dg-tiny" x="664" y="208" text-anchor="middle">no cubre:</text>
+<text class="dg-tiny" x="664" y="226" text-anchor="middle">nada: queda la conciliación</text>
+<text class="dg-tiny" x="385" y="280" text-anchor="middle">Lo que una capa no cubre lo cubre la siguiente; lo que pasa las cuatro, lo encuentra la conciliación (21.11).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.5.</b> Las cuatro capas de esta sección, en el orden en que las atraviesa el evento. Ninguna alcanza sola: cada una tapa el hueco que deja la anterior. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h3 id="dedupe-productor">1. El productor idempotente</h3>
 
@@ -513,6 +685,47 @@ def process(ev, dedupe, hourly, now):
     for unit, qty in ev.units.items():
         row[unit] = row.get(unit, 0) + qty
     # al cerrar la ventana se escribe el valor completo de la fila, con su versión: repetirlo no suma dos veces</code></pre>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f21n4t f21n4d">
+<title id="f21n4t">Escribir el incremento contra escribir el valor</title>
+<desc id="f21n4d">La misma escritura se repite por un reintento. A la izquierda, el procesador escribe un incremento, sumar 9 600 tokens: la fila de las 14:00 de org_7 pasa de 9 100 000 a 9 109 600 y, con el reintento, a 9 119 200, un error. A la derecha, escribe el valor, 9 109 600 en la versión 41: repetirlo deja la misma fila.</desc>
+<defs><marker id="f21n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Escribir el incremento</text>
+<rect class="dg-box" x="20" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="72" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 100 000</text>
+<text class="dg-tiny" x="72" y="132" text-anchor="middle">antes</text>
+<path class="dg-edge" d="M126 92 H142" marker-end="url(#f21n4a)"/>
+<rect class="dg-box" x="144" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="196" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 109 600</text>
+<text class="dg-tiny" x="196" y="132" text-anchor="middle">escritura</text>
+<path class="dg-edge" d="M250 92 H266" marker-end="url(#f21n4a)"/>
+<rect class="dg-bad" x="268" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="320" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 119 200</text>
+<text class="dg-tiny" x="320" y="132" text-anchor="middle">reintento</text>
+<text class="dg-tiny" x="196" y="56" text-anchor="middle" style="font-family: var(--f-mono)">+9 600</text>
+<text class="dg-small dg-fail-text" x="196" y="168" text-anchor="middle">el reintento suma otra vez: error</text>
+<text class="dg-group" x="395" y="26" text-anchor="start">Escribir el valor</text>
+<rect class="dg-box" x="395" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="447" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 100 000, v40</text>
+<text class="dg-tiny" x="447" y="132" text-anchor="middle">antes</text>
+<path class="dg-edge" d="M501 92 H517" marker-end="url(#f21n4a)"/>
+<rect class="dg-box" x="519" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="571" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 109 600, v41</text>
+<text class="dg-tiny" x="571" y="132" text-anchor="middle">escritura</text>
+<path class="dg-edge" d="M625 92 H641" marker-end="url(#f21n4a)"/>
+<rect class="dg-ok" x="643" y="70" width="104" height="44" rx="6"/>
+<text class="dg-tiny" x="695" y="97" text-anchor="middle" style="font-family: var(--f-mono)">9 109 600, v41</text>
+<text class="dg-tiny" x="695" y="132" text-anchor="middle">reintento</text>
+<text class="dg-tiny" x="571" y="56" text-anchor="middle" style="font-family: var(--f-mono)">= 9 109 600, v41</text>
+<text class="dg-small" x="571" y="168" text-anchor="middle">el reintento no cambia nada</text>
+<text class="dg-tiny" x="385" y="210" text-anchor="middle">ClickHouse: ReplacingMergeTree se queda con la versión más alta de cada clave; hasta fusionar, las consultas exactas usan FINAL.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.6.</b> La misma escritura repetida dos veces. El incremento se acumula; el valor con versión se reemplaza a sí mismo, y por eso un reproceso se puede correr de nuevo sin miedo. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <p>La animación recorre los cuatro casos: un evento normal, el mismo evento dos veces, un evento que llega tarde y un evento que se pierde porque el gateway murió.</p>
 
@@ -601,7 +814,7 @@ def process(ev, dedupe, hourly, now):
 <text class="dg-small" x="10" y="316">una ventana cierra cuando la marca de agua pasa su fin + la tolerancia (1 h): la de 14:00 cerró en 16:00</text>
 </svg>
         </div>
-        <figcaption><b>Figura 21.3.</b> Los eventos normales caen casi verticales: llegan segundos después de ocurrir. El evento rojo ocurrió a las 14:05 y llegó a las 16:10, cuando su ventana ya había cerrado.</figcaption>
+        <figcaption><b>Figura 21.7.</b> Los eventos normales caen casi verticales: llegan segundos después de ocurrir. El evento rojo ocurrió a las 14:05 y llegó a las 16:10, cuando su ventana ya había cerrado.</figcaption>
       </figure>
 
       <p>En Apache Flink, una ventana se dispara cuando la marca de agua pasa su fin, y los elementos que llegan después se descartan, porque la tolerancia (<i>allowed lateness</i>) vale 0 por defecto. Con una tolerancia mayor, cada evento tardío vuelve a disparar la ventana con el resultado actualizado; lo que llega después de la tolerancia se puede mandar a una salida aparte con <code>sideOutputLateData</code>. <span class="badge badge--doc">Documentado</span></p>
@@ -619,6 +832,45 @@ def process(ev, dedupe, hourly, now):
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f21n5t f21n5d">
+<title id="f21n5t">Los cuatro plazos de un evento tardío</title>
+<desc id="f21n5d">Una línea de tiempo que empieza cuando termina la ventana de las 14:00. Si el evento llega dentro del desorden tolerado, 5 minutos, entra en su ventana sin costo. Dentro de la tolerancia, 1 hora, la ventana se vuelve a emitir con una versión mayor. Después, va a la salida de tardíos y se suma una fila de corrección. Si llega después de facturado el ciclo, se cobra como línea de ajuste en la factura siguiente. La escala es cualitativa.</desc>
+<defs><marker id="f21n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-ok" x="30" y="50" width="120" height="104" rx="8"/>
+<text class="dg-small" x="90" y="80" text-anchor="middle">Desorden tolerado</text>
+<text class="dg-tiny" x="90" y="104" text-anchor="middle">entra en su ventana</text>
+<text class="dg-tiny" x="90" y="122" text-anchor="middle">costo: ninguno</text>
+<rect x="156" y="50" width="210" height="104" rx="8" fill="color-mix(in srgb, var(--l-cache) 22%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.5"/>
+<text class="dg-small" x="261" y="80" text-anchor="middle">Tolerancia</text>
+<text class="dg-tiny" x="261" y="104" text-anchor="middle">re-emite la ventana</text>
+<text class="dg-tiny" x="261" y="122" text-anchor="middle">con versión mayor</text>
+<rect class="dg-warnbox" x="372" y="50" width="190" height="104" rx="8"/>
+<text class="dg-small" x="467" y="80" text-anchor="middle">Salida de tardíos</text>
+<text class="dg-tiny" x="467" y="104" text-anchor="middle">fila de corrección</text>
+<text class="dg-tiny" x="467" y="122" text-anchor="middle">la hora cambia</text>
+<rect class="dg-bad" x="568" y="50" width="172" height="104" rx="8"/>
+<text class="dg-small" x="654" y="80" text-anchor="middle">Ciclo facturado</text>
+<text class="dg-tiny" x="654" y="104" text-anchor="middle">línea de ajuste</text>
+<text class="dg-tiny" x="654" y="122" text-anchor="middle">en la factura siguiente</text>
+<path class="sim-axis" d="M30 176 H740" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M30 170 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="30" y="200" text-anchor="start">fin de la ventana</text>
+<path class="sim-axis" d="M153 170 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="153" y="200" text-anchor="middle">+5 min</text>
+<path class="sim-axis" d="M369 170 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="369" y="200" text-anchor="middle">+1 h</text>
+<path class="sim-axis" d="M565 170 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="565" y="200" text-anchor="middle">cierre del ciclo</text>
+<text class="dg-group" x="30" y="30" text-anchor="start">Cuándo llega el evento, contado desde el fin de su ventana (escala cualitativa)</text>
+<text class="dg-tiny" x="385" y="232" text-anchor="middle">Descartar, lo que Flink hace por defecto, no es una opción: un evento tardío es dinero.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.8.</b> La tabla de los tres plazos como línea de tiempo. Cuanto más tarde llega el evento, más caro es corregirlo, pero en ningún tramo se descarta. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <h3 id="agregar-tablas">Las tablas de agregados</h3>
 
@@ -680,7 +932,7 @@ def process(ev, dedupe, hourly, now):
 <text class="dg-tiny" x="570" y="229" text-anchor="middle">depende del lag de Kafka: no se puede reproducir</text>
 </svg>
         </div>
-        <figcaption><b>Figura 21.4.</b> Un precio que cambia a medianoche, con precios inventados para el ejemplo. Tarifar por la hora de procesamiento haría que el precio dependiera del lag de Kafka.</figcaption>
+        <figcaption><b>Figura 21.9.</b> Un precio que cambia a medianoche, con precios inventados para el ejemplo. Tarifar por la hora de procesamiento haría que el precio dependiera del lag de Kafka.</figcaption>
       </figure>
 
       <figure class="schema">
@@ -735,6 +987,37 @@ def process(ev, dedupe, hourly, now):
         <li><b>Por línea de factura:</b> se suman las cantidades del mes por línea (3 millones de requests × 400 tokens de salida = 1&#8239;200 millones de tokens), se multiplica una vez por el precio y se redondea una vez. El error queda por debajo de medio centavo por línea.</li>
       </ul>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 240" role="img" aria-labelledby="f21n6t f21n6d">
+<title id="f21n6t">Dónde se redondea</title>
+<desc id="f21n6d">Tres millones de requests por mes, de 0.008 dólares cada una. Si cada request se redondea al centavo hacia arriba, la factura dice 30 000 dólares, un 25 % de más. Si se redondea hacia abajo, cada request vale 0 y el uso es gratis. Si se suman las cantidades por línea y se redondea una vez, la factura dice 24 000 dólares, con un error menor a medio centavo.</desc>
+<defs><marker id="f21n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="56" text-anchor="start">Por request, hacia arriba</text>
+<text class="dg-tiny" x="20" y="72" text-anchor="start">0.008 → 0.01</text>
+<rect class="dg-bad" x="230" y="44" width="346.875" height="30" rx="4"/>
+<text class="dg-small" x="584.875" y="64" text-anchor="start">30 000 USD, +25 %</text>
+<text class="dg-small" x="20" y="108" text-anchor="start">Por request, hacia abajo</text>
+<text class="dg-tiny" x="20" y="124" text-anchor="start">0.008 → 0</text>
+<text class="dg-small" x="238" y="116" text-anchor="start">0 USD: uso gratis</text>
+<text class="dg-small" x="20" y="160" text-anchor="start">Por línea, una vez</text>
+<text class="dg-tiny" x="20" y="176" text-anchor="start">suma, precio, redondeo</text>
+<rect class="dg-ok" x="230" y="148" width="277.5" height="30" rx="4"/>
+<text class="dg-small" x="515.5" y="168" text-anchor="start">24 000 USD</text>
+<path class="dg-feedback" d="M507.5 36 V196"/>
+<path class="sim-axis" d="M230 196 H600" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="230" y="214" text-anchor="middle">0</text>
+<text class="dg-tiny" x="345.625" y="214" text-anchor="middle">10 000</text>
+<text class="dg-tiny" x="461.25" y="214" text-anchor="middle">20 000</text>
+<text class="dg-tiny" x="576.875" y="214" text-anchor="middle">30 000</text>
+<text class="dg-tiny" x="610" y="214" text-anchor="start">USD</text>
+<text class="dg-tiny" x="20" y="232" text-anchor="start">100 000 requests por día × 30 días = 3 millones; cada una cuesta 0.008 USD (la request de 21.2).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.10.</b> El mismo uso facturado de tres formas. Redondear por request mete un error sistemático del tamaño de la fracción de centavo; redondear una vez por línea lo vuelve despreciable. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>El saldo prepagado, que se descuenta request por request, guarda montos en una unidad más chica que el centavo (micro o nanodólares) y nunca redondea al descontar. Solo la factura redondea, y la diferencia entre lo descontado y lo facturado se concilia.</p>
 
 <pre data-lang="python"><code>from decimal import Decimal, ROUND_HALF_UP
@@ -774,6 +1057,47 @@ assert rate_line(1_200_000_000, 10_000) == 1_200_000</code></pre>
         </table>
       </div>
       <p><span class="badge badge--ref">Diseño de referencia</span> Los créditos tienen vencimiento: los prepagos de OpenAI vencen al año de comprados. <span class="badge badge--doc">Documentado</span> Por eso se consumen por orden de vencimiento, y cada compra o promoción es un lote con su fecha y su saldo propio.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f21n7t f21n7d">
+<title id="f21n7t">El saldo son lotes que vencen</title>
+<desc id="f21n7d">Dos lotes de crédito: una promoción de 100 dólares que vence a los 30 días y una compra de 500 que vence al año. El uso se descuenta primero del lote que vence antes. En 30 días el cliente usa 70 dólares, todos de la promoción; el día 30 la promoción vence con 30 sin usar, que vuelven al gasto promocional. La compra queda intacta.</desc>
+<defs><marker id="f21n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Lotes vigentes, por orden de vencimiento</text>
+<text class="dg-small" x="20" y="66" text-anchor="start">Promoción</text>
+<text class="dg-tiny" x="20" y="82" text-anchor="start">vence a los 30 días</text>
+<rect class="dg-box" x="200" y="52" width="63" height="34" rx="4"/>
+<text class="dg-tiny" x="231.5" y="74" text-anchor="middle">usado: 70</text>
+<rect class="dg-warnbox" x="263" y="52" width="27" height="34" rx="4"/>
+<text class="dg-tiny" x="276.5" y="74" text-anchor="middle">30</text>
+<text class="dg-tiny" x="300" y="66" text-anchor="start">el día 30 vence con 30 sin usar:</text>
+<text class="dg-tiny" x="300" y="82" text-anchor="start">asiento a gasto promocional</text>
+<text class="dg-small" x="20" y="126" text-anchor="start">Compra</text>
+<text class="dg-tiny" x="20" y="142" text-anchor="start">vence al año</text>
+<rect x="200" y="112" width="450" height="34" rx="4" fill="color-mix(in srgb, var(--l-db) 24%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-tiny" x="425" y="134" text-anchor="middle">500, intacto</text>
+<path class="sim-axis" d="M200 164 H650.0" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M200.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="200" y="184" text-anchor="middle">0</text>
+<path class="sim-axis" d="M290.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="290" y="184" text-anchor="middle">100</text>
+<path class="sim-axis" d="M380.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="380" y="184" text-anchor="middle">200</text>
+<path class="sim-axis" d="M470.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="470" y="184" text-anchor="middle">300</text>
+<path class="sim-axis" d="M560.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="560" y="184" text-anchor="middle">400</text>
+<path class="sim-axis" d="M650.0 164 V170" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="650" y="184" text-anchor="middle">500</text>
+<text class="dg-tiny" x="672" y="184" text-anchor="start">USD</text>
+<rect class="dg-box" x="20" y="206" width="730" height="40" rx="8"/>
+<text class="dg-small" x="385" y="231" text-anchor="middle">El saldo es la suma de los lotes vigentes: 600 al empezar, 530 después de usar 70 y 500 cuando vence la promoción.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.11.</b> Los asientos de la tabla como lotes. Consumir primero lo que vence antes deja que la promoción se gaste y que lo que el cliente pagó dure más. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>El saldo de una organización es la suma de sus lotes vigentes. Calcularlo sumando el ledger en cada request sería lento, así que se guarda un saldo materializado con una versión, que se actualiza en la misma transacción que los asientos y que se puede volver a calcular desde el ledger cuando se quiera comprobar.</p>
 
@@ -819,6 +1143,49 @@ assert rate_line(1_200_000_000, 10_000) == 1_200_000</code></pre>
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 240" role="img" aria-labelledby="f21n8t f21n8d">
+<title id="f21n8t">Cuánto puede pasarse un tope de gasto</title>
+<desc id="f21n8d">Dos barras apiladas, en dólares, de lo que puede gastarse por encima del tope. En operación normal: 4 por el retraso del metering (2 dólares por segundo durante 2 segundos) más 24 de los 50 streams en vuelo (0.48 cada uno), 28 en total. Si Kafka se atrasa 60 segundos, el primer término sube a 120 y el exceso a 144.</desc>
+<defs><marker id="f21n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="60" text-anchor="start">Normal</text>
+<text class="dg-tiny" x="20" y="76" text-anchor="start">retraso de 2 s</text>
+<rect class="dg-warnbox" x="210" y="46" width="13.6" height="34" rx="3"/>
+<rect x="223.6" y="46" width="81.6" height="34" rx="3" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="264.4" y="68" text-anchor="middle">24: en vuelo</text>
+<text class="dg-small" x="313.2" y="68" text-anchor="start">28 USD</text>
+<text class="dg-small" x="20" y="130" text-anchor="start">Kafka atrasado</text>
+<text class="dg-tiny" x="20" y="146" text-anchor="start">retraso de 60 s</text>
+<rect class="dg-warnbox" x="210" y="116" width="408" height="34" rx="3"/>
+<rect x="618" y="116" width="81.6" height="34" rx="3" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="414" y="138" text-anchor="middle">120: retraso</text>
+<text class="dg-tiny" x="658.8" y="138" text-anchor="middle">24: en vuelo</text>
+<text class="dg-small" x="707.6" y="138" text-anchor="start">144 USD</text>
+<text class="dg-tiny" x="212" y="34" text-anchor="start">4</text>
+<path class="sim-axis" d="M210 178 H720.0" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M210.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="210" y="198" text-anchor="middle">0</text>
+<path class="sim-axis" d="M295.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="295" y="198" text-anchor="middle">25</text>
+<path class="sim-axis" d="M380.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="380" y="198" text-anchor="middle">50</text>
+<path class="sim-axis" d="M465.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="465" y="198" text-anchor="middle">75</text>
+<path class="sim-axis" d="M550.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="550" y="198" text-anchor="middle">100</text>
+<path class="sim-axis" d="M635.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="635" y="198" text-anchor="middle">125</text>
+<path class="sim-axis" d="M720.0 178 V184" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="720" y="198" text-anchor="middle">150</text>
+<text class="dg-tiny" x="742" y="198" text-anchor="start">USD</text>
+<text class="dg-tiny" x="20" y="224" text-anchor="start">Retraso: 2 USD/s × segundos de retraso. En vuelo: 50 streams × 0.48 USD de costo máximo. El primero crece con el lag.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.12.</b> Las dos fuentes del exceso, apiladas. Los streams en vuelo son un monto fijo; el retraso crece con el lag de Kafka y por eso es el que hay que vigilar. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>El primer término crece con el lag, y por eso el lag del consumidor de topes es una alerta de prioridad alta (<a href="m11-observabilidad.html#alertas">M11</a>). Para que un Kafka atrasado no deje pasar gasto sin límite, el limitador del gateway lleva además un contador aproximado del gasto del mes en Redis, que se corrige con el valor exacto en cada conciliación: si el metering se atrasa, el contador aproximado frena al cliente cerca del tope igual. El segundo término se acota con las reservas de 21.8: un tope estricto reserva contra el margen que queda hasta el tope, como contra un saldo.</p>
 
@@ -931,7 +1298,7 @@ event_name=output_tokens_modelo_m
 <path class="dg-edge" d="M400 150 L466 251" marker-end="url(#f21ka)"/>
 </svg>
         </div>
-        <figcaption><b>Figura 21.5.</b> Cada diferencia tiene una acción. Ninguna corrige editando: se publica un evento, se reprocesa una hora o se ajusta un contador aproximado.</figcaption>
+        <figcaption><b>Figura 21.13.</b> Cada diferencia tiene una acción. Ninguna corrige editando: se publica un evento, se reprocesa una hora o se ajusta un contador aproximado.</figcaption>
       </figure>
 
       <p>La conciliación corre cada hora sobre la hora que terminó hace dos, cuando ya pasó la tolerancia de los eventos tardíos (21.6). Compara:</p>
@@ -1031,6 +1398,51 @@ event_name=output_tokens_modelo_m
         </table>
       </div>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 220" role="img" aria-labelledby="f21n9t f21n9d">
+<title id="f21n9t">Lo que cuesta cada usuario de un plan de 20 dólares</title>
+<desc id="f21n9d">El costo de GPU por mes de tres usuarios de un plan de 20 dólares, a 2.78 dólares por millón de tokens de salida, contra una línea vertical en 20. El liviano cuesta 0.50, el promedio 2.67 y el pesado, con razonamiento, 62.50: tres veces lo que paga.</desc>
+<defs><marker id="f21n9a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="50" text-anchor="start">Liviano</text>
+<text class="dg-tiny" x="20" y="66" text-anchor="start">180 000 tokens/mes</text>
+<rect class="dg-ok" x="230" y="40" width="3.35714" height="28" rx="3"/>
+<text class="dg-small" x="241.357" y="59" text-anchor="start">0.50 USD</text>
+<text class="dg-small" x="20" y="96" text-anchor="start">Promedio</text>
+<text class="dg-tiny" x="20" y="112" text-anchor="start">960 000 tokens/mes</text>
+<rect class="dg-ok" x="230" y="86" width="17.9271" height="28" rx="3"/>
+<text class="dg-small" x="255.927" y="105" text-anchor="start">2.67 USD</text>
+<text class="dg-small" x="20" y="142" text-anchor="start">Pesado</text>
+<text class="dg-tiny" x="20" y="158" text-anchor="start">22.5 M tokens/mes</text>
+<rect class="dg-bad" x="230" y="132" width="419.643" height="28" rx="3"/>
+<text class="dg-small" x="657.643" y="151" text-anchor="start">62.50 USD</text>
+<path class="dg-edge" d="M364.2857142857143 30 V176" style="stroke: var(--accent); stroke-dasharray: 5 4"/>
+<text class="dg-tiny" x="370.286" y="26" text-anchor="start">precio del plan: 20 USD</text>
+<path class="sim-axis" d="M230 176 H700" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M230.0 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="230" y="196" text-anchor="middle">0</text>
+<path class="sim-axis" d="M297.1428571428571 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="297.143" y="196" text-anchor="middle">10</text>
+<path class="sim-axis" d="M364.2857142857143 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="364.286" y="196" text-anchor="middle">20</text>
+<path class="sim-axis" d="M431.42857142857144 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="431.429" y="196" text-anchor="middle">30</text>
+<path class="sim-axis" d="M498.57142857142856 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="498.571" y="196" text-anchor="middle">40</text>
+<path class="sim-axis" d="M565.7142857142858 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="565.714" y="196" text-anchor="middle">50</text>
+<path class="sim-axis" d="M632.8571428571429 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="632.857" y="196" text-anchor="middle">60</text>
+<path class="sim-axis" d="M700.0 176 V182" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="700" y="196" text-anchor="middle">70</text>
+<text class="dg-tiny" x="710" y="196" text-anchor="start">USD</text>
+<text class="dg-tiny" x="20" y="212" text-anchor="start">Costo de GPU por mes = tokens de salida × 2.78 USD por millón (21.13).</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 21.14.</b> La tabla como barras contra el precio del plan. Los dos primeros usuarios dejan margen; el tercero cuesta más que el plan, y solo el metering lo muestra. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
       <p>El usuario pesado cuesta tres veces lo que paga. Ese es el motivo de los límites de mensajes por ventana de tiempo de los planes de consumo, que se aplican con el limitador del <a href="m18-cuotas-tokens.html#jerarquia">M18</a>, y de los planes más caros para quienes los superan. Sin metering, nadie en la empresa sabría qué porcentaje de usuarios está en la última fila.</p>
 
       <h2 id="fallas"><span class="sec-num">21.14</span>Fallas</h2>
@@ -1114,7 +1526,7 @@ event_name=output_tokens_modelo_m
 <text class="dg-tiny" x="236" y="286" text-anchor="middle">registro del motor</text>
 </svg>
         </div>
-        <figcaption><b>Figura 21.6.</b> El metering como servicios administrados. Lo único que corre en las GPUs es el registro propio del motor; todo lo demás es CPU barata.</figcaption>
+        <figcaption><b>Figura 21.15.</b> El metering como servicios administrados. Lo único que corre en las GPUs es el registro propio del motor; todo lo demás es CPU barata.</figcaption>
       </figure>
 
       <div class="table-wrap">

@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M26. Entrenamiento y fine-tuning</title>
+<meta name="description" content="Entrenar con ojos de sistemas: la memoria de 16 bytes por parámetro, paralelismo de datos y ZeRO/FSDP, colectivas y red, fallas y checkpoints con Young/Daly, el pipeline de datos, LoRA y QLoRA, RLHF contra DPO, y del checkpoint a producción.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m26">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Entrenamiento y fine-tuning</h1>
+        <p class="lead">El modelo que sirves en toda la Parte II salió de aquí: un job que corre semanas sobre miles de GPUs que tienen que avanzar al mismo paso, donde algo se rompe cada pocas horas y un checkpoint mal puesto cuesta días. Este módulo mira el entrenamiento con ojos de sistemas: cuánta memoria pide (ocho veces más que servir), cómo se reparte entre GPUs, por qué la red es el cuello, cómo se sobrevive a las fallas, y las formas baratas de adaptarlo a tu caso (LoRA y QLoRA) y de alinearlo (RLHF y DPO).</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M26</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>85 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12, M13, M14, M15</dd></div>
+          <div><dt>Estado</dt><dd data-status="m26">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Explicar por qué entrenar pide unos 16 bytes por parámetro, ocho veces lo que pide servir, y qué guarda cada uno.</li>
+          <li>Distinguir el paralelismo de datos del de modelo, y qué reparten ZeRO y FSDP para que un modelo que no entra en una GPU quepa en muchas.</li>
+          <li>Entender por qué la red es el cuello de un entrenamiento y qué hace un all-reduce.</li>
+          <li>Calcular cada cuánto conviene guardar un checkpoint con la fórmula de Young y Daly, según cuántas fallas hay y cuánto cuesta guardar.</li>
+          <li>Elegir entre full fine-tuning, LoRA y QLoRA para adaptar un modelo, y estimar lo que ahorra cada uno.</li>
+          <li>Diferenciar SFT, RLHF y DPO, y saber de dónde sale el servilismo de un modelo.</li>
+          <li>Seguir el camino de un checkpoint a producción: evaluar, cuantizar, registrar y desplegar.</li>
+        </ul>
+      </section>
+
+      <h2 id="por-que"><span class="sec-num">26.1</span>Por qué un ingeniero de sistemas mira el entrenamiento</h2>
+
+      <p>Hasta aquí, toda la Parte II trató de <b>servir</b> un modelo ya hecho: cargarlo en GPUs, cortarlo en prefill y decode, cobrar los tokens. Pero ese modelo no apareció de la nada. Salió de un <b>entrenamiento</b>: un programa que ajusta miles de millones de números leyendo billones de palabras. No hace falta que sepas optimización ni cálculo para diseñar los sistemas que lo rodean, que es de lo que trata este módulo.</p>
+
+      <p>Las dos cargas se parecen poco. Servir es un enjambre de requests cortas e independientes que llegan todo el día; si una GPU se cae, se pierde una respuesta. Entrenar es <b>un solo job gigante</b> que corre semanas sobre miles de GPUs que tienen que avanzar al mismo paso, sincronizadas en cada paso; si una GPU se cae, se cae el job entero.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>&nbsp;</th><th>Servir (Parte II)</th><th>Entrenar (este módulo)</th></tr></thead>
+          <tbody>
+            <tr><td>Forma del trabajo</td><td>Muchas requests cortas e independientes</td><td>Un job que corre semanas</td></tr>
+            <tr><td>Memoria por parámetro</td><td>~2 bytes (BF16) o menos con cuantización</td><td>~16 bytes (pesos, gradientes y optimizador)</td></tr>
+            <tr><td>Si una GPU falla</td><td>Se pierde una respuesta; se drena la réplica (M19)</td><td>Se detiene el job; se reanuda desde el último checkpoint</td></tr>
+            <tr><td>El cuello de botella</td><td>El ancho de banda de memoria de la GPU (M13)</td><td>La red entre GPUs: hay que sincronizar en cada paso</td></tr>
+            <tr><td>Cuánto dura</td><td>Milisegundos por token</td><td>Semanas, con un checkpoint cada tanto</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f26n1t f26n1d">
+<title id="f26n1t">Servir contra entrenar</title>
+<desc id="f26n1d">Dos diagramas de tiempo. Arriba, servir: cuatro réplicas atienden requests cortas e independientes; una GPU falla en la réplica 3 y se pierde una sola respuesta, mientras las demás siguen. Abajo, entrenar: cuatro GPUs avanzan por pasos, con una sincronización al final de cada paso; una GPU falla y se detiene el job entero, que vuelve al último checkpoint. Los tiempos son ilustrativos.</desc>
+<defs><marker id="f26n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="24" text-anchor="start">Servir: muchas requests cortas e independientes</text>
+<text class="dg-tiny" x="20" y="51" text-anchor="start">Réplica 1</text>
+<rect x="130" y="36" width="39" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="189" y="36" width="33" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="232" y="36" width="64" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="307" y="36" width="53" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="369" y="36" width="62" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="445" y="36" width="32" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="487" y="36" width="57" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="565" y="36" width="34" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="614" y="36" width="35" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="670" y="36" width="33" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<text class="dg-tiny" x="20" y="79" text-anchor="start">Réplica 2</text>
+<rect x="127" y="64" width="70" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="206" y="64" width="66" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="292" y="64" width="33" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="340" y="64" width="32" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="384" y="64" width="48" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="453" y="64" width="39" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="503" y="64" width="66" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="586" y="64" width="65" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="664" y="64" width="36" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<text class="dg-tiny" x="20" y="107" text-anchor="start">Réplica 3</text>
+<rect x="131" y="92" width="36" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="177" y="92" width="66" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="252" y="92" width="69" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="335" y="92" width="61" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect class="dg-bad" x="417" y="92" width="50" height="20" rx="3"/>
+<text class="dg-tiny dg-fail-text" x="492" y="107" text-anchor="start">✕ se pierde una respuesta</text>
+<rect x="657" y="92" width="59" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<text class="dg-tiny" x="20" y="135" text-anchor="start">Réplica 4</text>
+<rect x="131" y="120" width="49" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="195" y="120" width="41" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="251" y="120" width="35" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="303" y="120" width="63" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="389" y="120" width="51" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="462" y="120" width="48" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="520" y="120" width="37" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="581" y="120" width="56" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="650" y="120" width="51" height="20" rx="3" fill="color-mix(in srgb, var(--l-client) 30%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<path class="sim-grid" d="M20 160 H750"/>
+<text class="dg-group" x="20" y="184" text-anchor="start">Entrenar: un job, todas las GPUs al mismo paso</text>
+<text class="dg-tiny" x="20" y="210" text-anchor="start">GPU 1</text>
+<rect x="120" y="196" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="224" y="196" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="328" y="196" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="432" y="196" width="60" height="18" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="20" y="234" text-anchor="start">GPU 2</text>
+<rect x="120" y="220" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="224" y="220" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="328" y="220" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect class="dg-bad" x="432" y="220" width="60" height="18" rx="3"/>
+<text class="dg-tiny" x="20" y="258" text-anchor="start">GPU 3</text>
+<rect x="120" y="244" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="224" y="244" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="328" y="244" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="432" y="244" width="60" height="18" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="20" y="282" text-anchor="start">GPU 4</text>
+<rect x="120" y="268" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="224" y="268" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="328" y="268" width="88" height="18" rx="3" fill="color-mix(in srgb, var(--l-gpu) 30%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="432" y="268" width="60" height="18" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<path class="dg-feedback" d="M216 190 V294"/>
+<path class="dg-feedback" d="M320 190 V294"/>
+<path class="dg-feedback" d="M424 190 V294"/>
+<text class="dg-tiny" x="216" y="308" text-anchor="middle">sincronizar</text>
+<text class="dg-tiny" x="320" y="308" text-anchor="middle">sincronizar</text>
+<text class="dg-tiny dg-fail-text" x="512" y="220" text-anchor="start">✕ una GPU cae: se detiene el job</text>
+<text class="dg-tiny" x="512" y="238" text-anchor="start">y vuelve al último checkpoint</text>
+<text class="dg-tiny" x="20" y="324" text-anchor="start">Por eso lo que importa al servir es la latencia de cada request, y al entrenar, que nadie se caiga ni espere.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.1.</b> Las dos primeras filas de la tabla, dibujadas. Al servir, una falla toca una request; al entrenar, todas las GPUs esperan a la más lenta y caen con la que se cae.</figcaption>
+      </figure>
+
+      <p>Un ingeniero de sistemas que opera inferencia se cruza con el entrenamiento más de lo que cree: comparte las GPUs (el entrenamiento ocupa el valle de la flota, M23), produce los checkpoints que después se cuantizan y se despliegan (M14, M22), y es donde se arregla —o se rompe— el comportamiento del modelo (el servilismo del M22 nace aquí). Empecemos por lo que explica casi todo lo demás: la memoria.</p>
+
+      <h2 id="memoria"><span class="sec-num">26.2</span>La memoria de un entrenamiento</h2>
+
+      <p>Servir un modelo de 70B en BF16 ocupa 2 bytes por parámetro: unos 141 GB, casi dos H100 (M13). Entrenarlo ocupa <b>ocho veces más</b>. La diferencia no está en los pesos, sino en todo lo que el optimizador necesita para ajustarlos. Con <b>Adam en precisión mixta</b>, la receta más común, cada parámetro arrastra 16 bytes: <span class="badge badge--doc">Documentado</span></p>
+
+      <ul>
+        <li><b>El peso en fp16</b> (2 bytes): la copia que se usa para calcular rápido.</li>
+        <li><b>El gradiente en fp16</b> (2 bytes): hacia dónde mover ese peso en este paso.</li>
+        <li><b>La copia maestra en fp32</b> (4 bytes): el peso en alta precisión, para que los ajustes diminutos no se pierdan al redondear.</li>
+        <li><b>El primer momento de Adam</b> (4 bytes): un promedio de los gradientes recientes.</li>
+        <li><b>La varianza</b> (4 bytes): un promedio de su tamaño, para dar pasos más cortos donde el terreno es escarpado.</li>
+      </ul>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f261t f261d">
+<title id="f261t">Memoria por parámetro: servir contra entrenar</title>
+<desc id="f261d">Una barra corta de 2 bytes para servir en BF16. Debajo, una barra ocho veces más larga para entrenar con Adam: 2 bytes del peso en fp16, 2 del gradiente en fp16, 4 de la copia maestra en fp32, 4 del primer momento y 4 de la varianza; en total 16 bytes por parámetro.</desc>
+<text class="dg-label" x="40" y="40">Servir (BF16)</text>
+<rect x="40" y="50" width="80" height="34" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.6"/>
+<text class="dg-small" x="80" y="72" text-anchor="middle">2 B</text>
+<text class="dg-tiny" x="132" y="71">= 141 GB en un modelo de 70B</text>
+<text class="dg-label" x="40" y="128">Entrenar (Adam, precisión mixta)</text>
+<rect x="40" y="138" width="80" height="36" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.6"/>
+<text class="dg-small" x="80" y="161" text-anchor="middle">2 B</text>
+<rect x="120" y="138" width="80" height="36" style="fill: var(--fill-2); stroke: var(--l-cache)" stroke-width="1.6"/>
+<text class="dg-small" x="160" y="161" text-anchor="middle">2 B</text>
+<rect x="200" y="138" width="160" height="36" style="fill: var(--fill-2); stroke: var(--l-db)" stroke-width="1.6"/>
+<text class="dg-small" x="280" y="161" text-anchor="middle">4 B</text>
+<rect x="360" y="138" width="160" height="36" style="fill: var(--fill-2); stroke: var(--l-service)" stroke-width="1.6"/>
+<text class="dg-small" x="440" y="161" text-anchor="middle">4 B</text>
+<rect x="520" y="138" width="160" height="36" style="fill: var(--fill-2); stroke: var(--l-edge)" stroke-width="1.6"/>
+<text class="dg-small" x="600" y="161" text-anchor="middle">4 B</text>
+<text class="dg-tiny" x="80" y="190" text-anchor="middle">peso fp16</text>
+<text class="dg-tiny" x="160" y="190" text-anchor="middle">gradiente</text>
+<text class="dg-tiny" x="280" y="190" text-anchor="middle">copia fp32</text>
+<text class="dg-tiny" x="440" y="190" text-anchor="middle">momento</text>
+<text class="dg-tiny" x="600" y="190" text-anchor="middle">varianza</text>
+<text class="dg-big" x="40" y="224">16 bytes por parámetro = 1.13 TB en un modelo de 70B, antes de las activaciones</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.2.</b> El optimizador, no los pesos, es lo que llena la GPU. Los mismos 70B que se sirven en 141 GB necesitan 1.13 TB solo para los estados del entrenamiento: catorce H100.</figcaption>
+      </figure>
+
+      <p>A eso hay que sumarle las <b>activaciones</b>: los resultados intermedios de cada capa que hay que guardar para calcular los gradientes. Dependen del tamaño del batch y del largo de la secuencia, y en modelos grandes pueden igualar a los estados. Se recortan con <b>recomputación</b> (tirar las activaciones y recalcularlas cuando hagan falta, cambiando memoria por cómputo), pero aun así el total no entra ni cerca en una sola GPU. Esa es la razón de todo lo que sigue: hay que repartir el entrenamiento entre muchas.</p>
+
+      <div data-calc="trainmem"></div>
+
+      <h2 id="datos-zero"><span class="sec-num">26.3</span>Paralelismo de datos, ZeRO y FSDP</h2>
+
+      <p>La forma más simple de usar muchas GPUs es el <dfn data-term="data-parallelism">paralelismo de datos</dfn>: poner una copia entera del modelo en cada GPU y darle a cada una un trozo distinto del batch. Cada GPU calcula sus gradientes con sus ejemplos, y después todas los <b>promedian</b> para que los pesos sigan siendo idénticos en todas. Ese promedio es una operación colectiva, el all-reduce de la sección siguiente.</p>
+
+      <p>El paralelismo de datos acelera el entrenamiento —procesas más ejemplos por paso— pero <b>no ahorra memoria</b>: cada GPU sigue cargando el modelo entero, los 16 bytes por parámetro. Para un 70B eso es imposible: 1.13 TB no entran en una H100 de 80 GB.</p>
+
+      <p>La solución es dejar de duplicar lo que se puede repartir. <dfn data-term="fsdp">FSDP</dfn> (en PyTorch) y ZeRO (en DeepSpeed) son la misma idea con dos nombres: en vez de que cada GPU guarde una copia completa, cada una guarda <b>una fracción</b> de los estados, y las piezas se juntan solo en el momento justo en que se usan. ZeRO lo hace en tres etapas, cada una reparte más: <span class="badge badge--doc">Documentado</span></p>
+
+      <ul>
+        <li><b>Etapa 1:</b> reparte los estados del optimizador (los 12 bytes de copia, momento y varianza). Ya baja la memoria a la mitad larga.</li>
+        <li><b>Etapa 2:</b> reparte también los gradientes.</li>
+        <li><b>Etapa 3:</b> reparte también los pesos. Ahora cada GPU guarda ≈ 16 bytes × parámetros ÷ número de GPUs. Justo antes de cada capa, las GPUs se intercambian las piezas de los pesos que les faltan (un all-gather), hacen la cuenta y las vuelven a soltar.</li>
+      </ul>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f262t f262d">
+<title id="f262t">Paralelismo de datos contra ZeRO-3</title>
+<desc id="f262d">A la izquierda, paralelismo de datos: tres GPUs, cada una con una copia completa del modelo (pesos, gradientes y optimizador), que promedian los gradientes con un all-reduce. A la derecha, ZeRO-3: tres GPUs, cada una con un tercio de los estados, que juntan las piezas con un all-gather justo antes de usarlas.</desc>
+<text class="dg-label" x="190" y="26" text-anchor="middle">Paralelismo de datos</text>
+<text class="dg-tiny" x="190" y="44" text-anchor="middle">cada GPU guarda el modelo entero</text>
+<rect class="dg-box" x="40" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="85" y="80" text-anchor="middle">GPU 0</text>
+<text class="dg-tiny" x="85" y="98" text-anchor="middle">pesos</text>
+<text class="dg-tiny" x="85" y="112" text-anchor="middle">grad.</text>
+<text class="dg-tiny" x="85" y="126" text-anchor="middle">optimiz.</text>
+<rect class="dg-box" x="145" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="190" y="80" text-anchor="middle">GPU 1</text>
+<text class="dg-tiny" x="190" y="98" text-anchor="middle">pesos</text>
+<text class="dg-tiny" x="190" y="112" text-anchor="middle">grad.</text>
+<text class="dg-tiny" x="190" y="126" text-anchor="middle">optimiz.</text>
+<rect class="dg-box" x="250" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="295" y="80" text-anchor="middle">GPU 2</text>
+<text class="dg-tiny" x="295" y="98" text-anchor="middle">pesos</text>
+<text class="dg-tiny" x="295" y="112" text-anchor="middle">grad.</text>
+<text class="dg-tiny" x="295" y="126" text-anchor="middle">optimiz.</text>
+<path class="dg-edge" d="M40 160 H340" marker-end="url(#f262a)"/>
+<path class="dg-edge" d="M340 160 H40" marker-end="url(#f262a)"/>
+<text class="dg-tiny" x="190" y="182" text-anchor="middle">all-reduce: promediar los gradientes</text>
+<defs><marker id="f262a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path d="M385 20 V280" stroke="var(--rule)" stroke-width="1" stroke-dasharray="4 4"/>
+<text class="dg-label" x="580" y="26" text-anchor="middle">ZeRO-3 / FSDP</text>
+<text class="dg-tiny" x="580" y="44" text-anchor="middle">cada GPU guarda un tercio</text>
+<rect class="dg-box" x="430" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="475" y="80" text-anchor="middle">GPU 0</text>
+<text class="dg-tiny" x="475" y="102" text-anchor="middle">⅓ pesos</text>
+<text class="dg-tiny" x="475" y="118" text-anchor="middle">⅓ estados</text>
+<rect class="dg-box" x="535" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="580" y="80" text-anchor="middle">GPU 1</text>
+<text class="dg-tiny" x="580" y="102" text-anchor="middle">⅓ pesos</text>
+<text class="dg-tiny" x="580" y="118" text-anchor="middle">⅓ estados</text>
+<rect class="dg-box" x="640" y="60" width="90" height="74" rx="4"/>
+<text class="dg-small" x="685" y="80" text-anchor="middle">GPU 2</text>
+<text class="dg-tiny" x="685" y="102" text-anchor="middle">⅓ pesos</text>
+<text class="dg-tiny" x="685" y="118" text-anchor="middle">⅓ estados</text>
+<path class="dg-edge" d="M430 160 H730" marker-end="url(#f262a)"/>
+<path class="dg-edge" d="M730 160 H430" marker-end="url(#f262a)"/>
+<text class="dg-tiny" x="580" y="182" text-anchor="middle">all-gather: juntar las piezas antes de cada capa</text>
+<rect x="430" y="210" width="300" height="60" rx="4" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.3"/>
+<text class="dg-tiny" x="580" y="233" text-anchor="middle">Memoria por GPU ≈ 16 B × parámetros ÷ GPUs</text>
+<text class="dg-tiny" x="580" y="251" text-anchor="middle">Más GPUs ⇒ menos memoria cada una,</text>
+<text class="dg-tiny" x="580" y="265" text-anchor="middle">pero más tráfico de red.</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.3.</b> El paralelismo de datos duplica el modelo en cada GPU y solo promedia gradientes. ZeRO-3 y FSDP reparten los estados y juntan las piezas justo a tiempo: así un modelo que no entra en una GPU cabe repartido en muchas, a cambio de más tráfico de red.</figcaption>
+      </figure>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f26n2t f26n2d">
+<title id="f26n2t">Cuánta memoria guarda cada GPU, etapa por etapa</title>
+<desc id="f26n2d">La memoria de estados por GPU para un modelo de 70.6 mil millones de parámetros repartido en 64 GPUs, sin contar las activaciones. Con paralelismo de datos, cada GPU guarda los 16 bytes por parámetro: 1 130 GB. La etapa 1 reparte el optimizador: 295.6 GB. La etapa 2 reparte también los gradientes: 156.6 GB. La etapa 3 reparte también los pesos: 17.65 GB, que entran en una H100 de 80 GB.</desc>
+<defs><marker id="f26n2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="56" text-anchor="start">Paralelismo de datos</text>
+<rect x="200" y="34" width="119.958" height="34" rx="3" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="259.979" y="56" text-anchor="middle">pesos y gradientes</text>
+<rect x="319.958" y="34" width="359.873" height="34" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="499.894" y="56" text-anchor="middle">optimizador</text>
+<text class="dg-small" x="687.83" y="56" text-anchor="start">1 130 GB</text>
+<text class="dg-small" x="20" y="110" text-anchor="start">ZeRO etapa 1</text>
+<rect x="200" y="88" width="119.958" height="34" rx="3" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="259.979" y="110" text-anchor="middle">pesos y gradientes</text>
+<rect x="319.958" y="88" width="5.62301" height="34" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="333.581" y="110" text-anchor="start">295.6 GB</text>
+<text class="dg-small" x="20" y="164" text-anchor="start">ZeRO etapa 2</text>
+<rect x="200" y="142" width="59.9788" height="34" rx="3" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<rect x="259.979" y="142" width="6.56018" height="34" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="274.539" y="164" text-anchor="start">156.6 GB</text>
+<text class="dg-small" x="20" y="218" text-anchor="start">ZeRO etapa 3</text>
+<rect x="200" y="196" width="7.49735" height="34" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="241.982" y="218" text-anchor="start">17.65 GB</text>
+<path class="dg-feedback" d="M233.98230088495575 26 V34" style="stroke: var(--ok)"/>
+<path class="dg-feedback" d="M233.98230088495575 68 V88" style="stroke: var(--ok)"/>
+<path class="dg-feedback" d="M233.98230088495575 122 V142" style="stroke: var(--ok)"/>
+<path class="dg-feedback" d="M233.98230088495575 176 V196" style="stroke: var(--ok)"/>
+<path class="dg-feedback" d="M233.98230088495575 230 V246" style="stroke: var(--ok)"/>
+<text class="dg-tiny" x="239.982" y="258" text-anchor="start">una H100: 80 GB</text>
+<rect x="20" y="270" width="14" height="12" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="40" y="280" text-anchor="start">sin repartir</text>
+<rect x="140" y="270" width="14" height="12" rx="2" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1"/>
+<text class="dg-tiny" x="160" y="280" text-anchor="start">repartido entre las 64 GPUs</text>
+<text class="dg-tiny" x="20" y="296" text-anchor="start">Cuenta: 16 B × 70.6 mil millones ÷ 64 = 17.65 GB; las activaciones van aparte.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.4.</b> Las tres etapas con un ejemplo de 64 GPUs. Cada etapa reparte un pedazo más de los 16 bytes; solo la etapa 3 baja de los 80&#8239;GB de una H100. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
+      <p>El precio de repartir es <b>comunicación</b>: cuanto más reparte ZeRO, más piezas hay que mover entre GPUs en cada paso. Por eso la etapa 3 solo conviene cuando el modelo de verdad no entra de otra forma, y por eso la red importa tanto.</p>
+
+      <h2 id="tres-d"><span class="sec-num">26.4</span>Tensor, pipeline y contexto</h2>
+
+      <p>El paralelismo de datos reparte <b>ejemplos</b>. Cuando el modelo es tan grande que ni una sola capa entra cómoda, hay que repartir el <b>modelo</b> mismo. Ya aparecieron en el M15, al servir; en el entrenamiento son los mismos:</p>
+
+      <ul>
+        <li><b><dfn data-term="tensor-parallelism">Tensor parallelism</dfn>:</b> cortar las matrices de una misma capa entre varias GPUs, que calculan en paralelo y juntan el resultado. Mueve mucho dato en cada capa, así que solo sirve dentro de un servidor, sobre NVLink.</li>
+        <li><b><dfn data-term="pipeline-parallelism">Pipeline parallelism</dfn>:</b> poner unas capas en unas GPUs y las siguientes en otras, como una línea de montaje. El riesgo es la <b>burbuja</b>: mientras la primera etapa trabaja, las otras esperan. Se achica partiendo el batch en micro-lotes que entran en fila.</li>
+        <li><b>Paralelismo de contexto o de secuencia:</b> cuando la secuencia es larguísima, repartir la propia secuencia entre GPUs.</li>
+      </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f26n3t f26n3d">
+<title id="f26n3t">La burbuja del pipeline</title>
+<desc id="f26n3d">Cuatro etapas de un pipeline, cada una en sus GPUs, sobre el tiempo. Arriba, el batch entra entero: cada etapa trabaja 1 de 4 turnos y espera los otros 3, el 75 % del tiempo ocioso. Abajo, el mismo batch partido en 8 micro-lotes que entran en fila: cada etapa trabaja 8 de 11 turnos, y la burbuja baja al 27 %. Se dibuja solo el forward; con el backward la proporción es la misma.</desc>
+<defs><marker id="f26n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="30" text-anchor="start">Un solo lote: 4 turnos, cada etapa trabaja 1</text>
+<text class="dg-tiny" x="20" y="55" text-anchor="start">Etapa 1</text>
+<rect x="100" y="40" width="117" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="158.5" y="54" text-anchor="middle">1</text>
+<rect x="220" y="40" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="340" y="40" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="460" y="40" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="79" text-anchor="start">Etapa 2</text>
+<rect x="100" y="64" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="220" y="64" width="117" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="278.5" y="78" text-anchor="middle">1</text>
+<rect x="340" y="64" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="460" y="64" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="103" text-anchor="start">Etapa 3</text>
+<rect x="100" y="88" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="220" y="88" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="340" y="88" width="117" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="398.5" y="102" text-anchor="middle">1</text>
+<rect x="460" y="88" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="127" text-anchor="start">Etapa 4</text>
+<rect x="100" y="112" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="220" y="112" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="340" y="112" width="117" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="460" y="112" width="117" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="518.5" y="126" text-anchor="middle">1</text>
+<text class="dg-big" x="600" y="82" text-anchor="start">75 % ocioso</text>
+<text class="dg-tiny" x="600" y="102" text-anchor="start">3 ÷ 4</text>
+<text class="dg-label" x="20" y="166" text-anchor="start">8 micro-lotes: 11 turnos, cada etapa trabaja 8</text>
+<text class="dg-tiny" x="20" y="191" text-anchor="start">Etapa 1</text>
+<rect x="100" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="120.5" y="190" text-anchor="middle">1</text>
+<rect x="144" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="164.5" y="190" text-anchor="middle">2</text>
+<rect x="188" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="208.5" y="190" text-anchor="middle">3</text>
+<rect x="232" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="252.5" y="190" text-anchor="middle">4</text>
+<rect x="276" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="296.5" y="190" text-anchor="middle">5</text>
+<rect x="320" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="340.5" y="190" text-anchor="middle">6</text>
+<rect x="364" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="384.5" y="190" text-anchor="middle">7</text>
+<rect x="408" y="176" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="428.5" y="190" text-anchor="middle">8</text>
+<rect x="452" y="176" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="496" y="176" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="540" y="176" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="215" text-anchor="start">Etapa 2</text>
+<rect x="100" y="200" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="144" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="164.5" y="214" text-anchor="middle">1</text>
+<rect x="188" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="208.5" y="214" text-anchor="middle">2</text>
+<rect x="232" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="252.5" y="214" text-anchor="middle">3</text>
+<rect x="276" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="296.5" y="214" text-anchor="middle">4</text>
+<rect x="320" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="340.5" y="214" text-anchor="middle">5</text>
+<rect x="364" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="384.5" y="214" text-anchor="middle">6</text>
+<rect x="408" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="428.5" y="214" text-anchor="middle">7</text>
+<rect x="452" y="200" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="472.5" y="214" text-anchor="middle">8</text>
+<rect x="496" y="200" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="540" y="200" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="239" text-anchor="start">Etapa 3</text>
+<rect x="100" y="224" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="144" y="224" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="188" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="208.5" y="238" text-anchor="middle">1</text>
+<rect x="232" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="252.5" y="238" text-anchor="middle">2</text>
+<rect x="276" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="296.5" y="238" text-anchor="middle">3</text>
+<rect x="320" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="340.5" y="238" text-anchor="middle">4</text>
+<rect x="364" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="384.5" y="238" text-anchor="middle">5</text>
+<rect x="408" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="428.5" y="238" text-anchor="middle">6</text>
+<rect x="452" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="472.5" y="238" text-anchor="middle">7</text>
+<rect x="496" y="224" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="516.5" y="238" text-anchor="middle">8</text>
+<rect x="540" y="224" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<text class="dg-tiny" x="20" y="263" text-anchor="start">Etapa 4</text>
+<rect x="100" y="248" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="144" y="248" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="188" y="248" width="41" height="20" rx="2" class="dg-box" stroke-dasharray="3 3"/>
+<rect x="232" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="252.5" y="262" text-anchor="middle">1</text>
+<rect x="276" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="296.5" y="262" text-anchor="middle">2</text>
+<rect x="320" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="340.5" y="262" text-anchor="middle">3</text>
+<rect x="364" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="384.5" y="262" text-anchor="middle">4</text>
+<rect x="408" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="428.5" y="262" text-anchor="middle">5</text>
+<rect x="452" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="472.5" y="262" text-anchor="middle">6</text>
+<rect x="496" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="516.5" y="262" text-anchor="middle">7</text>
+<rect x="540" y="248" width="41" height="20" rx="2" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-tiny" x="560.5" y="262" text-anchor="middle">8</text>
+<text class="dg-big" x="600" y="218" text-anchor="start">27 % ocioso</text>
+<text class="dg-tiny" x="600" y="238" text-anchor="start">3 ÷ 11</text>
+<text class="dg-tiny" x="20" y="290" text-anchor="start">Ocioso = (etapas − 1) ÷ (micro-lotes + etapas − 1). Los cuadros punteados son la burbuja.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.5.</b> La burbuja del pipeline con 4 etapas. Partir el batch no cambia lo que tarda cada micro-lote; llena los turnos que antes se esperaban. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
+      <p>Un entrenamiento de frontera combina los cuatro a la vez —datos × tensor × pipeline × contexto—, lo que se llama paralelismo 3D o 4D. La regla práctica: tensor dentro del servidor (NVLink rápido), pipeline y datos entre servidores (red más lenta). En los modelos de mezcla de expertos (<dfn data-term="moe">MoE</dfn>) se suma el <dfn data-term="expert-parallelism">expert parallelism</dfn>, que reparte los expertos. El detalle de cada uno está en el <a href="m15-motores-inferencia.html#paralelismo">M15</a>.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 350" role="img" aria-labelledby="f26n4t f26n4d">
+<title id="f26n4t">Datos, pipeline y tensor a la vez</title>
+<desc id="f26n4d">Un ejemplo con 64 GPUs en 8 servidores de 8. Dentro de cada servidor, las 8 GPUs se reparten las matrices de cada capa con tensor parallelism, sobre NVLink. Cuatro servidores en fila forman un pipeline: cada uno tiene un cuarto de las capas. Hay dos copias de ese pipeline, que reciben datos distintos: paralelismo de datos, con el all-reduce de gradientes entre ellas por InfiniBand.</desc>
+<defs><marker id="f26n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="96" text-anchor="start">Copia 1</text>
+<text class="dg-tiny" x="20" y="112" text-anchor="start">otro trozo del batch</text>
+<rect x="140" y="50" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="208" y="68" text-anchor="middle">servidor: capas 1–20</text>
+<rect x="150" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="180" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="210" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="240" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="150" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="180" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="210" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="240" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M278 96 H290" marker-end="url(#f26n4a)"/>
+<rect x="292" y="50" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="360" y="68" text-anchor="middle">servidor: capas 21–40</text>
+<rect x="302" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="332" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="362" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="302" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="332" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="362" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M430 96 H442" marker-end="url(#f26n4a)"/>
+<rect x="444" y="50" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="512" y="68" text-anchor="middle">servidor: capas 41–60</text>
+<rect x="454" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="484" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="514" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="544" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="454" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="484" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="514" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="544" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M582 96 H594" marker-end="url(#f26n4a)"/>
+<rect x="596" y="50" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="664" y="68" text-anchor="middle">servidor: capas 61–80</text>
+<rect x="606" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="636" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="666" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="696" y="78" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="606" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="636" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="666" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="696" y="106" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<text class="dg-label" x="20" y="226" text-anchor="start">Copia 2</text>
+<text class="dg-tiny" x="20" y="242" text-anchor="start">otro trozo del batch</text>
+<rect x="140" y="180" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="208" y="198" text-anchor="middle">servidor: capas 1–20</text>
+<rect x="150" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="180" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="210" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="240" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="150" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="180" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="210" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="240" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M278 226 H290" marker-end="url(#f26n4a)"/>
+<rect x="292" y="180" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="360" y="198" text-anchor="middle">servidor: capas 21–40</text>
+<rect x="302" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="332" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="362" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="302" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="332" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="362" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="392" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M430 226 H442" marker-end="url(#f26n4a)"/>
+<rect x="444" y="180" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="512" y="198" text-anchor="middle">servidor: capas 41–60</text>
+<rect x="454" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="484" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="514" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="544" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="454" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="484" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="514" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="544" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-edge" d="M582 226 H594" marker-end="url(#f26n4a)"/>
+<rect x="596" y="180" width="136" height="92" rx="8" fill="color-mix(in srgb, var(--l-gpu) 12%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="664" y="198" text-anchor="middle">servidor: capas 61–80</text>
+<rect x="606" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="636" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="666" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="696" y="208" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="606" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="636" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="666" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<rect x="696" y="236" width="26" height="22" rx="3" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1"/>
+<path class="dg-feedback" d="M208 144 V178" style="stroke: var(--l-queue); stroke-width: 2"/>
+<path class="dg-feedback" d="M360 144 V178" style="stroke: var(--l-queue); stroke-width: 2"/>
+<path class="dg-feedback" d="M512 144 V178" style="stroke: var(--l-queue); stroke-width: 2"/>
+<path class="dg-feedback" d="M664 144 V178" style="stroke: var(--l-queue); stroke-width: 2"/>
+<text class="dg-small" x="20" y="302" text-anchor="start">Tensor</text>
+<text class="dg-tiny" x="110" y="302" text-anchor="start">dentro de cada servidor, sobre NVLink: mueve datos en cada capa</text>
+<text class="dg-small" x="20" y="320" text-anchor="start">Pipeline</text>
+<text class="dg-tiny" x="110" y="320" text-anchor="start">flechas entre servidores: solo pasan las activaciones de una etapa a la siguiente</text>
+<text class="dg-small" x="20" y="338" text-anchor="start">Datos</text>
+<text class="dg-tiny" x="110" y="338" text-anchor="start">líneas verticales: el all-reduce de gradientes entre copias, por InfiniBand</text>
+<text class="dg-group" x="20" y="24" text-anchor="start">2 copias × 4 etapas × 8 GPUs = 64 GPUs (un ejemplo; las capas, ilustrativas)</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.6.</b> La regla práctica en un dibujo: lo que más habla (tensor) queda dentro del servidor, y lo que menos habla (pipeline y datos) cruza la red. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <h2 id="colectivas"><span class="sec-num">26.5</span>Colectivas y red: por qué la red es el cuello</h2>
+
+      <p>En cada paso del entrenamiento, todas las GPUs tienen que ponerse de acuerdo. La operación estrella es el <dfn data-term="all-reduce">all-reduce</dfn>: cada GPU tiene su versión de los gradientes y, al final, todas tienen que quedar con la <b>suma</b> de todas. No es una GPU que recoge y reparte (sería un cuello); se hace en anillo.</p>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f263t f263d">
+<title id="f263t">All-reduce en anillo</title>
+<desc id="f263d">Cuatro GPUs en un anillo. Cada una pasa un fragmento de sus gradientes a su vecino y recibe otro, en dos vueltas: primero suman (reduce-scatter) y después reparten el resultado (all-gather). Ninguna GPU es el cuello.</desc>
+<defs><marker id="f263a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="345" y="30" width="80" height="48" rx="4"/>
+<text class="dg-small" x="385" y="59" text-anchor="middle">GPU 0</text>
+<rect class="dg-box" x="560" y="110" width="80" height="48" rx="4"/>
+<text class="dg-small" x="600" y="139" text-anchor="middle">GPU 1</text>
+<rect class="dg-box" x="345" y="190" width="80" height="48" rx="4"/>
+<text class="dg-small" x="385" y="219" text-anchor="middle">GPU 2</text>
+<rect class="dg-box" x="130" y="110" width="80" height="48" rx="4"/>
+<text class="dg-small" x="170" y="139" text-anchor="middle">GPU 3</text>
+<path class="dg-edge" d="M425 50 Q520 70 575 110" marker-end="url(#f263a)"/>
+<path class="dg-edge" d="M610 158 Q560 210 425 218" marker-end="url(#f263a)"/>
+<path class="dg-edge" d="M345 218 Q210 210 175 158" marker-end="url(#f263a)"/>
+<path class="dg-edge" d="M195 110 Q250 70 345 50" marker-end="url(#f263a)"/>
+<text class="dg-tiny" x="520" y="60">fragmento</text>
+<text class="dg-tiny" x="245" y="60">resultado</text>
+<text class="dg-tiny" x="385" y="138" text-anchor="middle">reduce-scatter</text>
+<text class="dg-tiny" x="385" y="156" text-anchor="middle">+ all-gather</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.7.</b> El all-reduce en anillo: cada GPU manda y recibe fragmentos de su vecino, nunca todo a una sola. Se hace en dos vueltas: una que suma (reduce-scatter) y otra que reparte la suma (all-gather).</figcaption>
+      </figure>
+
+      <p>Hay más colectivas con el mismo patrón: el <b>all-gather</b> (cada GPU junta las piezas de todas, el que usa ZeRO-3) y el <b>reduce-scatter</b> (sumar y repartir el resultado por trozos). Todas mueven, por GPU, aproximadamente el doble de los datos que se comparten, sin importar cuántas GPUs haya.</p>
+
+      <p>Y acá está el problema: ese tráfico ocurre <b>en cada paso</b>, y hasta que termina, las GPUs no pueden seguir. Si la red es lenta, las GPUs carísimas se quedan esperando y el <dfn data-term="mfu">MFU</dfn> —cuánto del cómputo pico se aprovecha— se desploma. Por eso un clúster de entrenamiento se arma con <dfn data-term="nvlink">NVLink</dfn> dentro del servidor (cientos de GB/s entre las 8 GPUs) e <dfn data-term="infiniband">InfiniBand</dfn> entre servidores, y por eso los frameworks se esfuerzan en <b>solapar</b> la comunicación con el cómputo: mandar los gradientes de las primeras capas mientras todavía se calculan las últimas. Un buen entrenamiento aprovecha entre un 35 y un 45&#8239;% del pico (M13); la red mal armada es lo primero que lo tira abajo.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f26n5t f26n5d">
+<title id="f26n5t">Solapar la comunicación con el backward</title>
+<desc id="f26n5d">Un paso de entrenamiento en dos líneas de tiempo. Sin solapar: el backward recorre las capas de la última a la primera y recién al final empieza el all-reduce de todos los gradientes, mientras las GPUs esperan. Solapando: el all-reduce de cada grupo de capas empieza apenas su gradiente está listo, mientras el backward sigue con las capas anteriores, y el paso termina antes. Las duraciones son ilustrativas.</desc>
+<defs><marker id="f26n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="20" y="28" text-anchor="start">Sin solapar</text>
+<text class="dg-tiny" x="20" y="52" text-anchor="start">Cómputo</text>
+<text class="dg-tiny" x="20" y="82" text-anchor="start">Red</text>
+<rect x="110" y="36" width="120" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="170" y="52" text-anchor="middle">forward</text>
+<rect x="234" y="36" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="262" y="52" text-anchor="middle">capas 4</text>
+<rect x="294" y="36" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="322" y="52" text-anchor="middle">capas 3</text>
+<rect x="354" y="36" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="382" y="52" text-anchor="middle">capas 2</text>
+<rect x="414" y="36" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="442" y="52" text-anchor="middle">capas 1</text>
+<rect x="478" y="66" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="503" y="82" text-anchor="middle">AR 4</text>
+<rect x="532" y="66" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="557" y="82" text-anchor="middle">AR 3</text>
+<rect x="586" y="66" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="611" y="82" text-anchor="middle">AR 2</text>
+<rect x="640" y="66" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="665" y="82" text-anchor="middle">AR 1</text>
+<rect class="dg-warnbox" x="474" y="36" width="220" height="24" rx="3"/>
+<text class="dg-tiny" x="584" y="52" text-anchor="middle">las GPUs esperan</text>
+<path class="dg-feedback" d="M694 32 V94"/>
+<text class="dg-label" x="20" y="124" text-anchor="start">Solapando</text>
+<text class="dg-tiny" x="20" y="148" text-anchor="start">Cómputo</text>
+<text class="dg-tiny" x="20" y="178" text-anchor="start">Red</text>
+<rect x="110" y="132" width="120" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 26%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="170" y="148" text-anchor="middle">forward</text>
+<rect x="234" y="132" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="262" y="148" text-anchor="middle">capas 4</text>
+<rect x="294" y="132" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="322" y="148" text-anchor="middle">capas 3</text>
+<rect x="354" y="132" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="382" y="148" text-anchor="middle">capas 2</text>
+<rect x="414" y="132" width="56" height="24" rx="3" fill="color-mix(in srgb, var(--l-gpu) 42%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="442" y="148" text-anchor="middle">capas 1</text>
+<rect x="294" y="162" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="319" y="178" text-anchor="middle">AR 4</text>
+<rect x="354" y="162" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="379" y="178" text-anchor="middle">AR 3</text>
+<rect x="414" y="162" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="439" y="178" text-anchor="middle">AR 2</text>
+<rect x="474" y="162" width="50" height="24" rx="3" fill="color-mix(in srgb, var(--l-queue) 32%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="499" y="178" text-anchor="middle">AR 1</text>
+<path class="dg-feedback" d="M528 128 V190"/>
+<text class="dg-tiny" x="700" y="48" text-anchor="start">fin del paso</text>
+<text class="dg-tiny" x="534" y="144" text-anchor="start">fin del paso</text>
+<text class="dg-tiny" x="20" y="222" text-anchor="start">AR = all-reduce de los gradientes de ese grupo de capas. El backward va de la última capa a la primera,</text>
+<text class="dg-tiny" x="20" y="238" text-anchor="start">así que los gradientes de las capas finales están listos primero y pueden salir por la red mientras tanto.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.8.</b> El mismo backward con y sin solapar. La red no trabaja menos; trabaja mientras las GPUs todavía calculan, y el paso termina antes.</figcaption>
+      </figure>
+
+      <h2 id="checkpoints"><span class="sec-num">26.6</span>Fallas y checkpoints</h2>
+
+      <p>A esta escala, algo se rompe siempre. En el entrenamiento de Llama 3 sobre 16&#8239;384 H100 hubo <b>419 interrupciones inesperadas en 54 días</b>, una cada tres horas, y cerca del 78&#8239;% fueron de hardware, con las GPUs y su memoria HBM a la cabeza (M13). <span class="badge badge--doc">Documentado</span> Como todas las GPUs avanzan al mismo paso, una sola que caiga <b>detiene el job entero</b>.</p>
+
+      <p>La defensa es el <dfn data-term="checkpoint-entrenamiento">checkpoint</dfn>: cada tanto, guardar todo el estado del entrenamiento —los 16 bytes por parámetro: pesos, gradientes y optimizador— en almacenamiento, para poder reanudar desde ahí. Cuando una GPU muere, se reemplaza el servidor y el job vuelve al último checkpoint; se pierde solo el trabajo hecho desde entonces.</p>
+
+      <p>¿Cada cuánto guardar? Es un balance. Guardar seguido cuesta tiempo de escritura (un checkpoint de un modelo grande son terabytes). Guardar poco significa rehacer mucho trabajo cuando algo falla. El punto óptimo lo da la <b>fórmula de Young y Daly</b>: el intervalo ideal es aproximadamente <b>la raíz cuadrada de dos veces el MTBF por el costo de un checkpoint</b> (T ≈ √(2 · μ · C), con μ el tiempo medio entre fallas y C lo que tarda guardar). <span class="badge badge--doc">Documentado</span> Cuantas más fallas o más barato guardar, más seguido conviene.</p>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f264t f264d">
+<title id="f264t">Checkpoints y trabajo rehecho</title>
+<desc id="f264d">Arriba, una línea de tiempo con checkpoints regulares; una falla ocurre entre dos checkpoints, y el trabajo desde el último checkpoint hasta la falla se pierde y hay que rehacerlo. Abajo, la curva del tiempo perdido según el intervalo: guardar muy seguido paga mucha escritura, guardar muy espaciado rehace mucho; el mínimo está en medio.</desc>
+<text class="dg-label" x="40" y="30">Guardar cada tanto, fallar, reanudar</text>
+<path class="dg-frame" d="M60 70 H710"/>
+<g>
+<path d="M120 62 V78" stroke="var(--l-gpu)" stroke-width="2"/>
+<path d="M250 62 V78" stroke="var(--l-gpu)" stroke-width="2"/>
+<path d="M380 62 V78" stroke="var(--l-gpu)" stroke-width="2"/>
+<path d="M510 62 V78" stroke="var(--l-gpu)" stroke-width="2"/>
+<path d="M640 62 V78" stroke="var(--l-gpu)" stroke-width="2"/>
+</g>
+<rect x="510" y="64" width="80" height="12" style="fill: var(--fail)" opacity="0.28"/>
+<path d="M590 54 L585 72 L595 70 L588 86" fill="none" stroke="var(--fail)" stroke-width="2"/>
+<text class="dg-tiny" x="550" y="104" text-anchor="middle" style="fill: var(--fail)">se rehace</text>
+<text class="dg-tiny" x="120" y="100">checkpoint</text>
+<text class="dg-tiny" x="595" y="50" style="fill: var(--fail)">falla</text>
+<text class="dg-label" x="40" y="150">El tiempo perdido según el intervalo</text>
+<path d="M90 230 H420 M90 230 V165" stroke="var(--rule-strong)" stroke-width="1.2"/>
+<path d="M110 172 C170 232 340 232 400 172" fill="none" stroke="var(--l-cache)" stroke-width="2.4"/>
+<circle cx="255" cy="221" r="4.5" style="fill: var(--l-cache)"/>
+<text class="dg-tiny" x="255" y="214" text-anchor="middle">óptimo</text>
+<text class="dg-tiny" x="110" y="162">rehace</text>
+<text class="dg-tiny" x="110" y="246">muy seguido</text>
+<text class="dg-tiny" x="400" y="246" text-anchor="end">muy espaciado</text>
+<text class="dg-tiny" x="400" y="162" text-anchor="end">paga escritura</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.9.</b> Un checkpoint deja reanudar desde el último punto guardado; lo hecho desde entonces se rehace. Guardar muy seguido paga escritura; muy espaciado rehace trabajo. Young y Daly dan el intervalo que minimiza el total.</figcaption>
+      </figure>
+
+      <div data-calc="ckpt"></div>
+
+      <p>Dos trucos bajan el costo. El <b>checkpoint asíncrono</b> copia el estado a memoria rápido y lo escribe al disco en segundo plano, para que las GPUs casi no esperen. Y hay que <b>verificar</b> lo que se guarda: un checkpoint corrupto que nadie nota es la peor falla, porque se reanuda desde basura y se pierden días. Es la misma <dfn data-term="corrupcion-silenciosa">corrupción silenciosa</dfn> del <a href="m22-operar-modelos.html#incidentes-sdc">M22</a>: a esta escala, el hardware se equivoca sin avisar.</p>
+
+      <h2 id="datos"><span class="sec-num">26.7</span>El pipeline de datos</h2>
+
+      <p>Un modelo aprende de los datos que ve, y hay muchos. La regla de <b>Chinchilla</b> dice que, para un presupuesto de cómputo dado, conviene entrenar con unos <b>20 tokens por parámetro</b>: un modelo de 70B pide del orden de 1.4 billones de tokens. <span class="badge badge--doc">Documentado</span> En la práctica los modelos actuales se entrenan con muchos más, pero el orden de magnitud manda: son billones de palabras que hay que preparar.</p>
+
+      <p>Preparar esos datos es un sistema en sí mismo: recolectar (web, libros, código), <b>deduplicar</b> (el texto repetido hace memorizar, no aprender), <b>filtrar</b> por calidad y por seguridad, convertir a tokens con el <dfn data-term="tokenizer">tokenizer</dfn> (M12) y <b>mezclar</b> las fuentes en la proporción justa. Y hay una regla de oro de sistemas: el cargador de datos <b>no puede ser el cuello</b>. Un clúster de miles de GPUs que cuesta decenas de miles de dólares la hora no puede quedarse esperando a que llegue el próximo lote; los datos se preparan antes y se sirven con holgura.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f26n6t f26n6d">
+<title id="f26n6t">El pipeline de datos</title>
+<desc id="f26n6d">Las etapas que llevan texto crudo hasta las GPUs: recolectar de la web, libros y código; deduplicar; filtrar por calidad y por seguridad; convertir a tokens; mezclar las fuentes en proporción; y un cargador con un buffer de lotes ya preparados, para que las GPUs nunca esperen. Un modelo de 70 mil millones de parámetros pide del orden de 1.4 billones de tokens, 20 por parámetro.</desc>
+<defs><marker id="f26n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-external)" x="20" y="40" width="110" height="62" rx="10"/>
+<text class="dg-label" x="75" y="68" text-anchor="middle">Recolectar</text>
+<text class="dg-tiny" x="75" y="85" text-anchor="middle">web, libros, código</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="146" y="40" width="110" height="62" rx="10"/>
+<text class="dg-label" x="201" y="68" text-anchor="middle">Deduplicar</text>
+<text class="dg-tiny" x="201" y="85" text-anchor="middle">quitar repetidos</text>
+<path class="dg-edge" d="M132 71 H142" marker-end="url(#f26n6a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="272" y="40" width="110" height="62" rx="10"/>
+<text class="dg-label" x="327" y="68" text-anchor="middle">Filtrar</text>
+<text class="dg-tiny" x="327" y="85" text-anchor="middle">calidad, seguridad</text>
+<path class="dg-edge" d="M258 71 H268" marker-end="url(#f26n6a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="398" y="40" width="110" height="62" rx="10"/>
+<text class="dg-label" x="453" y="68" text-anchor="middle">Tokenizar</text>
+<text class="dg-tiny" x="453" y="85" text-anchor="middle">tokenizer (M12)</text>
+<path class="dg-edge" d="M384 71 H394" marker-end="url(#f26n6a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="524" y="40" width="110" height="62" rx="10"/>
+<text class="dg-label" x="579" y="68" text-anchor="middle">Mezclar</text>
+<text class="dg-tiny" x="579" y="85" text-anchor="middle">por fuente</text>
+<path class="dg-edge" d="M510 71 H520" marker-end="url(#f26n6a)"/>
+<path class="dg-edge" d="M636 71 H646" marker-end="url(#f26n6a)"/>
+<rect x="650" y="40" width="100" height="62" rx="8" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-label" x="700" y="66" text-anchor="middle">Lotes listos</text>
+<text class="dg-tiny" x="700" y="84" text-anchor="middle">con holgura</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="560" y="150" width="190" height="54" rx="10"/>
+<text class="dg-label" x="655" y="174" text-anchor="middle">GPUs</text>
+<text class="dg-tiny" x="655" y="191" text-anchor="middle">nunca esperan un lote</text>
+<path class="dg-edge" d="M700.0 104 V146" marker-end="url(#f26n6a)"/>
+<rect class="dg-box" x="20" y="150" width="500" height="54" rx="8"/>
+<text class="dg-small" x="270" y="172" text-anchor="middle">Chinchilla: ≈ 20 tokens por parámetro</text>
+<text class="dg-tiny" x="270" y="192" text-anchor="middle">70 000 millones × 20 = 1.4 billones de tokens</text>
+<text class="dg-tiny" x="20" y="236" text-anchor="start">Todo lo que está antes del buffer se hace antes del entrenamiento; el cargador solo sirve lotes preparados.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.10.</b> Las cinco etapas del párrafo y el cargador. Lo caro de preparar se hace una vez, antes; lo que corre durante el entrenamiento es solo servir lotes. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+
+      <h2 id="lora"><span class="sec-num">26.8</span>Fine-tuning: LoRA y QLoRA</h2>
+
+      <p>Entrenar desde cero cuesta millones. Casi nadie lo hace: se parte de un modelo abierto y se lo <b>afina</b> (fine-tuning) para una tarea o un dominio. El problema es que un fine-tuning completo cuesta lo mismo en memoria que entrenar: los mismos 16 bytes por parámetro. Para un 70B, otra vez 1.13 TB. Hay una forma mucho más barata.</p>
+
+      <p><dfn data-term="lora">LoRA</dfn> (Low-Rank Adaptation) parte de una observación: el ajuste que necesita un modelo para una tarea nueva es "pequeño" y se puede escribir como el producto de dos matrices flacas. Entonces <b>se congela el modelo original</b> —no se toca ni un peso— y se le suman, en cada capa, dos matrices chicas de <b>rango bajo</b> (una de d×r y otra de r×d, con r pequeño). Solo se entrenan esas. Comparado con afinar GPT-3 175B con Adam, LoRA usa <b>10&#8239;000 veces menos parámetros entrenables y 3 veces menos memoria de GPU</b>, sin agregar latencia en la inferencia, porque las matrices se pueden sumar a los pesos al terminar. <span class="badge badge--doc">Documentado</span></p>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 230" role="img" aria-labelledby="f265t f265d">
+<title id="f265t">Cómo funciona LoRA</title>
+<desc id="f265d">La entrada pasa por la matriz de pesos original W, que queda congelada, y en paralelo por dos matrices chicas A (de d por r) y B (de r por d) que sí se entrenan. Los dos resultados se suman. Solo A y B, de rango bajo, se ajustan.</desc>
+<defs><marker id="f265a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="50" y="118" text-anchor="middle">entrada</text>
+<path class="dg-edge" d="M90 110 H150" marker-end="url(#f265a)"/>
+<path class="dg-edge" d="M70 120 V175 H150" marker-end="url(#f265a)"/>
+<rect x="150" y="56" width="150" height="70" rx="4" style="fill: var(--fill-2); stroke: var(--l-db)" stroke-width="1.8"/>
+<text class="dg-small" x="225" y="86" text-anchor="middle">W (d × d)</text>
+<text class="dg-tiny" x="225" y="106" text-anchor="middle">congelada ❄</text>
+<rect x="150" y="158" width="70" height="36" rx="4" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.6"/>
+<text class="dg-tiny" x="185" y="181" text-anchor="middle">A (d × r)</text>
+<rect x="230" y="158" width="70" height="36" rx="4" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.6"/>
+<text class="dg-tiny" x="265" y="181" text-anchor="middle">B (r × d)</text>
+<path class="dg-edge" d="M220 176 H230" marker-end="url(#f265a)"/>
+<path class="dg-edge" d="M300 91 H360 V120" marker-end="url(#f265a)"/>
+<path class="dg-edge" d="M300 176 H360 V132" marker-end="url(#f265a)"/>
+<circle cx="360" cy="126" r="16" style="fill: var(--fill-2); stroke: var(--rule-strong)" stroke-width="1.5"/>
+<text class="dg-small" x="360" y="132" text-anchor="middle">+</text>
+<path class="dg-edge" d="M376 126 H440" marker-end="url(#f265a)"/>
+<text class="dg-small" x="470" y="130" text-anchor="middle">salida</text>
+<text class="dg-tiny" x="225" y="218" text-anchor="middle">solo A y B se entrenan (rango r pequeño)</text>
+<rect x="540" y="56" width="210" height="140" rx="4" style="fill: var(--fill-2); stroke: var(--l-gpu)" stroke-width="1.3"/>
+<text class="dg-small" x="645" y="86" text-anchor="middle">vs full fine-tuning</text>
+<text class="dg-tiny" x="645" y="112" text-anchor="middle">10 000× menos</text>
+<text class="dg-tiny" x="645" y="128" text-anchor="middle">parámetros entrenables</text>
+<text class="dg-tiny" x="645" y="152" text-anchor="middle">3× menos memoria</text>
+<text class="dg-tiny" x="645" y="176" text-anchor="middle">0 latencia extra al servir</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.11.</b> LoRA congela el modelo y entrena solo dos matrices chicas por capa. Como son de rango bajo, los parámetros a ajustar caen diez mil veces; al terminar se suman a los pesos, así que servir no cuesta ni un milisegundo más.</figcaption>
+      </figure>
+
+      <p><dfn data-term="qlora">QLoRA</dfn> va un paso más allá: además de congelar el modelo, lo <b>cuantiza a 4 bits</b> (M14) para que ocupe aún menos, y entrena los adaptadores LoRA encima. Con eso se puede <b>afinar un modelo de 65B en una sola GPU de 48 GB</b>, algo que antes pedía un servidor entero, sin perder calidad frente al fine-tuning de 16 bits. <span class="badge badge--doc">Documentado</span> El modelo que publicaron así, Guanaco, alcanzó el 99.3&#8239;% del rendimiento de ChatGPT en su prueba con 24 horas de ajuste en una sola GPU. <span class="badge badge--doc">Documentado</span></p>
+
+      <p>LoRA tiene un bonus para quien sirve modelos: como el adaptador es chiquito (unos pocos MB) y el modelo base es el mismo para todos, se pueden cargar <b>muchos adaptadores sobre una sola copia del modelo</b> y elegir el de cada request. Es el multi-LoRA que mencionaron el <a href="m15-motores-inferencia.html#paralelismo">M15</a> y el <a href="m19-router-flota.html">M19</a>: un cliente, un adaptador, sin pagar una flota por cada uno.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f26n7t f26n7d">
+<title id="f26n7t">Muchos adaptadores sobre un modelo</title>
+<desc id="f26n7d">Una GPU con una sola copia del modelo base, congelada, y varios adaptadores LoRA de unos pocos MB cada uno, uno por cliente. Las requests llegan con el id de su adaptador; el motor aplica el adaptador de cada una sobre el mismo modelo base, en el mismo batch. Sin LoRA, cada cliente necesitaría su propia copia del modelo y su propia flota.</desc>
+<defs><marker id="f26n7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="40" width="150" height="58" rx="10"/>
+<text class="dg-label" x="95" y="66" text-anchor="middle">Cliente A</text>
+<text class="dg-tiny" x="95" y="83" text-anchor="middle">adapter: legal</text>
+<path class="dg-edge" d="M172 69 L256 106" marker-end="url(#f26n7a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="114" width="150" height="58" rx="10"/>
+<text class="dg-label" x="95" y="140" text-anchor="middle">Cliente B</text>
+<text class="dg-tiny" x="95" y="157" text-anchor="middle">adapter: soporte</text>
+<path class="dg-edge" d="M172 143 L256 130" marker-end="url(#f26n7a)"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="20" y="188" width="150" height="58" rx="10"/>
+<text class="dg-label" x="95" y="214" text-anchor="middle">Cliente C</text>
+<text class="dg-tiny" x="95" y="231" text-anchor="middle">adapter: código</text>
+<path class="dg-edge" d="M172 217 L256 154" marker-end="url(#f26n7a)"/>
+<rect x="260" y="34" width="490" height="214" rx="12" fill="color-mix(in srgb, var(--l-gpu) 10%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="505" y="56" text-anchor="middle">Una GPU, un motor</text>
+<rect x="280" y="70" width="250" height="160" rx="8" fill="color-mix(in srgb, var(--l-gpu) 34%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-label" x="405" y="140" text-anchor="middle">Modelo base</text>
+<text class="dg-tiny" x="405" y="160" text-anchor="middle">congelado, una sola copia</text>
+<text class="dg-tiny" x="405" y="176" text-anchor="middle">decenas de GB</text>
+<rect x="560" y="74" width="170" height="30" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="645" y="93" text-anchor="middle">LoRA legal</text>
+<rect x="560" y="114" width="170" height="30" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="645" y="133" text-anchor="middle">LoRA soporte</text>
+<rect x="560" y="154" width="170" height="30" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="645" y="173" text-anchor="middle">LoRA código</text>
+<rect x="560" y="194" width="170" height="30" rx="5" fill="color-mix(in srgb, var(--l-queue) 30%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="645" y="213" text-anchor="middle">más adaptadores</text>
+<text class="dg-tiny" x="645" y="246" text-anchor="middle">unos pocos MB cada uno</text>
+<text class="dg-tiny" x="20" y="272" text-anchor="start">El costo de un cliente nuevo es un archivo de MB, no una flota: es el multi-LoRA del M15 y el M19.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.12.</b> Una copia del modelo y un adaptador por cliente. El motor elige el adaptador por request, como en el multi-LoRA de M15 y M19. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <h2 id="alinear"><span class="sec-num">26.9</span>Alinear: RLHF y DPO</h2>
+
+      <p>Un modelo recién salido del preentrenamiento sabe completar texto, pero no sabe <b>conversar</b> ni seguir instrucciones: si le escribes una pregunta, puede contestar con otra pregunta, porque en internet las preguntas vienen en listas. Convertirlo en un asistente lleva dos pasos más después del preentrenamiento:</p>
+
+      <ul>
+        <li><b><dfn data-term="sft">SFT</dfn> (fine-tuning supervisado):</b> mostrarle miles de ejemplos de "así se responde bien" —instrucción y respuesta modelo, escritas por personas— para que aprenda el formato de asistente.</li>
+        <li><b>Optimización por preferencias:</b> afinar el tono y el criterio a partir de <b>comparaciones</b>. A la gente le resulta más fácil decir "esta respuesta es mejor que esa" que escribir la respuesta perfecta.</li>
+      </ul>
+
+      <p>Hay dos formas de hacer ese último paso:</p>
+
+      <ul>
+        <li><b><dfn data-term="rlhf">RLHF</dfn> (aprendizaje por refuerzo con retroalimentación humana):</b> primero se entrena un <b>modelo de recompensa</b> que aprende a puntuar respuestas imitando las preferencias de las personas, y después se ajusta el modelo con refuerzo (PPO) para que maximice esa puntuación. Es la receta del InstructGPT que dio origen a ChatGPT. <span class="badge badge--doc">Documentado</span> Funciona muy bien, pero tiene varias piezas móviles y es delicado de estabilizar.</li>
+        <li><b><dfn data-term="dpo">DPO</dfn> (optimización directa de preferencias):</b> se salta el modelo de recompensa y el refuerzo. Con un truco matemático, ajusta el modelo directamente sobre los pares "preferida contra rechazada", como si fuera una clasificación. <span class="badge badge--doc">Documentado</span> Más simple, más estable y más barato; por eso se volvió el camino por defecto para muchos equipos.</li>
+      </ul>
+
+      <figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 200" role="img" aria-labelledby="f266t f266d">
+<title id="f266t">De texto crudo a asistente</title>
+<desc id="f266d">Tres etapas: preentrenamiento prediciendo el próximo token sobre billones de tokens; después fine-tuning supervisado con ejemplos de instrucción; y al final, uno de dos caminos de preferencias, RLHF con modelo de recompensa y PPO, o DPO directo sobre pares.</desc>
+<defs><marker id="f266a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="20" y="72" width="180" height="56" rx="4"/>
+<text class="dg-small" x="110" y="96" text-anchor="middle">Preentrenamiento</text>
+<text class="dg-tiny" x="110" y="114" text-anchor="middle">predecir el próximo token</text>
+<path class="dg-edge" d="M200 100 H250" marker-end="url(#f266a)"/>
+<rect class="dg-box" x="250" y="72" width="160" height="56" rx="4"/>
+<text class="dg-small" x="330" y="96" text-anchor="middle">SFT</text>
+<text class="dg-tiny" x="330" y="114" text-anchor="middle">ejemplos de instrucción</text>
+<path class="dg-edge" d="M410 90 H455 V48 H500" marker-end="url(#f266a)"/>
+<path class="dg-edge" d="M410 110 H455 V152 H500" marker-end="url(#f266a)"/>
+<text class="dg-tiny" x="448" y="86" text-anchor="middle">elige uno</text>
+<rect class="dg-box" x="500" y="22" width="250" height="52" rx="4"/>
+<text class="dg-small" x="625" y="44" text-anchor="middle">RLHF</text>
+<text class="dg-tiny" x="625" y="62" text-anchor="middle">modelo de recompensa + PPO</text>
+<rect class="dg-box" x="500" y="126" width="250" height="52" rx="4"/>
+<text class="dg-small" x="625" y="148" text-anchor="middle">DPO</text>
+<text class="dg-tiny" x="625" y="166" text-anchor="middle">preferencias directo, sin recompensa</text>
+</svg>
+  </div>
+  <figcaption><b>Figura 26.13.</b> El camino de texto crudo a asistente: preentrenar, enseñar el formato con SFT y afinar el criterio con preferencias, por RLHF o por DPO.</figcaption>
+      </figure>
+
+      <aside class="callout callout--warn">
+        <p class="callout-label">De dónde sale el servilismo</p>
+        <p>Optimizar "lo que a la gente le gusta" tiene una trampa: a la gente le gusta que le den la razón. Si el modelo de preferencias premia las respuestas aduladoras, el modelo aprende a adular —la deriva servil del <a href="m22-operar-modelos.html#deriva-servil">M22</a>—. No es un bug de código: es el objetivo mal puesto. Por eso las preferencias se curan con cuidado y se mide el servilismo como una regresión más.</p>
+      </aside>
+
+      <h2 id="a-produccion"><span class="sec-num">26.10</span>Del checkpoint a producción</h2>
+
+      <p>El entrenamiento termina con un checkpoint: un archivo con los pesos. Falta el camino hasta que atiende requests, que cierra el círculo con todo lo de la Parte II:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Evaluar</span>Pasarlo por los evals y los golden sets del <a href="m22-operar-modelos.html#evals">M22</a>, con barras de error y comparado contra la versión actual. Incluye medir el servilismo y la seguridad, no solo el acierto.</li>
+        <li><span class="step-title">Cuantizar</span>Bajarlo de 16 bits a <dfn data-term="cuantizacion">FP8 o INT4</dfn> para que ocupe menos y sirva más rápido (M14), midiendo cuánta calidad se pierde.</li>
+        <li><span class="step-title">Registrar</span>Guardar la versión en el <dfn data-term="model-registry">model registry</dfn> (M22), con su procedencia: qué datos, qué receta, qué evals pasó. Sin eso no hay forma de volver atrás ni de auditar.</li>
+        <li><span class="step-title">Desplegar</span>Sacarlo con un <b>canary</b> y, si hace falta, un A/B (M22): primero a una fracción del tráfico, mirando las señales, antes de darle todo. Si algo sale mal, se revierte al registro anterior.</li>
+      </ol>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 240" role="img" aria-labelledby="f26n8t f26n8d">
+<title id="f26n8t">Del checkpoint a producción</title>
+<desc id="f26n8d">El camino de un checkpoint hasta atender requests: evaluar con los evals y los golden sets; cuantizar a FP8 o INT4, midiendo la calidad; registrar la versión con su procedencia; y desplegar con un canary. Si los evals no pasan, el checkpoint no sigue. Si el canary sale mal, se revierte a la versión anterior del registro.</desc>
+<defs><marker id="f26n8a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="20" y="50" width="122" height="70" rx="10"/>
+<text class="dg-label" x="81" y="82" text-anchor="middle">Checkpoint</text>
+<text class="dg-tiny" x="81" y="99" text-anchor="middle">pesos en BF16</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="168" y="50" width="122" height="70" rx="10"/>
+<text class="dg-label" x="229" y="74" text-anchor="middle">Evaluar</text>
+<text class="dg-tiny" x="229" y="91" text-anchor="middle">evals y golden sets</text>
+<text class="dg-tiny" x="229" y="106" text-anchor="middle">servilismo, seguridad</text>
+<path class="dg-edge" d="M144 85 H164" marker-end="url(#f26n8a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="316" y="50" width="122" height="70" rx="10"/>
+<text class="dg-label" x="377" y="74" text-anchor="middle">Cuantizar</text>
+<text class="dg-tiny" x="377" y="91" text-anchor="middle">FP8 o INT4</text>
+<text class="dg-tiny" x="377" y="106" text-anchor="middle">midiendo la pérdida</text>
+<path class="dg-edge" d="M292 85 H312" marker-end="url(#f26n8a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="464" y="50" width="122" height="70" rx="10"/>
+<text class="dg-label" x="525" y="82" text-anchor="middle">Registrar</text>
+<text class="dg-tiny" x="525" y="99" text-anchor="middle">datos, receta, evals</text>
+<path class="dg-edge" d="M440 85 H460" marker-end="url(#f26n8a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="612" y="50" width="122" height="70" rx="10"/>
+<text class="dg-label" x="673" y="82" text-anchor="middle">Desplegar</text>
+<text class="dg-tiny" x="673" y="99" text-anchor="middle">canary, después A/B</text>
+<path class="dg-edge" d="M588 85 H608" marker-end="url(#f26n8a)"/>
+<path class="dg-edge" d="M229.0 122 V160" style="stroke: var(--fail); fill: none"/>
+<text class="dg-tiny dg-fail-text" x="229" y="178" text-anchor="middle">✕ no pasa: no sigue</text>
+<path class="dg-feedback" d="M673.0 122 C673.0 170 525.0 170 525.0 124" marker-end="url(#f26n8a)"/>
+<text class="dg-tiny" x="599" y="186" text-anchor="middle">canary mal: volver a la versión anterior</text>
+<text class="dg-tiny" x="20" y="226" text-anchor="start">Cada paso es de la Parte II: evals y registro del M22, cuantización del M14, canary del M22.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 26.14.</b> Los cuatro pasos de la lista, con sus dos salidas: el checkpoint que no pasa los evals no sigue, y el canary que sale mal vuelve a la versión anterior. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
+      <p>Y así se cierra el libro de la Parte II: el modelo que en el M12 era una caja que escupía tokens ahora tiene una historia completa, desde los datos y las GPUs que lo entrenaron hasta el canary que lo puso a atender. Lo que sigue —el mapa gigante— junta todas esas piezas en un solo lienzo.</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m26"></div>
+
+      <section class="exercise" aria-labelledby="ej-m26">
+        <p class="exercise-title" id="ej-m26">Ejercicio de diseño: ¿full fine-tuning, LoRA o QLoRA?</p>
+        <p>Para cada caso, elige la técnica y justifica en una línea. Supón un modelo base de 70B.</p>
+        <ol>
+          <li><b>Un bufete</b> quiere un asistente con el tono y la jerga de sus escritos, a partir de 5&#8239;000 documentos propios, y tiene presupuesto para un servidor de 8 H100.</li>
+          <li><b>Una plataforma SaaS</b> quiere darle a cada uno de sus 2&#8239;000 clientes un modelo "personalizado" con sus datos, sirviéndolos a todos de forma económica.</li>
+          <li><b>Un investigador</b> quiere afinar el modelo para un idioma minoritario y solo tiene una GPU de 48 GB.</li>
+        </ol>
+        <details><summary>Ver la solución de referencia</summary>
+          <ol>
+            <li><b>LoRA</b> (o full fine-tuning si sobra tiempo y GPU). 5&#8239;000 documentos es poco: un full fine-tuning corre riesgo de sobreajustar y de olvidar lo que ya sabía, además de costar los 16 bytes por parámetro. LoRA entrena rápido, no toca el modelo base y se puede repetir barato cuando lleguen más documentos.</li>
+            <li><b>LoRA, sí o sí</b>, por el multi-LoRA. Cada cliente es un adaptador de unos pocos MB sobre una <b>única</b> copia del modelo base en la flota; el router elige el adaptador por request (M19). Un modelo completo por cliente serían 2&#8239;000 flotas: inviable. QLoRA no ayuda acá porque el problema es servir, no entrenar.</li>
+            <li><b>QLoRA.</b> Es justo su caso: una sola GPU de 48 GB alcanza para afinar un 65–70B si el base va en 4 bits y solo se entrenan los adaptadores. Full fine-tuning necesitaría más de un terabyte de memoria; LoRA sin cuantizar tampoco entraría en 48 GB con un modelo de ese tamaño.</li>
+          </ol>
+        </details>
+      </section>
+
+      <div data-checkpoint="m26"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m26.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/data/llm.data.js"></script>
+<script src="../assets/js/widgets/sim-train.js"></script>
+</body>
+</html>

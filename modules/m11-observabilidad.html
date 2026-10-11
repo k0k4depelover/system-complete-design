@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M11. Observabilidad y operación</title>
-<meta name="description" content="Métricas, logs y traces con OpenTelemetry, RED y USE, cardinalidad, alertas por burn rate sobre SLOs, despliegues canary y blue-green, feature flags, migraciones expand/contract, incidentes y postmortems.">
+<meta name="description" content="Métricas, logs y traces con OpenTelemetry, una lámina con todos los términos, RED y USE, cardinalidad y churn de series, propagación de contexto y exemplars, alertas por burn rate sobre SLOs, despliegues canary y blue-green, feature flags, migraciones expand/contract, incidentes y postmortems, el kit mínimo de incidentes de una startup y las métricas DORA.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -42,7 +42,7 @@
         <dl class="tb-grid">
           <div><dt>Plano</dt><dd>M11</dd></div>
           <div><dt>Parte</dt><dd>I. Fundamentos</dd></div>
-          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Duración</dt><dd>110 min</dd></div>
           <div><dt>Requisitos previos</dt><dd>M00, M08</dd></div>
           <div><dt>Estado</dt><dd data-status="m11">Sin empezar</dd></div>
         </dl>
@@ -51,10 +51,12 @@
         <h2 class="plain" id="obj">Al terminar podrás</h2>
         <ul>
           <li>Elegir la señal adecuada (métricas, logs o traces) para cada pregunta y conectarlas entre sí.</li>
-          <li>Diseñar métricas con RED y USE sin disparar la cardinalidad.</li>
-          <li>Seguir una request entre servicios con un trace y decidir qué traces guardar.</li>
+          <li>Ubicar cada término (trace, span, serie, cardinalidad, exemplar, Collector) en una sola imagen y explicar cómo se conectan.</li>
+          <li>Diseñar métricas con RED y USE, calcular su cardinalidad y su churn, y saber qué datos van en etiquetas y cuáles en logs y traces.</li>
+          <li>Explicar cómo se forma un trace a partir del header <code>traceparent</code>, seguir una request de la alerta al log exacto y decidir qué traces guardar.</li>
           <li>Escribir alertas por burn rate que despierten a alguien solo cuando los usuarios sufren.</li>
           <li>Desplegar con canary y feature flags, migrar un esquema sin downtime y llevar un incidente hasta su postmortem.</li>
+          <li>Responder un incidente sin runbook, armar el kit mínimo de operación de una startup y medir la entrega con las métricas DORA.</li>
         </ul>
       </section>
 
@@ -73,7 +75,7 @@
         </table>
       </div>
 
-      <p>El valor aparece cuando las señales están conectadas por identificadores comunes. Un <dfn data-term="exemplar">exemplar</dfn> guarda, junto a un punto del gráfico de latencia, el <code>trace_id</code> de una request real de ese bucket; cada log lleva el <code>trace_id</code> y el <code>span_id</code> del paso que lo escribió. Así una investigación pasa de una herramienta a otra sin buscar a ciegas:</p>
+      <p>El valor aparece cuando las señales están conectadas por identificadores comunes. Un exemplar (11.5) guarda, junto a un punto del gráfico de latencia, el <code>trace_id</code> de una request real de ese bucket; cada log lleva el <code>trace_id</code> y el <code>span_id</code> del paso que lo escribió. Así una investigación pasa de una herramienta a otra sin buscar a ciegas:</p>
 
       <figure class="figure">
         <div class="figure-frame">
@@ -125,7 +127,169 @@
         <p>Además de las tres señales clásicas hay dos que se usan cada vez más. El <b>profiling continuo</b> muestrea las pilas de llamadas de toda la flota y muestra qué funciones consumen CPU y memoria. Los <b>eventos anchos</b> (wide events) son un registro por request con decenas de campos (cliente, plan, versión, región, tiempos de cada paso) que se consulta como una base de datos analítica: permiten preguntas nuevas sin haber creado la métrica antes.</p>
       </aside>
 
-      <h2 id="metricas"><span class="sec-num">11.2</span>Métricas: RED, USE y cardinalidad</h2>
+      <h3 id="lamina">La lámina: todos los términos en una imagen</h3>
+
+      <p>Antes de entrar en cada señal, mira el conjunto. Una <b>lámina</b> es una figura fija, como las de un atlas de anatomía, con marcas numeradas sobre las piezas de un sistema y una lista que dice qué es cada marca y dónde se explica a fondo. No tiene animación a propósito: sirve para presentar los términos de una vez, para volver a ella cuando un nombre se confunde con otro y para repasar antes del quiz. Esta muestra una sola request de la API de chat y todo lo que la observa.</p>
+
+      <figure class="figure plate">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 714" role="img" aria-labelledby="pl1t pl1d">
+<title id="pl1t">Lámina 11.A: anatomía de una request observada</title>
+<desc id="pl1d">Una request de chat cruza el gateway, chat-service y tres dependencias, con el header traceparent en cada salto. El SDK de OpenTelemetry de chat-service produce tres señales: un trace con sus spans y atributos, una métrica de histograma con etiquetas, su serie temporal y un exemplar, y un log estructurado con el trace_id. Las tres viajan por OTLP al Collector, que agrupa, quita datos sensibles y muestrea por cola, y de ahí a tres backends: métricas, traces y logs. El exemplar une la métrica con el trace, y el trace_id une el trace con los logs. Sobre las métricas corre la alerta por burn rate, que enlaza a su runbook. Catorce marcas numeradas señalan cada concepto y se explican en la lista debajo de la figura.</desc>
+<defs><marker id="pl1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="10" y="18">La request</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="10" y="66" width="92" height="64" rx="12"/>
+<text class="dg-label" x="56" y="103" text-anchor="middle">Usuario</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="150" y="56" width="140" height="84" rx="12"/>
+<text class="dg-label" x="220" y="82" text-anchor="middle">gateway</text>
+<text class="dg-tiny" x="220" y="102" text-anchor="middle">span raíz a1</text>
+<text class="dg-tiny" x="220" y="118" text-anchor="middle">crea el trace_id</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="372" y="40" width="170" height="116" rx="12"/>
+<text class="dg-label" x="457" y="64" text-anchor="middle">chat-service</text>
+<text class="dg-tiny" x="457" y="84" text-anchor="middle">span d4, hijo de a1</text>
+<rect class="hb-a" x="386" y="104" width="142" height="38" rx="8"/>
+<text class="dg-tiny" x="457" y="120" text-anchor="middle">SDK de</text>
+<text class="dg-tiny" x="457" y="135" text-anchor="middle" style="font-weight: 600">OpenTelemetry</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="610" y="24" width="150" height="40" rx="10"/>
+<text class="dg-small" x="685" y="49" text-anchor="middle" style="font-weight: 600; fill: var(--label)">moderation</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="610" y="80" width="150" height="40" rx="10"/>
+<text class="dg-small" x="685" y="105" text-anchor="middle" style="font-weight: 600; fill: var(--label)">PostgreSQL</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="610" y="136" width="150" height="40" rx="10"/>
+<text class="dg-small" x="685" y="161" text-anchor="middle" style="font-weight: 600; fill: var(--label)">inference-router</text>
+<path class="dg-edge" d="M104 98 H147" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M292 98 H369" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M544 98 L607 44" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M544 98 L607 100" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M544 98 L607 156" marker-end="url(#pl1a)"/>
+<g class="pl-pin"><circle cx="330" cy="80" r="11"/><text x="330" y="84" text-anchor="middle">1</text></g>
+<text class="dg-tiny" x="330" y="176" text-anchor="middle">cada salto lleva el header</text>
+<text class="dg-tiny" x="330" y="192" text-anchor="middle" style="font-family: var(--f-mono)">traceparent</text>
+<path class="dg-feedback" d="M330 92 V162"/>
+<g class="pl-pin"><circle cx="548" cy="123" r="11"/><text x="548" y="127" text-anchor="middle">5</text></g>
+<path class="dg-feedback" d="M457 158 V200 L128 216" marker-end="url(#pl1a)"/>
+<path class="dg-feedback" d="M457 158 V200 L388 216" marker-end="url(#pl1a)"/>
+<path class="dg-feedback" d="M457 158 V200 L645 216" marker-end="url(#pl1a)"/>
+<rect class="dg-box" x="10" y="220" width="236" height="228" rx="14"/>
+<text class="dg-group" x="24" y="244">Trace 4bf9…4736</text>
+<g class="pl-pin"><circle cx="222" cy="239" r="11"/><text x="222" y="243" text-anchor="middle">2</text></g>
+<text class="dg-tiny" x="24" y="274">gateway</text>
+<rect x="126.0" y="264" width="108.0" height="13" rx="2" style="fill: var(--l-edge)"/>
+<text class="dg-tiny" x="34" y="296">chat-service</text>
+<rect x="126.4" y="286" width="107.5" height="13" rx="2" style="fill: var(--l-service)"/>
+<text class="dg-tiny" x="44" y="318">INSERT</text>
+<rect x="126.4" y="308" width="3.0" height="13" rx="2" style="fill: var(--l-db)"/>
+<text class="dg-tiny" x="44" y="340">moderation</text>
+<rect x="127.1" y="330" width="3.0" height="13" rx="2" style="fill: var(--l-service)"/>
+<text class="dg-tiny" x="44" y="362">inference</text>
+<rect x="129.7" y="352" width="103.5" height="13" rx="2" style="fill: var(--l-gpu)"/>
+<rect x="122" y="348" width="116" height="21" rx="5" style="fill: none; stroke: var(--link); stroke-width: 1.6"/>
+<g class="pl-pin"><circle cx="234" cy="358" r="11"/><text x="234" y="362" text-anchor="middle">3</text></g>
+<rect class="dg-box" x="22" y="380" width="212" height="58" rx="8"/>
+<text class="dg-tiny" x="30" y="398" style="font-family: var(--f-mono)">span i9 · padre d4</text>
+<text class="dg-tiny" x="30" y="414" style="font-family: var(--f-mono)">gen_ai.request.model=</text>
+<text class="dg-tiny" x="30" y="430" style="font-family: var(--f-mono)">  &quot;chat-large&quot;  1162 ms</text>
+<g class="pl-pin"><circle cx="234" cy="380" r="11"/><text x="234" y="384" text-anchor="middle">4</text></g>
+<rect class="dg-box" x="270" y="220" width="236" height="228" rx="14"/>
+<text class="dg-group" x="284" y="244">Métrica: un histograma</text>
+<text class="dg-tiny" x="284" y="266" style="font-family: var(--f-mono)">http_request_duration</text>
+<text class="dg-tiny" x="284" y="282" style="font-family: var(--f-mono)">_seconds_bucket{</text>
+<text class="dg-tiny" x="292" y="298" style="font-family: var(--f-mono)">route=&quot;/v1/messages&quot;,</text>
+<text class="dg-tiny" x="292" y="314" style="font-family: var(--f-mono)">code=&quot;200&quot;, le=&quot;0.5&quot;}</text>
+<g class="pl-pin"><circle cx="492" cy="290" r="11"/><text x="492" y="294" text-anchor="middle">6</text></g>
+<line class="sim-grid" x1="290" x2="486" y1="388" y2="388"/>
+<path d="M290.0 376.8 L318.0 372.3 L346.0 374.6 L374.0 369.0 L402.0 371.2 L430.0 364.5 L458.0 354.4 L486.0 338.7" style="fill: none; stroke: var(--l-service); stroke-width: 2"/>
+<circle cx="290.0" cy="376.8" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="318.0" cy="372.3" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="346.0" cy="374.6" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="374.0" cy="369.0" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="402.0" cy="371.2" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="430.0" cy="364.5" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="458.0" cy="354.4" r="2.6" style="fill: var(--l-service)"/>
+<circle cx="486.0" cy="338.7" r="2.6" style="fill: var(--l-service)"/>
+<text class="sim-axis" x="290" y="404">una muestra cada 15 s</text>
+<g class="pl-pin"><circle cx="492" cy="348" r="11"/><text x="492" y="352" text-anchor="middle">7</text></g>
+<circle cx="458.0" cy="342.4" r="5" style="fill: var(--l-queue)"/>
+<circle cx="458.0" cy="342.4" r="9" style="fill: none; stroke: var(--l-queue); stroke-width: 1.4"/>
+<path class="dg-feedback" d="M447.0 342.4 H380"/>
+<text class="dg-tiny" x="376" y="338.4" text-anchor="end">exemplar:</text>
+<text class="dg-tiny" x="376" y="353.4" text-anchor="end">trace_id 4bf9…</text>
+<g class="pl-pin"><circle cx="284" cy="324.4" r="11"/><text x="284" y="328.4" text-anchor="middle">10</text></g>
+<rect class="hb-b" x="282" y="408" width="212" height="30" rx="8"/>
+<text class="dg-tiny" x="388" y="427" text-anchor="middle">12 × 40 × 8 × 150 = 576 000 series</text>
+<g class="pl-pin"><circle cx="492" cy="408" r="11"/><text x="492" y="412" text-anchor="middle">8</text></g>
+<g class="pl-pin"><circle cx="492" cy="316" r="11"/><text x="492" y="320" text-anchor="middle">9</text></g>
+<rect class="dg-box" x="530" y="220" width="230" height="228" rx="14"/>
+<text class="dg-group" x="544" y="244">Log estructurado</text>
+<text class="dg-tiny" x="544" y="270" style="font-family: var(--f-mono)">{&quot;ts&quot;: &quot;14:07:31.342Z&quot;,</text>
+<text class="dg-tiny" x="544" y="288" style="font-family: var(--f-mono)"> &quot;level&quot;: &quot;error&quot;,</text>
+<text class="dg-tiny" x="544" y="306" style="font-family: var(--f-mono)"> &quot;service&quot;: &quot;moderation&quot;,</text>
+<text class="dg-tiny" x="544" y="324" style="font-family: var(--f-mono); fill: var(--link); font-weight: 600"> &quot;trace_id&quot;: &quot;4bf9…4736&quot;,</text>
+<text class="dg-tiny" x="544" y="342" style="font-family: var(--f-mono); fill: var(--link); font-weight: 600"> &quot;span_id&quot;: &quot;g2&quot;,</text>
+<text class="dg-tiny" x="544" y="360" style="font-family: var(--f-mono)"> &quot;event&quot;: &quot;pool.acquire_wait&quot;,</text>
+<text class="dg-tiny" x="544" y="378" style="font-family: var(--f-mono)"> &quot;wait_ms&quot;: 498}</text>
+<g class="pl-pin"><circle cx="744" cy="327" r="11"/><text x="744" y="331" text-anchor="middle">11</text></g>
+<text class="dg-tiny" x="544" y="416">una línea por evento, con campos</text>
+<text class="dg-tiny" x="544" y="432">fijos que se pueden filtrar</text>
+<path class="dg-edge" d="M128 450 V482" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M388 450 V482" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M645 450 V482" marker-end="url(#pl1a)"/>
+<text class="dg-tiny" x="140" y="470">OTLP</text>
+<text class="dg-tiny" x="400" y="470">OTLP</text>
+<text class="dg-tiny" x="657" y="470">OTLP</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="10" y="486" width="750" height="62" rx="14"/>
+<text class="dg-label" x="30" y="512">OpenTelemetry Collector</text>
+<text class="dg-tiny" x="30" y="532">recibe las tres señales, agrupa en lotes y quita datos sensibles</text>
+<rect class="dg-warnbox" x="452" y="496" width="296" height="42" rx="9"/>
+<text class="dg-tiny" x="600" y="514" text-anchor="middle">muestreo por cola: guarda todos los errores,</text>
+<text class="dg-tiny" x="600" y="530" text-anchor="middle">todo lo lento y el 1 % del resto</text>
+<g class="pl-pin"><circle cx="246" cy="508" r="11"/><text x="246" y="512" text-anchor="middle">12</text></g>
+<g class="pl-pin"><circle cx="452" cy="496" r="11"/><text x="452" y="500" text-anchor="middle">13</text></g>
+<path class="dg-edge" d="M105 550 V587" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M385 550 V587" marker-end="url(#pl1a)"/>
+<path class="dg-edge" d="M665 550 V587" marker-end="url(#pl1a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="10" y="590" width="190" height="58" rx="12"/>
+<text class="dg-label" x="105" y="615" text-anchor="middle">Prometheus</text>
+<text class="dg-tiny" x="105" y="634" text-anchor="middle">métricas y exemplars</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="290" y="590" width="190" height="58" rx="12"/>
+<text class="dg-label" x="385" y="615" text-anchor="middle">Tempo o Jaeger</text>
+<text class="dg-tiny" x="385" y="634" text-anchor="middle">traces</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="570" y="590" width="190" height="58" rx="12"/>
+<text class="dg-label" x="665" y="615" text-anchor="middle">Loki o Elasticsearch</text>
+<text class="dg-tiny" x="665" y="634" text-anchor="middle">logs</text>
+<path class="dg-feedback" d="M202 619 H287" marker-end="url(#pl1a)"/>
+<path class="dg-feedback" d="M482 619 H567" marker-end="url(#pl1a)"/>
+<text class="dg-tiny" x="245" y="582" text-anchor="middle">exemplar</text>
+<text class="dg-tiny" x="525" y="582" text-anchor="middle">trace_id</text>
+<rect class="dg-bad" x="10" y="664" width="300" height="40" rx="10"/>
+<text class="dg-tiny" x="160" y="689" text-anchor="middle" style="fill: var(--label); font-weight: 600">alerta: burn rate 14.4× → runbook</text>
+<path class="dg-edge" d="M105 650 V661" marker-end="url(#pl1a)"/>
+<g class="pl-pin"><circle cx="310" cy="664" r="11"/><text x="310" y="668" text-anchor="middle">14</text></g>
+<text class="dg-tiny" x="340" y="682">Grafana consulta los tres backends desde una pantalla:</text>
+<text class="dg-tiny" x="340" y="698">de la alerta al exemplar, al trace y al log, sin buscar a ciegas.</text>
+</svg>
+        </div>
+        <figcaption><b>Lámina 11.A.</b> Anatomía de una request observada. Arriba, el camino de la request; en el medio, las tres señales que produce el SDK; abajo, el Collector y los backends. Los dos saltos punteados de la última fila (exemplar y <code>trace_id</code>) son los que convierten tres herramientas en una sola investigación.</figcaption>
+        <ol class="plate-key">
+          <li><b>Propagación de contexto</b><span>El header <code>traceparent</code> lleva el <code>trace_id</code> y el span padre en cada llamada, también en gRPC y en los mensajes de Kafka. <a href="#propagacion">11.5</a></span></li>
+          <li><b>Trace</b><span>El recorrido completo de una request: el árbol de todos sus spans, unidos por un mismo <code>trace_id</code> de 16 bytes. <a href="#traces">11.5</a></span></li>
+          <li><b>Span</b><span>Una operación con nombre, inicio, duración y un padre. La barra de inference ocupa casi todo el trace: ahí se fue el tiempo. <a href="#propagacion">11.5</a></span></li>
+          <li><b>Atributos</b><span>Pares clave y valor del span, con nombres fijados por las convenciones semánticas: <code>gen_ai.request.model</code>, <code>http.response.status_code</code>. <a href="#traces">11.5</a></span></li>
+          <li><b>Instrumentación</b><span>El SDK de OpenTelemetry dentro de cada servicio: crea los spans, cuenta las métricas, agrega el <code>trace_id</code> a los logs y propaga el contexto. <a href="#traces">11.5</a></span></li>
+          <li><b>Métrica y etiquetas</b><span>Un número agregado con un nombre y etiquetas (<code>route</code>, <code>code</code>) que dicen de qué parte del tráfico habla. <a href="#metricas">11.2</a></span></li>
+          <li><b>Serie temporal</b><span>Una combinación de nombre y etiquetas, con una muestra cada 15 s. Es la unidad que guarda y cobra el sistema de métricas. <a href="#serie">11.3</a></span></li>
+          <li><b>Cardinalidad</b><span>Cuántas series distintas existen: el producto de los valores de cada etiqueta. Es lo que se lleva la memoria. <a href="#cardinalidad">11.3</a></span></li>
+          <li><b>Bucket de histograma</b><span>La etiqueta <code>le</code> dice "cuántas requests tardaron menos de 0.5 s". Los buckets se suman entre instancias y el percentil se calcula al final. <a href="#metricas">11.2</a></span></li>
+          <li><b>Exemplar</b><span>Junto a una muestra, el <code>trace_id</code> de una request real que cayó en ese bucket. Es el salto del gráfico al trace. <a href="#exemplars">11.5</a></span></li>
+          <li><b>Log estructurado</b><span>Un evento con campos fijos, incluidos el <code>trace_id</code> y el <code>span_id</code> que lo unen a su span exacto. <a href="#logs">11.4</a></span></li>
+          <li><b>Collector y OTLP</b><span>Los SDK mandan las tres señales por el protocolo OTLP a un Collector que agrupa, filtra y quita datos sensibles antes de exportar. <a href="#traces">11.5</a></span></li>
+          <li><b>Muestreo por cola</b><span>El Collector espera a que el trace termine y guarda todos los errores, todo lo lento y una fracción del resto. <a href="#traces">11.5</a></span></li>
+          <li><b>Alerta por burn rate</b><span>Una regla sobre las métricas que despierta a alguien solo cuando el SLO está en riesgo, y enlaza a su runbook. <a href="#alertas">11.6</a></span></li>
+        </ol>
+      </figure>
+
+      <p>Las secciones que siguen recorren la lámina de arriba abajo: métricas (11.2) y su trampa, la cardinalidad (11.3); logs (11.4); traces, con su propagación y los exemplars (11.5); y después lo que se hace con todo eso: alertas, despliegues e incidentes.</p>
+
+      <h2 id="metricas"><span class="sec-num">11.2</span>Métricas: tipos, RED y USE</h2>
 
       <p>Hay tres tipos de métrica. Un <b>contador</b> solo sube (requests atendidas, bytes enviados) y se consulta como tasa por segundo. Un <b>gauge</b> sube y baja (conexiones abiertas, profundidad de una cola). Un <b>histograma</b> cuenta cuántas observaciones cayeron en cada rango (<em>bucket</em>) de valores, y es la forma correcta de medir latencia: los percentiles de cada instancia no se pueden promediar (el promedio de doscientos p99 no es el p99 de nada), pero los buckets sí se suman entre instancias y el percentil se calcula al final.</p>
 
@@ -147,14 +311,189 @@ histogram_quantile(0.99,
 
       <p>Las colas agregan dos métricas propias: la profundidad y la edad del mensaje más viejo, o el lag del consumidor en un log (M07). La edad es la mejor de las dos, porque se traduce directo en "los usuarios ven sus datos con cinco minutos de retraso". Los servicios de LLM suman las suyas: TTFT, tokens por segundo por request y ocupación del KV cache (Parte II).</p>
 
-      <p>La trampa de las métricas es la <dfn data-term="cardinalidad">cardinalidad</dfn>. Cada combinación distinta de etiquetas es una serie temporal que el sistema guarda por separado. Un histograma de latencia con 10 buckets genera 12 series por combinación (los buckets, más la suma y el conteo). Con 40 rutas, 8 códigos de estado y 150 pods son, en el peor caso, 12 × 40 × 8 × 150 = <b>576 000 series</b>. Si alguien agrega la etiqueta <code>user_id</code>, cada usuario activo crea al menos 12 series propias: con un millón de usuarios activos en una hora son 12 millones, veinte veces más, y creciendo con el producto.</p>
+      <p>Cada métrica que definas aquí tiene un costo que no depende del tráfico sino de sus etiquetas. Es la trampa más común de las métricas, y tiene su propia sección.</p>
+
+      <h2 id="cardinalidad"><span class="sec-num">11.3</span>Cardinalidad: filas, tiempo y memoria</h2>
+
+      <p>La <dfn data-term="cardinalidad">cardinalidad</dfn> es el concepto de este módulo que más incidentes causa, y el que menos se ve venir: nadie la nota hasta que el sistema de métricas se cae. Para entenderla de una vez, hay que ver cómo guarda los datos un sistema de métricas.</p>
+
+      <h3 id="serie">Qué es una serie temporal</h3>
+
+      <p>Una <dfn data-term="serie-temporal">serie temporal</dfn> es el nombre de una métrica más <b>una combinación concreta de etiquetas</b>, con una lista de muestras en el tiempo. <code>http_requests_total{route="/messages", code="200", pod="chat-7f9"}</code> es una serie; la misma métrica con <code>code="500"</code> es otra, y con otro pod, otra más. Cada <b>muestra</b> es un par de hora y valor que el servidor de métricas toma en cada scrape, por ejemplo cada 15 s.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Piensa en una hoja de cálculo. Cada <b>fila</b> es una serie: la identifica la combinación de etiquetas, como un cliente se identifica por su número. Cada <b>columna</b> es un momento: cada 15 s se agrega una columna y se llena una celda por fila. Agregar columnas es barato: el tiempo pasa igual para todos. Agregar filas es lo caro, porque cada fila nueva necesita su lugar en el índice, su espacio en memoria y su propia historia. La cardinalidad es <b>cuántas filas tiene la hoja</b>.</p>
+      </aside>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 380" role="img" aria-labelledby="f113t f113d">
+<title id="f113t">Series temporales: filas, columnas y churn</title>
+<desc id="f113d">Una tabla. Cada fila es una serie: el nombre de la métrica más una combinación de etiquetas. Cada columna es un scrape, uno cada 15 segundos. Cada celda es una muestra con su hora y su valor. A las 14:00:52 hay un deploy: las dos series del pod chat-7f9 dejan de recibir muestras y nacen dos series nuevas del pod chat-a21. El tráfico no cambió, pero el servidor de métricas ahora conoce cuatro series en lugar de dos.</desc>
+<defs><marker id="f113a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="34" y="22" style="font-family: var(--f-mono)">http_requests_total</text>
+<text class="dg-tiny" x="34" y="42">el nombre de la métrica; cada fila suma una combinación de etiquetas</text>
+<path class="dg-edge" d="M372 30 H752" marker-end="url(#f113a)"/>
+<text class="dg-tiny" x="564.0" y="22" text-anchor="middle">tiempo: una columna por scrape, cada 15 s</text>
+<text class="sim-axis" x="396.0" y="72" text-anchor="middle">14:00:00</text>
+<text class="sim-axis" x="444.0" y="72" text-anchor="middle">:15</text>
+<text class="sim-axis" x="492.0" y="72" text-anchor="middle">:30</text>
+<text class="sim-axis" x="540.0" y="72" text-anchor="middle">:45</text>
+<text class="sim-axis" x="588.0" y="72" text-anchor="middle">14:01:00</text>
+<text class="sim-axis" x="636.0" y="72" text-anchor="middle">:15</text>
+<text class="sim-axis" x="684.0" y="72" text-anchor="middle">:30</text>
+<text class="sim-axis" x="732.0" y="72" text-anchor="middle">:45</text>
+<text class="dg-tiny" x="34" y="110" style="font-family: var(--f-mono); fill: var(--label-3)">{route=&quot;/messages&quot;, code=&quot;200&quot;, pod=&quot;chat-7f9&quot;}</text>
+<rect class="hb-b" x="375" y="92" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="396.0" y="110" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1200</text>
+<rect class="hb-b" x="423" y="92" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="444.0" y="110" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1260</text>
+<rect class="hb-b" x="471" y="92" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="492.0" y="110" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1330</text>
+<rect class="hb-b" x="519" y="92" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="540.0" y="110" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1395</text>
+<rect class="dg-frame" x="567" y="92" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="615" y="92" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="663" y="92" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="711" y="92" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="34" y="150" style="font-family: var(--f-mono); fill: var(--label-3)">{route=&quot;/messages&quot;, code=&quot;500&quot;, pod=&quot;chat-7f9&quot;}</text>
+<rect class="hb-b" x="375" y="132" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="396.0" y="150" text-anchor="middle" style="font-weight: 600; fill: var(--label)">3</text>
+<rect class="hb-b" x="423" y="132" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="444.0" y="150" text-anchor="middle" style="font-weight: 600; fill: var(--label)">3</text>
+<rect class="hb-b" x="471" y="132" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="492.0" y="150" text-anchor="middle" style="font-weight: 600; fill: var(--label)">4</text>
+<rect class="hb-b" x="519" y="132" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="540.0" y="150" text-anchor="middle" style="font-weight: 600; fill: var(--label)">4</text>
+<rect class="dg-frame" x="567" y="132" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="615" y="132" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="663" y="132" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="711" y="132" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="34" y="190" style="font-family: var(--f-mono)">{route=&quot;/messages&quot;, code=&quot;200&quot;, pod=&quot;chat-a21&quot;}</text>
+<rect class="dg-frame" x="375" y="172" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="423" y="172" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="471" y="172" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="519" y="172" width="42" height="28" rx="5"/>
+<rect class="hb-a" x="567" y="172" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="588.0" y="190" text-anchor="middle" style="font-weight: 600; fill: var(--label)">0</text>
+<rect class="hb-a" x="615" y="172" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="636.0" y="190" text-anchor="middle" style="font-weight: 600; fill: var(--label)">61</text>
+<rect class="hb-a" x="663" y="172" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="684.0" y="190" text-anchor="middle" style="font-weight: 600; fill: var(--label)">120</text>
+<rect class="hb-a" x="711" y="172" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="732.0" y="190" text-anchor="middle" style="font-weight: 600; fill: var(--label)">188</text>
+<text class="dg-tiny" x="34" y="230" style="font-family: var(--f-mono)">{route=&quot;/messages&quot;, code=&quot;500&quot;, pod=&quot;chat-a21&quot;}</text>
+<rect class="dg-frame" x="375" y="212" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="423" y="212" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="471" y="212" width="42" height="28" rx="5"/>
+<rect class="dg-frame" x="519" y="212" width="42" height="28" rx="5"/>
+<rect class="hb-a" x="567" y="212" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="588.0" y="230" text-anchor="middle" style="font-weight: 600; fill: var(--label)">0</text>
+<rect class="hb-a" x="615" y="212" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="636.0" y="230" text-anchor="middle" style="font-weight: 600; fill: var(--label)">0</text>
+<rect class="hb-a" x="663" y="212" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="684.0" y="230" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1</text>
+<rect class="hb-a" x="711" y="212" width="42" height="28" rx="5"/>
+<text class="dg-tiny" x="732.0" y="230" text-anchor="middle" style="font-weight: 600; fill: var(--label)">1</text>
+<text class="dg-tiny" x="34" y="266" style="fill: var(--label-3)">… y una fila por cada combinación restante: 576 000 en el ejemplo</text>
+<path class="dg-edge" d="M18 90 V268" marker-end="url(#f113a)"/>
+<text class="dg-tiny" transform="translate(12 176) rotate(-90)" text-anchor="middle">cardinalidad: filas</text>
+<line x1="564" x2="564" y1="80" y2="250" style="stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 4"/>
+<text class="dg-tiny" x="564" y="268" text-anchor="middle" style="fill: var(--label)">deploy 14:00:52: chat-7f9 se reemplaza por chat-a21</text>
+<rect class="dg-box" x="14" y="290" width="742" height="64" rx="10"/>
+<text class="dg-tiny" x="28" y="312">Cada celda es una muestra: hora y valor, 1 a 2 bytes comprimida. Cada fila es una serie, con su índice en memoria.</text>
+<text class="dg-tiny" x="28" y="330">El deploy no cambió el tráfico, pero dejó dos series viejas que ya no reciben muestras y creó dos nuevas: eso es churn.</text>
+<text class="dg-tiny" x="28" y="346">Lo caro no son las celdas, son las filas: el costo crece con la cardinalidad y con cuántas filas nacen por hora.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 11.2.</b> Las series como tabla. Las filas son la cardinalidad, las columnas son el tiempo. El deploy de las 14:00:52 no cambió el tráfico, pero el servidor de métricas pasó de conocer dos series a conocer cuatro.</figcaption>
+      </figure>
+
+      <p>Prometheus comprime muy bien las celdas: cada muestra ocupa en promedio entre 1 y 2 bytes en disco, porque guarda solo la diferencia entre valores consecutivos. <span class="badge badge--doc">Documentado</span> Lo que no se comprime es la fila: cada serie activa vive en memoria con sus etiquetas, su entrada en el índice invertido (para encontrarla por cualquier etiqueta) y el bloque de muestras que se está llenando. Por eso el costo de un sistema de métricas crece con la cantidad de series, y casi nada con el tráfico: un contador que pasa de 100 a 100 000 requests por segundo sigue siendo una serie.</p>
+
+      <h3 id="cardinalidad-cuenta">La cuenta: las etiquetas se multiplican</h3>
+
+      <p>La cardinalidad de una métrica es el <b>producto</b> de los valores distintos de cada etiqueta, no la suma. Un histograma de latencia con 10 buckets genera 12 series por combinación (los buckets, más la suma y el conteo). Con 40 rutas, 8 códigos de estado y 150 pods son, en el peor caso:</p>
+
+      <p class="formula">12 × 40 × 8 × 150 = <b>576 000 series</b></p>
+
+      <p>El peor caso supone que existen todas las combinaciones; en la práctica algunas no aparecen nunca, porque no todas las rutas devuelven todos los códigos. Pero el orden de magnitud es ese, y dos detalles lo hacen peligroso:</p>
+      <ul>
+        <li><b>Una etiqueta nueva multiplica todo lo anterior.</b> Agregar <code>region</code> con 3 valores no suma 3 series: multiplica por 3 las 576 000, y quedan 1.7 millones.</li>
+        <li><b>Una etiqueta sin límite crece con el producto.</b> Si alguien agrega <code>user_id</code>, cada usuario activo crea al menos 12 series propias: con un millón de usuarios activos en una hora son 12 millones, veinte veces más. Y el número sube solo, sin que nadie cambie el código, cada vez que el producto gana usuarios.</li>
+      </ul>
+
+      <p>Activa y desactiva etiquetas para ver cómo se mueve la cuenta. Prueba el ejemplo, después agrega <code>user_id</code>, y después quita <code>pod</code> y cambia el código exacto por su clase (<code>2xx</code>, <code>4xx</code>, <code>5xx</code>…):</p>
+
+      <div data-calc="cardinality"></div>
+
+      <h3 id="churn">Cardinalidad en el tiempo: churn</h3>
+
+      <p>Hasta aquí contamos las filas que existen en un instante. Pero las filas también <b>nacen y mueren</b>. Cuando un pod se reemplaza, sus series dejan de recibir muestras y aparecen otras con el nombre del pod nuevo, como en la figura 11.2. A ese recambio se le llama <dfn data-term="churn-series">churn de series</dfn>. El tráfico no cambia, pero el sistema de métricas tiene que crear filas nuevas, indexarlas y conservar las viejas un tiempo.</p>
+
+      <p>¿Cuánto tiempo? En Prometheus, las muestras recientes viven en memoria en el <em>head block</em> y se escriben a disco en bloques de dos horas. <span class="badge badge--doc">Documentado</span> Una serie que dejó de recibir muestras sigue ocupando memoria hasta que el head block se compacta. Durante un deploy conviven en memoria las series de los pods viejos y las de los nuevos: con el ejemplo de 576 000 series, un rolling update las lleva por un rato a <b>más de un millón</b> sin que haya un solo usuario más.</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Qué produce churn</th><th>Por qué</th><th>Qué hacer</th></tr></thead>
+          <tbody>
+            <tr><td>Deploys frecuentes con la etiqueta <code>pod</code></td><td>Cada deploy cambia el nombre de todos los pods: 4 deploys al día con 576 000 series crean 2.3 millones de series nuevas por día</td><td>Quitar <code>pod</code> de las métricas de negocio y agregar por servicio; dejar <code>pod</code> solo en contadores simples, donde multiplica poco</td></tr>
+            <tr><td>Autoscaling agresivo</td><td>Cada réplica que nace y muere deja sus series viejas</td><td>Lo mismo: etiquetas por servicio y zona, no por instancia</td></tr>
+            <tr><td>Jobs cortos y funciones serverless</td><td>Cada ejecución es un "pod" que vive segundos</td><td>Mandar las métricas ya agregadas, o emitir eventos en lugar de series</td></tr>
+            <tr><td>Etiquetas con la versión del build o un hash</td><td>Cada build crea una familia nueva de series</td><td>Una etiqueta de versión con pocos valores vivos (la estable y la del canary), no el hash de cada commit</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="cardinalidad-memoria">Cuánta memoria cuesta</h3>
+
+      <p>Robust Perception midió cuánto le cuesta una serie a Prometheus 2.9: unos 2 GiB de memoria por cada millón de series solo por la cardinalidad (las etiquetas, el índice y la caché del scrape), más unos 2.5 GiB por millón para la ingesta, con scrape cada 15 s y sin churn. <span class="badge badge--doc">Documentado</span> Son unos 4.8 KB por serie activa (4.5 GiB entre un millón). Es un orden de magnitud, no una constante: cambia con la versión, el largo de las etiquetas y el churn. Con esa cifra:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Diseño de la métrica</th><th class="r">Series activas</th><th class="r">Memoria aproximada</th></tr></thead>
+          <tbody>
+            <tr><td>Histograma con <code>route</code> y la clase de código, sin <code>pod</code></td><td class="r">12 × 40 × 5 = 2 400</td><td class="r">~12 MB</td></tr>
+            <tr><td>El ejemplo: <code>route</code>, código exacto y <code>pod</code></td><td class="r">576 000</td><td class="r">~2.8 GB</td></tr>
+            <tr><td>El ejemplo, durante un rolling update</td><td class="r">~1 150 000</td><td class="r">~5.6 GB</td></tr>
+            <tr><td>El ejemplo más <code>user_id</code> (un millón activos)</td><td class="r">más de 12 000 000</td><td class="r">más de 58 GB</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La última fila es una sola métrica. Un servidor de métricas típico no tiene 58 GB libres, y si los tuviera, cada consulta que agrega esas series tendría que leer millones de filas: los dashboards se vuelven lentos antes de que la memoria se acabe.</p>
 
       <aside class="callout callout--fail">
         <p class="callout-label">Qué pasa si falla</p>
-        <p>Una explosión de cardinalidad agota la memoria del sistema de métricas y lo tira, casi siempre justo durante un incidente, que es cuando se crean dashboards nuevos y alguien agrega etiquetas "para investigar". Las reglas que lo evitan: etiquetas con un conjunto de valores acotado (ruta con plantilla, <code>/v1/conversations/{id}</code> y nunca el id real; clase de código <code>5xx</code> en lugar del código exacto cuando alcanza), un límite de series por servicio que rechaza las nuevas, y los identificadores de alta cardinalidad (usuario, request, conversación) en logs y traces, que están hechos para eso.</p>
+        <p>Una explosión de cardinalidad agota la memoria del sistema de métricas y lo tira, casi siempre justo durante un incidente, que es cuando se crean dashboards nuevos y alguien agrega etiquetas "para investigar". Te quedas sin métricas y sin alertas en el peor momento: el sistema que te avisa que algo anda mal es el que se cayó.</p>
       </aside>
 
-      <h2 id="logs"><span class="sec-num">11.3</span>Logs estructurados y correlación</h2>
+      <h3 id="cardinalidad-control">Cómo se controla</h3>
+
+      <ol class="steps">
+        <li><span class="step-title">Etiquetas con valores acotados</span>La ruta con plantilla (<code>/v1/conversations/{id}</code>, nunca el id real), la clase de código (<code>5xx</code>) cuando alcanza, la región, el plan del cliente. Si no puedes escribir la lista completa de valores posibles, no es una etiqueta.</li>
+        <li><span class="step-title">Lo de alta cardinalidad, a logs y traces</span>El usuario, la request y la conversación van en logs, traces y eventos anchos, que están hechos para eso. Para saltar de un gráfico a una request concreta sin crear series, están los exemplars (11.5).</li>
+        <li><span class="step-title">Límites que rechazan</span>En Prometheus, cada scrape puede llevar <code>sample_limit</code> y <code>label_limit</code>: si un servicio se pasa, ese scrape falla y lo ves en la métrica <code>up</code>, en lugar de tirar todo el servidor. <span class="badge badge--doc">Documentado</span></li>
+        <li><span class="step-title">Quitar etiquetas antes de guardar</span>Con <code>metric_relabel_configs</code> se borra una etiqueta o se descarta una métrica entera antes de que llegue a la base, sin tocar el código del servicio.</li>
+        <li><span class="step-title">Medirla</span>Vigila el total de series y quién las crea, y alerta cuando crece rápido.</li>
+      </ol>
+
+<pre><code># Series activas en el head block: la cifra que se lleva la memoria
+prometheus_tsdb_head_series
+
+# Las 10 métricas con más series (cara: úsala de vez en cuando, no en un dashboard)
+topk(10, count by (__name__) ({__name__=~".+"}))
+
+# Cuántas series nuevas se crean por segundo: el churn
+rate(prometheus_tsdb_head_series_created_total[1h])</code></pre>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Una etiqueta más es una pregunta más que puedes responder ("¿falla solo en Europa?") a cambio de multiplicar el costo. La regla práctica: cada etiqueta tiene que responder una pregunta que vas a hacer durante un incidente. Las preguntas que nadie anticipó ("¿solo los clientes del plan pro con la app 3.2?") son justo las que responden los eventos anchos y los traces, sin pagar por adelantado una serie por combinación.</p>
+      </aside>
+
+      <h2 id="logs"><span class="sec-num">11.4</span>Logs estructurados y correlación</h2>
 
       <p>Un log útil es un objeto con campos fijos, no una frase: se puede filtrar, agregar y unir con el trace. Los campos que no pueden faltar son la hora con zona, el nivel, el servicio y su versión, el <code>trace_id</code> y el <code>span_id</code>, un nombre de evento estable y los atributos del caso:</p>
 
@@ -184,7 +523,7 @@ histogram_quantile(0.99,
         <p>Nunca se registran contraseñas, tokens, API keys, números de tarjeta ni el contenido de los prompts. La redacción se hace en el origen, en la librería de logging, porque un log que ya salió del proceso se copia a muchos sistemas y ya no se puede borrar de todos (M10).</p>
       </aside>
 
-      <h2 id="traces"><span class="sec-num">11.4</span>Tracing distribuido</h2>
+      <h2 id="traces"><span class="sec-num">11.5</span>Tracing distribuido</h2>
 
       <p>Un <dfn data-term="trace">trace distribuido</dfn> sigue una request a través de todos los servicios que toca. Cada paso es un <dfn data-term="span">span</dfn>: una operación con nombre, inicio, duración, atributos y el span padre que la originó. El árbol de spans, dibujado en el tiempo, es el waterfall. Para que los servicios cuelguen sus spans del mismo trace, el contexto viaja con la request en el header <code>traceparent</code>, definido por el estándar W3C Trace Context. <span class="badge badge--doc">Documentado</span> Una llamada de un servicio a otro lo lleva así:</p>
 
@@ -193,6 +532,27 @@ Host: moderation.internal
 traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01</code></pre>
 
       <p>Sus cuatro partes son la versión (<code>00</code>), el id del trace (16 bytes), el id del span que hace la llamada (8 bytes) y las banderas (<code>01</code>: este trace se está guardando). Cada servicio lee el header, crea su span como hijo y lo propaga en sus propias llamadas: headers HTTP, metadata de gRPC y headers de los mensajes de Kafka. Un solo servicio que no propaga parte el trace en dos.</p>
+
+      <h3 id="propagacion">Mira cómo se forma un trace</h3>
+
+      <p>Lo más difícil de imaginar de un trace es que <b>nadie lo arma en un lugar central</b>. Cada servicio crea sus propios spans y los exporta por su cuenta; lo único que los une es que todos llevan el mismo <code>trace_id</code> y que cada uno sabe quién es su padre. A ese viaje del contexto de servicio en servicio se le llama <dfn data-term="propagacion-contexto">propagación de contexto</dfn>.</p>
+
+      <aside class="callout callout--analogy">
+        <p class="callout-label">Analogía</p>
+        <p>Una carpeta de expediente que pasa de oficina en oficina. La primera oficina le pone un número de expediente (el <code>trace_id</code>). Cada oficina que la recibe anota en su propio libro "expediente 4bf9, me lo mandó la oficina a1, empecé a las 10:02, terminé a las 10:05" (su span), y cuando la pasa a otra oficina escribe en la carátula "viene de mí". Al final nadie tiene la historia completa en un solo libro, pero cualquiera puede reconstruirla juntando las anotaciones de todos los libros con ese número. Si una oficina pasa la carpeta sin carátula, la siguiente abre un expediente nuevo y la historia queda partida.</p>
+      </aside>
+
+      <p>La animación muestra la request de chat de punta a punta. Arriba, los servicios y el header que viaja en cada salto; abajo, el waterfall que se va formando: cada span aparece cuando empieza su operación, con borde punteado mientras está abierto, y se llena cuando termina. La segunda escena muestra qué pasa cuando un servicio no propaga el contexto, y la tercera, cómo se sigue después esa misma request, de la alerta al log exacto.</p>
+
+      <div data-sim="traceprop"></div>
+
+      <p>Tres detalles de la animación que conviene fijar:</p>
+      <ul>
+        <li><b>El padre cambia en cada salto.</b> El gateway manda su propio span como padre; chat-service manda el suyo a moderation. El <code>trace_id</code> es el mismo en todo el árbol; el id del padre es lo que da la forma.</li>
+        <li><b>Las bases de datos no crean spans.</b> El span de un <code>INSERT</code> lo crea el driver instrumentado dentro del servicio que llama, como span de cliente. En la realidad, cada llamada entre servicios produce dos spans, uno de cliente en quien llama y uno de servidor en quien atiende; la animación los muestra como uno para que el árbol se lea mejor.</li>
+        <li><b>Lo asíncrono sigue en el mismo trace.</b> El evento de uso lleva el <code>traceparent</code> en los headers del mensaje de Kafka, y el consumidor abre su span después de que la request respondió. Cuando un consumidor procesa mensajes de muchas requests en un lote, en lugar de un padre usa <em>span links</em>: referencias a varios traces a la vez.</li>
+      </ul>
+
 
       <p>Hoy casi todo se instrumenta con <dfn data-term="opentelemetry">OpenTelemetry</dfn>: una API y SDKs por lenguaje (con instrumentación automática de los frameworks y clientes más usados), el protocolo OTLP y un <b>Collector</b> que recibe spans, métricas y logs, los procesa (agrupa, filtra, quita datos sensibles, muestrea) y los exporta al backend que elijas. Sus convenciones semánticas fijan los nombres de los atributos, como <code>http.response.status_code</code> o <code>db.system</code>, para que cualquier herramienta los entienda.</p>
 
@@ -219,7 +579,26 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01</code></pre
         <p>El muestreo por cola necesita que todos los spans de un trace lleguen al mismo Collector, aunque vengan de cien servicios distintos. Se resuelve con dos niveles: una primera capa de Collectors reparte los spans por <code>trace_id</code> con hashing consistente (el exportador de balanceo de carga del Collector de OpenTelemetry hace exactamente eso) y la segunda capa decide. <span class="badge badge--doc">Documentado</span> Es el mismo patrón de particionar por clave que viste en M05 y M07.</p>
       </aside>
 
-      <h2 id="alertas"><span class="sec-num">11.5</span>Alertas sobre SLOs: burn rate</h2>
+      <h3 id="exemplars">Exemplars: el puente entre métricas y traces</h3>
+
+      <p>Un <dfn data-term="exemplar">exemplar</dfn> resuelve un problema concreto: el gráfico del p99 dice "a las 14:02 la latencia subió a 1.7 s", pero un percentil no es una request, y no se puede abrir. El exemplar guarda, junto a una muestra de la métrica, el <code>trace_id</code> de <b>una request real</b> que cayó en ese bucket. En la exposición de OpenMetrics va al final de la línea, después de un <code>#</code>:</p>
+
+<pre><code># bucket "menos de 2.5 s": 48 213 requests. Después del #, un ejemplo real con su valor y su hora
+http_request_duration_seconds_bucket{route="/v1/messages",le="2.5"} 48213 # {trace_id="4bf92f3577b34da6a3ce929d0e0e4736"} 1.74 1773497251.842</code></pre>
+
+      <p>Tres cosas lo hacen útil sin romper lo que vimos en 11.3:</p>
+      <ul>
+        <li><b>No es una etiqueta.</b> El <code>trace_id</code> no crea una serie nueva: viaja al costado de la muestra. Prometheus guarda los exemplars en un buffer circular de tamaño fijo en memoria, de unos 100 bytes cada uno, y hay que activarlo con <code>--enable-feature=exemplar-storage</code>. <span class="badge badge--doc">Documentado</span> El costo es fijo y no crece con los usuarios.</li>
+        <li><b>Se adjunta solo.</b> Cuando el código mide la latencia dentro de un span activo, el SDK de OpenTelemetry toma el <code>trace_id</code> y el <code>span_id</code> del contexto y los guarda como exemplar. Por defecto, solo de requests cuyo trace se está guardando. <span class="badge badge--doc">Documentado</span></li>
+        <li><b>Grafana lo dibuja como un punto.</b> Cada exemplar es un punto sobre el gráfico, y un clic abre el trace. Es el salto de la escena "Seguir la request" de la animación.</li>
+      </ul>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>El exemplar apunta a un trace que nadie guardó. Pasa cuando el muestreo descarta la request después de que la métrica ya registró su <code>trace_id</code>: haces clic en el punto y el backend responde "trace no encontrado". Se evita con dos reglas: que el SDK adjunte exemplars solo de requests con la bandera de muestreo activa, y que el muestreo por cola conserve siempre lo lento y lo que falla, que es justo lo que tiene exemplars interesantes.</p>
+      </aside>
+
+      <h2 id="alertas"><span class="sec-num">11.6</span>Alertas sobre SLOs: burn rate</h2>
 
       <p>Una alerta que despierta a alguien tiene que cumplir dos condiciones: que haya usuarios afectados y que haya algo que hacer. Por eso se alerta por <b>síntomas</b> (el SLO se está incumpliendo) y no por <b>causas</b> (la CPU al 90&#8239;%): una CPU al 90&#8239;% puede no afectar a nadie, y un problema serio puede ocurrir con la CPU al 20&#8239;%. Las alertas que no piden acción entrenan al equipo a ignorarlas, y la siguiente que importe también se ignora. Las causas van a los dashboards, donde ayudan a diagnosticar.</p>
 
@@ -250,7 +629,7 @@ and
 
       <p>Cada alerta enlaza a su <dfn data-term="runbook">runbook</dfn>: qué significa, cómo confirmar el impacto, qué mitigaciones probar primero (revertir el último deploy, apagar un flag, sacar una zona) y a quién escalar. Si una alerta se dispara y el runbook dice "no hacer nada", la alerta sobra.</p>
 
-      <h2 id="despliegues"><span class="sec-num">11.6</span>Desplegar sin miedo: canary, flags y expand/contract</h2>
+      <h2 id="despliegues"><span class="sec-num">11.7</span>Desplegar sin miedo: canary, flags y expand/contract</h2>
 
       <p>La mayoría de los incidentes empieza con un cambio: código, configuración o infraestructura. No se trata de cambiar menos, sino de que cada cambio llegue primero a pocos usuarios, se compare con lo que había y se pueda revertir en segundos.</p>
 
@@ -312,7 +691,7 @@ and
 <text class="dg-group" x="20" y="24">Tráfico a la versión nueva</text>
 </svg>
         </div>
-        <figcaption><b>Figura 11.2.</b> Un canary útil compara automáticamente la versión nueva con la estable en el mismo momento y con el mismo tipo de tráfico. El tamaño de cada etapa depende del volumen: al 1&#8239;% de 20 000 requests por segundo, 10 minutos son 120 000 requests, suficientes para distinguir una tasa de errores de 0.1&#8239;% de una de 0.5&#8239;% (unos 120 errores frente a unos 600).</figcaption>
+        <figcaption><b>Figura 11.3.</b> Un canary útil compara automáticamente la versión nueva con la estable en el mismo momento y con el mismo tipo de tráfico. El tamaño de cada etapa depende del volumen: al 1&#8239;% de 20 000 requests por segundo, 10 minutos son 120 000 requests, suficientes para distinguir una tasa de errores de 0.1&#8239;% de una de 0.5&#8239;% (unos 120 errores frente a unos 600).</figcaption>
       </figure>
 
       <p>Un <dfn data-term="feature-flag">feature flag</dfn> separa desplegar código de activar la funcionalidad. El código nuevo llega a producción apagado; después se enciende para el equipo interno, para el 1&#8239;% de los usuarios o para un cliente, y si algo sale mal se apaga en segundos sin desplegar nada. Dos precauciones: el servicio de flags no puede estar en el camino de cada request (los SDKs guardan las reglas en memoria y usan un valor por defecto si no pueden actualizarlas) y cada flag necesita una fecha de retiro, porque los flags olvidados multiplican los caminos del código que nadie prueba.</p>
@@ -338,7 +717,7 @@ and
         <p>Un <code>ALTER TABLE</code> necesita un lock exclusivo de la tabla, aunque dure un milisegundo. Si una consulta larga tiene la tabla abierta, el <code>ALTER</code> espera, y todas las consultas que llegan después esperan detrás de él: la tabla queda bloqueada para todos. Por eso las migraciones fijan un límite corto de espera (<code>SET lock_timeout = '2s'</code>) y se reintentan, y los índices se crean con <code>CREATE INDEX CONCURRENTLY</code>, que no bloquea las escrituras.</p>
       </aside>
 
-      <h2 id="incidentes"><span class="sec-num">11.7</span>Incidentes y postmortems</h2>
+      <h2 id="incidentes"><span class="sec-num">11.8</span>Incidentes y postmortems</h2>
 
       <p>Cuando un incidente empieza, lo primero es <b>mitigar</b>, no entender: revertir el último deploy, apagar el flag, sacar la zona enferma, limitar el tráfico. El diagnóstico completo viene después, con el sistema estable. En incidentes grandes se reparten tres roles para que nadie haga todo a la vez: quien coordina y decide (incident commander), quien investiga y ejecuta las mitigaciones, y quien comunica, en la página de estado y a los clientes, con una cadencia fija aunque no haya novedades.</p>
 
@@ -378,7 +757,169 @@ and
         </div>
       </div>
 
-      <p>Para saber si la operación mejora con el tiempo, las cuatro métricas de DORA miden el proceso de entrega y no un servicio: frecuencia de deploys, tiempo desde el commit hasta producción, porcentaje de cambios que causan un incidente y tiempo de recuperación. <span class="badge badge--doc">Documentado</span> Los equipos con mejores resultados despliegan más seguido, no menos: cambios chicos, fáciles de revisar y de revertir.</p>
+      <h2 id="sin-runbook"><span class="sec-num">11.9</span>Cuando no hay runbook: el kit mínimo de una startup</h2>
+
+      <p>Todo lo anterior supone un equipo con dashboards, guardias y un runbook por alerta. Una startup de cinco personas no tiene nada de eso, y su primer incidente serio llega igual: a las 3 de la mañana, el día de un lanzamiento, con el único que conoce la base de datos de vacaciones. Esta sección es para ese caso: qué hacer cuando el incidente es ahora y no hay nada escrito, y qué es lo mínimo que conviene tener listo antes.</p>
+
+      <p>Primero, dos palabras que se confunden. Un <b>runbook</b> es específico: los pasos para una alerta o una tarea concreta ("la base se quedó sin conexiones"). Un <dfn data-term="playbook-incidentes">playbook de incidentes</dfn> es general: cómo se maneja <b>cualquier</b> incidente, sea cual sea la causa (quién decide, dónde se habla, cómo se comunica, cuándo se escala). Una startup puede vivir sin runbooks al principio, pero no sin playbook: es lo que evita que cinco personas toquen producción a la vez sin saber qué hizo cada una.</p>
+
+      <h3 id="sin-runbook-ahora">Si el incidente es ahora y no hay nada escrito</h3>
+
+      <p>Sin runbook, la tentación es ponerse a leer código para entender la causa. Es el error más caro: mientras entiendes, los usuarios siguen fallando. Este es el runbook genérico que sirve para casi cualquier incidente:</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Decláralo y nombra a quien coordina</span>Un mensaje en un canal: "Incidente: fallan los pagos desde las 03:10. Coordino yo." Aunque estés solo. Desde ese momento, todo lo que se hace se dice ahí.</li>
+        <li><span class="step-title">Mide el impacto, no la causa</span>¿Qué ven los usuarios? ¿Todos o algunos? ¿Desde cuándo? Una prueba desde fuera (abrir la app, llamar a la API) vale más que diez gráficos internos.</li>
+        <li><span class="step-title">Pregunta qué cambió</span>La mayoría de los incidentes empieza con un cambio (11.7). Revisa, en este orden: el último deploy, cambios de configuración y flags, el estado de los proveedores (nube, pagos, el proveedor del modelo), certificados y dominios por vencer, y la factura o las cuotas de la nube.</li>
+        <li><span class="step-title">Mitiga con una palanca genérica</span>Revertir el último deploy. Apagar el flag. Escalar o reiniciar lo que está saturado. Sacar del tráfico la zona o la instancia enferma. Degradar: apagar una funcionalidad para salvar el resto. Elige la más reversible primero, y cambia <b>una cosa a la vez</b>, anotando cuál.</li>
+        <li><span class="step-title">Comunica con horario fijo</span>Una línea en la página de estado o a los clientes afectados, y la siguiente actualización con hora ("próxima novedad a las 03:45"), aunque no haya novedad. El silencio es lo que convierte un incidente en una crisis de confianza.</li>
+        <li><span class="step-title">Anota la línea de tiempo mientras pasa</span>Hora y qué se hizo, en el mismo canal. Es la materia prima del postmortem, y a las 3 de la mañana la memoria falla.</li>
+        <li><span class="step-title">Con el sistema estable, escribe lo que faltó</span>El runbook de este incidente se escribe esa misma semana, con lo que aprendiste, y se enlaza desde la alerta que lo debió avisar. Cada incidente sin runbook termina en un runbook nuevo.</li>
+      </ol>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Los tres errores típicos sin playbook: dos personas mitigando a la vez sin saberlo (una revierte el deploy mientras la otra reinicia la base, y nadie sabe cuál de las dos cosas funcionó, o cuál empeoró todo); depurar en producción antes de mitigar, porque "ya casi lo entiendo"; y silenciar la alerta "por un rato" sin un responsable de volver a encenderla.</p>
+      </aside>
+
+      <h3 id="kit-minimo">El kit mínimo, antes del primer incidente</h3>
+
+      <p>No hace falta un equipo de SRE. Esto se arma en un par de semanas y cubre la mayor parte del riesgo:</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Pieza</th><th>Lo mínimo para una startup</th><th>Qué evita</th></tr></thead>
+          <tbody>
+            <tr><td><b>Alertas por síntoma</b></td><td>Un chequeo externo de disponibilidad del endpoint principal y dos SLOs con burn rate (éxito y latencia, 11.6). Nada de alertas por CPU</td><td>Enterarte por un tuit de un cliente</td></tr>
+            <tr><td><b>Guardia</b></td><td>Una rotación semanal, aunque sean dos personas, con un suplente y una regla de escalamiento ("si no responde en 15 min, llama a…")</td><td>Que la alerta suene en un teléfono apagado</td></tr>
+            <tr><td><b>Un canal y una página de estado</b></td><td>Un canal fijo para incidentes y una página de estado, aunque sea estática</td><td>Que la información esté repartida en mensajes privados</td></tr>
+            <tr><td><b>Severidades</b></td><td>Tres niveles con definición de una línea (abajo)</td><td>Discutir a las 3 de la mañana si "esto es grave"</td></tr>
+            <tr><td><b>Rollback de un comando</b></td><td>Volver a la versión anterior con un solo comando probado, y migraciones expand/contract para que el rollback no rompa la base (11.7)</td><td>El incidente que dura horas porque revertir es un proyecto</td></tr>
+            <tr><td><b>Backups restaurados</b></td><td>Backups automáticos y una restauración de prueba al mes, cronometrada</td><td>Descubrir el día del desastre que el backup no sirve</td></tr>
+            <tr><td><b>Inventario de dependencias</b></td><td>Una página con cada proveedor (nube, pagos, correo, el modelo), su página de estado y su contacto de soporte</td><td>Buscar a las 3 de la mañana quién es el proveedor del DNS</td></tr>
+            <tr><td><b>Plantillas</b></td><td>La del runbook (abajo) y la del postmortem (11.8)</td><td>Que cada documento se escriba de cero y no se escriba</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Severidad</th><th>Definición</th><th>Respuesta</th></tr></thead>
+          <tbody>
+            <tr><td><b>SEV1</b></td><td>El producto no funciona para la mayoría, se pierden datos o dinero, o hay un problema de seguridad activo</td><td>Se despierta a quien haga falta; actualizaciones cada 30 min; postmortem obligatorio</td></tr>
+            <tr><td><b>SEV2</b></td><td>Una función importante falla, o falla para un grupo de clientes</td><td>La guardia responde ya; actualizaciones cada hora; postmortem</td></tr>
+            <tr><td><b>SEV3</b></td><td>Algo degradado con alternativa, o un riesgo sin impacto todavía</td><td>Ticket para horario laboral</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>La plantilla de runbook cabe en una pantalla. Si no cabe, nadie la va a leer durante un incidente:</p>
+
+<pre><code># Runbook: &lt;nombre de la alerta&gt;
+
+## Qué significa
+Una frase: qué ven los usuarios cuando esta alerta suena.
+
+## Confirmar el impacto (2 minutos)
+- Enlace al dashboard y a la consulta exacta.
+- Prueba desde fuera: el comando o la URL que reproduce el problema.
+
+## Mitigar primero (en este orden)
+1. ¿Hubo un deploy en la última hora?  Revertir: &lt;comando&gt;
+2. ¿Hay un flag nuevo?                  Apagar: &lt;dónde&gt;
+3. ¿Está saturado?                     Escalar: &lt;comando&gt;
+
+## Diagnosticar (con el sistema estable)
+- Dónde mirar: trace de una request lenta, logs con su trace_id.
+- Causas conocidas y su arreglo (se completa después de cada incidente).
+
+## Escalar
+- Quién sabe de esto, y el proveedor con su enlace de soporte.
+
+Última revisión: &lt;fecha&gt;, &lt;persona&gt;</code></pre>
+
+      <h3 id="primeros-runbooks">Los cinco primeros runbooks</h3>
+
+      <p>No se escriben todos los runbooks posibles: se escriben los de los incidentes que más se repiten en sistemas chicos, y después uno por cada incidente que ocurra.</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Un deploy malo</span>Cómo saber si coincide con un deploy (la hora del último está en el dashboard) y el comando de rollback. Es la causa más común y la mitigación más rápida.</li>
+        <li><span class="step-title">La base de datos</span>Conexiones agotadas, disco lleno, una consulta lenta que bloquea a las demás: cómo ver las conexiones y las consultas activas, cómo cancelar una consulta y cuánto disco queda (M05).</li>
+        <li><span class="step-title">Un proveedor caído</span>Pagos, correo, el proveedor del modelo: dónde está su página de estado, qué hace el sistema en modo degradado (encolar y reintentar, mostrar un aviso) y cómo se activa (M08).</li>
+        <li><span class="step-title">Un certificado o un dominio vencido</span>Cómo se renueva, dónde está la credencial del registrador, y la alerta que avisa 30 días antes para que este runbook no se use nunca.</li>
+        <li><span class="step-title">Una credencial filtrada o una factura disparada</span>Cómo revocar y rotar una clave de API o de la nube, cómo cortar el acceso de una cuenta comprometida y dónde están los topes de gasto. Es un incidente de seguridad (M10): primero se corta el acceso y después se investiga.</li>
+      </ol>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>El objetivo no es tener muchos runbooks, sino que los que hay sirvan. Dos prácticas lo sostienen: ensayar un incidente al trimestre en un entorno de prueba (apagar la base de staging y seguir el runbook al pie de la letra, cronometrando), y revisar cada runbook después de usarlo, porque un runbook desactualizado es peor que ninguno: da confianza en pasos que ya no funcionan.</p>
+      </aside>
+
+      <h2 id="dora"><span class="sec-num">11.10</span>Medir la entrega: las métricas DORA</h2>
+
+      <p>Todo este módulo mide servicios: si responden, cuánto tardan, cuánto presupuesto de errores queda. Falta medir otra cosa: <b>el proceso que cambia esos servicios</b>. ¿El equipo entrega más rápido que hace seis meses? ¿Sus cambios rompen menos? ¿Se recupera antes? Para eso están las <dfn data-term="dora">métricas DORA</dfn>, del programa de investigación DevOps Research and Assessment, hoy parte de Google Cloud, que estudia equipos de software con encuestas anuales desde hace más de una década y publicó sus resultados en el libro <em>Accelerate</em> (2018). <span class="badge badge--doc">Documentado</span></p>
+
+      <h3 id="dora-metricas">Las cinco métricas</h3>
+
+      <p>Durante años fueron cuatro, las "four keys". El modelo actual tiene cinco, en dos grupos: <b>throughput</b> (cuánto cambio pasa y qué tan rápido) e <b>inestabilidad</b> (qué tan bien salen los cambios). <span class="badge badge--doc">Documentado</span></p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Métrica</th><th>Grupo</th><th>Qué mide</th><th>De dónde sale el dato</th></tr></thead>
+          <tbody>
+            <tr><td><b>Lead time del cambio</b></td><td>Throughput</td><td>Tiempo desde que un cambio entra al control de versiones hasta que está en producción</td><td>La hora del commit y la hora del deploy que lo incluye, del CI/CD</td></tr>
+            <tr><td><b>Frecuencia de deploys</b></td><td>Throughput</td><td>Cuántos deploys a producción hay por período, o cuánto tiempo pasa entre uno y otro</td><td>Los eventos de deploy del CI/CD</td></tr>
+            <tr><td><b>Tiempo de recuperación de un deploy fallido</b></td><td>Throughput</td><td>Cuánto se tarda en recuperarse de un deploy que obliga a intervenir de inmediato</td><td>El inicio y el fin del incidente, de la herramienta de incidentes</td></tr>
+            <tr><td><b>Tasa de cambios fallidos</b></td><td>Inestabilidad</td><td>Qué fracción de los deploys obliga a intervenir de inmediato: un rollback o un hotfix</td><td>Los deploys marcados como revertidos o que abrieron un incidente</td></tr>
+            <tr><td><b>Tasa de retrabajo</b></td><td>Inestabilidad</td><td>Qué fracción de los deploys no estaba planificada y existe para arreglar un incidente en producción</td><td>Los deploys marcados como no planificados</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Dos cambios de la historia reciente explican por qué el modelo es así. En 2023, el viejo MTTR (tiempo medio de recuperación) pasó a ser el tiempo de recuperación <b>de un deploy fallido</b>: el MTTR mezclaba fallas causadas por un cambio con las que no tenían nada que ver con el equipo, como la caída de un datacenter. En 2024 se sumó la tasa de retrabajo como quinta métrica, y la recuperación pasó al grupo de throughput: recuperarse rápido es parte de que el flujo de cambios no se detenga. <span class="badge badge--doc">Documentado</span></p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">La idea que hay que llevarse</p>
+        <p>Velocidad y estabilidad <b>no</b> se compensan: la investigación de DORA encuentra, año tras año, que los equipos que mejor rinden lo hacen en las cinco métricas a la vez, y los que peor rinden, en ninguna. <span class="badge badge--doc">Documentado</span> El mecanismo es el de 11.7: cambios chicos y frecuentes son fáciles de revisar, de probar con un canary y de revertir. Un deploy grande una vez al mes junta cien cambios, y cuando falla nadie sabe cuál fue.</p>
+      </aside>
+
+      <h3 id="dora-medir">Cómo se miden, con los datos que ya tienes</h3>
+
+      <p>No hace falta una herramienta comercial para empezar. Si el pipeline de CI/CD registra cada deploy con el commit que lleva, y el canal de incidentes registra cuál deploy causó cuál incidente, las cinco métricas son consultas. Con una tabla así:</p>
+
+<pre data-lang="sql"><code>CREATE TABLE deployments (
+  id            bigserial PRIMARY KEY,
+  service       text        NOT NULL,
+  commit_sha    text        NOT NULL,
+  committed_at  timestamptz NOT NULL,   -- el commit más viejo que entra en este deploy
+  deployed_at   timestamptz NOT NULL,
+  unplanned     boolean     NOT NULL DEFAULT false,  -- existe para arreglar un incidente
+  failed        boolean     NOT NULL DEFAULT false,  -- obligó a un rollback o a un hotfix
+  recovered_at  timestamptz                          -- si falló: cuándo se recuperó el servicio
+);
+
+-- Las cinco métricas de los últimos 30 días, por servicio
+SELECT service,
+       count(*) / 30.0                                              AS deploys_por_dia,
+       percentile_cont(0.5) WITHIN GROUP
+         (ORDER BY deployed_at - committed_at)                      AS lead_time_mediana,
+       avg(failed::int)                                             AS tasa_cambios_fallidos,
+       avg(unplanned::int)                                          AS tasa_retrabajo,
+       percentile_cont(0.5) WITHIN GROUP
+         (ORDER BY recovered_at - deployed_at)
+         FILTER (WHERE failed)                                      AS recuperacion_mediana
+FROM deployments
+WHERE deployed_at &gt; now() - interval '30 days'
+GROUP BY service;</code></pre>
+
+      <p>El postmortem de 11.8 se ve así en esa tabla: el deploy de moderation 2.14 tiene <code>failed = true</code>, y el rollback a 2.13 es un deploy no planificado (<code>unplanned = true</code>). Con esta tabla, la recuperación se cuenta desde <code>deployed_at</code> (13:55) hasta <code>recovered_at</code> (14:40): 45 minutos. Si prefieres contar desde que empezó el impacto, a las 14:02 (38 minutos), guarda también esa hora: lo importante es elegir una definición y mantenerla.</p>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p>Cuando una medida se convierte en objetivo, deja de ser una buena medida (la ley de Goodhart). Si la frecuencia de deploys se premia, aparecen deploys vacíos; si se castiga la tasa de cambios fallidos, los rollbacks dejan de registrarse. Las métricas DORA sirven para que un equipo vea su propia tendencia y decida dónde invertir, no para comparar equipos ni para evaluar personas. Se miran juntas, siempre con medianas, y por servicio.</p>
+      </aside>
+
+      <p>Para una startup, el orden práctico es: registrar cada deploy con su commit desde el primer día (un paso en el pipeline), marcar los deploys que causan incidentes en el postmortem, y mirar las cinco cada mes. Un lead time que crece o una tasa de cambios fallidos que sube avisan, meses antes, que el proceso se está trabando.</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 
@@ -419,6 +960,8 @@ and
 <script src="../assets/js/core/nav.js"></script>
 <script src="../assets/js/core/glossary.js"></script>
 <script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-dbflow.js"></script>
+<script src="../assets/js/widgets/sim-traceprop.js"></script>
 <script src="../assets/js/widgets/sim-obs.js"></script>
 </body>
 </html>

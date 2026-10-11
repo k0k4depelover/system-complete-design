@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa gigante de ChatGPT</title>
+<meta name="description" content="Todo el serving de ChatGPT en un lienzo explorable: borde, servicios, plano de inferencia en GPU, datos y colas. Abre cada nodo (responsabilidad, endpoints, esquema, fallos y números) y reproduce nueve escenarios animados, caídas incluidas.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+<link rel="stylesheet" href="../assets/css/map.css">
+</head>
+<body data-root="../" data-module="map-chatgpt">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Mapa gigante de ChatGPT</h1>
+        <p class="lead">Toda la Parte II en un solo lienzo: el camino de un turno de chat desde el navegador hasta las GPUs y de vuelta, con el metering, la moderación, las herramientas, la voz y las imágenes alrededor. Arrástralo, haz zoom y abre cada nodo para ver su responsabilidad, sus endpoints, su esquema, sus fallos y sus números. Después reproduce los nueve escenarios animados, las caídas incluidas.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>Mapa</dd></div>
+          <div><dt>Parte</dt><dd>II. De un LLM a ChatGPT</dd></div>
+          <div><dt>Duración</dt><dd>60 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M12 a M26</dd></div>
+          <div><dt>Estado</dt><dd data-status="map-chatgpt">Sin empezar</dd></div>
+        </dl>
+      </header>
+
+      <p>Es la suma de los módulos de la Parte II, no un sistema nuevo: cada nodo y cada número vienen de un módulo concreto, y cada escenario recorre uno de sus casos. Si algo no se entiende, el módulo que lo explica está citado en la pestaña del nodo. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+      <div data-map="chatgpt"></div>
+
+      <p>Para seguir: el <a href="../modules/checkpoint-b.html">Checkpoint B</a> te pone a diseñar el serving de un modelo de 70B para 10&#8239;000 usuarios concurrentes con un presupuesto dado, usando todo lo de este mapa.</p>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/maps/chatgpt.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/map/map-engine.js"></script>
+<script src="../assets/js/map/flow-sim.js"></script>
+</body>
+</html>

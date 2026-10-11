@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>M27. Pagos tipo Stripe</title>
-<meta name="description" content="Caso de estudio completo de un procesador de pagos: dinero como enteros, máquina de estados del PaymentIntent, 3D Secure, API y límites de tasa, idempotency keys de principio a fin, ledger de doble entrada, mensajes ISO 8583, webhooks, sagas, disputas, pagos a comercios, conciliación, PCI DSS, fraude, migraciones sin cortes y cómo armarlo en AWS, con un mapa explorable de diez escenarios.">
+<meta name="description" content="Caso de estudio completo de un procesador de pagos: dinero como enteros, máquina de estados del PaymentIntent, 3D Secure, API y límites de tasa, idempotency keys de principio a fin, ledger de doble entrada, mensajes ISO 8583, webhooks, sagas, disputas, pagos a comercios, conciliación, PCI DSS, fraude, migraciones sin cortes y cómo armarlo en AWS, con un mapa explorable de doce escenarios.">
 <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../assets/css/tokens.css">
 <link rel="stylesheet" href="../assets/css/layout.css">
@@ -127,7 +127,9 @@
 
       <h2 id="mapa"><span class="sec-num">27.2</span>El mapa completo</h2>
 
-      <p>Explora el sistema antes de entrar en cada pieza. Cada nodo tiene su responsabilidad, su interfaz, su esquema, sus fallas y sus números; cada escenario muestra un pago viajando paso a paso, incluidos los que salen mal: un doble clic, un timeout después de que el banco aprobó, un webhook fuera de orden, un emisor caído, un pago con 3D Secure, una oleada de tráfico, la liquidación del día y un contracargo.</p>
+      <p>Explora el sistema antes de entrar en cada pieza. Cada nodo tiene su responsabilidad, su interfaz, su esquema, sus fallas y sus números; cada escenario muestra un pago viajando paso a paso, incluidos los que salen mal: un doble clic, un timeout después de que el banco aprobó, un webhook fuera de orden, un emisor caído, un pago con 3D Secure, una oleada de tráfico, la liquidación del día, un contracargo, un pago al comercio que su banco devuelve y un ataque de card testing.</p>
+
+      <p>El panel del mapa explica el paso actual: entre qué piezas viaja, qué lleva y qué queda guardado. Más abajo, "Qué hace cada pieza" resume en una frase el trabajo de cada nodo; al pasar el mouse por una pieza se resalta en el lienzo, y con un clic se abre su detalle. En pantalla completa, el panel queda a la derecha del lienzo.</p>
 
       <div data-map="m27-pagos"></div>
 
@@ -1046,6 +1048,8 @@ def avanzar(db, saga_id):
     else:
         ledger.anular(conn, payout_id);    marcar(conn, payout_id, "failed")</code></pre>
 
+      <p>El <a href="#scenario=payout">escenario "Pago al comercio y devolución"</a> recorre este código en el mapa: la reserva en el ledger, la transferencia con el ID del payout como referencia, el evento <code>payout.paid</code> y, tres días después, la devolución del banco con <code>account_closed</code>, los asientos de reversión y el aviso al comercio.</p>
+
       <h2 id="conciliacion"><span class="sec-num">27.14</span>Conciliación diaria</h2>
 
       <p>El ledger dice lo que el sistema cree que pasó. La <dfn data-term="conciliacion">conciliación</dfn> lo compara todos los días con lo que dicen los demás: los archivos de liquidación del adquirente, los extractos del banco y los reportes de disputas. Cada diferencia cae en una categoría:</p>
@@ -1113,6 +1117,7 @@ def avanzar(db, saga_id):
         <li><b>Reglas de Radar sobre las señales del ataque:</b> por ejemplo, bloquear cuando una misma IP tuvo más de N tarjetas distintas en una hora.</li>
         <li><b>Montos mínimos y tiempo de espera</b> entre intentos fallidos consecutivos.</li>
       </ul>
+      <p>El <a href="#scenario=card-testing">escenario "Ataque de card testing"</a> lo muestra en el mapa: rechazos en serie desde el mismo origen, el límite por señal que corta al script con un 429, el atacante que cambia de IP y la regla de Radar que bloquea el pago antes de que llegue a la red.</p>
 
       <h2 id="escala"><span class="sec-num">27.16</span>Escalar los datos sin parar el servicio</h2>
 

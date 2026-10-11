@@ -483,6 +483,320 @@
 
       <p>Si cada agente define sus herramientas en su propio código, conectar 10 aplicaciones con 20 sistemas son 200 integraciones. El <dfn data-term="mcp">Model Context Protocol</dfn> (MCP) estandariza esa conexión: un sistema expone sus herramientas una vez, como un servidor de MCP, y cualquier aplicación que hable MCP las puede usar. La especificación vigente es la del 28 de julio de 2026. <span class="badge badge--doc">Documentado</span></p>
 
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 336" role="img" aria-labelledby="f25n1t f25n1d">
+<title id="f25n1t">De 200 integraciones a 30</title>
+<desc id="f25n1d">A la izquierda, 10 aplicaciones y 20 sistemas conectados cada uno con cada uno: 10 × 20 = 200 integraciones, cada una escrita a mano. A la derecha, con MCP: cada aplicación habla el protocolo una vez y cada sistema lo expone una vez, 10 + 20 = 30 piezas.</desc>
+<defs><marker id="f25n1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Sin un protocolo: 10 × 20 = 200</text>
+<rect x="30" y="72" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="90" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="108" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="126" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="144" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="162" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="180" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="198" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="216" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="30" y="234" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="300" y="40" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="52.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="65" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="77.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="90" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="102.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="115" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="127.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="140" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="152.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="165" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="177.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="190" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="202.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="215" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="227.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="240" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="252.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="265" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="300" y="277.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<path d="M76 78.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 78.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 96.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 114.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 132.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 150.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 168.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 186.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 204.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 222.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 44.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 57.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 69.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 82.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 94.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 107.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 119.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 132.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 144.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 157.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 169.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 182.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 194.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 207.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 219.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 232.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 244.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 257.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 269.5" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<path d="M76 240.0 L300 282.0" style="stroke: var(--label-3); stroke-width: 0.5; opacity: 0.6"/>
+<text class="dg-tiny" x="53" y="306" text-anchor="middle">10 apps</text>
+<text class="dg-tiny" x="323" y="306" text-anchor="middle">20 sistemas</text>
+<path class="sim-grid" d="M392 16 V296"/>
+<text class="dg-group" x="420" y="26" text-anchor="start">Con MCP: 10 + 20 = 30</text>
+<rect x="430" y="72" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="90" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="108" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="126" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="144" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="162" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="180" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="198" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="216" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="430" y="234" width="46" height="12" rx="2" fill="color-mix(in srgb, var(--l-client) 40%, var(--bg))" stroke="var(--l-client)" stroke-width="1"/>
+<rect x="700" y="40" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="52.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="65" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="77.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="90" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="102.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="115" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="127.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="140" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="152.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="165" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="177.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="190" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="202.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="215" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="227.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="240" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="252.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="265" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="700" y="277.5" width="46" height="9" rx="2" fill="color-mix(in srgb, var(--l-db) 40%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="552" y="110" width="100" height="60" rx="8" fill="color-mix(in srgb, var(--l-service) 26%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="602" y="138" text-anchor="middle">MCP</text>
+<text class="dg-tiny" x="602" y="156" text-anchor="middle">un protocolo</text>
+<path d="M476 78.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 96.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 114.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 132.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 150.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 168.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 186.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 204.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 222.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M476 240.0 L552 140" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 44.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 57.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 69.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 82.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 94.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 107.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 119.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 132.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 144.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 157.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 169.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 182.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 194.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 207.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 219.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 232.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 244.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 257.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 269.5" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<path d="M652 140 L700 282.0" style="stroke: var(--label-3); stroke-width: 0.8"/>
+<text class="dg-tiny" x="453" y="306" text-anchor="middle">clientes</text>
+<text class="dg-tiny" x="723" y="306" text-anchor="middle">servidores</text>
+<text class="dg-tiny" x="385" y="328" text-anchor="middle">Cada línea es una integración que alguien escribe y mantiene.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.4.</b> La cuenta del párrafo. Sin protocolo, las integraciones crecen como el producto de aplicaciones por sistemas; con MCP, como la suma.</figcaption>
+      </figure>
+
+
       <figure class="figure">
         <div class="figure-frame">
 <svg viewBox="0 0 770 300" role="img" aria-labelledby="f25mt f25md">
@@ -524,7 +838,7 @@
 <text class="dg-tiny" x="372" y="120" text-anchor="middle">JSON-RPC 2.0</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.4.</b> Un host con un cliente de MCP por servidor. El local habla por stdio; los remotos, por Streamable HTTP con OAuth.</figcaption>
+        <figcaption><b>Figura 25.5.</b> Un host con un cliente de MCP por servidor. El local habla por stdio; los remotos, por Streamable HTTP con OAuth.</figcaption>
       </figure>
 
       <ul>
@@ -553,7 +867,62 @@ Accept: application/json, text/event-stream
 
       <p>El servidor también publica la lista con <code>tools/list</code>, que trae un <code>ttlMs</code> para que el cliente sepa cuánto cachearla. La especificación recomienda devolver las herramientas en un orden determinista, para no romper el prompt caching del host. <span class="badge badge--doc">Documentado</span> Una herramienta puede declarar un <code>outputSchema</code> y devolver <code>structuredContent</code> además del texto.</p>
 
-      <h3 id="mcp-auth">Autorización</h3>
+      <h3 id="mcp-auth">
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 512" role="img" aria-labelledby="f25n2t f25n2d">
+<title id="f25n2t">Un cliente de MCP obtiene un token</title>
+<desc id="f25n2d">El cliente de MCP llama al servidor remoto sin token y recibe 401, con un encabezado que apunta a los metadatos de recurso protegido (RFC 9728). Los lee y sabe a qué servidor de autorización ir. Pide la autorización con PKCE y con el parámetro resource (RFC 8707), que ata el token a ese servidor de MCP. Canjea el código con el verifier y recibe el token. Llama de nuevo con el token. El servidor de MCP valida que el token fue emitido para él y no lo reenvía a otros servicios.</desc>
+<defs><marker id="f25n2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f25n2-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f25n2-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f25n2-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Cliente de MCP</text>
+<path class="dg-frame" d="M70.0 40 V502"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Servidor de MCP</text>
+<path class="dg-frame" d="M385.0 40 V502"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Autorización</text>
+<path class="dg-frame" d="M700.0 40 V502"/>
+<path class="dg-edge" d="M73.0 72 L380.0 72" marker-end="url(#f25n2-a)"/>
+<rect x="155.5" y="55" width="144.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="66" text-anchor="middle">POST /mcp, sin token</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M382.0 106 L75.0 106" marker-end="url(#f25n2-f)"/>
+<rect x="86.20000000000002" y="89" width="282.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="100" text-anchor="middle">401 · WWW-Authenticate: resource_metadata</text>
+<path class="dg-edge" d="M73.0 140 L380.0 140" marker-end="url(#f25n2-a)"/>
+<rect x="86.20000000000002" y="123" width="282.59999999999997" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="134" text-anchor="middle">GET /.well-known/oauth-protected-resource</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 174 L75.0 174" marker-end="url(#f25n2-r)"/>
+<rect x="132.4" y="157" width="190.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="168" text-anchor="middle">authorization_servers: [as]</text>
+<path class="dg-edge" d="M73.0 208 L695.0 208" marker-end="url(#f25n2-a)"/>
+<rect x="223.9" y="191" width="322.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">authorize: code_challenge (PKCE) + resource=mcp</text>
+<rect x="418.0" y="228" width="272" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="428.0" y="244">el usuario inicia sesión y consiente</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 276 L75.0 276" marker-end="url(#f25n2-r)"/>
+<rect x="365.8" y="259" width="38.4" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="270" text-anchor="middle">code</text>
+<path class="dg-edge" d="M73.0 310 L695.0 310" marker-end="url(#f25n2-a)"/>
+<rect x="253.60000000000002" y="293" width="262.79999999999995" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="304" text-anchor="middle">token: code + code_verifier + resource</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 344 L75.0 344" marker-end="url(#f25n2-r)"/>
+<rect x="286.6" y="327" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="338" text-anchor="middle">access_token, audiencia: mcp</text>
+<path class="dg-edge" d="M73.0 378 L380.0 378" marker-end="url(#f25n2-a)"/>
+<rect x="106.0" y="361" width="243.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="372" text-anchor="middle">POST /mcp · Authorization: Bearer …</text>
+<rect x="395.0" y="398" width="300" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="405.0" y="414">valida la audiencia; no reenvía el token</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M382.0 446 L75.0 446" marker-end="url(#f25n2-r)"/>
+<rect x="132.4" y="429" width="190.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="227.5" y="440" text-anchor="middle">resultado de la herramienta</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.6.</b> La autorización de un servidor remoto, paso a paso. El parámetro resource ata el token a un servidor, y por eso un servidor de MCP no puede usarlo contra otro. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
+Autorización</h3>
 
       <p>Un servidor local por stdio usa las credenciales del entorno donde corre. Uno remoto se protege con OAuth 2.1 (<a href="m10-seguridad.html">M10</a>): el servidor de MCP es un <i>resource server</i>, publica sus metadatos de recurso protegido (RFC 9728) para que el cliente sepa a qué servidor de autorización ir, y el cliente pide el token con PKCE y con el parámetro <code>resource</code> (RFC 8707), que ata el token a ese servidor y no a otro. El servidor tiene que validar que el token fue emitido para él, y tiene prohibido pasarlo hacia otros servicios. <span class="badge badge--doc">Documentado</span></p>
 
@@ -616,6 +985,84 @@ Accept: application/json, text/event-stream
           </tbody>
         </table>
       </div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f25n3t f25n3d">
+<title id="f25n3t">Cuatro formas de achicar el contexto</title>
+<desc id="f25n3d">El contexto del paso 30 de una tarea, como una fila de bloques, con cada técnica. Sin nada: las instrucciones y 29 resultados completos. Limpiar resultados viejos: los primeros resultados quedan reducidos a una línea. Compactación: todo lo anterior se reemplaza por un resumen. Notas fuera del contexto: un resumen más un archivo de notas que el agente relee. Subagentes: las subtareas corren en otro contexto y devuelven solo un resumen. Los tamaños son ilustrativos.</desc>
+<defs><marker id="f25n3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="52" text-anchor="start">Sin nada</text>
+<text class="dg-tiny" x="20" y="68" text-anchor="start">el paso 30 relee todo</text>
+<rect x="200" y="36" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="230" y="58" text-anchor="middle">fijo</text>
+<rect x="264" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="302" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="340" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="378" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="416" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="454" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="492" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="530" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="568" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="606" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="644" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="682" y="36" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="20" y="108" text-anchor="start">Limpiar resultados</text>
+<text class="dg-tiny" x="20" y="124" text-anchor="start">los viejos, en una línea</text>
+<rect x="200" y="92" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="230" y="114" text-anchor="middle">fijo</text>
+<rect x="264" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="278" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="292" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="306" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="320" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="334" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="348" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="362" y="104" width="10" height="12" rx="2" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1"/>
+<rect x="380" y="92" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="418" y="92" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="456" y="92" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="494" y="92" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="20" y="164" text-anchor="start">Compactación</text>
+<text class="dg-tiny" x="20" y="180" text-anchor="start">un resumen como nuevo inicio</text>
+<rect x="200" y="148" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="230" y="170" text-anchor="middle">fijo</text>
+<rect x="264" y="148" width="70" height="36" rx="3" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="299" y="170" text-anchor="middle">resumen</text>
+<rect x="338" y="148" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="376" y="148" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="20" y="220" text-anchor="start">Notas fuera</text>
+<text class="dg-tiny" x="20" y="236" text-anchor="start">el agente las relee</text>
+<rect x="200" y="204" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="230" y="226" text-anchor="middle">fijo</text>
+<rect x="264" y="204" width="70" height="36" rx="3" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="299" y="226" text-anchor="middle">resumen</text>
+<rect x="338" y="204" width="34" height="36" rx="3" fill="color-mix(in srgb, var(--l-db) 22%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<rect x="584" y="204" width="110" height="36" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="639" y="226" text-anchor="middle">NOTES.md</text>
+<path class="dg-feedback" d="M580 222 H376" marker-end="url(#f25n3a)"/>
+<text class="dg-tiny" x="478" y="216" text-anchor="middle">lo relee</text>
+<text class="dg-small" x="20" y="276" text-anchor="start">Subagentes</text>
+<text class="dg-tiny" x="20" y="292" text-anchor="start">devuelven un resumen</text>
+<rect x="200" y="260" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-service) 30%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="230" y="282" text-anchor="middle">fijo</text>
+<rect x="264" y="260" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="294" y="282" text-anchor="middle">resumen</text>
+<rect x="328" y="260" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="358" y="282" text-anchor="middle">resumen</text>
+<rect x="392" y="260" width="60" height="36" rx="3" fill="color-mix(in srgb, var(--l-queue) 28%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="422" y="282" text-anchor="middle">resumen</text>
+<rect x="584" y="260" width="40" height="36" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<rect x="630" y="260" width="40" height="36" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<rect x="676" y="260" width="40" height="36" rx="3" class="dg-box" stroke-dasharray="4 3"/>
+<text class="dg-tiny" x="653" y="256" text-anchor="middle">otros contextos</text>
+<text class="dg-tiny" x="20" y="316" text-anchor="start">Lo que tiene efectos (un reembolso hecho, un monto aprobado) no vive en ningún resumen: vive en el estado de la tarea.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.7.</b> Las técnicas de la tabla aplicadas al mismo paso 30. El caché no aparece porque no achica nada: abarata releer. Los tamaños de los bloques son ilustrativos.</figcaption>
+      </figure>
 
       <p>El artículo de Anthropic sobre <i>context engineering</i> describe las tres últimas para tareas de horas: compactar cuando el contexto se acerca al límite, notas estructuradas que viven fuera de la ventana, y subagentes que exploran a fondo, con decenas de miles de tokens, y devuelven un resumen de 1&#8239;000 a 2&#8239;000. <span class="badge badge--doc">Documentado</span> En Sonnet 5.5, la compactación también existe del lado de la API, en beta, con el encabezado <code>compact-2026-09-04</code>. <span class="badge badge--doc">Documentado</span></p>
 
@@ -713,7 +1160,7 @@ Accept: application/json, text/event-stream
 <text class="dg-tiny" x="76" y="258">checkpoint: el estado y la última respuesta del modelo, en PostgreSQL</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.5.</b> Sin checkpoints, la tarea vuelve a empezar y los 14 pasos se pagan dos veces. Con un checkpoint por paso, otro worker sigue desde el último.</figcaption>
+        <figcaption><b>Figura 25.8.</b> Sin checkpoints, la tarea vuelve a empezar y los 14 pasos se pagan dos veces. Con un checkpoint por paso, otro worker sigue desde el último.</figcaption>
       </figure>
 
       <div data-sim="durable"></div>
@@ -796,7 +1243,7 @@ Accept: application/json, text/event-stream
 <text class="dg-tiny" x="90.0" y="458">el modelo recibe el resultado y sigue</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.6.</b> Una aprobación que tarda tres horas. La propuesta queda en el checkpoint, el worker se libera y la reanudación ejecuta el efecto con su idempotency key.</figcaption>
+        <figcaption><b>Figura 25.9.</b> Una aprobación que tarda tres horas. La propuesta queda en el checkpoint, el worker se libera y la reanudación ejecuta el efecto con su idempotency key.</figcaption>
       </figure>
 
       <p>Con la ejecución durable ya está casi todo: la aprobación es un checkpoint con una propuesta pendiente. En LangGraph, un nodo llama a <code>interrupt()</code> con lo que la persona tiene que ver; la ejecución se detiene y el valor vuelve en <code>__interrupt__</code>. Para seguir, se invoca otra vez el grafo con el mismo <code>thread_id</code> y un <code>Command(resume=...)</code>, y lo que lleva el <code>resume</code> es lo que devuelve <code>interrupt()</code>. Un detalle decide el diseño: al reanudar, el nodo vuelve a ejecutarse <b>desde el principio</b>, así que todo lo que hay antes del <code>interrupt()</code> se repite. <span class="badge badge--doc">Documentado</span></p>
@@ -831,6 +1278,71 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
         <li><b>Las aprobaciones vencen.</b> Tres días sin respuesta, y la propuesta expira: la tarea termina con "no aprobado" y el cliente recibe una respuesta, no un silencio.</li>
         <li><b>Se mide la aprobación.</b> Si el 99&#8239;% se aprueba en menos de 5 segundos, nadie está mirando: el umbral está mal o el panel no muestra lo que importa.</li>
       </ul>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 260" role="img" aria-labelledby="f25n4t f25n4d">
+<title id="f25n4t">Se aprueban acciones, no llamadas</title>
+<desc id="f25n4d">Los 30 pasos de una tarea como una fila de cuadros. Las lecturas pasan solas; solo la escritura que cruza un umbral, el reembolso de más de 50 dólares, se detiene a esperar una aprobación. Abajo, la ley de Little: 5 000 aprobaciones por día con una mediana de 20 minutos dan unas 69 tareas esperando a la vez, cada una en un checkpoint, sin un worker ocupado.</desc>
+<defs><marker id="f25n4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="26" text-anchor="start">Los 30 pasos de la tarea de soporte</text>
+<rect class="dg-box" x="20" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="44.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="69" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="93.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="118" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="142.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="167" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="191.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="216" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="240.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="265" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="289.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="314" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="338.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="363" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="387.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="412" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="436.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="461" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="485.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="510" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="534.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="559" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="583.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="608" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="632.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-warnbox" x="657" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-ok" x="681.5" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-ok" x="706" y="40" width="22" height="34" rx="3"/>
+<rect class="dg-box" x="730.5" y="40" width="22" height="34" rx="3"/>
+<text class="dg-tiny" x="20" y="96" text-anchor="start">lecturas y escrituras chicas: pasan solas</text>
+<path class="dg-feedback" d="M668.0 78 V116"/>
+<text class="dg-tiny" x="668" y="132" text-anchor="end">reembolso &gt; 50 USD: espera</text>
+<text class="dg-tiny" x="668" y="148" text-anchor="end">una aprobación, no 30</text>
+<path class="sim-grid" d="M20 166 H750"/>
+<rect class="dg-box" x="20" y="180" width="172" height="70" rx="8"/>
+<text class="dg-big" x="106" y="206" text-anchor="middle">5 000</text>
+<text class="dg-small" x="106" y="224" text-anchor="middle">aprobaciones por día</text>
+<text class="dg-tiny" x="106" y="240" text-anchor="middle">el 5 % de 100 000 tareas</text>
+<rect class="dg-box" x="206" y="180" width="172" height="70" rx="8"/>
+<text class="dg-big" x="292" y="206" text-anchor="middle">20 min</text>
+<text class="dg-small" x="292" y="224" text-anchor="middle">de espera mediana</text>
+<text class="dg-tiny" x="292" y="240" text-anchor="middle">1 200 s</text>
+<rect class="dg-box" x="392" y="180" width="172" height="70" rx="8"/>
+<text class="dg-big" x="478" y="206" text-anchor="middle">69</text>
+<text class="dg-small" x="478" y="224" text-anchor="middle">tareas esperando</text>
+<text class="dg-tiny" x="478" y="240" text-anchor="middle">5 000 ÷ 86 400 × 1 200</text>
+<rect class="dg-ok" x="578" y="180" width="172" height="70" rx="8"/>
+<text class="dg-big" x="664" y="206" text-anchor="middle">0</text>
+<text class="dg-small" x="664" y="224" text-anchor="middle">workers ocupados</text>
+<text class="dg-tiny" x="664" y="240" text-anchor="middle">esperan en un checkpoint</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.10.</b> La primera regla de la lista y la cuenta de Little. Pedir permiso por acción, y no por llamada, es lo que hace que la persona lea lo que aprueba. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
+
 
       <h2 id="sandbox"><span class="sec-num">25.10</span>El sandbox</h2>
 
@@ -876,7 +1388,7 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
 <text class="dg-fail-text" x="612" y="214" text-anchor="end">✗ bloqueado</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.7.</b> El código corre en una microVM con su propio kernel. La única salida es un proxy con una lista de destinos, que agrega las credenciales.</figcaption>
+        <figcaption><b>Figura 25.11.</b> El código corre en una microVM con su propio kernel. La única salida es un proxy con una lista de destinos, que agrega las credenciales.</figcaption>
       </figure>
 
       <ul>
@@ -961,7 +1473,7 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
 <path class="dg-edge" d="M500 258 H588" marker-end="url(#f25ra)"/>
 </svg>
         </div>
-        <figcaption><b>Figura 25.8.</b> La regla de dos, y una forma de cumplirla: el planificador con herramientas nunca lee el contenido no confiable; un lector sin herramientas lo convierte en datos con un esquema.</figcaption>
+        <figcaption><b>Figura 25.12.</b> La regla de dos, y una forma de cumplirla: el planificador con herramientas nunca lee el contenido no confiable; un lector sin herramientas lo convierte en datos con un esquema.</figcaption>
       </figure>
 
       <div data-calc="trifecta"></div>
@@ -1047,7 +1559,7 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
 <text class="sim-axis" x="634.211" y="307" text-anchor="middle">15 s</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.9.</b> La trace de una tarea. El paso 4 falló con un 503 y el modelo lo reintentó; los spans del modelo llevan los tokens, y su suma es el costo.</figcaption>
+        <figcaption><b>Figura 25.13.</b> La trace de una tarea. El paso 4 falló con un 503 y el modelo lo reintentó; los spans del modelo llevan los tokens, y su suma es el costo.</figcaption>
       </figure>
 
       <ul>
@@ -1066,6 +1578,57 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
       </ul>
 
       <p>Y un agente se evalúa varias veces por caso, porque no es determinista. τ-bench define <b>pass^k</b>: la probabilidad de que el agente resuelva el mismo caso en las k corridas. En su dominio de ventas al por menor, gpt-4o resolvió menos del 50&#8239;% de las tareas, y pass^8 quedó por debajo del 25&#8239;%. <span class="badge badge--doc">Documentado</span> La cuenta muestra por qué: si cada corrida acierta con probabilidad 0.9 y son independientes, pass^8 = 0.9<sup>8</sup> ≈ 0.43. Con 0.95 sale 0.66; con 0.99, 0.92. Un agente que "anda el 90&#8239;% de las veces" falla, para algún cliente, todos los días.</p>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 280" role="img" aria-labelledby="f25n5t f25n5d">
+<title id="f25n5t">pass^k cae rápido</title>
+<desc id="f25n5d">La probabilidad de que un agente resuelva el mismo caso en las k corridas, de k = 1 a 8, si cada corrida acierta con probabilidad p y son independientes: p elevado a k. Con p = 0.99, pass^8 es 0.92; con 0.95, 0.66; con 0.9, 0.43.</desc>
+<defs><marker id="f25n5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="sim-axis" d="M90 236 H560" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90 236 V40" style="stroke: var(--label-3); fill: none"/>
+<path class="sim-axis" d="M90.0 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="90" y="256" text-anchor="middle">k = 1</text>
+<path class="sim-axis" d="M157.14285714285714 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="157.143" y="256" text-anchor="middle">k = 2</text>
+<path class="sim-axis" d="M224.28571428571428 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="224.286" y="256" text-anchor="middle">k = 3</text>
+<path class="sim-axis" d="M291.42857142857144 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="291.429" y="256" text-anchor="middle">k = 4</text>
+<path class="sim-axis" d="M358.57142857142856 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="358.571" y="256" text-anchor="middle">k = 5</text>
+<path class="sim-axis" d="M425.71428571428567 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="425.714" y="256" text-anchor="middle">k = 6</text>
+<path class="sim-axis" d="M492.85714285714283 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="492.857" y="256" text-anchor="middle">k = 7</text>
+<path class="sim-axis" d="M560.0 236 V241" style="stroke: var(--label-3); fill: none"/>
+<text class="dg-tiny" x="560" y="256" text-anchor="middle">k = 8</text>
+<path class="sim-grid" d="M90 236 H560"/>
+<text class="dg-tiny" x="82" y="240" text-anchor="end">0</text>
+<path class="sim-grid" d="M90 187.0 H560"/>
+<text class="dg-tiny" x="82" y="191" text-anchor="end">0.25</text>
+<path class="sim-grid" d="M90 138.0 H560"/>
+<text class="dg-tiny" x="82" y="142" text-anchor="end">0.5</text>
+<path class="sim-grid" d="M90 89.0 H560"/>
+<text class="dg-tiny" x="82" y="93" text-anchor="end">0.75</text>
+<path class="sim-grid" d="M90 40 H560"/>
+<text class="dg-tiny" x="82" y="44" text-anchor="end">1</text>
+<path class="dg-edge" d="M90.0 42.0 L157.1 43.9 L224.3 45.8 L291.4 47.7 L358.6 49.6 L425.7 51.5 L492.9 53.3 L560.0 55.1" style="stroke: var(--l-service); stroke-width: 2.5; fill: none"/>
+<circle cx="560" cy="55.1" r="4" style="fill: var(--l-service)"/>
+<text class="dg-small" x="570" y="59.142" text-anchor="start">p = 0.99: pass^8 = 0.92</text>
+<path class="dg-edge" d="M90.0 49.8 L157.1 59.1 L224.3 68.0 L291.4 76.4 L358.6 84.3 L425.7 91.9 L492.9 99.1 L560.0 106.0" style="stroke: var(--l-queue); stroke-width: 2.5; fill: none"/>
+<circle cx="560" cy="106.0" r="4" style="fill: var(--l-queue)"/>
+<text class="dg-small" x="570" y="109.97" text-anchor="start">p = 0.95: pass^8 = 0.66</text>
+<path class="dg-edge" d="M90.0 59.6 L157.1 77.2 L224.3 93.1 L291.4 107.4 L358.6 120.3 L425.7 131.8 L492.9 142.3 L560.0 151.6" style="stroke: var(--l-external); stroke-width: 2.5; fill: none"/>
+<circle cx="560" cy="151.6" r="4" style="fill: var(--l-external)"/>
+<text class="dg-small" x="570" y="155.628" text-anchor="start">p = 0.9: pass^8 = 0.43</text>
+<text class="dg-tiny" x="90" y="24" text-anchor="start">Probabilidad de acertar las k corridas</text>
+<text class="dg-tiny" x="20" y="272" text-anchor="start">Un agente que «anda el 90 % de las veces» falla en más de la mitad de los casos repetidos 8 veces.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.14.</b> La cuenta del párrafo, para k de 1 a 8. Las tres curvas empiezan casi juntas y se separan rápido: lo que importa en un agente es la confiabilidad de cada corrida. <span class="badge badge--doc">Documentado</span></figcaption>
+      </figure>
 
       <h2 id="fallas"><span class="sec-num">25.13</span>Qué falla</h2>
 
@@ -1151,7 +1714,7 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
 <text class="dg-tiny" x="48" y="116">aprobado: reanudar</text>
 </svg>
         </div>
-        <figcaption><b>Figura 25.10.</b> La plataforma de agentes en AWS. Los workers sacan tareas de SQS, guardan cada paso en Aurora y ejecutan el código en Lambda, dentro de una VPC sin internet.</figcaption>
+        <figcaption><b>Figura 25.15.</b> La plataforma de agentes en AWS. Los workers sacan tareas de SQS, guardan cada paso en Aurora y ejecutan el código en Lambda, dentro de una VPC sin internet.</figcaption>
       </figure>
 
       <ol class="steps">
@@ -1167,6 +1730,34 @@ grafo.invoke(Command(resume={"aprobado": True, "comentario": ""}),
       <p>La factura mensual con precios de lista de us-east-1, en los tres tamaños. Producción es el servicio de referencia: 100&#8239;000 tareas por día.</p>
 
       <div data-calc="bom" data-preset="m25"></div>
+
+      
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 220" role="img" aria-labelledby="f25n6t f25n6d">
+<title id="f25n6t">El modelo es casi toda la factura</title>
+<desc id="f25n6d">Dos barras al 100 % con la factura mensual de la plataforma. En producción, 100 000 tareas por día, el modelo es el 99.7 %: 868 050 dólares al mes, contra unos 2 800 de todo lo demás. En el MVP, con 1 000 tareas por día, el modelo es el 94 %.</desc>
+<defs><marker id="f25n6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-small" x="20" y="54" text-anchor="start">Producción</text>
+<text class="dg-tiny" x="20" y="70" text-anchor="start">100 000 tareas por día</text>
+<rect x="200" y="36" width="438.68" height="40" rx="3" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<rect class="dg-warnbox" x="638.68" y="36" width="1.32" height="40" rx="2"/>
+<text class="dg-small" x="419.34" y="61" text-anchor="middle">modelo: 99.7 % · 868 050 USD</text>
+<text class="dg-tiny" x="648" y="54" text-anchor="start">resto</text>
+<text class="dg-tiny" x="648" y="68" text-anchor="start">0.3 % · ≈ 2 800</text>
+<text class="dg-small" x="20" y="118" text-anchor="start">MVP</text>
+<text class="dg-tiny" x="20" y="134" text-anchor="start">1 000 tareas por día</text>
+<rect x="200" y="100" width="413.6" height="40" rx="3" fill="color-mix(in srgb, var(--l-gpu) 32%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<rect class="dg-warnbox" x="613.6" y="100" width="26.4" height="40" rx="2"/>
+<text class="dg-small" x="406.8" y="125" text-anchor="middle">modelo: 94 %</text>
+<text class="dg-tiny" x="648" y="118" text-anchor="start">resto</text>
+<text class="dg-tiny" x="648" y="132" text-anchor="start">6 %</text>
+<text class="dg-tiny" x="20" y="180" text-anchor="start">Resto: API de tareas, workers, Aurora, SQS, sandbox, NAT y traces.</text>
+<text class="dg-tiny" x="20" y="200" text-anchor="start">Lo que mueve la factura es el caché, los pasos por tarea y el modelo elegido, no la infraestructura.</text>
+</svg>
+        </div>
+        <figcaption><b>Figura 25.16.</b> La factura de la calculadora, partida en dos. En la escala del MVP la infraestructura todavía se nota; en producción, desaparece. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+      </figure>
 
       <p>En producción, el modelo es el 99.7&#8239;% de la factura: 868&#8239;050 dólares al mes, contra unos 2&#8239;800 de todo lo demás. Incluso en el MVP, con 1&#8239;000 tareas por día, es el 94&#8239;%. Optimizar la infraestructura de un agente casi no mueve el número. Lo que lo mueve es lo de este módulo: el caché, que ya está en la cuenta y la baja 4.5 veces; menos pasos por tarea, con mejores herramientas y un workflow donde alcanza (25.3); resultados acotados (25.4); y un modelo más chico donde sirve. Con Haiku 4.5, la misma tarea con caché cuesta 0.14 dólares, la mitad, si los evals dicen que la resuelve igual de bien.</p>
 

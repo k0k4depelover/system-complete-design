@@ -73,16 +73,16 @@
 .sdm-group rect { fill: color-mix(in srgb, var(--label) 3%, transparent); stroke: var(--separator-strong); stroke-width: 1; stroke-dasharray: 5 5; }
 .sdm-group text { fill: var(--label-3); font-family: var(--f-body); font-weight: 600; font-size: 13px; }
 
-.sdm-edge path { fill: none; stroke: var(--label-3); stroke-width: 1.4; }
+.sdm-edge path { fill: none; stroke: var(--label-2); stroke-width: 1.5; }
 .sdm-edge.is-async path { stroke-dasharray: 6 5; }
 .sdm-edge .sdm-elabel-bg { fill: var(--bg-2); }
 .sdm-edge text { fill: var(--label-3); font-family: var(--f-mono); font-size: 10.5px; }
 .sdm-edge.is-active path { stroke: var(--accent-fill); stroke-width: 2.4; }
 .sdm-edge.is-active text { fill: var(--label); }
-.sdm-arrow { fill: var(--label-3); }
+.sdm-arrow { fill: var(--label-2); }
 
 .sdm-node { cursor: pointer; }
-.sdm-node .sdm-box { fill: var(--bg); stroke: var(--c); stroke-width: 1.6; }
+.sdm-node .sdm-box { fill: color-mix(in srgb, var(--c) 7%, var(--bg)); stroke: var(--c); stroke-width: 1.75; }
 .sdm-node[data-layer="external"] .sdm-box { stroke-dasharray: 6 4; }
 .sdm-node .sdm-icon { fill: none; stroke: var(--c); stroke-width: 1.9; stroke-linejoin: round; stroke-linecap: round; }
 .sdm-node .sdm-label { fill: var(--label); font-family: var(--f-body); font-weight: 600; font-size: 14.5px; letter-spacing: -0.01em; }
@@ -93,7 +93,7 @@
 .sdm-node.is-selected .sdm-box { stroke-width: 3; }
 .sdm-node.is-selected .sdm-sel { display: block; }
 .sdm-sel { display: none; fill: none; stroke: var(--accent-fill); stroke-width: 2; }
-.sdm-node.is-active .sdm-box { fill: color-mix(in srgb, var(--c) 10%, var(--bg)); stroke-width: 2.6; }
+.sdm-node.is-active .sdm-box { fill: color-mix(in srgb, var(--c) 18%, var(--bg)); stroke-width: 2.6; }
 .sdm-node.is-down .sdm-box { stroke: var(--fail); stroke-dasharray: 5 4; fill: url(#sdm-hatch); }
 .sdm-node.is-down .sdm-label { fill: var(--fail); }
 .sdm-hatch-bg { fill: var(--bg); }
@@ -192,6 +192,25 @@
 .sdm-sp-item.k-req .sdm-sp-num { background: var(--label-2); }
 .sdm-sp-help summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; color: var(--label-2); padding: 6px 0; }
 .sdm-sp-help .sdm-panel-inner { padding: 4px 0 0; }
+.sdm-back { min-height: 30px; padding: 3px 10px; font-size: var(--fs-xs); margin: 0 0 10px; }
+.sdm-panel .sdm-brief { color: var(--label-2); margin-top: 6px !important; }
+
+/* Qué hace cada pieza (def.pieces) */
+.sdm-pieces { margin: 4px 0 8px; }
+.sdm-pieces summary { cursor: pointer; font-size: var(--fs-sm); font-weight: 600; color: var(--label-2); padding: 6px 0; }
+.sdm-panel .sdm-pc-group { margin: 10px 0 4px !important; font-size: var(--fs-xs); font-weight: 600; color: var(--label-3); }
+.sdm-pc-list { list-style: none; padding: 0 !important; margin: 0 !important; display: grid; gap: 2px; }
+.sdm-panel .sdm-pc-list li { margin: 0 !important; }
+.sdm-pc-item {
+  display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; width: 100%; min-height: 32px;
+  padding: 6px 8px; border: 0; border-radius: var(--radius-s); background: none; color: var(--label-2);
+  font: inherit; font-size: var(--fs-xs); line-height: 1.4; text-align: left; cursor: pointer;
+}
+.sdm-pc-item::before { content: ''; grid-row: 1 / span 2; width: 9px; height: 9px; margin-top: 4px; border-radius: 50%; background: var(--c); }
+.sdm-pc-item b { color: var(--label); font-weight: 600; }
+.sdm-pc-item:hover { background: var(--fill); }
+.sdm-pc-item.is-now { background: var(--accent-tint); }
+.sdm-node.is-hl .sdm-box { fill: color-mix(in srgb, var(--c) 14%, var(--bg)); stroke-width: 3; }
 
 /* ---------- Pantalla completa ---------- */
 
@@ -199,6 +218,19 @@
 .sdmap:fullscreen .sdm-body { flex: 1; min-height: 0; }
 .sdmap:fullscreen .sdm-stage { height: 100%; }
 .sdmap:fullscreen .sdm-panel { max-height: none; }
+/* Pantalla completa angosta (el panel va debajo): el lienzo conserva un alto útil y el resto se desplaza,
+   en lugar de encoger el mapa hasta una franja. En pantalla completa el mapa ocupa todo el ancho del viewport. */
+@media (max-width: 999px) {
+  .sdmap:fullscreen { overflow-y: auto; }
+  .sdmap:fullscreen .sdm-toolbar, .sdmap:fullscreen .sdm-stage,
+  .sdmap:fullscreen .sdm-scen, .sdmap:fullscreen .sdm-panel { flex-shrink: 0; }
+  .sdmap:fullscreen .sdm-stage { height: max(320px, 64vh); }
+}
+/* Con stepPanel y el panel al costado, el panel ya explica el paso: abajo sobra el texto y el lienzo gana alto */
+@container (min-width: 1000px) {
+  .sdmap.has-steppanel:fullscreen .sdm-step { display: none; }
+  .sdmap.has-steppanel:fullscreen .sdm-timeline { margin-bottom: 0; }
+}
 
 @media (max-width: 640px) {
   .sdm-minimap { display: none; }
@@ -210,4 +242,5 @@
   .sdm-tools .icon-btn { width: 44px; height: 44px; }
   .sdm-layer { padding: 10px 12px 10px 9px; }
   .sdm-tab { padding: 10px 8px; }
+  .sdm-pc-item, .sdm-sp-item, .sdm-back, .sdm-sp-route .chip-btn { min-height: 44px; }
 }
