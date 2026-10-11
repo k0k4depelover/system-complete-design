@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CP-E. Checkpoint E: endurece una plataforma</title>
+<meta name="description" content="Examen integrador de la Parte IV (M32 a M38) y un diseño: endurecer una plataforma del firewall a la nube asumiendo que el atacante ya entró, con solución de referencia.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="cpe">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Checkpoint E: endurece una plataforma</h1>
+        <p class="lead">La Parte IV termina aquí. El examen cruza los siete módulos de ciberseguridad en situaciones concretas, y el diseño te pide endurecer una plataforma real capa por capa, con una premisa incómoda: el atacante ya está dentro. Defensa en profundidad, no un muro único.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>CP-E</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>90 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M32 a M38, y M10</dd></div>
+          <div><dt>Estado</dt><dd data-status="cpe">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Qué vas a demostrar</h2>
+  <ul>
+    <li>Reconocer el patrón vulnerable y su arreglo en el firewall, el host, la base de datos, la criptografía y la nube.</li>
+    <li>Razonar con la premisa de la brecha asumida: qué sigue protegiendo cuando el perímetro ya cayó.</li>
+    <li>Diseñar la defensa de una plataforma capa por capa, y decir en cada una qué detecta el ataque y cómo se responde.</li>
+    <li>Conectar los controles entre módulos: mínimo privilegio, zero trust, cifrado, auditoría y respuesta a incidentes.</li>
+  </ul>
+</section>
+
+<h2 id="examen"><span class="sec-num">E.1</span>El examen</h2>
+
+<p>Veinte preguntas que cruzan los siete módulos de la Parte IV; se aprueba con el 70&#8239;%. Cada explicación dice qué módulo repasar si fallaste, y puedes repetirlo las veces que quieras. Aprobarlo habilita el botón para marcar el checkpoint como completado, al final de la página. Todo el examen es defensivo: se pregunta por el patrón seguro, su rastro y su respuesta, nunca por un procedimiento de ataque.</p>
+
+<div data-quiz="cpe"></div>
+
+<h2 id="diseno"><span class="sec-num">E.2</span>Diseño: endurece la plataforma de IA</h2>
+
+<p>Retoma la plataforma de los módulos de la Parte&nbsp;II y los casos de estudio: una API de IA con su borde, sus servicios de inferencia, su base de datos con datos de clientes, su metering (<a href="m21-metering.html">M21</a>) y su identidad (<a href="m10-seguridad.html">M10</a>), desplegada en la nube (<a href="m37-nube.html">M37</a>). Tu trabajo no es construirla otra vez, sino <b>endurecerla</b>, con una premisa que cambia todo: <b>asume que el atacante ya consiguió entrar</b> a una máquina de la red. La pregunta deja de ser "¿cómo lo dejo fuera?" y pasa a ser "¿hasta dónde puede llegar, qué lo detiene en cada capa y cómo me entero?".</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 430" role="img" aria-labelledby="fcpet fcped">
+<title id="fcpet">Defensa en profundidad sobre la plataforma</title>
+<desc id="fcped">Capas concéntricas de defensa alrededor de los datos sensibles. De fuera hacia dentro: la red (firewall, egress, SG/NACL, M32), el host (hardening de SSH, MAC y auditoría, M33), la identidad (IAM, mTLS y zero trust, M37 y M10) y los datos (RBAC, cifrado y bitácora, M35 y M36). Una flecha entra desde fuera marcada como brecha asumida: aunque caiga una capa, la siguiente aguanta. Una banda al pie cruza todas las capas: detección y respuesta (triage de M34, eventos de AD de M38, SLOs e incidentes de M11).</desc>
+<defs><marker id="fcpea" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="40" y="44" width="690" height="286" rx="10" fill="color-mix(in srgb, var(--l-edge) 20%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="62" text-anchor="middle">Red — firewall, egress, SG/NACL</text>
+<text class="dg-tiny dg-mono" x="385" y="77" text-anchor="middle">M32</text>
+<rect x="120" y="78" width="530" height="218" rx="10" fill="color-mix(in srgb, var(--l-service) 20%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="96" text-anchor="middle">Host — SSH, MAC, auditoría</text>
+<text class="dg-tiny dg-mono" x="385" y="111" text-anchor="middle">M33</text>
+<rect x="200" y="112" width="370" height="150" rx="10" fill="color-mix(in srgb, var(--l-client) 20%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="130" text-anchor="middle">Identidad — IAM, mTLS, zero trust</text>
+<text class="dg-tiny dg-mono" x="385" y="145" text-anchor="middle">M37 · M10</text>
+<rect x="280" y="146" width="210" height="82" rx="10" fill="color-mix(in srgb, var(--l-db) 20%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="164" text-anchor="middle">Datos — RBAC, cifrado, bitácora</text>
+<text class="dg-tiny dg-mono" x="385" y="179" text-anchor="middle">M35 · M36</text>
+<text class="dg-label" x="385" y="196" text-anchor="middle">Datos</text>
+<text class="dg-tiny" x="385" y="212" text-anchor="middle">sensibles</text>
+<path class="dg-edge" d="M8 188 L40 188" marker-end="url(#fcpea)" style="stroke:var(--fail);stroke-width:2.5"/>
+<text class="dg-tiny dg-fail-text" x="10" y="164" text-anchor="start">brecha</text>
+<text class="dg-tiny dg-fail-text" x="10" y="176" text-anchor="start">asumida</text>
+<rect x="40" y="352" width="690" height="52" rx="10" fill="color-mix(in srgb, var(--l-queue) 22%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="385" y="372" text-anchor="middle">Detección y respuesta — en todas las capas</text>
+<text class="dg-tiny" x="385" y="390" text-anchor="middle">triage (M34) · eventos de AD (M38) · SLOs e incidentes (M11)</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura E.1.</b> Defensa en profundidad sobre los datos sensibles. Cada capa supone que la de fuera ya cayó; la detección y la respuesta cruzan todas. <span class="badge badge--ref">Diseño de referencia</span></figcaption>
+</figure>
+
+<p>Escribe tu plan como un design doc corto, capa por capa. Para cada capa di <b>qué controles pones</b>, <b>qué detecta el ataque</b> y <b>cómo respondes</b> cuando esa capa es la que cae:</p>
+<ol>
+  <li><b>Red</b> (<a href="m32-firewalls.html">M32</a>): política por defecto, qué entra, y sobre todo qué <b>sale</b> (egress). Segmentación entre el borde, los servicios y la base. En la nube, security groups y NACL.</li>
+  <li><b>Host</b> (<a href="m33-hardening-linux.html">M33</a>): SSH con claves, control de acceso obligatorio, auditoría, y qué queda expuesto si el firewall no alcanza.</li>
+  <li><b>Identidad</b> (<a href="m37-nube.html#iam">M37</a>, <a href="m10-seguridad.html">M10</a>): IAM con mínimo privilegio, roles con credenciales temporales en vez de llaves largas, mTLS entre servicios, secretos fuera del código.</li>
+  <li><b>Datos</b> (<a href="m35-seguridad-bd.html">M35</a>, <a href="m36-criptografia.html">M36</a>): el rol de la aplicación acotado, RBAC y aislamiento por tenant, cifrado donde corresponde, contraseñas con hash lento y salado, y la bitácora append-only.</li>
+  <li><b>Detección y respuesta</b> (<a href="m34-sysadmin.html">M34</a>, <a href="m38-active-directory.html">M38</a>, <a href="m11-observabilidad.html">M11</a>): qué señales centralizas, qué alertas disparan, el runbook, y cómo contienes, rotas y reconstruyes.</li>
+  <li>Si la plataforma usa un dominio de Windows (<a href="m38-active-directory.html">M38</a>): tiering, protección de las credenciales y los eventos que vigilas.</li>
+</ol>
+<p>Lo que más importa no es coincidir con la solución de referencia, sino que cada control tenga su motivo y su "qué pasa si esta capa cae".</p>
+
+<h2 id="solucion"><span class="sec-num">E.3</span>Solución de referencia</h2>
+
+<p>Hay más de una buena respuesta. Esta recorre las capas de la figura E.1 con la brecha asumida; compárala con la tuya, control por control.</p>
+
+<details class="solution" data-toc="skip">
+  <summary>Ver la solución de referencia</summary>
+  <div class="solution-body">
+
+    <h3>Red (M32)</h3>
+    <ul>
+      <li><b>Control:</b> política por defecto <code>drop</code> de entrada y de salida. Entrada solo al borde (443). Egress acotado: los servicios de inferencia solo hablan con lo que necesitan (la API del modelo, la base, el metering), nada de internet abierto. Tres zonas: borde, servicios, datos, con la base sin IP pública. En la nube, security groups por recurso (con estado) y NACL por subred (sin estado) como segunda reja.</li>
+      <li><b>Detecta:</b> una conexión de salida a un destino desconocido desde un servicio de inferencia es, por sí sola, una alarma; el egress estrecho es el mejor detector de una brecha.</li>
+      <li><b>Si cae:</b> si alguien ya entró, el egress le impide llamar a casa y exfiltrar; se corta la ruta de salida y se aísla la subred afectada.</li>
+    </ul>
+
+    <h3>Host (M33)</h3>
+    <ul>
+      <li><b>Control:</b> SSH solo con claves, sin root ni contraseñas; actualizaciones automáticas; AppArmor o SELinux confinando cada servicio; auditoría (auditd/AIDE) e inventario de puertos con <code>ss -tulpen</code> para cerrar lo que no se usa.</li>
+      <li><b>Detecta:</b> AIDE avisa de un binario cambiado; el MAC registra cuando un proceso intenta salirse de su política.</li>
+      <li><b>Si cae:</b> el control de acceso obligatorio acota el daño de un servicio comprometido aunque corra como root; el servidor se endurece por sí mismo sin depender del perímetro.</li>
+    </ul>
+
+    <h3>Identidad (M37, M10)</h3>
+    <ul>
+      <li><b>Control:</b> cada servicio con un rol de IAM de <b>mínimo privilegio</b> (acciones y recursos concretos, nunca <code>*</code>), con credenciales temporales en vez de llaves de larga duración; <a href="m37-nube.html#mtls">mTLS</a> entre servicios para que la red no sea la que autentica; secretos en un gestor, no en el código ni en variables de entorno planas; <span class="badge badge--doc">Documentado</span> IMDSv2 en las instancias para que una petición forzada no robe las credenciales del rol.</li>
+      <li><b>Detecta:</b> CloudTrail (append-only) registra cada llamada; un uso de credencial desde una IP o a una hora anómala salta.</li>
+      <li><b>Si cae:</b> una credencial filtrada solo abre lo poco que su rol permitía; se revoca, se rota y el deny explícito y los guardarraíles (SCP) limitan el radio.</li>
+    </ul>
+
+    <h3>Datos (M35, M36)</h3>
+    <ul>
+      <li><b>Control:</b> el rol de la aplicación solo lee y escribe sus tablas (sin DDL ni otras tablas); RLS para aislar por tenant; cifrado del volumen y, para los campos sensibles, cifrado por columna con su coste asumido; las contraseñas con <span class="badge badge--doc">Documentado</span> Argon2id salado; una bitácora append-only fuera de la base.</li>
+      <li><b>Detecta:</b> la bitácora muestra accesos fuera de patrón (un analista que consulta otro tenant); una fuga masiva de filas se nota en el metering y en los logs de la base.</li>
+      <li><b>Si cae:</b> aunque roben el rol de la aplicación, no pueden borrar tablas ni cruzar tenants; el cifrado protege un disco robado; el crypto-shredding (borrar la clave) retira datos sin tocar cada fila.</li>
+    </ul>
+
+    <h3>Detección y respuesta (M34, M38, M11)</h3>
+    <ul>
+      <li><b>Control:</b> logs y métricas centralizados; alertas por síntoma (burn rate del SLO, ráfaga de 4xx/5xx, egress raro), no por cada línea; <a href="m34-sysadmin.html#runbooks">runbooks</a> escritos de antemano; backups 3-2-1 con una copia <b>fuera de línea</b>. Si hay dominio Windows, tiering, Protected Users/LAPS/gMSA y los eventos de AD vigilados, con cuentas señuelo.</li>
+      <li><b>Responde:</b> contener y aislar siguiendo el runbook; rotar toda credencial que pudo verse (si el dominio cayó, <code>krbtgt</code> dos veces); reconstruir desde los backups fuera de línea; cerrar el camino que usó el atacante; y cerrar con un <a href="m11-observabilidad.html#incidentes">postmortem sin culpables</a> que se convierte en controles nuevos.</li>
+    </ul>
+
+    <p>El hilo que une las cinco capas es el mismo de toda la parte: <b>mínimo privilegio</b> y <b>asume la brecha</b>. Ninguna capa confía en que la de fuera aguantó; cada una limita el daño y deja rastro para la siguiente.</p>
+
+  </div>
+</details>
+
+<h2 id="repaso"><span class="sec-num">E.4</span>Qué repasar según tus errores</h2>
+
+<p>Si fallaste varias de un bloque, vuelve a su módulo antes de seguir.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Si fallaste en…</th><th>Repasa</th></tr></thead>
+    <tbody>
+      <tr><td>Estado de las conexiones, egress, SG contra NACL</td><td><a href="m32-firewalls.html">M32 — Firewalls</a></td></tr>
+      <tr><td>SSH, control de acceso obligatorio, la brecha asumida en el host</td><td><a href="m33-hardening-linux.html">M33 — Hardening de Linux</a></td></tr>
+      <tr><td>Triage de un servidor lento, backups 3-2-1, RPO/RTO</td><td><a href="m34-sysadmin.html">M34 — Operación para SysAdmin</a></td></tr>
+      <tr><td>RBAC/ABAC, bitácora append-only, cifrado en reposo honesto</td><td><a href="m35-seguridad-bd.html">M35 — Seguridad en bases de datos</a></td></tr>
+      <tr><td>Hash contra HMAC, nonce en AEAD, guardado de contraseñas</td><td><a href="m36-criptografia.html">M36 — Criptografía</a></td></tr>
+      <tr><td>Comodín en IAM, mTLS y zero trust, IMDSv2</td><td><a href="m37-nube.html">M37 — Nube segura</a></td></tr>
+      <tr><td>krbtgt y Golden Ticket, tiering, respuesta a un compromiso de dominio</td><td><a href="m38-active-directory.html">M38 — Active Directory</a></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Con esto cierras la Parte&nbsp;IV. Has visto la seguridad de punta a punta: el perímetro y su egress, el servidor por dentro, la operación que lo mantiene, la base que guarda los datos, la criptografía que los protege, la nube que lo aloja y el dominio que gobierna las identidades, siempre con la misma premisa: el atacante va a entrar, y la defensa se mide por lo que aguanta cuando lo hace.</p>
+
+<div data-checkpoint="cpe"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/cpe.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+</body>
+</html>

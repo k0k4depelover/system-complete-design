@@ -551,7 +551,7 @@ jwt.decode(token, clave_publica, algorithms=["ES256"], audience="api.miapp.ia", 
           </table>
         </div>
       </figure>
-      <p class="more-link">Las tablas de bitácora dentro de la base (triggers, pgAudit) se tratan en el módulo de seguridad en bases de datos (M35), de la Parte IV.</p>
+      <p class="more-link">Las tablas de bitácora dentro de la base (triggers, pgAudit) se tratan en el módulo de seguridad en bases de datos (<a href="m35-seguridad-bd.html#bitacora">M35</a>), de la Parte IV.</p>
 
       <p>Sobre los datos personales (PII): recolectar solo lo necesario, cifrarlo, no escribirlo en logs (los logs se copian a muchos más lugares que la base), definir cuánto tiempo se retiene y tener un proceso de borrado que llegue también a réplicas, cachés, índices de búsqueda y backups (el borrado criptográfico de 10.6 ayuda con lo que no puedes alcanzar). Y registrar en el log de auditoría quién accedió a qué.</p>
 

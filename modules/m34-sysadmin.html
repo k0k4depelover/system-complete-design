@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M34. Operación y troubleshooting para SysAdmin</title>
+<meta name="description" content="La caja de herramientas diaria del que mantiene servidores vivos: systemd y journald, discos y LVM, backups con prueba de restauración, y un método para diagnosticar CPU, memoria, disco y red.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m34">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Operación y troubleshooting para SysAdmin</h1>
+        <p class="lead">Endurecer un servidor (M33) es el primer día. Lo demás es mantenerlo vivo y sano: arrancar servicios, que no se llene el disco, tener backups que de verdad restauran y saber mirar el número correcto cuando algo va lento.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M34</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M33, M11</dd></div>
+          <div><dt>Estado</dt><dd data-status="m34">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+        <h2 class="plain" id="obj">Al terminar podrás</h2>
+        <ul>
+          <li>Manejar servicios con <code>systemd</code>: arrancarlos, ver por qué fallan en <code>journald</code> y ponerles un tope de memoria y de CPU.</li>
+          <li>Administrar discos con LVM, crecer un volumen en caliente y reaccionar a un disco lleno antes de que tumbe el sistema.</li>
+          <li>Montar backups con la regla 3-2-1 y, sobre todo, probar la restauración: un backup sin prueba no es un backup.</li>
+          <li>Diagnosticar un servidor lento con un método: síntoma, hipótesis, medición y arreglo, mirando el número correcto en cada caso.</li>
+          <li>Separar un cuello de CPU de uno de memoria, de disco o de red, y escribir el runbook para la próxima vez.</li>
+        </ul>
+      </section>
+
+      <h2 id="usuarios"><span class="sec-num">34.1</span>Usuarios, grupos y permisos, en el día a día</h2>
+      <p>Operar un servidor es un oficio distinto del de endurecerlo. En M33 pusiste los candados; aquí vives dentro de la casa: arrancas servicios, revisas por qué uno no levantó, haces espacio en el disco y, cuando algo va lento, encuentras la causa sin cambiar diez cosas a la vez. Todo lo que sigue son comandos de administración y de diagnóstico, de los que lees el estado del sistema y lo ajustas.</p>
+
+      <p>Empecemos por lo que toca todo lo demás: la identidad. Cada proceso en Linux corre como un usuario, con su <b>UID</b> (número de usuario) y sus grupos (<b>GID</b>). El kernel no conoce nombres; conoce números. El UID&#8239;0 es <code>root</code> y puede todo. Un servicio bien montado no corre como root: tiene su propio usuario de sistema, sin shell de inicio, para que si lo comprometen el atacante herede lo mínimo (lo viste en <a href="m33-hardening-linux.html#cuentas">M33</a>, y el sandbox de <code>systemd</code> lo lleva más lejos).</p>
+
+<pre data-lang="shell"><code>$ id www-data
+uid=33(www-data) gid=33(www-data) groups=33(www-data)
+
+$ ps -o user,pid,comm -C nginx        # con qué usuario corre nginx
+USER       PID COMMAND
+root       811 nginx                   # el master, para abrir el puerto 80
+www-data   812 nginx                   # los workers, sin privilegios</code></pre>
+
+      <p>Los permisos de un archivo son tres ternas <code>rwx</code> (leer, escribir, ejecutar) para el dueño, el grupo y el resto. Leerlos rápido evita la mitad de los "permission denied":</p>
+
+      <div class="table-wrap">
+        <table class="t">
+          <thead><tr><th>Lo que ves</th><th>Qué significa</th><th>En números</th></tr></thead>
+          <tbody>
+            <tr><td><code>-rw-r--r--</code></td><td>Archivo. El dueño lee y escribe; grupo y resto solo leen.</td><td class="r">644</td></tr>
+            <tr><td><code>-rwxr-x---</code></td><td>Ejecutable. El dueño todo; el grupo lee y ejecuta; el resto nada.</td><td class="r">750</td></tr>
+            <tr><td><code>drwx------</code></td><td>Directorio privado del dueño (la <code>d</code> inicial dice que es directorio).</td><td class="r">700</td></tr>
+            <tr><td><code>-rw-------</code></td><td>Secreto: solo el dueño lo lee. Así va una clave privada.</td><td class="r">600</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Dos trampas clásicas. Un bit <b>setuid</b> (<code>-rwsr-xr-x</code>) hace que el programa corra con el usuario de su dueño, no con el tuyo; es necesario en unos pocos binarios (<code>sudo</code>, <code>passwd</code>) y peligroso en cualquier otro, así que se audita (<a href="m33-hardening-linux.html#auditoria">M33</a> lo revisa con AIDE). Y <code>sudo</code> no es "ser root para todo": se acota por comando y por usuario, con el mínimo privilegio que viste en M33. La base de datos, cuando llegues a ella, es otro servicio con su propio usuario y sus propios permisos, y se opera con el mismo cuidado (<a href="m35-seguridad-bd.html#modelo">M35</a>).</p>
+
+      <h2 id="systemd"><span class="sec-num">34.2</span>systemd: arrancar, vigilar y acotar servicios</h2>
+      <p><dfn data-term="systemd">systemd</dfn> es el primer proceso que arranca el kernel (PID&#8239;1) y el que gobierna a todos los demás: decide qué servicios levantan, en qué orden, qué hacer si uno muere y cuántos recursos puede gastar cada uno. Un servicio se describe en una <b>unidad</b> (un archivo <code>.service</code>), y lo manejas con <code>systemctl</code>.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f342t f342d">
+<title id="f342t">Los estados de un servicio en systemd</title>
+<desc id="f342d">Una unidad pasa de inactive a activating a active. Si el proceso termina con error va a failed; con Restart activado, systemd lo vuelve a activating. El watchdog reinicia el servicio si deja de dar señales.</desc>
+<defs><marker id="f342a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="40" y="70" width="150" height="50" rx="8"/>
+<text class="dg-label" x="115" y="92" text-anchor="middle">inactive</text>
+<text class="dg-tiny" x="115" y="110" text-anchor="middle">parado</text>
+<rect class="dg-box" x="250" y="70" width="150" height="50" rx="8"/>
+<text class="dg-label" x="325" y="92" text-anchor="middle">activating</text>
+<text class="dg-tiny" x="325" y="110" text-anchor="middle">ExecStartPre, ExecStart</text>
+<rect class="dg-ok" x="460" y="36" width="150" height="50" rx="8"/>
+<text class="dg-label" x="535" y="58" text-anchor="middle">active</text>
+<text class="dg-tiny" x="535" y="76" text-anchor="middle">running</text>
+<rect class="dg-bad" x="460" y="150" width="150" height="50" rx="8"/>
+<text class="dg-label" x="535" y="172" text-anchor="middle">failed</text>
+<text class="dg-tiny" x="535" y="190" text-anchor="middle">código ≠ 0, timeout</text>
+<path class="dg-edge" d="M190 95 H248" marker-end="url(#f342a)"/>
+<text class="dg-tiny" x="219" y="86" text-anchor="middle">start</text>
+<path class="dg-edge" d="M400 88 L458 66" marker-end="url(#f342a)"/>
+<text class="dg-tiny" x="430" y="68" text-anchor="middle">ok</text>
+<path class="dg-edge" d="M400 104 L458 172" marker-end="url(#f342a)"/>
+<text class="dg-tiny" x="430" y="150" text-anchor="middle">error</text>
+<path class="dg-feedback" d="M535 150 C535 120 460 130 410 110"/>
+<path class="dg-edge" d="M416 112 L404 106 L408 119 z"/>
+<text class="dg-tiny dg-mono" x="452" y="128" text-anchor="middle">Restart=on-failure</text>
+<path class="dg-feedback" d="M535 36 C535 18 360 18 325 64"/>
+<text class="dg-tiny" x="400" y="20" text-anchor="middle">WatchdogSec: sin señal, reinicia</text>
+<rect class="dg-box" x="40" y="158" width="360" height="86" rx="8"/>
+<text class="dg-small" x="58" y="180" text-anchor="start">Lo que se mira:</text>
+<text class="dg-tiny dg-mono" x="58" y="200" text-anchor="start">systemctl status / is-active / --failed  → estado y PID</text>
+<text class="dg-tiny dg-mono" x="58" y="216" text-anchor="start">journalctl -u servicio -b  → sus logs desde el arranque</text>
+<text class="dg-tiny dg-mono" x="58" y="232" text-anchor="start">Límites en la unidad: MemoryMax, CPUQuota, TasksMax</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.2.</b> El ciclo de vida de un servicio: de <code>inactive</code> a <code>active</code>, y a <code>failed</code> si termina con error. Con <code>Restart=</code> y el watchdog, systemd lo reintenta.</figcaption>
+      </figure>
+
+      <p>El ciclo de vida de arriba explica el 90&#8239;% de los "no levanta". Los comandos para recorrerlo:</p>
+
+<pre data-lang="shell"><code>$ systemctl status nginx         # estado, PID, uso de memoria y las últimas líneas de log
+$ systemctl start  nginx         # arrancar ahora
+$ systemctl enable nginx         # que arranque solo en cada boot
+$ systemctl restart nginx        # pararlo y volver a arrancar
+$ systemctl --failed             # todos los servicios en estado failed, de un vistazo</code></pre>
+
+      <p>Una unidad declara sus dependencias (<code>After=</code> para el orden, <code>Requires=</code> para "si aquel falla, yo también") y, lo que más te va a servir en seguridad y en estabilidad, sus <b>topes de recursos</b>. Un servicio con una fuga de memoria no debería poder tumbar la máquina entera:</p>
+
+<pre data-lang="shell"><code># /etc/systemd/system/mi-api.service.d/limites.conf
+[Service]
+MemoryMax=512M        # si pasa de 512 MB, el kernel lo mata a él, no a un vecino
+MemoryHigh=448M       # a partir de aquí lo frena y lo presiona a liberar
+CPUQuota=150%         # como máximo 1.5 núcleos
+TasksMax=256          # tope de hilos y procesos, contra las fork bombs</code></pre>
+
+      <aside class="callout callout--prod">
+        <p class="callout-label">En producción real</p>
+        <p>Esos mismos archivos de unidad llevan las directivas de aislamiento de <a href="m33-hardening-linux.html#systemd-sandbox">M33</a> (<code>ProtectSystem</code>, <code>NoNewPrivileges</code>, <code>PrivateTmp</code>). Operar y endurecer se escriben en el mismo lugar: la unidad del servicio. Tras cambiarla, <code>systemctl daemon-reload</code> y <code>systemctl restart</code>.</p>
+      </aside>
+
+      <h3 id="journald">journald: dónde están los logs</h3>
+      <p><dfn data-term="journald">journald</dfn> es el recolector de logs de systemd. Guarda, por cada línea, quién la escribió, cuándo y con qué prioridad, y lo lees con <code>journalctl</code>. Es el primer sitio al que vas cuando un servicio falla:</p>
+
+<pre data-lang="shell"><code>$ journalctl -u mi-api -b            # solo mi-api, solo desde el último arranque (-b)
+$ journalctl -u mi-api -p err        # solo prioridad error o peor
+$ journalctl -u mi-api -f            # seguir en vivo, como tail -f
+$ journalctl --since "10 min ago"    # ventana de tiempo
+$ journalctl --disk-usage            # cuánto ocupa; se acota con SystemMaxUse en journald.conf</code></pre>
+
+      <p>Por defecto el journal puede ser volátil (se pierde al reiniciar). En un servidor de verdad se hace persistente (<code>Storage=persistent</code>) y, mejor aún, se envían los logs fuera de la máquina, para que un atacante que entre no pueda borrarlos (otra idea de <a href="m33-hardening-linux.html#auditoria">M33</a>, y el corazón de la observabilidad de <a href="m11-observabilidad.html#logs">M11</a>).</p>
+
+      <h2 id="discos"><span class="sec-num">34.3</span>Discos, particiones y LVM</h2>
+      <p>Dos preguntas resuelven casi todo lo de disco: ¿cuánto espacio queda? y ¿cómo lo agrando sin apagar nada? Para la primera, <code>df</code> mira el espacio por sistema de archivos y <code>du</code> mira qué carpeta se lo comió:</p>
+
+<pre data-lang="shell"><code>$ df -h                 # espacio libre por punto de montaje, en unidades legibles
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vg0/lv_root 50G   47G  0.6G  99% /
+
+$ df -i                 # inodes: un disco puede tener espacio y aun así no dejar crear archivos
+$ du -sh /var/* | sort -h | tail        # los mayores de /var; casi siempre /var/log</code></pre>
+
+      <aside class="callout callout--fail">
+        <p class="callout-label">Qué pasa si falla</p>
+        <p>Un disco al 100&#8239;% no da un error limpio: las escrituras fallan y los servicios se caen en cadena. La base no puede escribir su WAL, el log no se puede abrir, journald deja de registrar justo cuando más lo necesitas. Por eso <code>df</code> es la primera alerta que se monta (<a href="m11-observabilidad.html#alertas">M11</a>) y la primera que miras.</p>
+      </aside>
+
+      <p>Para la segunda pregunta está <dfn data-term="lvm">LVM</dfn> (Logical Volume Manager). En vez de atar un sistema de archivos a una partición fija, LVM pone una capa en medio: los discos son volúmenes físicos (PV), juntos forman un grupo (VG) y de ese grupo cortas volúmenes lógicos (LV) del tamaño que quieras, y los creces después tomando del espacio libre.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f343t f343d">
+<title id="f343t">LVM en capas: crecer sin reparticionar</title>
+<desc id="f343d">De abajo arriba: los discos físicos son volúmenes físicos (PV); juntos forman un grupo de volúmenes (VG); del grupo se cortan volúmenes lógicos (LV), y encima de cada uno va un sistema de archivos. Crecer un LV toma espacio libre del grupo sin tocar los discos ni los datos.</desc>
+<defs><marker id="f343a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="36" text-anchor="start">Volúmenes físicos (PV): los discos</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="16" y="44" width="236" height="40" rx="6"/>
+<text class="dg-small dg-mono" x="134" y="68" text-anchor="middle">/dev/sda  (500 GB)</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="266" y="44" width="236" height="40" rx="6"/>
+<text class="dg-small dg-mono" x="384" y="68" text-anchor="middle">/dev/sdb  (500 GB)</text>
+<path class="dg-edge" d="M250 84 V104" marker-end="url(#f343a)"/>
+<text class="dg-group" x="16" y="122" text-anchor="start">Grupo de volúmenes (VG): el espacio junto</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="16" y="130" width="738" height="44" rx="8"/>
+<text class="dg-label" x="385" y="156" text-anchor="middle">vg0  —  1 TB en total, 240 GB libres</text>
+<path class="dg-edge" d="M385 174 V194" marker-end="url(#f343a)"/>
+<text class="dg-group" x="16" y="212" text-anchor="start">Volúmenes lógicos (LV) con su sistema de archivos</text>
+<rect class="dg-box" x="16" y="220" width="232" height="46" rx="6"/>
+<text class="dg-small dg-mono" x="132" y="240" text-anchor="middle">lv_root</text>
+<text class="dg-tiny" x="132" y="257" text-anchor="middle">ext4 · 50 GB</text>
+<rect class="dg-box" x="258" y="220" width="300" height="46" rx="6"/>
+<text class="dg-small dg-mono" x="408" y="240" text-anchor="middle">lv_data</text>
+<text class="dg-tiny" x="408" y="257" text-anchor="middle">xfs · 710 GB</text>
+<rect class="dg-ok" x="568" y="220" width="150" height="46" rx="6"/>
+<text class="dg-small dg-mono" x="643" y="240" text-anchor="middle">libre</text>
+<text class="dg-tiny" x="643" y="257" text-anchor="middle">240 GB</text>
+<path class="dg-feedback" d="M624 243 C664 243 664 243 684 243"/>
+<text class="dg-tiny dg-mono" x="690" y="230" text-anchor="middle">lvextend -r</text>
+<text class="dg-tiny" x="690" y="288" text-anchor="middle">toma del libre</text>
+<text class="dg-tiny" x="16" y="282" text-anchor="start">Crecer lv_data sin reparticionar, en caliente y sin perder datos:</text>
+<text class="dg-tiny dg-mono" x="16" y="296" text-anchor="start">lvextend -r -L +100G /dev/vg0/lv_data</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.3.</b> LVM en capas. Crecer <code>lv_data</code> toma espacio libre del grupo, en caliente, sin tocar los discos ni los datos.</figcaption>
+      </figure>
+
+<pre data-lang="shell"><code>$ vgs                                        # cuánto libre queda en el grupo
+$ lvextend -r -L +100G /dev/vg0/lv_data      # crecer 100 GB y ajustar el FS, en caliente
+$ lvcreate -s -n snap_data -L 20G /dev/vg0/lv_data   # snapshot para un backup consistente</code></pre>
+
+      <p>El <code>-r</code> es la clave: crece el volumen y el sistema de archivos de encima en un paso, sin desmontar y sin tocar los datos. Y un <b>snapshot</b> (una foto del volumen en un instante) te deja hacer el backup de una base que sigue escribiendo, sin pararla. De los backups va la sección que sigue.</p>
+
+      <h2 id="backups"><span class="sec-num">34.4</span>Backups y la prueba que los convierte en backups</h2>
+      <p>La regla que se repite porque funciona es <dfn data-term="backup-3-2-1">3-2-1</dfn>: tres copias de los datos, en dos medios distintos, con una fuera del sitio. Así ningún fallo único (un disco, un incendio, un ransomware que cifra la red local) se lleva todo.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f344t f344d">
+<title id="f344t">La regla 3-2-1 y la prueba que la cierra</title>
+<desc id="f344d">Tres copias de los datos, en dos medios distintos, con una fuera del sitio. El dato de producción se copia a un backup local en otro medio y a uno fuera de sitio. La flecha que de verdad importa es la prueba de restauración: un backup que nunca se restauró no es un backup.</desc>
+<defs><marker id="f344a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="40" y="60" width="170" height="70" rx="8"/>
+<text class="dg-label" x="125" y="88" text-anchor="middle">Producción</text>
+<text class="dg-tiny" x="125" y="108" text-anchor="middle">copia 1 · disco</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="300" y="60" width="170" height="70" rx="8"/>
+<text class="dg-label" x="385" y="84" text-anchor="middle">Backup local</text>
+<text class="dg-tiny" x="385" y="104" text-anchor="middle">copia 2</text>
+<text class="dg-tiny" x="385" y="120" text-anchor="middle">otro medio: cinta/objeto</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="560" y="60" width="170" height="70" rx="8"/>
+<text class="dg-label" x="645" y="84" text-anchor="middle">Fuera de sitio</text>
+<text class="dg-tiny" x="645" y="104" text-anchor="middle">copia 3</text>
+<text class="dg-tiny" x="645" y="120" text-anchor="middle">otra región/nube</text>
+<path class="dg-edge" d="M210 95 H298" marker-end="url(#f344a)"/>
+<text class="dg-tiny" x="254" y="86" text-anchor="middle">copiar</text>
+<path class="dg-edge" d="M470 95 H558" marker-end="url(#f344a)"/>
+<text class="dg-tiny" x="514" y="86" text-anchor="middle">replicar</text>
+<rect class="dg-ok" x="40" y="168" width="220" height="54" rx="8"/>
+<text class="dg-small" x="150" y="188" text-anchor="middle">Servidor de prueba</text>
+<text class="dg-tiny" x="150" y="206" text-anchor="middle">restaura y verifica</text>
+<path class="dg-feedback" d="M645 130 C645 190 300 200 262 198"/>
+<path class="dg-edge" d="M268 200 L256 195 L259 207 z"/>
+<text class="dg-small" x="470" y="168" text-anchor="middle">Prueba de restauración periódica:</text>
+<text class="dg-tiny" x="470" y="186" text-anchor="middle">levantar la copia en un servidor aparte,</text>
+<text class="dg-tiny" x="470" y="202" text-anchor="middle">comprobar que los datos abren y cuadran,</text>
+<text class="dg-tiny" x="470" y="218" text-anchor="middle">y medir cuánto tarda (tu RTO real).</text>
+<rect class="dg-warnbox" x="40" y="240" width="690" height="36" rx="8"/>
+<text class="dg-tiny" x="385" y="262" text-anchor="middle">3 copias · 2 medios · 1 fuera de sitio. Sin una restauración probada, solo tienes la esperanza de un backup.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.4.</b> La regla 3-2-1 y la flecha que de verdad la cierra: la prueba de restauración.</figcaption>
+      </figure>
+
+      <p>Pero la parte que casi todos saltan es la flecha de vuelta: la <b>prueba de restauración</b>. Un backup que nunca restauraste no es un backup; es un archivo del que supones cosas. La única forma de saber que sirve es levantarlo en un servidor aparte, comprobar que los datos abren y cuadran, y medir cuánto tardó. Ese tiempo es tu <b>RTO</b> real (lo que tardas en volver), y la antigüedad de la copia es tu <b>RPO</b> (cuántos datos pierdes). Si no los mediste, no los conoces.</p>
+
+      <aside class="callout callout--def">
+        <p class="callout-label">Definición</p>
+        <p class="def-term">RPO y RTO <span class="def-en">Recovery Point / Time Objective</span></p>
+        <p class="def-one">Cuánto dato puedes perder y cuánto puedes tardar en volver.</p>
+        <dl class="def-rows">
+          <div><dt>Intuición</dt><dd>El RPO es "¿hasta qué momento tengo guardado?" (si copias cada 24&#8239;h, puedes perder un día). El RTO es "¿cuánto tardo en estar arriba otra vez?".</dd></div>
+          <div><dt>Ejemplo</dt><dd>Un backup diario con una restauración que tarda 3&#8239;h da RPO 24&#8239;h y RTO 3&#8239;h. Si el negocio no aguanta eso, cambias la frecuencia o el método, no la esperanza.</dd></div>
+          <div><dt>Por qué importa en producción</dt><dd>Son números del negocio, no de tecnología. Se acuerdan antes del incidente y se prueban, igual que el libro de inmutabilidad del ledger de pagos de <a href="m27-pagos-stripe.html#ledger">M27</a>: lo que no se verifica, no cuenta.</dd></div>
+        </dl>
+      </aside>
+
+      <p>Las herramientas importan menos que la disciplina. <code>pg_dump</code> para el volcado lógico de una base (<a href="m35-seguridad-bd.html#rbac">M35</a> entra en el detalle), <code>rsync</code> para copiar archivos, y <code>restic</code> o <code>borg</code> cuando quieres copias deduplicadas, cifradas y con histórico. Todas se agendan con un <code>systemd timer</code> y todas se prueban restaurando.</p>
+
+      <h2 id="troubleshooting"><span class="sec-num">34.5</span>Un método para diagnosticar</h2>
+      <p>Cuando algo va lento o se cae, la tentación es tocar cosas hasta que mejore. El método que no te deja perder es al revés: <b>síntoma, hipótesis, medición, arreglo</b>, y una cosa a la vez. Primero describes el síntoma con precisión ("la API tarda 4&#8239;s desde las 02:00"), formas una hipótesis ("se llenó el disco de logs"), la mides con la herramienta que la confirma o la descarta, arreglas, y vuelves a medir para comprobar. Cambiar varias cosas juntas te deja sin saber cuál era.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 324" role="img" aria-labelledby="f341t f341d">
+<title id="f341t">Árbol de decisión cuando un servicio va lento</title>
+<desc id="f341d">Del síntoma &quot;el servicio responde lento&quot; salen cuatro ramas: CPU, memoria, disco y red. Cada rama tiene su pregunta, la herramienta que la mide, el número que la confirma y la causa típica. Se recorre de arriba abajo, midiendo antes de tocar.</desc>
+<defs><marker id="f341a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box--em dg-box" x="275" y="12" width="220" height="34" rx="6"/>
+<text class="dg-label" x="385" y="33" text-anchor="middle">El servicio responde lento</text>
+<path class="dg-edge" d="M385 46 L100 68" marker-end="url(#f341a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="16" y="70" width="168" height="32" rx="6"/>
+<text class="dg-small" x="100" y="90" text-anchor="middle">¿CPU saturada?</text>
+<path class="dg-edge" d="M100 102 V124" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="16" y="126" width="168" height="30" rx="5"/>
+<text class="dg-small dg-mono" x="100" y="145" text-anchor="middle">top, htop</text>
+<path class="dg-edge" d="M100 156 V178" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="16" y="180" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="100" y="198" text-anchor="middle">us+sy alto,</text>
+<text class="dg-tiny" x="100" y="214" text-anchor="middle">load ≈ nº de núcleos</text>
+<path class="dg-edge" d="M100 226 V248" marker-end="url(#f341a)"/>
+<rect class="dg-warnbox" x="16" y="250" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="100" y="268" text-anchor="middle">Proceso en bucle,</text>
+<text class="dg-tiny" x="100" y="284" text-anchor="middle">poca capacidad</text>
+<path class="dg-edge" d="M385 46 L290 68" marker-end="url(#f341a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="206" y="70" width="168" height="32" rx="6"/>
+<text class="dg-small" x="290" y="90" text-anchor="middle">¿Falta memoria?</text>
+<path class="dg-edge" d="M290 102 V124" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="206" y="126" width="168" height="30" rx="5"/>
+<text class="dg-small dg-mono" x="290" y="145" text-anchor="middle">free, vmstat</text>
+<path class="dg-edge" d="M290 156 V178" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="206" y="180" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="290" y="198" text-anchor="middle">swap creciendo,</text>
+<text class="dg-tiny" x="290" y="214" text-anchor="middle">si/so &gt; 0</text>
+<path class="dg-edge" d="M290 226 V248" marker-end="url(#f341a)"/>
+<rect class="dg-warnbox" x="206" y="250" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="290" y="268" text-anchor="middle">Fuga de memoria,</text>
+<text class="dg-tiny" x="290" y="284" text-anchor="middle">OOM killer activo</text>
+<path class="dg-edge" d="M385 46 L480 68" marker-end="url(#f341a)"/>
+<rect class="dg-layer" style="--c: var(--l-db)" x="396" y="70" width="168" height="32" rx="6"/>
+<text class="dg-small" x="480" y="90" text-anchor="middle">¿Disco al límite?</text>
+<path class="dg-edge" d="M480 102 V124" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="396" y="126" width="168" height="30" rx="5"/>
+<text class="dg-small dg-mono" x="480" y="145" text-anchor="middle">iostat, df</text>
+<path class="dg-edge" d="M480 156 V178" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="396" y="180" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="480" y="198" text-anchor="middle">wa alto, %util ≈ 100,</text>
+<text class="dg-tiny" x="480" y="214" text-anchor="middle">await grande</text>
+<path class="dg-edge" d="M480 226 V248" marker-end="url(#f341a)"/>
+<rect class="dg-warnbox" x="396" y="250" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="480" y="268" text-anchor="middle">Disco lleno de logs,</text>
+<text class="dg-tiny" x="480" y="284" text-anchor="middle">I/O saturado</text>
+<path class="dg-edge" d="M385 46 L670 68" marker-end="url(#f341a)"/>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="586" y="70" width="168" height="32" rx="6"/>
+<text class="dg-small" x="670" y="90" text-anchor="middle">¿Red o DNS?</text>
+<path class="dg-edge" d="M670 102 V124" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="586" y="126" width="168" height="30" rx="5"/>
+<text class="dg-small dg-mono" x="670" y="145" text-anchor="middle">ss, dig, ping</text>
+<path class="dg-edge" d="M670 156 V178" marker-end="url(#f341a)"/>
+<rect class="dg-box" x="586" y="180" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="670" y="198" text-anchor="middle">Recv-Q/Send-Q,</text>
+<text class="dg-tiny" x="670" y="214" text-anchor="middle">reenvíos, pérdida</text>
+<path class="dg-edge" d="M670 226 V248" marker-end="url(#f341a)"/>
+<rect class="dg-warnbox" x="586" y="250" width="168" height="46" rx="5"/>
+<text class="dg-tiny" x="670" y="268" text-anchor="middle">Resolución lenta,</text>
+<text class="dg-tiny" x="670" y="284" text-anchor="middle">conexiones colgadas</text>
+<text class="dg-small" x="385" y="314" text-anchor="middle">Una sola causa a la vez: se mide, se confirma con el número, se arregla y se vuelve a medir.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.5.</b> El árbol de diagnóstico: del síntoma al recurso, con la herramienta, el número que lo confirma y la causa típica de cada rama.</figcaption>
+      </figure>
+
+      <p>El árbol de arriba enruta el síntoma hacia el recurso. La regla de oro para elegir rama es la que ya viste en la observabilidad de <a href="m11-observabilidad.html#metricas">M11</a> con el método USE: para cada recurso, mira su <b>uso</b>, su <b>saturación</b> y sus <b>errores</b>. Abajo tienes cuatro casos reales para practicar la lectura: elige el cuello de botella y el widget te explica qué número lo delata.</p>
+
+      <div data-sim="triage"></div>
+
+      <h2 id="cpu-mem"><span class="sec-num">34.6</span>CPU y memoria</h2>
+      <p>El primer número que todos miran es el <dfn data-term="load-average">load average</dfn>, y el primero que casi todos malinterpretan. No mide la CPU: mide cuántos procesos están corriendo <em>o</em> esperando para correr, y en Linux incluye además los que esperan por disco sin poder interrumpirse (estado D). Por eso un load alto con la CPU ociosa casi nunca es falta de CPU.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 286" role="img" aria-labelledby="f345t f345d">
+<title id="f345t">Qué cuenta el load average</title>
+<desc id="f345d">El load average cuenta los procesos que corren (R) más los que esperan por disco sin poder parar (D), no solo la CPU. Por eso un load de 8 en 4 núcleos con la CPU medio ociosa casi siempre es espera de disco, no falta de CPU. Abajo, cómo se leen los tres números y el uptime.</desc>
+<defs><marker id="f345a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group dg-mono" x="16" y="36" text-anchor="start">load average: 8.10, 6.40, 3.20   ·   4 núcleos</text>
+<text class="dg-tiny" x="16" y="64" text-anchor="start">Capacidad (4 núcleos)</text>
+<rect class="dg-box" x="200" y="54" width="360" height="18" rx="4"/>
+<path class="dg-feedback" d="M470 48 V78"/>
+<text class="dg-tiny" x="470" y="90" text-anchor="middle">4.0 = lleno</text>
+<text class="dg-tiny" x="16" y="112" text-anchor="start">De dónde sale el 8.1</text>
+<rect class="dg-ok" x="200" y="102" width="110" height="20" rx="4"/>
+<text class="dg-tiny" x="255" y="116" text-anchor="middle">R: en CPU ~2.3</text>
+<rect class="dg-bad" x="312" y="102" width="248" height="20" rx="4"/>
+<text class="dg-tiny" x="436" y="116" text-anchor="middle">D: esperando disco ~5.8</text>
+<rect x="200" y="138" width="360" height="60" rx="6" fill="color-mix(in srgb, var(--l-db) 10%, var(--bg))" stroke="var(--l-db)" stroke-width="1.5"/>
+<text class="dg-small" x="380" y="160" text-anchor="middle">La CPU está al 30 % ocupada (us+sy), 70 % idle,</text>
+<text class="dg-tiny" x="380" y="178" text-anchor="middle">pero wa (I/O wait) es alto: el cuello es el disco, no la CPU.</text>
+<rect class="dg-box" x="16" y="214" width="738" height="60" rx="8"/>
+<text class="dg-tiny" x="30" y="236" text-anchor="start">Los tres números son el promedio de 1, 5 y 15 minutos. Si el de 1 min supera a los otros, la carga sube ahora;</text>
+<text class="dg-tiny" x="30" y="254" text-anchor="start">si baja, ya pasó el pico. Compáralo siempre con el número de núcleos (nproc): 8 es mucho en 4, poco en 32.</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.6a.</b> Qué cuenta el load average: los procesos en CPU más los que esperan por disco. Alto con la CPU ociosa es espera de I/O.</figcaption>
+      </figure>
+
+      <p>La forma correcta de leerlo es junto a <code>top</code> y al número de núcleos. En <code>top</code>, la línea <code>%Cpu(s)</code> reparte el tiempo: <code>us</code> (código de usuario), <code>sy</code> (kernel), <code>id</code> (ocioso) y <code>wa</code> (esperando I/O). Un <code>wa</code> alto apunta al disco; un <code>us</code> alto, a cómputo. <code>vmstat 1</code> lo confirma con sus columnas <code>r</code> (listos para CPU) y <code>b</code> (bloqueados en I/O):</p>
+
+<pre data-lang="shell"><code>$ uptime
+ 14:02:11 up 40 days,  load average: 8.10, 7.90, 6.40     # ¿8 sobre cuántos núcleos?
+$ nproc
+4                                                          # 8 en 4 núcleos: hay cola
+$ vmstat 1 5
+ r  b   swpd   free   buff  cache   si   so    bi    bo   us sy id wa
+ 1  6      0  102400  2048 512000    0    0  2048 51200    6  3 30 61    # wa 61: es disco</code></pre>
+
+      <p>La memoria tiene su propia trampa: <code>free -m</code> muestra poca <code>free</code> casi siempre, porque Linux usa la RAM libre como caché de disco y la suelta cuando hace falta. El número que importa es <code>available</code>. Cuando <em>ese</em> se agota y el <dfn data-term="swap">swap</dfn> (memoria de respaldo en disco) también, el kernel no tiene de dónde sacar y entra el <dfn data-term="oom-killer">OOM killer</dfn>.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 250" role="img" aria-labelledby="f347t f347d">
+<title id="f347t">Qué hace el OOM killer</title>
+<desc id="f347d">Cuando la memoria se llena y el swap también, el kernel no puede dar más: el OOM killer elige el proceso con mayor oom_score (grande y poco protegido), lo mata para liberar memoria y lo deja anotado en el log. El síntoma típico es un proceso que &quot;desaparece&quot; sin que nadie lo paró.</desc>
+<defs><marker id="f347a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="16" y="60" width="150" height="54" rx="8"/>
+<text class="dg-label" x="91" y="82" text-anchor="middle">RAM</text>
+<text class="dg-tiny" x="91" y="100" text-anchor="middle">se llena</text>
+<path class="dg-edge" d="M166 87 H210" marker-end="url(#f347a)"/>
+<rect class="dg-warnbox" x="210" y="60" width="150" height="54" rx="8"/>
+<text class="dg-label" x="285" y="82" text-anchor="middle">swap</text>
+<text class="dg-tiny dg-mono" x="285" y="100" text-anchor="middle">si/so altos</text>
+<path class="dg-edge" d="M360 87 H404" marker-end="url(#f347a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="404" y="52" width="160" height="70" rx="8"/>
+<text class="dg-small" x="484" y="76" text-anchor="middle">kernel: elige</text>
+<text class="dg-tiny dg-mono" x="484" y="94" text-anchor="middle">mayor oom_score</text>
+<text class="dg-tiny" x="484" y="110" text-anchor="middle">(tamaño − protección)</text>
+<path class="dg-edge" d="M564 87 H608" marker-end="url(#f347a)"/>
+<rect class="dg-bad" x="608" y="60" width="146" height="54" rx="8"/>
+<text class="dg-small" x="681" y="82" text-anchor="middle">mata el proceso</text>
+<text class="dg-tiny" x="681" y="100" text-anchor="middle">libera memoria</text>
+<rect class="dg-box" x="16" y="140" width="738" height="44" rx="8"/>
+<text class="dg-small dg-mono" x="30" y="162" text-anchor="start">En el log:  dmesg -T | grep -i oom   o   journalctl -k | grep -i &quot;Out of memory&quot;</text>
+<text class="dg-tiny" x="30" y="178" text-anchor="start"></text>
+<rect class="dg-warnbox" x="16" y="194" width="738" height="46" rx="8"/>
+<text class="dg-tiny" x="385" y="214" text-anchor="middle">Defensa: límites por servicio (MemoryMax en la unidad), vigilar la memoria disponible y arreglar la fuga.</text>
+<text class="dg-tiny" x="385" y="231" text-anchor="middle">Subir el swap solo tapa el síntoma y vuelve todo más lento (thrashing).</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.6b.</b> El OOM killer: cuando la RAM y el swap se agotan, el kernel mata el proceso de mayor <code>oom_score</code> y lo anota en el log.</figcaption>
+      </figure>
+
+      <p>El OOM killer elige el proceso con mayor <code>oom_score</code> (grande y poco protegido), lo mata y lo anota en el log del kernel. El síntoma clásico es un servicio que "desaparece" de noche sin que nadie lo tocara. La defensa no es subir el swap —eso solo lleva al <b>thrashing</b>, páginas yendo y viniendo del disco hasta que todo se arrastra— sino poner un <code>MemoryMax</code> por servicio (sección <a href="#systemd">34.2</a>) y arreglar la fuga que lo infla.</p>
+
+      <h2 id="disco-red"><span class="sec-num">34.7</span>Disco y red</h2>
+      <p>Cuando el árbol te manda a disco o a red, cambian las herramientas pero no el método: mides el uso, la saturación y los errores del recurso. Para disco, <code>iostat -x 1</code> es el que manda; su <code>%util</code> cercano a 100 y un <code>await</code> (latencia media por operación) de cientos de milisegundos dicen que el disco está al límite. <code>iotop</code> te dice quién escribe.</p>
+
+<pre data-lang="shell"><code>$ iostat -x 1
+Device    r/s    w/s   rkB/s    wkB/s  await  %util
+nvme0n1   2.0  480.0    16.0  51200.0  182.4   99.2     # saturado: await alto, %util ~100</code></pre>
+
+      <p>Para red, <code>ss</code> reemplaza al viejo <code>netstat</code>: <code>ss -s</code> resume las conexiones, <code>ss -tn</code> muestra su estado (un montón en <code>SYN-SENT</code> es "mando el SYN y no vuelve nada"), y <code>ss -tulpen</code> es el inventario de puertos que escuchas (el mismo de <a href="m33-hardening-linux.html#inventario">M33</a>). Cuando el problema huele a nombres, <code>dig</code> mide cuánto tarda el DNS; cuando huele a pérdida, <code>ping</code> y <code>mtr</code> la cuantifican.</p>
+
+      <figure class="figure">
+        <div class="figure-frame">
+<svg viewBox="0 0 770 268" role="img" aria-labelledby="f346t f346d">
+<title id="f346t">Dónde mirar según el síntoma</title>
+<desc id="f346d">Una fila por recurso no: una columna por recurso (CPU, memoria, disco y red) y una fila por lo que miras (síntoma, herramienta, el número y la causa típica). Cada celda cruza las dos cosas.</desc>
+<rect class="dg-layer" style="--c: var(--l-service)" x="104" y="40" width="158" height="24" rx="5"/>
+<text class="dg-label" x="183" y="56" text-anchor="middle">CPU</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="270" y="40" width="158" height="24" rx="5"/>
+<text class="dg-label" x="349" y="56" text-anchor="middle">Memoria</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="436" y="40" width="158" height="24" rx="5"/>
+<text class="dg-label" x="515" y="56" text-anchor="middle">Disco</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="602" y="40" width="158" height="24" rx="5"/>
+<text class="dg-label" x="681" y="56" text-anchor="middle">Red</text>
+<text class="dg-small" x="90" y="96" text-anchor="end">Síntoma</text>
+<rect class="dg-box" x="104" y="72" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="183" y="96" text-anchor="middle">todo lento, load alto</text>
+<rect class="dg-box" x="270" y="72" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="349" y="96" text-anchor="middle">procesos muertos</text>
+<rect class="dg-box" x="436" y="72" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="515" y="96" text-anchor="middle">escrituras lentas</text>
+<rect class="dg-box" x="602" y="72" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="681" y="96" text-anchor="middle">timeouts, cortes</text>
+<text class="dg-small" x="90" y="142" text-anchor="end">Herramienta</text>
+<rect class="dg-box" x="104" y="118" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="183" y="142" text-anchor="middle">top, mpstat</text>
+<rect class="dg-box" x="270" y="118" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="349" y="142" text-anchor="middle">free, vmstat</text>
+<rect class="dg-box" x="436" y="118" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="515" y="142" text-anchor="middle">iostat, df, du</text>
+<rect class="dg-box" x="602" y="118" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="681" y="142" text-anchor="middle">ss, dig, ping</text>
+<text class="dg-small" x="90" y="188" text-anchor="end">El número</text>
+<rect class="dg-box" x="104" y="164" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="183" y="188" text-anchor="middle">%us, %sy, load</text>
+<rect class="dg-box" x="270" y="164" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="349" y="188" text-anchor="middle">avail, si/so</text>
+<rect class="dg-box" x="436" y="164" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="515" y="188" text-anchor="middle">%util, await, uso</text>
+<rect class="dg-box" x="602" y="164" width="158" height="40" rx="5"/>
+<text class="dg-tiny dg-mono" x="681" y="188" text-anchor="middle">Recv-Q, pérdida</text>
+<text class="dg-small" x="90" y="234" text-anchor="end">Causa típica</text>
+<rect class="dg-warnbox" x="104" y="210" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="183" y="234" text-anchor="middle">bucle, poca capacidad</text>
+<rect class="dg-warnbox" x="270" y="210" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="349" y="234" text-anchor="middle">fuga, OOM</text>
+<rect class="dg-warnbox" x="436" y="210" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="515" y="234" text-anchor="middle">disco lleno, I/O</text>
+<rect class="dg-warnbox" x="602" y="210" width="158" height="40" rx="5"/>
+<text class="dg-tiny" x="681" y="234" text-anchor="middle">DNS, saturación</text>
+</svg>
+
+        </div>
+        <figcaption><b>Figura 34.7.</b> Dónde mirar según el recurso: el síntoma que lo delata, la herramienta, el número que se lee y la causa típica.</figcaption>
+      </figure>
+
+      <p>Y para el caso difícil —un proceso que se cuelga y no sabes en qué— está <dfn data-term="strace">strace</dfn>, que muestra las llamadas al sistema (syscalls) que hace un proceso: en qué <code>read</code>, <code>connect</code> o <code>futex</code> se quedó parado. Es la lupa final del diagnóstico.</p>
+
+<pre data-lang="shell"><code>$ strace -p 9123 -f -tt            # engancha al PID 9123 y sus hilos, con marca de tiempo
+...
+connect(7, {sa_family=AF_INET, sin_port=htons(5432), ...}   # se quedó esperando a PostgreSQL</code></pre>
+
+      <aside class="callout callout--tradeoff">
+        <p class="callout-label">Trade-off</p>
+        <p><code>strace</code> frena el proceso que observa (intercepta cada syscall), así que no es lo primero que corres en producción caliente, y menos sobre la base de datos. Es la herramienta de último recurso, cuando top, vmstat, iostat y ss ya acotaron el problema a un proceso concreto. Para ver dentro sin frenar tanto se usan <code>perf</code> o eBPF, tema aparte.</p>
+      </aside>
+
+      <h2 id="runbooks"><span class="sec-num">34.8</span>Runbooks y mantenimiento</h2>
+      <p>La última pieza de operar es no tener que redescubrir el diagnóstico cada vez. Un <dfn data-term="runbook">runbook</dfn> —que ya conociste en <a href="m11-observabilidad.html#sin-runbook">M11</a>— es la receta para un síntoma concreto: cómo confirmarlo, cómo mitigarlo rápido y cómo arreglarlo de fondo. Los que escribes en este módulo son los de recursos: "disco lleno", "servicio en failed", "OOM de noche", "DNS lento". Cada incidente que resuelves deja uno nuevo.</p>
+
+      <ol class="steps">
+        <li><span class="step-title">Síntoma y confirmación</span>Qué se ve y con qué comando se confirma en un minuto (<code>df -h</code>, <code>systemctl --failed</code>, <code>journalctl -k | grep -i oom</code>).</li>
+        <li><span class="step-title">Mitigación</span>Lo que devuelve el servicio ya, aunque sea provisional (rotar y borrar logs, reiniciar el servicio acotado, subir una réplica).</li>
+        <li><span class="step-title">Arreglo de fondo</span>La causa raíz y el cambio que evita la próxima (un <code>MemoryMax</code>, una alerta antes del 90&#8239;%, una rotación de logs que faltaba).</li>
+      </ol>
+
+      <p>El mantenimiento planeado sigue la misma cabeza que los despliegues de <a href="m11-observabilidad.html#despliegues">M11</a>: ventana anunciada, parchear por tandas sacando cada servidor de rotación antes de tocarlo (drenar, parchear, devolver), y nunca todo a la vez. Y cuando algo se rompe de verdad, el <dfn data-term="postmortem">postmortem</dfn> sin culpables cierra el ciclo: qué pasó, por qué, y qué runbook o qué alerta lo habría atajado. La base de datos tiene su propia operación segura —roles, bitácora y cifrado—, y ese es el tema del módulo que sigue (<a href="m35-seguridad-bd.html#modelo">M35</a>).</p>
+
+      <h2 id="comprueba">Comprueba lo aprendido</h2>
+
+      <div data-quiz="m34"></div>
+
+      <div data-exercise="m34-servidor-lento"></div>
+
+      <div data-checkpoint="m34"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m34.data.js"></script>
+<script src="../assets/js/data/exercises/m34.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-triage.js"></script>
+</body>
+</html>

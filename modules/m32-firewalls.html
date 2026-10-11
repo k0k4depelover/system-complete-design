@@ -554,7 +554,7 @@ $ sudo firewall-cmd --reload</code></pre>
 
       <p>Tres reglas para los security groups, que AWS también recomienda <span class="badge badge--doc">Documentado</span>:</p>
       <ul>
-        <li><b>Nunca 22 ni 3389 abiertos a <code>0.0.0.0/0</code>.</b> El acceso de administración va desde un rango concreto o, mejor, sin abrir puertos, con un acceso gestionado como Session Manager (M37).</li>
+        <li><b>Nunca 22 ni 3389 abiertos a <code>0.0.0.0/0</code>.</b> El acceso de administración va desde un rango concreto o, mejor, sin abrir puertos, con un acceso gestionado como Session Manager (<a href="m37-nube.html#iam">M37</a>).</li>
         <li><b>Referenciar otros security groups en lugar de IPs.</b> "El 5432 desde <code>sg-web</code>" sigue siendo correcto cuando el autoscaling agrega diez instancias. Es microsegmentación por identidad, como en la sección anterior.</li>
         <li><b>Rangos de puertos chicos.</b> "Del 0 al 65&#8239;535 desde la VPC" es una red plana con otro nombre.</li>
       </ul>
@@ -568,7 +568,7 @@ $ sudo firewall-cmd --reload</code></pre>
       <ul>
         <li><b>NGFW.</b> Un <dfn data-term="ngfw">NGFW</dfn> (next-generation firewall) suma al filtrado por puertos la identificación de aplicaciones por su tráfico (sabe que es SSH aunque vaya al 443), las reglas por usuario o grupo del directorio, el filtrado de URLs y un sistema de prevención de intrusiones. Para ver dentro de HTTPS necesita descifrarlo: actúa como intermediario con un certificado propio en el que confían los equipos de la empresa. Es habitual en redes corporativas y en el borde entre redes; en la nube, el equivalente administrado es un servicio como AWS Network Firewall.</li>
         <li><b>IDS e IPS.</b> La <dfn data-term="ids-ips">detección de intrusiones</dfn> compara el tráfico (o la actividad de un host) contra firmas de ataques conocidos y contra comportamientos anómalos. Un IDS solo avisa; un IPS está en el camino y bloquea. Suricata y Snort son los motores de red más conocidos; OSSEC y Wazuh, los de host (<a href="m33-hardening-linux.html#rootkits">M33</a>).</li>
-        <li><b>WAF.</b> El firewall de aplicaciones ya lo conoces: en <a href="m03-balanceo-gateways.html#waf">M03</a> viste cómo evalúa cada request HTTP contra reglas como el OWASP CRS, y en <a href="m28-cloudflare.html#ddos">M28</a> cómo lo opera Cloudflare en el borde. Vive donde termina TLS, porque necesita la request en claro. Su diseño en la nube, con el resto de los controles, sigue en M37.</li>
+        <li><b>WAF.</b> El firewall de aplicaciones ya lo conoces: en <a href="m03-balanceo-gateways.html#waf">M03</a> viste cómo evalúa cada request HTTP contra reglas como el OWASP CRS, y en <a href="m28-cloudflare.html#ddos">M28</a> cómo lo opera Cloudflare en el borde. Vive donde termina TLS, porque necesita la request en claro. Su diseño en la nube, con el resto de los controles, sigue en <a href="m37-nube.html#red">M37</a>.</li>
       </ul>
 
       <div class="table-wrap">
@@ -719,7 +719,7 @@ $ sudo firewall-cmd --reload</code></pre>
 
       <h3 id="responder-evasion">Responder a un atacante con oficio</h3>
 
-      <p>Cuando la señal aparece, la respuesta también estaba ensayada o no sirve. Cuatro principios. La <b>defensa en profundidad</b>: ninguna capa se confía a sí misma, de modo que saltar el firewall deja al atacante frente al servidor endurecido, al mínimo privilegio y al egress. <b>Contener sin avisar</b>: aislar el equipo comprometido de la red, pero con cuidado de no espantar al atacante antes de entender qué tocó, igual que en la respuesta a incidentes del curso (<a href="m11-observabilidad.html#incidentes">M11</a>) y en <a href="m33-hardening-linux.html#responder">M33&#8239;§&#8239;33.10</a>. <b>Rotar y reconstruir</b>: dar por quemadas las credenciales que ese equipo podía ver y levantar la máquina de nuevo desde una imagen conocida, porque un atacante bueno deja más de una puerta. Y <b>cerrar el camino</b>, no solo el síntoma: si entró por un servicio expuesto de más, la corrección es quitar la exposición, no bloquear una sola IP. Zero Trust, el WAF administrado y la defensa de borde a escala vuelven en M37.</p>
+      <p>Cuando la señal aparece, la respuesta también estaba ensayada o no sirve. Cuatro principios. La <b>defensa en profundidad</b>: ninguna capa se confía a sí misma, de modo que saltar el firewall deja al atacante frente al servidor endurecido, al mínimo privilegio y al egress. <b>Contener sin avisar</b>: aislar el equipo comprometido de la red, pero con cuidado de no espantar al atacante antes de entender qué tocó, igual que en la respuesta a incidentes del curso (<a href="m11-observabilidad.html#incidentes">M11</a>) y en <a href="m33-hardening-linux.html#responder">M33&#8239;§&#8239;33.10</a>. <b>Rotar y reconstruir</b>: dar por quemadas las credenciales que ese equipo podía ver y levantar la máquina de nuevo desde una imagen conocida, porque un atacante bueno deja más de una puerta. Y <b>cerrar el camino</b>, no solo el síntoma: si entró por un servicio expuesto de más, la corrección es quitar la exposición, no bloquear una sola IP. Zero Trust, el WAF administrado y la defensa de borde a escala vuelven en <a href="m37-nube.html#zero-trust">M37</a>.</p>
 
       <h2 id="fallos"><span class="sec-num">32.11</span>Fallos típicos</h2>
 
@@ -738,7 +738,7 @@ $ sudo firewall-cmd --reload</code></pre>
         </table>
       </div>
 
-      <p>Lo que sigue en esta parte: el firewall es una capa, y <a href="m33-hardening-linux.html">M33</a> se ocupa de qué hacer con el servidor mismo, suponiendo que esa capa falla. Los firewalls administrados de la nube, el WAF y Zero Trust vuelven en M37.</p>
+      <p>Lo que sigue en esta parte: el firewall es una capa, y <a href="m33-hardening-linux.html">M33</a> se ocupa de qué hacer con el servidor mismo, suponiendo que esa capa falla. Los firewalls administrados de la nube, el WAF y Zero Trust vuelven en <a href="m37-nube.html#zero-trust">M37</a>.</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 

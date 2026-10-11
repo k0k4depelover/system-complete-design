@@ -322,7 +322,7 @@ $ sudo -l -U ana                      # qué puede hacer ana con sudo
 $ awk -F: '$7 !~ /nologin|false/' /etc/passwd   # cuentas con un shell válido
 $ lastlog | grep -v 'Never logged'    # quién entró y cuándo fue la última vez</code></pre>
 
-      <p>Los permisos de sudo pueden ser finos (<code>ana ALL=(postgres) /usr/bin/psql</code> deja a ana correr solo <code>psql</code> como <code>postgres</code>). Es la misma idea de <a href="m05-bases-de-datos.html#roles-grant">los roles de la base</a> en M05: cada uno con lo que necesita. El principio de mínimo privilegio, aplicado de punta a punta, vuelve en M35.</p>
+      <p>Los permisos de sudo pueden ser finos (<code>ana ALL=(postgres) /usr/bin/psql</code> deja a ana correr solo <code>psql</code> como <code>postgres</code>). Es la misma idea de <a href="m05-bases-de-datos.html#roles-grant">los roles de la base</a> en M05: cada uno con lo que necesita. El principio de mínimo privilegio, aplicado de punta a punta, vuelve en <a href="m35-seguridad-bd.html#modelo">M35</a>.</p>
 
       <p class="more-link">En la guía original: <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#limit-who-can-use-sudo">Limit Who Can Use sudo</a> y <a href="https://github.com/imthenachoman/How-To-Secure-A-Linux-Server#limit-who-can-use-su">Limit Who Can Use su</a>.</p>
 
@@ -642,7 +642,7 @@ tcp   *:8080               users:(("java",…))</code></pre>
         <li><span class="step-title">Auditar</span>Lynis, revisar sus advertencias, y guardar el resultado para comparar el mes que viene.</li>
       </ol>
 
-      <p>Lo que sigue en esta parte: mantener vivo un servidor endurecido (systemd y journald, discos, backups con pruebas de restauración y el diagnóstico de CPU, memoria, disco y red) es el tema de M34, y la base de datos, con sus roles, su bitácora y su cifrado, el de M35.</p>
+      <p>Lo que sigue en esta parte: mantener vivo un servidor endurecido (systemd y journald, discos, backups con pruebas de restauración y el diagnóstico de CPU, memoria, disco y red) es el tema de <a href="m34-sysadmin.html">M34</a>, y la base de datos, con sus roles, su bitácora y su cifrado, el de <a href="m35-seguridad-bd.html#rbac">M35</a>.</p>
 
       <h2 id="comprueba">Comprueba lo aprendido</h2>
 

@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M38. Active Directory: cómo se ataca y cómo se defiende</title>
+<meta name="description" content="Active Directory para quien lo defiende: Kerberos y NTLM por dentro, qué abusa cada ataque conocido y qué rastro deja, el modelo de niveles, los controles para endurecerlo, qué eventos vigilar y cómo recuperar un dominio.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m38">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Active Directory: cómo se ataca y cómo se defiende</h1>
+        <p class="lead">Quien controla el dominio controla todas las máquinas unidas a él. Por eso Active Directory es el objetivo número uno dentro de una red. Aquí lo aprendes como quien lo defiende: el mecanismo de cada ataque y, sobre todo, el rastro que deja y el control que lo corta.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M38</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>150 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M33, M34, M36, M10, M11</dd></div>
+          <div><dt>Estado</dt><dd data-status="m38">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Explicar qué es Active Directory y por qué el controlador de dominio es la joya de la corona.</li>
+    <li>Seguir Kerberos paso a paso y entender qué protege la clave de <code>krbtgt</code>.</li>
+    <li>Reconocer, a nivel de concepto, qué abusa cada ataque conocido y <b>qué rastro deja</b> en los logs.</li>
+    <li>Aplicar el modelo de niveles (<b>tiering</b>) y el principio de que una credencial de nivel alto no baja.</li>
+    <li>Endurecer un dominio con LAPS, Protected Users, gMSA, firma SMB y la reducción de NTLM.</li>
+    <li>Elegir qué eventos vigilar y cómo recuperar un dominio tras un compromiso.</li>
+  </ul>
+</section>
+
+<aside class="callout callout--def">
+  <p class="callout-label">Cómo se usa este módulo</p>
+  <p class="def-one">Todo aquí es <b>defensivo</b>. Cada ataque se explica como <b>concepto</b>: qué debilidad abusa, qué consigue, qué evento deja y qué control lo corta. No hay comandos de ataque, ni opciones de herramientas ofensivas, ni pasos de intrusión. Los únicos comandos son de administración, auditoría y detección. La regla "para defender hay que entender cómo atacan" se cumple explicando el <b>mecanismo</b> y su <b>rastro</b>, no el procedimiento.</p>
+</aside>
+
+<p>Cierras la Parte&nbsp;IV donde vive la identidad de casi toda empresa con Windows. En <a href="m33-hardening-linux.html">M33</a> endureciste un servidor Linux; <a href="m34-sysadmin.html">M34</a> te dio la caja de herramientas de operación; <a href="m36-criptografia.html">M36</a> te dio las primitivas (claves simétricas, hashes, firmas) que Kerberos usa; <a href="m37-nube.html">M37</a> llevó el <a href="m37-nube.html#zero-trust">zero trust</a> y el mínimo privilegio a la nube. Active Directory (AD) es el mismo problema —quién es quién y qué puede tocar— pero en el corazón de la red corporativa, y con un protagonista que, si cae, se lleva todo con él.</p>
+
+<h2 id="que-es"><span class="sec-num">38.1</span>Qué es Active Directory</h2>
+
+<p><dfn data-term="active-directory">Active Directory</dfn> es el directorio de identidades de una red Windows: guarda quién es cada usuario y cada máquina, a qué grupos pertenece y qué puede hacer. Las aplicaciones y los servidores confían en él para autenticar y autorizar. Su unidad mayor es el <b>bosque</b> (forest), que es el límite de seguridad real: dentro de un bosque, la confianza es total entre sus dominios. Un <b>dominio</b> agrupa objetos bajo un nombre (<code>corp.example.com</code>), y las <b>unidades organizativas</b> (OU) los ordenan en ramas para administrarlos.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f385t f385d">
+<title id="f385t">Cómo se organiza Active Directory</title>
+<desc id="f385d">El bosque es el límite de seguridad real. Dentro va el dominio, atendido por los controladores de dominio, que guardan y replican todo y tienen los roles FSMO. El dominio se divide en unidades organizativas (OU) que agrupan los objetos (usuarios, equipos, servidores); una directiva de grupo (GPO) se aplica sobre una OU para configurar todo lo que contiene.</desc>
+<defs><marker id="f385a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="dg-frame" d="M30 40 H740 V286 H30 Z"/>
+<text class="dg-small dg-mono" x="42" y="58" text-anchor="start">Bosque (forest) — el límite de seguridad real</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="300" y="70" width="200" height="50" rx="10"/>
+<text class="dg-label" x="400" y="92" text-anchor="middle">Dominio</text>
+<text class="dg-tiny" x="400" y="108" text-anchor="middle">corp.example.com</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="60" y="70" width="210" height="50" rx="10"/>
+<text class="dg-small" x="165" y="90" text-anchor="middle">Controlador de dominio</text>
+<text class="dg-tiny" x="165" y="106" text-anchor="middle">roles FSMO · replica todo</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="530" y="70" width="180" height="50" rx="10"/>
+<text class="dg-small" x="620" y="90" text-anchor="middle">GPO</text>
+<text class="dg-tiny" x="620" y="106" text-anchor="middle">directiva de grupo</text>
+<path class="dg-edge" d="M270 95 H300"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="60" y="170" width="170" height="46" rx="8"/>
+<text class="dg-small" x="145" y="189" text-anchor="middle">OU Servidores</text>
+<text class="dg-tiny" x="145" y="205" text-anchor="middle">objetos</text>
+<rect class="dg-box" x="70" y="234" width="150" height="34" rx="6"/>
+<text class="dg-tiny" x="145" y="255" text-anchor="middle">SRV-DB, SRV-APP</text>
+<path class="dg-edge" d="M400 120 L145 170" marker-end="url(#f385a)"/>
+<path class="dg-edge" d="M145 216 V234"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="300" y="170" width="170" height="46" rx="8"/>
+<text class="dg-small" x="385" y="189" text-anchor="middle">OU Estaciones</text>
+<text class="dg-tiny" x="385" y="205" text-anchor="middle">objetos</text>
+<rect class="dg-box" x="310" y="234" width="150" height="34" rx="6"/>
+<text class="dg-tiny" x="385" y="255" text-anchor="middle">PC-01, PC-02…</text>
+<path class="dg-edge" d="M400 120 L385 170" marker-end="url(#f385a)"/>
+<path class="dg-edge" d="M385 216 V234"/>
+<rect class="dg-layer" style="--c: var(--l-client)" x="540" y="170" width="170" height="46" rx="8"/>
+<text class="dg-small" x="625" y="189" text-anchor="middle">OU Usuarios</text>
+<text class="dg-tiny" x="625" y="205" text-anchor="middle">objetos</text>
+<rect class="dg-box" x="550" y="234" width="150" height="34" rx="6"/>
+<text class="dg-tiny" x="625" y="255" text-anchor="middle">ana, svc, admin</text>
+<path class="dg-edge" d="M400 120 L625 170" marker-end="url(#f385a)"/>
+<path class="dg-edge" d="M625 216 V234"/>
+<path class="dg-feedback" d="M620 120 L470 170" marker-end="url(#f385a)"/>
+<text class="dg-tiny" x="548" y="150" text-anchor="middle">se aplica a una OU</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 38.1.</b> El bosque contiene el dominio; el controlador de dominio lo atiende y replica; las OU agrupan los objetos y una GPO se aplica sobre una OU para configurarlos en masa.</figcaption>
+</figure>
+
+<p>El <dfn data-term="controlador-dominio">controlador de dominio</dfn> (DC) es el servidor que guarda la base de AD, autentica a todo el mundo y replica los cambios a los demás DC. Tiene los roles especiales (FSMO) y, sobre todo, guarda los secretos de todas las cuentas. Una <dfn data-term="gpo">GPO</dfn> (directiva de grupo) es una configuración que el dominio empuja a las máquinas de una OU: desde el fondo de pantalla hasta reglas de seguridad. Esa misma potencia la hace peligrosa: quien controla una GPO configura cientos de máquinas a la vez, y por eso el ransomware moderno suele desplegarse <b>desde</b> el dominio.</p>
+
+<aside class="callout callout--analogy">
+  <p class="callout-label">Analogía</p>
+  <p>El DC es a la vez el registro civil del edificio —la lista oficial de quién es cada quien— y la cerradura maestra que abre todas las puertas. Robar la cerradura maestra no es entrar a una oficina: es quedarse con el edificio entero. Por eso proteger el DC no es una tarea más; es <i>la</i> tarea.</p>
+</aside>
+
+<h2 id="kerberos"><span class="sec-num">38.2</span>Kerberos y NTLM por dentro</h2>
+
+<p><dfn data-term="kerberos">Kerberos</dfn> es el protocolo de autenticación de AD. Su idea: en vez de mandar la contraseña a cada servicio, el usuario obtiene <b>tickets</b> firmados por una autoridad central (el KDC, que vive en el DC) y los presenta. Usa las primitivas de <a href="m36-criptografia.html#simetrico">M36</a>: claves simétricas y marcas de tiempo cifradas. Tres intercambios, resumidos en la lámina.</p>
+
+<figure class="figure plate">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 348" role="img" aria-labelledby="f381t f381d">
+<title id="f381t">Kerberos paso a paso, con las marcas de dónde actúa cada ataque</title>
+<desc id="f381d">Un usuario, el controlador de dominio (que hace de KDC con el AS y el TGS, y guarda la cuenta krbtgt) y un servicio. Tres intercambios: el AS entrega un TGT cifrado con la clave de krbtgt; el TGS entrega un ticket de servicio cifrado con la clave de la cuenta de servicio; el usuario presenta ese ticket al servicio. Cada marca señala qué protege o qué debilidad abusa un ataque conocido, y qué evento se registra en el controlador de dominio.</desc>
+<defs><marker id="f381a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="60" y="24" width="120" height="44" rx="8"/>
+<text class="dg-label" x="120" y="44" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="120" y="60" text-anchor="middle">su estación</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="300" y="20" width="200" height="52" rx="10"/>
+<text class="dg-label" x="400" y="40" text-anchor="middle">Controlador de dominio</text>
+<text class="dg-tiny" x="400" y="56" text-anchor="middle">KDC: AS + TGS · cuenta krbtgt</text>
+<rect class="dg-box" x="600" y="24" width="120" height="44" rx="8"/>
+<text class="dg-label" x="660" y="44" text-anchor="middle">Servicio</text>
+<text class="dg-tiny" x="660" y="60" text-anchor="middle">app, archivo, SQL</text>
+<path class="dg-feedback" d="M120 72 V320"/>
+<path class="dg-feedback" d="M400 72 V320"/>
+<path class="dg-feedback" d="M660 72 V320"/>
+<path class="dg-edge" d="M120 112 L400 112" marker-end="url(#f381a)"/>
+<text class="dg-tiny" x="260" y="103" text-anchor="middle">AS-REQ: pruebo quién soy (hora cifrada con mi clave)</text>
+<path class="dg-edge" d="M400 152 L120 152" marker-end="url(#f381a)"/>
+<text class="dg-tiny" x="260" y="143" text-anchor="middle">AS-REP: TGT (cifrado con la clave de krbtgt)</text>
+<path class="dg-edge" d="M120 208 L400 208" marker-end="url(#f381a)"/>
+<text class="dg-tiny" x="260" y="199" text-anchor="middle">TGS-REQ: presento el TGT, pido un ticket</text>
+<path class="dg-edge" d="M400 248 L120 248" marker-end="url(#f381a)"/>
+<text class="dg-tiny" x="260" y="239" text-anchor="middle">TGS-REP: ticket de servicio (cifrado con la clave del servicio)</text>
+<path class="dg-edge" d="M120 302 L660 302" marker-end="url(#f381a)"/>
+<text class="dg-tiny" x="390" y="293" text-anchor="middle">AP-REQ: presento el ticket; el servicio no llama al DC</text>
+<text class="dg-tiny dg-mono" x="520" y="156" text-anchor="start">evento 4768</text>
+<text class="dg-tiny dg-mono" x="520" y="252" text-anchor="start">evento 4769 (RC4 = 0x17)</text>
+<text class="dg-tiny dg-mono" x="592" y="292" text-anchor="start">evento 4624</text>
+<g class="pl-pin"><circle cx="135" cy="125" r="11"/><text x="135" y="129" text-anchor="middle">1</text></g>
+<g class="pl-pin"><circle cx="135" cy="165" r="11"/><text x="135" y="169" text-anchor="middle">2</text></g>
+<g class="pl-pin"><circle cx="486" cy="46" r="11"/><text x="486" y="50" text-anchor="middle">3</text></g>
+<g class="pl-pin"><circle cx="135" cy="261" r="11"/><text x="135" y="265" text-anchor="middle">4</text></g>
+<g class="pl-pin"><circle cx="300" cy="315" r="11"/><text x="300" y="319" text-anchor="middle">5</text></g>
+</svg>
+
+  </div>
+  <figcaption><b>Lámina 38.A.</b> Kerberos de principio a fin, con las marcas de qué protege cada paso, qué debilidad abusa cada ataque y qué evento se registra.</figcaption>
+</figure>
+<ol class="plate-key">
+  <li><b>Preautenticación</b><span>El usuario cifra la hora con su clave para probar quién es antes de recibir el <dfn data-term="tgt">TGT</dfn>. Si una cuenta la tiene desactivada, el AS responde con material que se puede atacar fuera de línea (AS-REP roasting). Queda el evento 4768. <a href="#ataques">38.3</a></span></li>
+  <li><b>TGT cifrado con la clave de <code>krbtgt</code></b><span>El usuario no puede leer su TGT, solo presentarlo. Quien tenga la clave de <code>krbtgt</code> fabrica TGT válidos a voluntad (Golden Ticket). <a href="#ataques">38.3</a></span></li>
+  <li><b><code>krbtgt</code>, la cuenta clave</b><span>Su clave firma <b>todos</b> los TGT del dominio. Es el secreto que sostiene Kerberos; por eso el DC es tier&nbsp;0. <a href="#tiering">38.4</a></span></li>
+  <li><b>Ticket de servicio cifrado con la clave del servicio</b><span>Cualquier usuario del dominio puede pedir uno. Si la contraseña de esa cuenta de servicio es débil y el ticket va en RC4, se adivina fuera de línea (Kerberoasting). El evento 4769 con tipo de cifrado RC4 (<code>0x17</code>) es la señal. <a href="#ataques">38.3</a></span></li>
+  <li><b>AP-REQ: el servicio valida solo</b><span>El usuario presenta el ticket al servicio, que lo verifica sin volver a llamar al DC. El inicio de sesión queda en el evento 4624. <a href="#detectar">38.6</a></span></li>
+</ol>
+
+<p>La cuenta <dfn data-term="krbtgt"><code>krbtgt</code></dfn> merece su propia línea: es una cuenta de servicio del dominio cuya clave firma cada TGT. Nadie inicia sesión con ella, pero si su clave se filtra, el atacante fabrica tickets indistinguibles de los legítimos. De ahí dos consecuencias que verás abajo: el DC es tier&nbsp;0, y tras un compromiso se rota <code>krbtgt</code> <b>dos veces</b>.</p>
+
+<p>Junto a Kerberos sobrevive <dfn data-term="ntlm">NTLM</dfn>, el protocolo heredado. Funciona por desafío-respuesta con el hash de la contraseña, y tiene dos problemas de diseño: el hash vale tanto como la contraseña (si lo robas, te autenticas sin conocerla) y <b>no autentica al servidor</b>, solo al cliente. <span class="badge badge--doc">Documentado</span> Microsoft está retirando NTLM: eliminó NTLMv1 en Windows&nbsp;11 24H2 y Windows Server&nbsp;2025, añadió una opción para bloquear NTLM en conexiones SMB salientes y anunció que lo desactivará por defecto en una versión futura. Mientras tanto convive, y es la base de dos ataques de abajo (robo de hash y relay).</p>
+
+<h2 id="ataques"><span class="sec-num">38.3</span>Cómo atacan: concepto, rastro y defensa</h2>
+
+<p>Aquí está el corazón defensivo del módulo. Cada fila nombra una técnica conocida, dice <b>qué debilidad abusa</b> (el concepto, no el procedimiento), <b>qué rastro deja</b> en los logs y <b>qué la corta</b>. Los números de evento son los de Windows; los verás en 38.6.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Técnica</th><th>Qué abusa (concepto)</th><th>Qué rastro deja</th><th>Qué lo corta</th></tr></thead>
+    <tbody>
+      <tr><td><b>Password spraying</b></td><td>Pocas contraseñas comunes contra muchas cuentas, para no bloquear ninguna</td><td>4625 / 4771 repartidos entre muchas cuentas</td><td><dfn data-term="mfa">MFA</dfn>, lista de contraseñas prohibidas, bloqueo inteligente</td></tr>
+      <tr><td><b>Kerberoasting</b></td><td>Cualquier usuario pide un ticket de servicio; si la contraseña del servicio es débil, se adivina fuera de línea</td><td>4769 en ráfaga con cifrado RC4 (<code>0x17</code>)</td><td><dfn data-term="gmsa">gMSA</dfn>, forzar AES, contraseñas largas</td></tr>
+      <tr><td><b>AS-REP roasting</b></td><td>Cuentas con la preautenticación de Kerberos desactivada</td><td>4768 sin preautenticación</td><td>No desactivar la preautenticación; auditar ese atributo</td></tr>
+      <tr><td><b>Robo de credenciales</b> (pass-the-hash / ticket)</td><td><dfn data-term="pass-the-hash">NTLM acepta el hash</dfn> en vez de la contraseña; un admin que entra a una máquina comprometida deja material en memoria</td><td>4624 tipo&nbsp;3/9; inicios con la misma credencial en muchos equipos</td><td><dfn data-term="laps">LAPS</dfn>, <dfn data-term="protected-users">Protected Users</dfn>, Credential Guard, tiering</td></tr>
+      <tr><td><b>Relay de NTLM</b></td><td><dfn data-term="ntlm-relay">Reenviar una autenticación NTLM</dfn> a otro servidor que no verifica el origen</td><td>Inicios desde una cuenta en un servidor inesperado</td><td>Firma SMB y LDAP, channel binding, reducir NTLM</td></tr>
+      <tr><td><b>Abuso de ACL</b></td><td><dfn data-term="ruta-ataque">Permisos delegados de más</dfn> encadenados (un grupo que administra a otro) hasta Domain Admins</td><td>5136 (cambios en objetos), altas en grupos (4728/4732)</td><td>Auditar rutas (BloodHound, PingCastle), AdminSDHolder, limpiar delegaciones</td></tr>
+      <tr><td><b>Delegación sin restricciones</b></td><td>Un servidor configurado para guardar los TGT de quien se conecta a él</td><td>Configuración del atributo; accesos del servidor en nombre de otros</td><td>Delegación restringida, "cuenta sensible, no delegar", Protected Users</td></tr>
+      <tr><td><b>AD CS mal configurado</b></td><td>Plantillas de certificado que dejan pedir un certificado a nombre de otro (concepto de "Certified Pre-Owned")</td><td>Emisiones de certificado anómalas en la CA</td><td>Auditar plantillas, exigir aprobación del administrador, parchear</td></tr>
+      <tr><td><b>DCSync</b></td><td><dfn data-term="dcsync">Una cuenta con permiso de replicación</dfn> le pide al DC los secretos de todos, haciéndose pasar por otro DC</td><td>4662 con los GUID de replicación <b>desde una máquina que no es DC</b></td><td>Auditar quién tiene esos permisos de replicación</td></tr>
+      <tr><td><b>Golden / Silver Ticket</b></td><td><dfn data-term="golden-ticket">Con la clave de <code>krbtgt</code></dfn> (o de un servicio) se fabrican tickets válidos sin pasar por el KDC</td><td>Poco rastro directo; TGT con tiempos o cifrados anómalos</td><td>DC como tier&nbsp;0; rotar <code>krbtgt</code> dos veces tras un compromiso</td></tr>
+      <tr><td><b>GPP con contraseñas</b> (histórico)</td><td>Contraseñas guardadas en <code>SYSVOL</code> cifradas con una clave pública conocida (MS14-025)</td><td>Presencia de esos archivos en <code>SYSVOL</code></td><td>Buscarlas y borrarlas; los secretos no van en la configuración</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Varias de esas filas terminan en el mismo sitio: una <b>ruta de ataque</b>. Una ruta no es una hazaña técnica, sino una cadena de relaciones de confianza —esta cuenta puede sobre esta otra, que administra este servidor, donde entró un admin— que lleva de un usuario cualquiera a Domain Admins. La defensa es verla antes que nadie y cortar cualquier eslabón.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f383t f383d">
+<title id="f383t">Una ruta de confianzas, y el control que corta cada paso</title>
+<desc id="f383d">Seis pasos encadenados: desde un usuario que cae en un phishing hasta el grupo Domain Admins (tier 0). Entre cada par, en el pasillo, el control defensivo que elimina ese salto. Si cualquiera de los controles está puesto, la cadena se rompe antes de llegar al final.</desc>
+<defs><marker id="f383a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-client)" x="30" y="56" width="165" height="58" rx="8"/>
+<text class="dg-label" x="112.5" y="83" text-anchor="middle">Usuario</text>
+<text class="dg-tiny" x="112.5" y="100" text-anchor="middle">cae en un phishing</text>
+<rect class="dg-layer" style="--c: var(--l-client)" x="300" y="56" width="165" height="58" rx="8"/>
+<text class="dg-label" x="382.5" y="83" text-anchor="middle">Estación de trabajo</text>
+<text class="dg-tiny" x="382.5" y="100" text-anchor="middle">el atacante entra</text>
+<rect class="dg-warnbox" x="560" y="56" width="165" height="58" rx="8"/>
+<text class="dg-label" x="642.5" y="83" text-anchor="middle">Credencial de admin</text>
+<text class="dg-tiny" x="642.5" y="100" text-anchor="middle">quedó en memoria</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="560" y="196" width="165" height="58" rx="8"/>
+<text class="dg-label" x="642.5" y="223" text-anchor="middle">Servidor</text>
+<text class="dg-tiny" x="642.5" y="240" text-anchor="middle">donde ese admin entró</text>
+<rect class="dg-warnbox" x="300" y="196" width="165" height="58" rx="8"/>
+<text class="dg-label" x="382.5" y="223" text-anchor="middle">Grupo con permiso de más</text>
+<text class="dg-tiny" x="382.5" y="240" text-anchor="middle">ACL delegada de más</text>
+<rect class="dg-bad" x="30" y="196" width="165" height="58" rx="8"/>
+<text class="dg-label" x="112.5" y="223" text-anchor="middle">Domain Admins</text>
+<text class="dg-tiny" x="112.5" y="240" text-anchor="middle">tier 0: control total</text>
+<path class="dg-edge" d="M195 85 L300 85" marker-end="url(#f383a)"/>
+<text class="dg-tiny" x="247" y="74" text-anchor="middle">corta</text>
+<text class="dg-tiny" x="247" y="88" text-anchor="middle">MFA</text>
+<path class="dg-edge" d="M465 85 L560 85" marker-end="url(#f383a)"/>
+<text class="dg-tiny" x="512" y="74" text-anchor="middle">corta</text>
+<text class="dg-tiny" x="512" y="88" text-anchor="middle">Cred. Guard</text>
+<path class="dg-edge" d="M642 114 L642 196" marker-end="url(#f383a)"/>
+<text class="dg-tiny" x="652" y="160" text-anchor="start">corta: LAPS</text>
+<path class="dg-edge" d="M560 225 L465 225" marker-end="url(#f383a)"/>
+<text class="dg-tiny" x="512" y="214" text-anchor="middle">corta</text>
+<text class="dg-tiny" x="512" y="228" text-anchor="middle">limpiar ACL</text>
+<path class="dg-edge" d="M300 225 L195 225" marker-end="url(#f383a)"/>
+<text class="dg-tiny" x="247" y="214" text-anchor="middle">corta</text>
+<text class="dg-tiny" x="247" y="228" text-anchor="middle">mín. privilegio</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 38.3.</b> Una ruta de confianzas hasta tier&nbsp;0 y, en cada pasillo, el control que la elimina. Como la cadena necesita todos sus eslabones, cortar uno solo ya la rompe.</figcaption>
+</figure>
+
+<p>En el widget, activa controles y mira cuántas rutas quedan. Verás la lección central: ningún control solo cierra todo, pero una combinación bien elegida deja el dominio sin caminos a tier&nbsp;0.</p>
+
+<div data-sim="adpaths"></div>
+
+<h2 id="tiering"><span class="sec-num">38.4</span>El modelo de niveles (tiering)</h2>
+
+<p>La defensa de fondo contra las rutas de ataque es estructural: <dfn data-term="tiering">tiering</dfn>, el modelo de niveles del Enterprise Access Model de Microsoft. Se clasifican los activos por lo que controlan y se impone una regla simple: <b>una credencial de un nivel alto nunca se expone en un nivel más bajo</b>.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 290" role="img" aria-labelledby="f382t f382d">
+<title id="f382t">El modelo de niveles: una credencial de nivel alto no baja</title>
+<desc id="f382d">Tres franjas: tier 0 (plano de control: controlador de dominio, AD CS, Entra Connect, backups del DC), tier 1 (servidores y aplicaciones) y tier 2 (estaciones de trabajo y usuarios). A la izquierda, lo permitido: cada nivel administra el de abajo sin iniciar sesión en él. A la derecha, lo prohibido, marcado con una cruz: usar una cuenta de tier 0 en una estación de tier 2 expone su credencial.</desc>
+<defs><marker id="f382a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect x="180" y="40" width="420" height="64" rx="8" fill="color-mix(in srgb, var(--warn) 16%, var(--bg))" stroke="var(--warn)" stroke-width="1.5"/>
+<text class="dg-label" x="390" y="68" text-anchor="middle">Tier 0 — plano de control</text>
+<text class="dg-tiny" x="390" y="87" text-anchor="middle">DC, AD CS, Entra Connect, backups del DC</text>
+<rect x="180" y="120" width="420" height="64" rx="8" fill="color-mix(in srgb, var(--l-service) 20%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="390" y="148" text-anchor="middle">Tier 1 — servidores y aplicaciones</text>
+<text class="dg-tiny" x="390" y="167" text-anchor="middle">bases de datos, servidores de negocio</text>
+<rect x="180" y="200" width="420" height="64" rx="8" fill="color-mix(in srgb, var(--l-client) 20%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-label" x="390" y="228" text-anchor="middle">Tier 2 — estaciones y usuarios</text>
+<text class="dg-tiny" x="390" y="247" text-anchor="middle">portátiles, escritorios, correo</text>
+<text class="dg-group" x="108" y="36" text-anchor="middle">Permitido</text>
+<path class="dg-edge" d="M108 106 L108 120" marker-end="url(#f382a)"/>
+<path class="dg-edge" d="M108 186 L108 200" marker-end="url(#f382a)"/>
+<text class="dg-tiny" x="108" y="152" text-anchor="middle">administra</text>
+<text class="dg-tiny" x="108" y="166" text-anchor="middle">sin iniciar</text>
+<text class="dg-tiny" x="108" y="180" text-anchor="middle">sesión abajo</text>
+<text class="dg-group" x="672" y="36" text-anchor="middle">Prohibido</text>
+<path class="dg-edge" d="M710 106 L710 232" style="stroke:var(--fail);stroke-width:2;stroke-dasharray:5 4"/>
+<path class="dg-edge" d="M700 158 L720 178" style="stroke:var(--fail);stroke-width:2.5"/>
+<path class="dg-edge" d="M720 158 L700 178" style="stroke:var(--fail);stroke-width:2.5"/>
+<text class="dg-tiny" x="658" y="150" text-anchor="end">cuenta de</text>
+<text class="dg-tiny" x="658" y="164" text-anchor="end">tier 0 en una</text>
+<text class="dg-tiny" x="658" y="178" text-anchor="end">estación</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 38.4.</b> Tier&nbsp;0 (el plano de control: DC, AD CS, Entra Connect, backups del DC), tier&nbsp;1 (servidores) y tier&nbsp;2 (estaciones). Se administra de arriba hacia abajo, pero una cuenta de tier&nbsp;0 jamás inicia sesión en una máquina de tier inferior.</figcaption>
+</figure>
+
+<p>¿Por qué importa tanto? Porque casi todo ataque de 38.3 depende de encontrar una credencial potente en una máquina poco protegida. Si un Domain Admin inicia sesión en la estación de un usuario para "ayudarlo", su credencial queda ahí y la cadena de la figura 38.3 se vuelve posible. El tiering lo prohíbe de raíz. Se apoya en cuentas de administración separadas de las de uso diario y en estaciones de acceso privilegiado (<dfn data-term="paw">PAW</dfn>): equipos endurecidos y dedicados desde los que se administra tier&nbsp;0, sin correo ni navegación. Es el <a href="m37-nube.html#zero-trust">zero trust</a> de M37 aplicado a la identidad interna: la confianza no viene de estar dentro de la red, sino de la cuenta correcta en la máquina correcta.</p>
+
+<h2 id="endurecer"><span class="sec-num">38.5</span>Endurecer el dominio</h2>
+
+<p>Los controles concretos, como checklist. Cada uno con su "si no lo haces" y el comando o la GPO <b>de administración</b> para verificarlo.</p>
+
+<ul>
+  <li><b>LAPS</b> (<span class="badge badge--doc">Documentado</span> Windows LAPS, integrado en Windows). Pone en cada máquina una contraseña de administrador local <b>única</b> y rotada, guardada en AD. Si no lo haces, una sola contraseña local compartida convierte un equipo comprometido en acceso a todos. Verificar: <code>Get-LapsADPassword</code>.</li>
+  <li><b>Protected Users.</b> Un grupo cuyos miembros no usan NTLM ni cifrados débiles, no se pueden delegar y reciben TGT de vida corta. <span class="badge badge--doc">Documentado</span> es la jaula para las cuentas privilegiadas. Si no lo haces, esas cuentas siguen dejando material robable en memoria.</li>
+  <li><b>gMSA</b> para servicios. Cuentas de servicio administradas cuya contraseña la gestiona y rota AD, larga y aleatoria. Neutraliza el Kerberoasting (ya no hay contraseña débil que adivinar). Si no lo haces, cada servicio con contraseña humana es un candidato.</li>
+  <li><b>AES, no RC4.</b> Forzar AES en Kerberos quita la señal y la debilidad que explota el Kerberoasting clásico (<a href="m36-criptografia.html#simetrico">RC4 es el cifrado viejo de M36</a>).</li>
+  <li><b>Firma SMB y LDAP, channel binding.</b> <span class="badge badge--doc">Documentado</span> desde Windows&nbsp;11 24H2 y Windows Server&nbsp;2025, la firma SMB es obligatoria por defecto en todas las conexiones (antes solo para <code>SYSVOL</code>, <code>NETLOGON</code> y los clientes de los DC). Corta el relay de NTLM: un mensaje reenviado no lleva la firma correcta.</li>
+  <li><b>Reducir y auditar NTLM</b>, con el camino para desactivarlo donde ya no haga falta. Menos NTLM, menos robo de hash y menos relay.</li>
+  <li><b>Credential Guard.</b> Aísla los secretos en memoria con virtualización, de modo que un proceso comprometido no los lea.</li>
+  <li><b>Tier&nbsp;0 sin cuentas de servicio humanas</b>, Papelera de reciclaje de AD activada, y una GPO de <b>auditoría avanzada</b> para que existan los eventos de 38.6.</li>
+  <li><b>MFA</b> para todo acceso remoto y privilegiado, y política de contraseñas con lista de prohibidas.</li>
+</ul>
+
+<h2 id="detectar"><span class="sec-num">38.6</span>Qué vigilar: los eventos</h2>
+
+<p>No puedes detectar lo que no registras. La <a href="m33-hardening-linux.html#auditoria">auditoría de M33</a> tiene su equivalente en Windows: la política de auditoría avanzada, que hay que activar para que estos eventos existan. Luego se vigilan los que delatan las técnicas de 38.3.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 236" role="img" aria-labelledby="f384t f384d">
+<title id="f384t">La huella de una intrusión en los logs, en orden</title>
+<desc id="f384d">Una línea de tiempo con los eventos que deja una intrusión típica. Los de arriba, marcados como alerta, piden una respuesta inmediata. El de abajo, marcado como contexto, no dispara nada solo, pero sirve en la investigación posterior.</desc>
+<defs><marker id="f384a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<path class="dg-edge" d="M50 128 H706"/>
+<path class="dg-edge" d="M690 128 L718 128" marker-end="url(#f384a)"/>
+<text class="dg-tiny" x="715" y="120" text-anchor="end">tiempo</text>
+<circle cx="95" cy="128" r="7" fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="95" y="82" text-anchor="middle">4625/4771</text>
+<text class="dg-tiny" x="95" y="96" text-anchor="middle">spraying</text>
+<text class="dg-tiny" x="95" y="110" text-anchor="middle">alerta</text>
+<circle cx="205" cy="128" r="7" fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="205" y="82" text-anchor="middle">4768</text>
+<text class="dg-tiny" x="205" y="96" text-anchor="middle">AS-REP roast.</text>
+<text class="dg-tiny" x="205" y="110" text-anchor="middle">alerta</text>
+<circle cx="320" cy="128" r="7" fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="320" y="82" text-anchor="middle">4769 RC4</text>
+<text class="dg-tiny" x="320" y="96" text-anchor="middle">kerberoasting</text>
+<text class="dg-tiny" x="320" y="110" text-anchor="middle">alerta</text>
+<circle cx="435" cy="128" r="7" fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="435" y="82" text-anchor="middle">4662</text>
+<text class="dg-tiny" x="435" y="96" text-anchor="middle">DCSync</text>
+<text class="dg-tiny" x="435" y="110" text-anchor="middle">alerta</text>
+<circle cx="548" cy="128" r="7" fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="548" y="82" text-anchor="middle">4728</text>
+<text class="dg-tiny" x="548" y="96" text-anchor="middle">alta a DA</text>
+<text class="dg-tiny" x="548" y="110" text-anchor="middle">alerta</text>
+<circle cx="655" cy="128" r="7" fill="var(--label-2)" stroke="var(--bg)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="655" y="160" text-anchor="middle">4624</text>
+<text class="dg-tiny" x="655" y="174" text-anchor="middle">uso del acceso</text>
+<text class="dg-tiny" x="655" y="188" text-anchor="middle">contexto</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 38.6.</b> La huella que deja una intrusión, en orden. Los de arriba piden alerta inmediata; el de abajo no dispara nada solo, pero da contexto en la investigación.</figcaption>
+</figure>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Evento</th><th>Qué es</th><th>Por qué importa</th></tr></thead>
+    <tbody>
+      <tr><td class="r"><code>4624 / 4625</code></td><td>Inicio de sesión correcto / fallido (con su tipo)</td><td>El tipo distingue interactivo, en red o con credencial en caché</td></tr>
+      <tr><td class="r"><code>4768 / 4769 / 4771</code></td><td>TGT emitido / ticket de servicio / preautenticación fallida</td><td>El tipo de cifrado en 4769 (RC4) delata Kerberoasting; 4771 en masa, spraying</td></tr>
+      <tr><td class="r"><code>4662</code></td><td>Acceso a un objeto de AD</td><td>Con los GUID de replicación y desde una no-DC, señal de DCSync</td></tr>
+      <tr><td class="r"><code>4672</code></td><td>Inicio de sesión con privilegios especiales</td><td>Uso de cuentas privilegiadas; vigílalo fuera de las PAW</td></tr>
+      <tr><td class="r"><code>4720 / 4728 / 4732 / 4756</code></td><td>Alta de cuenta / altas en grupos privilegiados</td><td>Una cuenta nueva o un alta en Domain Admins fuera de un cambio aprobado es una alarma</td></tr>
+      <tr><td class="r"><code>5136</code></td><td>Cambio en un objeto del directorio</td><td>Modificar una ACL o una GPO: el paso silencioso de una ruta de ataque</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Dos ideas que vienen de <a href="m11-observabilidad.html#incidentes">M11</a>: se alerta por <b>síntoma</b> (una ráfaga de 4769 RC4, un alta inesperada en Domain Admins), no por cada línea de log; y se prepara el <a href="m34-sysadmin.html#runbooks">runbook</a> antes de necesitarlo. Una técnica barata y potente son las cuentas <dfn data-term="honeytoken">señuelo</dfn> (honeytokens): una cuenta que parece jugosa (un falso admin con un SPN) pero que nadie usa; cualquier intento de pedir su ticket es, por definición, malicioso y dispara una alerta limpia. Para dominios grandes, Microsoft Defender for Identity ofrece esta detección gestionada.</p>
+
+<h2 id="hibrido"><span class="sec-num">38.7</span>AD híbrido con Entra ID</h2>
+
+<p>Casi nadie tiene hoy un AD aislado: lo sincroniza con <b>Entra ID</b> (el directorio en la nube de Microsoft) para dar acceso a servicios web. El puente es <b>Entra Connect</b>, y aquí está la trampa: ese servidor de sincronización tiene credenciales potentes en los dos mundos, así que <b>es tier&nbsp;0</b>, aunque no lo parezca. Un compromiso de un lado puede alcanzar el otro. Las defensas combinan lo de M38 con lo de <a href="m37-nube.html#iam">M37</a>: acceso condicional, MFA obligatoria para lo privilegiado, y tratar Entra Connect con el mismo celo que un DC.</p>
+
+<h2 id="recuperar"><span class="sec-num">38.8</span>Cuando el dominio cae: recuperación</h2>
+
+<p>Si el dominio se compromete de verdad, la <a href="m37-nube.html#incidentes">respuesta a incidentes de M37</a> tiene pasos propios de AD: aislar, <b>rotar <code>krbtgt</code> dos veces</b> (esperando la replicación entre una rotación y la otra, para invalidar los Golden Tickets sin romper el dominio), restablecer las cuentas privilegiadas, y revisar GPO y tareas programadas en busca de persistencia. Lo que hace posible rehacer el dominio son los <b>backups de estado del sistema fuera de línea</b>: copias que un atacante dentro de la red no puede borrar, y la guía de recuperación del bosque de Microsoft.</p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p><span class="badge badge--doc">Documentado</span> en 2017, el gusano NotPetya cifró casi todos los equipos de Maersk, incluidos sus controladores de dominio. Pudieron reconstruir AD gracias a un único DC que, por un corte de luz en una oficina de Ghana, estaba apagado y desconectado cuando el gusano pasó. La lección no es la suerte: es que un backup <b>fuera de línea</b> del plano de control fue, literalmente, lo que salvó a la empresa. Cierra con el <a href="m11-observabilidad.html#incidentes">postmortem sin culpables de M11</a>.</p>
+</aside>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m38"></div>
+
+<div data-exercise="m38-ad"></div>
+
+<div data-checkpoint="m38"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m38.data.js"></script>
+<script src="../assets/js/data/exercises/m38.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-ad.js"></script>
+</body>
+</html>

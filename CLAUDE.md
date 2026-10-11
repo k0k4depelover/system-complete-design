@@ -9,7 +9,7 @@ Curso web en español de diseño de sistemas reales:
 - **Parte I:** fundamentos de sistemas distribuidos (M00–M11 y el Checkpoint A).
 - **Parte II:** de un LLM a ChatGPT (M12–M26, el mapa gigante y el Checkpoint B).
 - **Parte III:** casos de estudio: Stripe (M27), Cloudflare (M28) y WhatsApp (M29). La Fase 2 suma Twitter (M30) y Google Docs (M31).
-- **Parte IV:** ciberseguridad (M32–M38 y el Checkpoint E): firewalls, hardening de Linux, operación de SysAdmin, seguridad en bases de datos, criptografía, nube segura y Active Directory. Publicados M32 (firewalls) y M33 (hardening de Linux); el resto sigue en `soon` y se escribe uno por pedido. Cuenta para el progreso. Plan detallado en `PLAN_SEGURIDAD.md`. Currículo en `PLAN.md`.
+- **Parte IV:** ciberseguridad (M32–M38 y el Checkpoint E): firewalls, hardening de Linux, operación de SysAdmin, seguridad en bases de datos, criptografía, nube segura y Active Directory. Publicados M32 (firewalls), M33 (hardening de Linux), M34 (operación de SysAdmin), M35 (seguridad en bases de datos), M36 (criptografía desde cero), M37 (arquitecturas seguras en la nube) y M38 (Active Directory, cómo se ataca y cómo se defiende), más el Checkpoint E, que cierra la parte. La Parte IV está completa. Cuenta para el progreso. Plan detallado en `PLAN_SEGURIDAD.md`. Currículo en `PLAN.md`.
 - **Aplicación de conocimiento** (`proyectos.html` y `proyectos/`): tutoriales en Java y Spring Boot para construir lo de cada módulo, y al final de la página los tutoriales de AI Engineering, en Python (IA01, IA02…). Cada guía es una página en `proyectos/`, generada con `tools/mkguide.py`. Las reglas están en "De las guías de proyectos" y "De los tutoriales de AI Engineering".
 
 Es un sitio estático de HTML, CSS y JS vanilla, sin build ni dependencias. Funciona con doble clic (`file://`) y se publica en GitHub Pages con cada push a `main` (`.github/workflows/static.yml`).
@@ -349,7 +349,7 @@ SD.defineExercise('m06-planificador', {
 
 - Los scripts: `data/exercises/<id>.data.js` después de los datos del quiz, y `core/exercise.js` después de `core/quiz.js` (usa `SD.quizKit`). Con `mkpage.py`, alcanza con `"exercises": true` en el META; en una página existente se agregan a mano (así está en M18).
 - El glosario no enlaza dentro de `[data-exercise]`: los términos se explican en el texto del módulo.
-- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21, cinco en M22 (incidentes), uno en M23, uno en M24, uno en M25, uno en M12.1 (diagnóstico de una réplica lenta) y uno en M33.
+- Ejercicios publicados: uno en M02, siete en M06.1 (los datos siguen en `exercises/m06.data.js`), uno en M18, uno en M19, uno en M21, cinco en M22 (incidentes), uno en M23, uno en M24, uno en M25, uno en M12.1 (diagnóstico de una réplica lenta), uno en M33, uno en M34 (diagnosticar un servidor lento), uno en M36 (criptografía de una API con datos sensibles), uno en M37 (endurecer la arquitectura de un SaaS en la nube) y uno en M38 (auditar un dominio y cerrar sus rutas a tier 0).
 
 ### Quiz y checkpoint
 
@@ -439,6 +439,11 @@ Categorías (`SD.catNames` en `glossary.js`): `metodo`, `redes`, `datos`, `distr
 | `data-calc="snowflake"`, `data-calc="fanout"` | `widgets/sim-feed.js` | Id Snowflake bit por bit, y escrituras y lecturas del fan-out en escritura, en lectura e híbrido (M30) |
 | `data-sim="firewall"` | `widgets/sim-firewall.js` | Un paquete contra la cadena de nftables: cuatro juegos de reglas (con estado, sin conntrack, una regla de más antes, salida sin filtrar) por nueve paquetes, con la primera coincidencia, las reglas que no se leen y la política (M32) |
 | `data-sim="hardening"` | `widgets/sim-harden.js` | Checklist de endurecimiento: 16 medidas con pesos didácticos, tres puntos de partida, un índice de 0 a 100 y lo que puede hacer el atacante por cada medida que falta (M33) |
+| `data-calc="hash"`, `"hmac"`, `"dh"`, `"kdfcost"`, `data-sim="nonce"`, `"sign"` | `widgets/sim-crypto.js` | Avalancha de SHA-256, HMAC contra la construcción casera, Diffie-Hellman con números elegibles, el coste por intento de cada forma de guardar contraseñas, por qué el nonce no se repite (flujo de juguete) y firmar/verificar con un RSA de juguete; usa `SD.crypto` de `sim-signurl.js` (M36) |
+| `data-sim="triage"` | `widgets/sim-triage.js` | Lectura guiada de métricas de un servidor lento: cuatro casos (I/O, CPU, memoria/OOM, red) con salidas reales de `top`, `vmstat`, `iostat` y `ss`; el lector elige el cuello de botella y el widget explica qué número lo delata (M34) |
+| `data-sim="rbac"` | `widgets/sim-rbac.js` | Un sujeto, una acción y un recurso evaluados en dos pasos como PostgreSQL: RBAC (el rol) y luego ABAC/RLS (la fila). Solo permite si los dos permiten; el dueño se salta la RLS (M35) |
+| `data-sim="iam"` | `widgets/sim-cloud.js` | Evaluador de políticas de IAM: una acción, un recurso y una política (mínimo privilegio, comodín `*` o amplia con deny explícito); resuelve con las reglas de IAM —deny por defecto, un allow debe cubrir acción y recurso, el deny explícito gana— y explica la decisión (M37) |
+| `data-sim="adpaths"` | `widgets/sim-ad.js` | Rutas de confianza hasta Domain Admins (tier 0) en Active Directory: el lector activa controles defensivos (MFA, AES/gMSA, Credential Guard, LAPS, tiering, limpiar ACL, mínimo privilegio) y ve qué aristas caen y cuántas rutas quedan; ningún control solo las cierra todas; modelo puramente defensivo (M38) |
 | `data-calc="imgtokens"`, `"imgfleet"`, `data-sim="imgjob"` | `widgets/sim-vision.js` | Tokens de una imagen por proveedor y modo con la grilla dibujada, GPUs y espera de un servicio de generación (Erlang C), y el viaje de un job en cuatro escenas; `imgjob` necesita `sim-dbflow.js`; lógica en `SD.visionCore` (M23) |
 | `data-calc="voicebudget"`, `data-sim="bargein"`, `"jitterbuf"` | `widgets/sim-voice.js` | Presupuesto de latencia voz a voz en cascada ingenua, en streaming y speech-to-speech; una interrupción con el truncado de lo que no sonó, en cuatro casos; y paquetes con jitter y pérdida contra el jitter buffer, fijo o adaptativo, con FEC; lógica en `SD.voiceCore` (M24) |
 | `data-sim="agentloop"`, `"durable"`, `data-calc="agentcost"`, `"trifecta"` | `widgets/sim-agent.js` | El bucle de un agente con presupuesto en cuatro escenarios (normal, bucle, herramienta caída, resultado gigante) y cinco defensas; costo de una tarea y de la flota con caché y la ley de Little; la trifecta con herramientas, defensas y ataques por día; y la ejecución durable en tres escenas; `durable` necesita `sim-dbflow.js`; lógica en `SD.agentCore` (M25) |
@@ -544,6 +549,10 @@ ia-system-desing
 │       │   │       m121.data.js
 │       │   │       m25.data.js
 │       │   │       m33.data.js
+│       │   │       m34.data.js
+│       │   │       m36.data.js
+│       │   │       m37.data.js
+│       │   │       m38.data.js
 │       │   │
 │       │   ├───maps
 │       │   │       chatgpt.data.js
@@ -575,6 +584,7 @@ ia-system-desing
 │       │   └───quizzes
 │       │           cpa.data.js
 │       │           cpb.data.js
+│       │           cpe.data.js
 │       │           m00.data.js
 │       │           m01.data.js
 │       │           m02.data.js
@@ -610,6 +620,11 @@ ia-system-desing
 │       │           m30.data.js
 │       │           m32.data.js
 │       │           m33.data.js
+│       │           m34.data.js
+│       │           m35.data.js
+│       │           m36.data.js
+│       │           m37.data.js
+│       │           m38.data.js
 │       │
 │       ├───map
 │       │       flow-sim.js
@@ -623,10 +638,12 @@ ia-system-desing
 │       │
 │       └───widgets
 │               calculators.js
+│               sim-ad.js
 │               sim-agent.js
 │               sim-api.js
 │               sim-cache.js
 │               sim-cachepat.js
+│               sim-cloud.js
 │               sim-collab.js
 │               sim-consist.js
 │               sim-context.js
@@ -635,6 +652,7 @@ ia-system-desing
 │               sim-dtx.js
 │               sim-engine.js
 │               sim-feed.js
+│               sim-crypto.js
 │               sim-firewall.js
 │               sim-harden.js
 │               sim-gpu.js
@@ -651,6 +669,7 @@ ia-system-desing
 │               sim-obs.js
 │               sim-quant.js
 │               sim-quota.js
+│               sim-rbac.js
 │               sim-raft.js
 │               sim-resil.js
 │               sim-router.js
@@ -660,6 +679,7 @@ ia-system-desing
 │               sim-traceprop.js
 │               sim-fwd.js
 │               sim-train.js
+│               sim-triage.js
 │               sim-vision.js
 │               sim-voice.js
 │
@@ -669,6 +689,7 @@ ia-system-desing
 ├───modules
 │       checkpoint-a.html
 │       checkpoint-b.html
+│       checkpoint-e.html
 │       m00-metodo.html
 │       m01-viaje-request.html
 │       m02-apis.html
@@ -704,6 +725,11 @@ ia-system-desing
 │       m30-twitter.html
 │       m32-firewalls.html
 │       m33-hardening-linux.html
+│       m34-sysadmin.html
+│       m35-seguridad-bd.html
+│       m36-criptografia.html
+│       m37-nube.html
+│       m38-active-directory.html
 │
 ├───proyectos
 │       a00-laboratorio.html

@@ -196,7 +196,7 @@ En cada checkpoint **me detengo** para que abras el sitio en el navegador y lo r
 | **CP8** | **Cloudflare** (módulo + mapa) + **Checkpoint C** | Los 6 escenarios |
 | **CP9** | Pulido: búsqueda global, glosario completo, móvil, accesibilidad, revisión técnica cruzada | Lighthouse ≥ 90 en accesibilidad; el sitio funciona en el móvil |
 | **CP10–12** | Fase 2: Twitter, Google Docs + Checkpoint D (WhatsApp ya está como M29) | — |
-| **CP13** | Parte IV: Ciberseguridad (M32–M38 + Checkpoint E). Publicados M32 y M33; el resto se escribe uno por pedido | Cada módulo: 0 errores de consola, 0 términos faltantes, quiz aprobado, sin desborde a 390 px |
+| **CP13** | Parte IV: Ciberseguridad (M32–M38 + Checkpoint E). Publicados M32–M38 y el Checkpoint E; la Parte IV está completa | Cada módulo: 0 errores de consola, 0 términos faltantes, quiz aprobado, sin desborde a 390 px |
 
 ---
 

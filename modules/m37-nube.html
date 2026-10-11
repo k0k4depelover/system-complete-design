@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M37. Arquitecturas seguras en la nube</title>
+<meta name="description" content="Cómo se arma un sistema seguro en la nube: IAM con mínimo privilegio, VPC y endpoints privados, mTLS entre servicios, KMS y gestores de secretos, zero trust, auditoría con CloudTrail y respuesta a incidentes.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m37">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Arquitecturas seguras en la nube</h1>
+        <p class="lead">La nube no es insegura por sí misma: casi todas las brechas vienen de una configuración propia. Aquí se arma la arquitectura segura capa por capa, con el mínimo privilegio como hilo conductor.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M37</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>120 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M32, M36, M10, M28</dd></div>
+          <div><dt>Estado</dt><dd data-status="m37">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Repartir el pie de la responsabilidad compartida: qué asegura el proveedor y qué te toca a ti.</li>
+    <li>Escribir políticas de <b>IAM</b> con mínimo privilegio y reconocer el peligro del comodín <code>*</code>.</li>
+    <li>Diseñar la red: <b>VPC</b> con subredes pública y privada, endpoints privados y salida controlada.</li>
+    <li>Dar identidad a cada servicio con <b>mTLS</b> y SPIFFE, en vez de confiar en la red.</li>
+    <li>Guardar claves y secretos en <b>KMS</b> y un gestor de secretos, y rotarlos.</li>
+    <li>Aplicar <b>zero trust</b>, auditar con CloudTrail y guardarraíles, y responder a un incidente.</li>
+  </ul>
+</section>
+
+<p>Esta es la última parada de la ruta de seguridad antes del checkpoint, y la que junta todo. En <a href="m32-firewalls.html">M32</a> pusiste firewalls y grupos de seguridad; en <a href="m33-hardening-linux.html">M33</a> endureciste el servidor; en <a href="m35-seguridad-bd.html">M35</a> acotaste la base; en <a href="m36-criptografia.html">M36</a> aprendiste las primitivas. Aquí subimos a la arquitectura: cómo se arma un sistema seguro en la nube, pieza por pieza, con una idea que ya es vieja conocida —el <a href="m35-seguridad-bd.html#modelo">mínimo privilegio</a>— aplicada a todo, no solo a la base.</p>
+
+<h2 id="modelo"><span class="sec-num">37.1</span>El modelo: responsabilidad compartida y mínimo privilegio</h2>
+
+<p>El primer malentendido que hay que deshacer: la nube no te hace seguro, ni inseguro. Reparte la responsabilidad. El proveedor asegura la seguridad <b>de</b> la nube —el hardware, el hipervisor, la red física, los centros de datos—; tú aseguras lo que pones <b>en</b> la nube —la configuración, los permisos, los datos, el código—. <span class="badge badge--doc">Documentado</span> AWS, Azure y Google Cloud publican este modelo de responsabilidad compartida, y la gran mayoría de las brechas en la nube no son fallos del proveedor, sino configuraciones propias: un bucket abierto, un rol con permisos de más, un secreto en un repositorio.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f371t f371d">
+<title id="f371t">Una arquitectura segura de referencia en la nube</title>
+<desc id="f371d">Internet entra por una WAF y un balanceador en la subred pública. Detrás, en la subred privada, los servicios y la base de datos, sin IP pública. Cada servicio corre con su propio rol de IAM, pide las claves a KMS y las contraseñas al gestor de secretos, habla con los demás por mTLS, y CloudTrail registra cada llamada a la API de la nube.</desc>
+<defs><marker id="f371a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box" x="16" y="150" width="110" height="48" rx="8"/>
+<text class="dg-small" x="71" y="172" text-anchor="middle">Internet</text>
+<text class="dg-tiny" x="71" y="188" text-anchor="middle">no confiable</text>
+<path class="dg-frame" d="M150 26 H612 V336 H150 Z"/>
+<text class="dg-small dg-mono" x="160" y="42" text-anchor="start">VPC (red privada)</text>
+<rect x="165" y="54" width="160" height="160" rx="8" fill="color-mix(in srgb, var(--l-edge) 10%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-tiny" x="245" y="72" text-anchor="middle">Subred pública</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="180" y="84" width="130" height="44" rx="8"/>
+<text class="dg-small" x="245" y="104" text-anchor="middle">WAF</text>
+<text class="dg-tiny" x="245" y="119" text-anchor="middle">filtra la capa 7</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="180" y="150" width="130" height="44" rx="8"/>
+<text class="dg-small" x="245" y="170" text-anchor="middle">Balanceador</text>
+<text class="dg-tiny" x="245" y="185" text-anchor="middle">termina TLS</text>
+<rect x="345" y="54" width="255" height="272" rx="8" fill="color-mix(in srgb, var(--l-service) 10%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-tiny" x="472" y="72" text-anchor="middle">Subred privada (sin IP pública)</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="360" y="90" width="110" height="44" rx="8"/>
+<text class="dg-small" x="415" y="110" text-anchor="middle">Servicio A</text>
+<text class="dg-tiny" x="415" y="125" text-anchor="middle">rol IAM propio</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="490" y="90" width="95" height="44" rx="8"/>
+<text class="dg-small" x="537" y="110" text-anchor="middle">Servicio B</text>
+<text class="dg-tiny" x="537" y="125" text-anchor="middle">rol IAM</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="360" y="190" width="110" height="48" rx="8"/>
+<text class="dg-small" x="415" y="212" text-anchor="middle">Base de datos</text>
+<text class="dg-tiny" x="415" y="228" text-anchor="middle">RLS, cifrada</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="490" y="190" width="95" height="48" rx="8"/>
+<text class="dg-small" x="537" y="212" text-anchor="middle">Secrets</text>
+<text class="dg-tiny" x="537" y="228" text-anchor="middle">contraseñas</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="360" y="268" width="225" height="42" rx="8"/>
+<text class="dg-small" x="472" y="286" text-anchor="middle">KMS — claves de cifrado</text>
+<text class="dg-tiny" x="472" y="301" text-anchor="middle">envelope; la app nunca ve la clave raíz</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="628" y="90" width="128" height="150" rx="10"/>
+<text class="dg-small" x="692" y="150" text-anchor="middle">CloudTrail</text>
+<text class="dg-tiny" x="692" y="168" text-anchor="middle">registra cada</text>
+<text class="dg-tiny" x="692" y="182" text-anchor="middle">llamada a la</text>
+<text class="dg-tiny" x="692" y="196" text-anchor="middle">API de la nube</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="628" y="258" width="128" height="52" rx="10"/>
+<text class="dg-small" x="692" y="280" text-anchor="middle">IAM</text>
+<text class="dg-tiny" x="692" y="296" text-anchor="middle">rol por servicio</text>
+<path class="dg-edge" d="M126 174 L178 128" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M245 128 L245 150" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M310 172 L360 120" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M470 112 L490 112" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M470 118 L490 118"/>
+<text class="dg-tiny" x="480" y="86" text-anchor="middle">mTLS</text>
+<path class="dg-edge" d="M415 134 L415 190" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M537 134 L537 190" marker-end="url(#f371a)"/>
+<path class="dg-edge" d="M490 212 L472 212" marker-end="url(#f371a)" style="stroke-dasharray:4 3"/>
+<path class="dg-feedback" d="M585 165 L626 165" marker-end="url(#f371a)"/>
+<text class="dg-tiny" x="607" y="158" text-anchor="middle">audita</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 37.1.</b> La arquitectura que arma este módulo, de una vez. Internet entra por una WAF y un balanceador en la subred pública; detrás, en la privada y sin IP pública, los servicios y la base; cada servicio con su rol de IAM, hablando por mTLS, pidiendo claves a KMS y contraseñas al gestor de secretos, con CloudTrail registrando todo. Las secciones que siguen la desarman pieza por pieza.</figcaption>
+</figure>
+
+<p>El hilo que recorre toda la figura es el <a href="m35-seguridad-bd.html#modelo">mínimo privilegio</a>: cada identidad —una persona, un servicio, una máquina— recibe solo lo que su tarea exige. Ya lo aplicaste al rol de la base en M35, a las cuentas de servicio en <a href="m33-hardening-linux.html#cuentas">M33</a> y a los tenants en <a href="m10-seguridad.html#multitenant">M10</a>. En la nube se vuelve el principio rector de todo: del rol de IAM, de la regla del grupo de seguridad, del alcance de una clave, del permiso de un secreto. La superficie de ataque de un sistema en la nube es la suma de todos esos permisos; reducirla es reducir cuánto daño hace una credencial robada.</p>
+
+<h2 id="iam"><span class="sec-num">37.2</span>IAM: identidades y permisos</h2>
+
+<p>El <dfn data-term="iam">IAM</dfn> (gestión de identidades y accesos) es el plano de control de quién puede hacer qué en toda la cuenta de la nube. Tiene tres piezas: <b>identidades</b> (usuarios y, sobre todo, <b>roles</b>), <b>políticas</b> (reglas en JSON que permiten o niegan acciones sobre recursos) y <b>condiciones</b> (restricciones extra: desde qué IP, con qué etiqueta, a qué hora). Es RBAC y ABAC (los <a href="m35-seguridad-bd.html#rbac">modelos que viste en M35</a>) aplicados a la infraestructura entera.</p>
+
+<p>La primera regla es <b>roles, no llaves largas</b>. Una llave de acceso permanente incrustada en un servidor es una contraseña eterna esperando a filtrarse. En su lugar, cada carga de trabajo asume un <b>rol</b>: la máquina o el contenedor reciben credenciales <b>temporales</b> que rotan solas cada pocas horas, sin que nadie las copie a ningún lado.</p>
+
+<pre data-lang="json"><code>{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:GetObject", "s3:PutObject"],
+    "Resource": "arn:aws:s3:::facturas-acme/*",
+    "Condition": { "StringEquals": { "aws:PrincipalTag/tenant": "acme" } }
+  }]
+}</code></pre>
+
+<p>Esa política dice exactamente lo que el servicio necesita: leer y escribir objetos, solo en <b>un</b> bucket, solo si el principal pertenece al tenant correcto. Compárala con el antipatrón que causa la mitad de los incidentes:</p>
+
+<pre data-lang="json"><code>{
+  "Effect": "Allow",
+  "Action": "*",
+  "Resource": "*"
+}            // "puede hacer cualquier cosa sobre cualquier recurso": nunca</code></pre>
+
+<p>El comodín <code>*</code> en <code>Action</code> o <code>Resource</code> convierte una credencial filtrada en un desastre total. Otra regla clave: <span class="badge badge--doc">Documentado</span> en IAM un <b>deny explícito siempre gana</b> sobre cualquier allow. Eso permite poner barandas duras ("nadie, jamás, borra los logs") que ninguna política permisiva puede contradecir.</p>
+
+<div data-sim="iam"></div>
+
+<h2 id="red"><span class="sec-num">37.3</span>La red: VPC, subredes y salida</h2>
+
+<p>La <dfn data-term="vpc">VPC</dfn> (red privada virtual) es tu propia red aislada dentro de la nube. Se divide en subredes: la <b>pública</b>, que puede recibir tráfico de internet (ahí viven el balanceador y la WAF), y la <b>privada</b>, sin ruta directa a internet, donde van los servicios y la base. La base de datos nunca tiene IP pública; se llega a ella solo desde dentro de la VPC.</p>
+
+<p>Los <dfn data-term="private-endpoint">endpoints privados</dfn> cierran una fuga sutil: por defecto, un servicio que llama a otro servicio de la nube (el almacén de objetos, el gestor de secretos) sale a internet y vuelve a entrar. Un endpoint privado lo mantiene dentro de la red del proveedor, sin pasar por la internet pública. Menos superficie, y el tráfico no se puede interceptar fuera.</p>
+
+<p>El cortafuegos de la VPC ya lo conoces: los <a href="m32-firewalls.html#nube">grupos de seguridad y las NACL de M32</a> deciden qué entra y sale de cada subred. Dos cosas que M32 dejó señaladas y aquí se confirman: la <a href="m32-firewalls.html#entrada-salida">salida controlada</a> (egress) es tan importante como la entrada —un servicio comprometido que no puede llamar a su centro de control es un servicio contenido—, y la <a href="m28-cloudflare.html#ddos">WAF en el borde</a>, como viste en M28, filtra la capa 7 antes de que el tráfico toque tu red. La WAF va delante de todo, en la subred pública o en el borde del proveedor.</p>
+
+<h2 id="mtls"><span class="sec-num">37.4</span>mTLS: identidad entre servicios</h2>
+
+<p>Una vez dentro de la VPC, ¿un servicio puede confiar en otro solo porque le llega desde una IP interna? No. Una IP no prueba identidad: si un atacante llega a un pod, hereda su IP y su posición en la red. La respuesta es <dfn data-term="mtls">mTLS</dfn> (TLS mutuo): no solo el cliente verifica al servidor (como en el TLS de siempre), también el servidor verifica al cliente. Cada servicio presenta un certificado que prueba quién es, y verifica el del otro antes de hablar.</p>
+
+<p>El problema práctico es de dónde salen esos certificados y cómo se renuevan sin que nadie los copie a mano. Ahí entra <dfn data-term="spiffe">SPIFFE</dfn> (un estándar de identidad para cargas de trabajo) y su implementación SPIRE: le dan a cada servicio un SVID, un certificado de identidad de corta vida que caduca en minutos y se renueva solo. Esto retoma la <a href="m10-seguridad.html#servicios">autenticación entre servicios de M10</a> y la <a href="m03-balanceo-gateways.html#mesh-identidad">malla de servicios de M03</a>, donde el service mesh suele ser quien pone el mTLS sin tocar el código de cada servicio. El certificado en sí es el <a href="m36-criptografia.html#certificados">X.509 de M36</a>.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 334" role="img" aria-labelledby="f373t f373d">
+<title id="f373t">Dos servicios se prueban su identidad con mTLS</title>
+<desc id="f373d">Servicio A y Servicio B ya recibieron de SPIRE su SVID: un certificado de identidad de corta vida. Al hablar, cada uno presenta su SVID y verifica el del otro contra la autoridad SPIRE antes de intercambiar datos. La red no otorga confianza: la identidad probada, sí.</desc>
+<defs><marker id="f373-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f373-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f373-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f373-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Servicio A</text>
+<path class="dg-frame" d="M70.0 40 V276"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Servicio B</text>
+<path class="dg-frame" d="M700.0 40 V276"/>
+<path class="dg-edge" d="M73.0 72 L695.0 72" marker-end="url(#f373-a)"/>
+<rect x="263.5" y="55" width="243.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="66" text-anchor="middle">ClientHello + su certificado (SVID)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 106 L75.0 106" marker-end="url(#f373-r)"/>
+<rect x="266.8" y="89" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">verifica a A; responde con su SVID</text>
+<path class="dg-edge" d="M73.0 140 L695.0 140" marker-end="url(#f373-a)"/>
+<rect x="273.4" y="123" width="223.2" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">verifica a B; canal mTLS cifrado</text>
+<rect x="383.0" y="160" width="307" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="393.0" y="176">SVID emitido por SPIRE, caduca en minutos</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M697.0 208 L75.0 208" marker-end="url(#f373-r)"/>
+<rect x="286.6" y="191" width="196.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="202" text-anchor="middle">ya pueden intercambiar datos</text>
+<rect class="dg-box dg-box--em" x="8.0" y="288" width="124" height="38" rx="4"/>
+<text class="dg-small" x="70.0" y="304" text-anchor="middle" style="font-weight:700">Servicio A</text>
+<text class="dg-tiny" x="70.0" y="319" text-anchor="middle">con su SVID</text>
+<rect class="dg-box dg-box--em" x="638.0" y="288" width="124" height="38" rx="4"/>
+<text class="dg-small" x="700.0" y="304" text-anchor="middle" style="font-weight:700">Servicio B</text>
+<text class="dg-tiny" x="700.0" y="319" text-anchor="middle">con su SVID</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 37.4.</b> Dos servicios se prueban su identidad antes de hablar. Cada uno presenta su SVID (emitido por SPIRE, de corta vida) y verifica el del otro. La confianza no viene de estar en la misma red, sino de la identidad probada en cada conexión.</figcaption>
+</figure>
+
+<h2 id="kms"><span class="sec-num">37.5</span>Claves y secretos: KMS y el gestor de secretos</h2>
+
+<p>En <a href="m10-seguridad.html#cifrado">M10</a> viste el <b>envelope encryption</b>: una clave de datos cifra el dato, y una clave raíz cifra la clave de datos. El <dfn data-term="kms">KMS</dfn> (servicio de gestión de claves) es quien guarda esa clave raíz, y lo hace en un <dfn data-term="hsm">HSM</dfn> (módulo de hardware para claves): un dispositivo que custodia la clave de modo que <b>nunca sale en claro</b>, ni siquiera para ti. Pides al KMS "descifra esta clave de datos" y te devuelve el resultado; la clave raíz jamás abandona el hardware. Así, si roban tu base y tus backups, sin el KMS no pueden descifrar nada (es la base del <a href="m10-seguridad.html#cifrado">borrado criptográfico</a>).</p>
+
+<p>Las contraseñas y los tokens —la credencial de la base de <a href="m35-seguridad-bd.html#credenciales">M35</a>, una llave de API de un tercero— van en un <dfn data-term="secrets-manager">gestor de secretos</dfn>, no en el código ni en una variable de entorno versionada. El gestor los cifra con el KMS, los entrega solo a los roles autorizados, los <b>rota</b> de forma automática y registra cada acceso. El servicio los pide al arrancar; nunca viajan en el repositorio.</p>
+
+<pre data-lang="python"><code># El secreto se pide en tiempo de ejecución; no vive en el código ni en git
+import boto3, json
+
+sm = boto3.client("secretsmanager")
+secreto = json.loads(sm.get_secret_value(SecretId="prod/db/app_rw")["SecretString"])
+# el rol de la máquina autoriza esta llamada; el gestor la registra y rota el secreto solo
+conectar(usuario="app_rw", password=secreto["password"])</code></pre>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>El secreto filtrado más común no es una contraseña adivinada: es una llave de acceso o un token subido por error a un repositorio público. Los bots los encuentran en minutos. Por eso el gestor de secretos y los roles temporales no son un lujo: son la diferencia entre "rotamos un secreto" y "alguien lleva una semana dentro".</p>
+</aside>
+
+<h2 id="zero-trust"><span class="sec-num">37.6</span>Zero trust: nunca confíes, siempre verifica</h2>
+
+<p>Todo lo anterior apunta a un cambio de modelo. El modelo viejo es el del <b>perímetro</b>: una muralla (el firewall) separa el "afuera peligroso" del "adentro de confianza", y una vez dentro, todo confía en todo. Falla por una razón simple: cuando alguien cruza la muralla —un phishing, un servidor comprometido, un empleado interno—, llega a todo sin volver a probar quién es.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 258" role="img" aria-labelledby="f372t f372d">
+<title id="f372t">Perímetro contra zero trust</title>
+<desc id="f372d">A la izquierda, el modelo de perímetro: una sola muralla, y dentro todo confía en todo. Si alguien cruza la muralla, llega a todo. A la derecha, zero trust: no hay interior de confianza; cada servicio verifica la identidad del otro en cada salto.</desc>
+<defs><marker id="f372a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="195" y="32" text-anchor="middle">Perímetro: una muralla</text>
+<path class="dg-frame" d="M40 50 H360 V234 H40 Z" style="stroke:var(--warn);stroke-width:2"/>
+<text class="dg-tiny" x="200" y="68" text-anchor="middle">firewall / muralla</text>
+<rect class="dg-ok" x="70" y="90" width="60" height="42" rx="8"/>
+<text class="dg-tiny" x="100" y="110" text-anchor="middle">Servicio A</text>
+<text class="dg-tiny" x="100" y="124" text-anchor="middle">confía</text>
+<rect class="dg-ok" x="170" y="90" width="60" height="42" rx="8"/>
+<text class="dg-tiny" x="200" y="110" text-anchor="middle">Servicio B</text>
+<text class="dg-tiny" x="200" y="124" text-anchor="middle">confía</text>
+<rect class="dg-ok" x="270" y="90" width="60" height="42" rx="8"/>
+<text class="dg-tiny" x="300" y="110" text-anchor="middle">Servicio C</text>
+<text class="dg-tiny" x="300" y="124" text-anchor="middle">confía</text>
+<rect class="dg-ok" x="110" y="160" width="60" height="42" rx="8"/>
+<text class="dg-tiny" x="140" y="180" text-anchor="middle">Servicio D</text>
+<text class="dg-tiny" x="140" y="194" text-anchor="middle">confía</text>
+<rect class="dg-ok" x="230" y="160" width="60" height="42" rx="8"/>
+<text class="dg-tiny" x="260" y="180" text-anchor="middle">Servicio E</text>
+<text class="dg-tiny" x="260" y="194" text-anchor="middle">confía</text>
+<path class="dg-edge" d="M100 111 L170 111"/>
+<path class="dg-edge" d="M200 111 L270 111"/>
+<path class="dg-edge" d="M140 132 L140 160"/>
+<path class="dg-edge" d="M260 132 L260 160"/>
+<text class="dg-tiny" x="200" y="222" text-anchor="middle">Cruzas la muralla una vez y llegas a todo.</text>
+<text class="dg-group" x="575" y="32" text-anchor="middle">Zero trust: cada salto verifica</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="430" y="80" width="110" height="44" rx="8"/>
+<text class="dg-small" x="485" y="100" text-anchor="middle">Servicio A</text>
+<text class="dg-tiny" x="485" y="116" text-anchor="middle">prueba quién es</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="620" y="80" width="110" height="44" rx="8"/>
+<text class="dg-small" x="675" y="100" text-anchor="middle">Servicio B</text>
+<text class="dg-tiny" x="675" y="116" text-anchor="middle">prueba quién es</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="430" y="160" width="110" height="44" rx="8"/>
+<text class="dg-small" x="485" y="180" text-anchor="middle">Servicio C</text>
+<text class="dg-tiny" x="485" y="196" text-anchor="middle">prueba quién es</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="620" y="160" width="110" height="44" rx="8"/>
+<text class="dg-small" x="675" y="180" text-anchor="middle">Servicio D</text>
+<text class="dg-tiny" x="675" y="196" text-anchor="middle">prueba quién es</text>
+<path class="dg-edge" d="M540 102 L620 102" marker-end="url(#f372a)"/>
+<path class="dg-edge" d="M485 124 L485 160" marker-end="url(#f372a)"/>
+<path class="dg-edge" d="M675 124 L675 160" marker-end="url(#f372a)"/>
+<path class="dg-edge" d="M540 182 L620 182" marker-end="url(#f372a)"/>
+<text class="dg-tiny" x="575" y="236" text-anchor="middle">No hay interior de confianza: identidad en cada llamada.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 37.6.</b> A la izquierda, el perímetro: una muralla y, dentro, confianza total; cruzarla una vez da acceso a todo. A la derecha, zero trust: no hay interior de confianza, cada salto verifica la identidad del otro.</figcaption>
+</figure>
+
+<p>El <dfn data-term="zero-trust">zero trust</dfn> invierte la premisa: "nunca confíes, siempre verifica". No hay interior de confianza; cada petición se autentica y se autoriza como si viniera de fuera, salto por salto. <span class="badge badge--doc">Documentado</span> el NIST lo define en la publicación SP 800-207. En la práctica es la suma de lo que ya montaste: identidad fuerte en cada servicio (mTLS), mínimo privilegio en cada permiso (IAM), y <a href="m32-firewalls.html#host-vs-red">microsegmentación</a> para que cada parte solo hable con quien debe. La muralla no desaparece, pero deja de ser la única defensa.</p>
+
+<h2 id="auditoria"><span class="sec-num">37.7</span>Auditoría y guardarraíles</h2>
+
+<p>No puedes defender lo que no ves. En la nube, la bitácora del plano de control es <b>CloudTrail</b> (o su equivalente): registra cada llamada a la API de la nube —quién creó un recurso, quién cambió un permiso, quién leyó un secreto—, con identidad, hora y origen. Es el <a href="m10-seguridad.html#audit-log">audit log</a> de M10, pero de la infraestructura entera. La regla de oro: que escriba en una cuenta aparte, de solo-adición, para que ni un atacante con permisos pueda borrar su propio rastro.</p>
+
+<p>Por encima de los permisos de cada cuenta van los <dfn data-term="scp-guardrail">guardarraíles</dfn> (en AWS, las SCP de Organizations): límites que ninguna identidad de la cuenta puede exceder, ni siquiera un administrador. Son el <b>deny explícito</b> a escala de organización: "en estas cuentas, nadie puede desactivar CloudTrail, ni usar regiones no aprobadas, ni hacer públicos los buckets". Mientras IAM dice lo que cada rol <i>puede</i> hacer, el guardarraíl fija lo que <i>nadie</i> puede hacer.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Control</th><th>Pregunta que responde</th><th>Quién lo pone</th></tr></thead>
+    <tbody>
+      <tr><td>Política de IAM</td><td>¿qué puede hacer este rol?</td><td>el equipo del servicio</td></tr>
+      <tr><td>Guardarraíl (SCP)</td><td>¿qué no puede hacer <b>nadie</b> en estas cuentas?</td><td>la organización</td></tr>
+      <tr><td>CloudTrail</td><td>¿quién hizo qué, y cuándo?</td><td>registro central, append-only</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="incidentes"><span class="sec-num">37.8</span>Cuando algo sale mal: respuesta a incidentes</h2>
+
+<p>Ninguna arquitectura es perfecta, así que hay que ensayar la respuesta antes de necesitarla. La <dfn data-term="incident-response">respuesta a incidentes</dfn> sigue cinco pasos en ciclo: <b>detectar</b> (una alerta, una señal rara en CloudTrail), <b>contener</b> (aislar lo afectado, cortar el acceso), <b>erradicar</b> (quitar la causa, rotar toda credencial que pudo verse), <b>recuperar</b> (restaurar desde algo limpio) y <b>aprender</b> (el <a href="m11-observabilidad.html#despliegues">postmortem sin culpables de M11</a>, que alimenta la detección de la próxima vez).</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f374t f374d">
+<title id="f374t">El ciclo de respuesta a un incidente</title>
+<desc id="f374d">Cinco pasos en anillo: detectar, contener, erradicar, recuperar y aprender. El postmortem sin culpables cierra el ciclo y alimenta la detección de la próxima vez.</desc>
+<defs><marker id="f374a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="319" y="20" width="132" height="52" rx="10"/>
+<text class="dg-small" x="385" y="42" text-anchor="middle">Detectar</text>
+<text class="dg-tiny" x="385" y="59" text-anchor="middle">alertas, señales</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="417.91" y="91.8622" width="132" height="52" rx="10"/>
+<text class="dg-small" x="483.91" y="113.862" text-anchor="middle">Contener</text>
+<text class="dg-tiny" x="483.91" y="130.862" text-anchor="middle">aislar, cortar</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="380.13" y="208.138" width="132" height="52" rx="10"/>
+<text class="dg-small" x="446.13" y="230.138" text-anchor="middle">Erradicar</text>
+<text class="dg-tiny" x="446.13" y="247.138" text-anchor="middle">quitar el acceso</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="257.87" y="208.138" width="132" height="52" rx="10"/>
+<text class="dg-small" x="323.87" y="230.138" text-anchor="middle">Recuperar</text>
+<text class="dg-tiny" x="323.87" y="247.138" text-anchor="middle">restaurar, rotar</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="220.09" y="91.8622" width="132" height="52" rx="10"/>
+<text class="dg-small" x="286.09" y="113.862" text-anchor="middle">Aprender</text>
+<text class="dg-tiny" x="286.09" y="130.862" text-anchor="middle">postmortem</text>
+<path class="dg-edge" d="M441.6 66.0 L427.3 97.9" marker-end="url(#f374a)"/>
+<path class="dg-edge" d="M462.3 150.2 L467.8 201.8" marker-end="url(#f374a)"/>
+<path class="dg-edge" d="M376.1 234.1 L393.9 234.1" marker-end="url(#f374a)"/>
+<path class="dg-edge" d="M302.2 201.8 L307.7 150.2" marker-end="url(#f374a)"/>
+<path class="dg-edge" d="M342.7 97.9 L328.4 66.0" marker-end="url(#f374a)"/>
+<text class="dg-tiny" x="385" y="146" text-anchor="middle">sin culpables</text>
+<text class="dg-tiny" x="385" y="162" text-anchor="middle">aprende el sistema</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 37.8a.</b> El ciclo: detectar, contener, erradicar, recuperar y aprender. El postmortem cierra el anillo y hace que el sistema aprenda de cada incidente.</figcaption>
+</figure>
+
+<p>El ejemplo que condensa casi todo este módulo es la brecha de Capital One en 2019. <span class="badge badge--doc">Documentado</span> una WAF mal configurada permitió una petición no prevista (habitualmente descrita como SSRF) que alcanzó el servicio de metadatos de la instancia (IMDSv1) y obtuvo las <b>credenciales temporales del rol</b> de esa máquina. Ese rol tenía permiso amplio de lectura sobre el almacén de objetos, así que con esas credenciales se leyeron los datos de más de 100 millones de solicitantes en EE.&nbsp;UU. y Canadá. Cada eslabón es una lección de este módulo: la WAF mal puesta (37.3), el rol con permisos de más (37.2), y la defensa concreta que lo corta.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 236" role="img" aria-labelledby="f375t f375d">
+<title id="f375t">Por qué IMDSv2: la lección de Capital One</title>
+<desc id="f375d">Arriba, el patrón vulnerable: una petición no prevista (descrita como SSRF) desde la aplicación alcanza el servicio de metadatos IMDSv1 y obtiene las credenciales temporales del rol de la instancia. Abajo, IMDSv2 lo corta: exige un token pedido con PUT y un límite de saltos, así una petición reenviada no llega.</desc>
+<defs><marker id="f375a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="20" y="30" text-anchor="start">IMDSv1 — el patrón que falló</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="44" width="150" height="46" rx="8"/>
+<text class="dg-small" x="95" y="64" text-anchor="middle">Aplicación</text>
+<text class="dg-tiny" x="95" y="80" text-anchor="middle">con una entrada no validada</text>
+<rect class="dg-warnbox" x="300" y="44" width="170" height="46" rx="8"/>
+<text class="dg-small dg-mono" x="385" y="64" text-anchor="middle">169.254.169.254</text>
+<text class="dg-tiny" x="385" y="80" text-anchor="middle">metadatos (IMDSv1)</text>
+<rect class="dg-bad" x="560" y="44" width="180" height="46" rx="8"/>
+<text class="dg-small" x="650" y="64" text-anchor="middle">Credenciales del rol</text>
+<text class="dg-tiny" x="650" y="80" text-anchor="middle">permiso amplio sobre S3</text>
+<path class="dg-edge" d="M170 67 L298 67" marker-end="url(#f375a)"/>
+<text class="dg-tiny" x="234" y="60" text-anchor="middle">petición no prevista</text>
+<path class="dg-edge" d="M470 67 L558 67" marker-end="url(#f375a)"/>
+<text class="dg-tiny dg-mono" x="514" y="60" text-anchor="middle">GET</text>
+<text class="dg-group" x="20" y="134" text-anchor="start">IMDSv2 — lo que lo corta</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="20" y="148" width="150" height="46" rx="8"/>
+<text class="dg-small" x="95" y="168" text-anchor="middle">Aplicación</text>
+<text class="dg-tiny" x="95" y="184" text-anchor="middle">misma entrada</text>
+<rect class="dg-ok" x="300" y="148" width="170" height="46" rx="8"/>
+<text class="dg-small" x="385" y="168" text-anchor="middle">IMDSv2</text>
+<text class="dg-tiny" x="385" y="184" text-anchor="middle">token por PUT + hop limit</text>
+<rect class="dg-ok" x="560" y="148" width="180" height="46" rx="8"/>
+<text class="dg-small" x="650" y="171" text-anchor="middle">401 sin token</text>
+<text class="dg-tiny" x="650" y="187" text-anchor="middle">la petición reenviada no llega</text>
+<path class="dg-edge" d="M170 171 L298 171" marker-end="url(#f375a)"/>
+<text class="dg-tiny dg-mono" x="234" y="164" text-anchor="middle">GET sin token</text>
+<path class="dg-edge" d="M470 171 L558 171" marker-end="url(#f375a)"/>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 37.8b.</b> Por qué IMDSv2. En IMDSv1 una petición reenviada alcanzaba los metadatos y sacaba las credenciales del rol. IMDSv2 exige un token pedido con <code>PUT</code> y un límite de saltos, así una petición reenviada desde la aplicación no llega. Es defensa en profundidad: aunque falle la WAF, el robo de credenciales se corta.</figcaption>
+</figure>
+
+<p>La <a href="m32-firewalls.html#ngfw-waf">defensa en profundidad</a> es la moraleja: ninguna capa basta sola. Si la WAF falla, IMDSv2 corta el robo de credenciales; si eso falla, el rol de mínimo privilegio limita qué se puede leer; si eso falla, CloudTrail deja el rastro para detectarlo. Cada capa asume que la anterior puede caer.</p>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m37"></div>
+
+<div data-exercise="m37-nube"></div>
+
+<div data-checkpoint="m37"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m37.data.js"></script>
+<script src="../assets/js/data/exercises/m37.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-cloud.js"></script>
+</body>
+</html>

@@ -129,12 +129,12 @@ Todo lo de `CLAUDE.md` aplica. Lo más usado aquí:
 |---|---|---|---|---|---|
 | M32 | `modules/m32-firewalls.html` | Firewalls a fondo | 90 | no | ready (2026-10-07) |
 | M33 | `modules/m33-hardening-linux.html` | Hardening de servidores Linux | 150 | no | ready (2026-10-07) |
-| M34 | `modules/m34-sysadmin.html` | Operación y troubleshooting para SysAdmin | 150 | no | soon |
-| M35 | `modules/m35-seguridad-bd.html` | Seguridad en bases de datos | 120 | no | soon |
-| M36 | `modules/m36-criptografia.html` | Criptografía desde cero | 120 | no | soon |
-| M37 | `modules/m37-nube-segura.html` | Arquitecturas seguras en la nube | 120 | opcional (diagrama zero-trust) | soon |
-| M38 | `modules/m38-active-directory.html` | Active Directory: cómo se ataca y cómo se defiende | 150 | no (lámina de Kerberos) | soon (plan agregado 2026-10-08) |
-| CP-E | `modules/checkpoint-e.html` | Checkpoint E: endurece una plataforma | 90 | no | soon |
+| M34 | `modules/m34-sysadmin.html` | Operación y troubleshooting para SysAdmin | 150 | no | ready (2026-10-10) |
+| M35 | `modules/m35-seguridad-bd.html` | Seguridad en bases de datos | 120 | no | ready (2026-10-10) |
+| M36 | `modules/m36-criptografia.html` | Criptografía desde cero | 140 | no | ready (2026-10-10) |
+| M37 | `modules/m37-nube.html` | Arquitecturas seguras en la nube | 120 | no (diagrama zero-trust estático) | ready (2026-10-10) |
+| M38 | `modules/m38-active-directory.html` | Active Directory: cómo se ataca y cómo se defiende | 150 | no (lámina de Kerberos) | ready (2026-10-10) |
+| CP-E | `modules/checkpoint-e.html` | Checkpoint E: endurece una plataforma | 90 | sí (defensa en profundidad) | ready (2026-10-10) |
 
 Prerrequisitos sugeridos (encadenamiento con el resto del curso):
 - M32: M01 (redes), M03 (balanceo/gateways), M08 (resiliencia).

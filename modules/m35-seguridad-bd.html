@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M35. Seguridad en bases de datos</title>
+<meta name="description" content="Mínimo privilegio en la base: RBAC, ABAC y ACL, tablas de bitácora con triggers y pgAudit, y cifrado de datos en reposo y por columna. Quién se conecta con qué rol y qué ve.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m35">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Seguridad en bases de datos</h1>
+        <p class="lead">La base guarda lo que más duele perder. Aquí decides quién la toca, con qué rol, qué queda registrado y qué viaja cifrado.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M35</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>120 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M05, M10</dd></div>
+          <div><dt>Estado</dt><dd data-status="m35">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Repartir el acceso a una base por <b>mínimo privilegio</b>: un rol por servicio, no una contraseña para todo.</li>
+    <li>Elegir entre <b>RBAC</b>, <b>ABAC</b> y <b>ACL</b> según lo que tengas que decidir, y ver por qué una política de fila (RLS) es ABAC aplicado dentro de la base.</li>
+    <li>Guardar una <b>bitácora de auditoría dentro de la base</b> con triggers o pgAudit, y saber en qué se diferencia del log de auditoría de la aplicación.</li>
+    <li>Cifrar datos en la base —en reposo y por columna— y reconocer qué <b>no</b> protege ese cifrado.</li>
+    <li>Manejar las <b>credenciales</b> de la base sin incrustarlas en el código y rotarlas sin cortar el servicio.</li>
+  </ul>
+</section>
+
+<p>En <a href="m05-bases-de-datos.html">M05</a> montaste la base y en su sección de <a href="m05-bases-de-datos.html#rls">row-level security</a> aislaste dos tenants. En <a href="m10-seguridad.html">M10</a> protegiste la API con tokens, viste el <a href="m10-seguridad.html#multitenant">multi-tenant</a> y el <a href="m10-seguridad.html#audit-log">audit log</a> de la aplicación. Este módulo baja todo eso a la base misma: quién se conecta y con qué rol, qué queda anotado adentro, y qué columnas viajan cifradas. La idea que atraviesa todo es una sola: a cada quien, lo mínimo que necesita para su trabajo.</p>
+
+<h2 id="modelo"><span class="sec-num">35.1</span>El modelo de amenaza de una base</h2>
+
+<p>Antes de repartir permisos, hay que saber <b>quién toca la base</b> y <b>qué se protege</b>. No es una sola aplicación: a la misma base llegan la app en producción, las migraciones que cambian el esquema, un analista que corre consultas, el proceso que hace los backups y —si algo sale mal— alguien con una credencial robada o una <dfn data-term="sql-injection">inyección SQL</dfn>. Cada uno necesita cosas distintas, y darle a todos la misma cuenta de superusuario es el error más común.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 326" role="img" aria-labelledby="f351t f351d">
+<title id="f351t">Quién toca la base y qué se protege</title>
+<desc id="f351d">En el centro, la base de datos. Alrededor, los que se conectan a ella con roles distintos: la app, las migraciones, un analista, los backups y un atacante con una credencial robada. Abajo, lo que hay que proteger: las filas de cada tenant, las columnas sensibles, las credenciales y la propia bitácora.</desc>
+<defs><marker id="f351a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="300" y="116" width="170" height="86" rx="12"/>
+<text class="dg-label" x="385" y="150" text-anchor="middle">Base de datos</text>
+<text class="dg-small" x="385" y="170" text-anchor="middle">PostgreSQL</text>
+<text class="dg-tiny" x="385" y="186" text-anchor="middle">filas · columnas · WAL</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="40" y="40" width="170" height="54" rx="8"/>
+<text class="dg-small" x="125" y="64" text-anchor="middle">App (app_rw)</text>
+<text class="dg-tiny" x="125" y="81" text-anchor="middle">lee y escribe sus filas</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="40" y="214" width="170" height="54" rx="8"/>
+<text class="dg-small" x="125" y="238" text-anchor="middle">Migraciones (dueño)</text>
+<text class="dg-tiny" x="125" y="255" text-anchor="middle">DDL y despliegues</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="560" y="40" width="170" height="54" rx="8"/>
+<text class="dg-small" x="645" y="64" text-anchor="middle">Analista</text>
+<text class="dg-tiny" x="645" y="81" text-anchor="middle">solo lectura, con RLS</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="560" y="214" width="170" height="54" rx="8"/>
+<text class="dg-small" x="645" y="238" text-anchor="middle">Backups / pg_dump</text>
+<text class="dg-tiny" x="645" y="255" text-anchor="middle">copia completa (BYPASSRLS)</text>
+<path class="dg-edge" d="M210 67 L300 130" marker-end="url(#f351a)"/>
+<path class="dg-edge" d="M210 232 L300 188" marker-end="url(#f351a)"/>
+<path class="dg-edge" d="M560 67 L470 130" marker-end="url(#f351a)"/>
+<path class="dg-edge" d="M560 232 L470 188" marker-end="url(#f351a)"/>
+<rect class="dg-bad" x="305" y="40" width="160" height="44" rx="8"/>
+<text class="dg-small" x="385" y="60" text-anchor="middle">Atacante</text>
+<text class="dg-tiny" x="385" y="77" text-anchor="middle">credencial robada, inyección</text>
+<path class="dg-feedback" d="M385 84 V112"/>
+<path class="dg-edge" d="M385 112 L381 100 L389 100 z" style="stroke:var(--fail)"/>
+<rect class="dg-warnbox" x="40" y="284" width="690" height="38" rx="8"/>
+<text class="dg-tiny" x="385" y="301" text-anchor="middle">Qué se protege: las filas de cada tenant (aislamiento), las columnas sensibles (PII, secretos),</text>
+<text class="dg-tiny" x="385" y="315" text-anchor="middle">las credenciales de conexión y la propia bitácora. A cada quien, el mínimo privilegio para su trabajo.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 35.1.</b> Quién se conecta a la base y qué hay que proteger. A cada conexión, un rol con lo mínimo para su trabajo; el atacante que entra con una credencial robada hereda solo lo que ese rol podía hacer.</figcaption>
+</figure>
+
+<p>El <dfn data-term="minimo-privilegio">principio de mínimo privilegio</dfn> dice que cada identidad —una persona, un servicio, un proceso— recibe solo los permisos que su tarea exige, y nada más. Ya lo viste de punta a punta en <a href="m33-hardening-linux.html#cuentas">el hardening de M33</a> (cuentas de servicio sin shell, sudo acotado) y en <a href="m10-seguridad.html#multitenant">el multi-tenant de M10</a>. En la base se traduce en una regla práctica: la aplicación no se conecta como dueño de las tablas ni como superusuario. Se conecta con un rol que puede leer y escribir las filas que le tocan, y nada más. Así, si esa credencial se filtra, el daño queda acotado a lo que el rol permitía.</p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>La causa de incidente más repetida con bases de datos no es un exploit sofisticado: es una base expuesta a internet con un rol que podía leerlo todo, o la contraseña del superusuario en un repositorio. El mínimo privilegio no evita que roben una credencial; evita que robar una credencial lo entregue todo.</p>
+</aside>
+
+<h2 id="rbac"><span class="sec-num">35.2</span>RBAC: el permiso cuelga del rol</h2>
+
+<p><dfn data-term="rbac">RBAC</dfn> (control de acceso basado en roles) es el modelo que ya usaste sin nombrarlo cuando creaste roles y diste <a href="m05-bases-de-datos.html#roles-grant"><code>GRANT</code> en M05</a>. La idea: no le das permisos a cada persona, se los das a un <b>rol</b>, y las personas o los servicios reciben el rol. Si mañana entra otro analista, le das el rol <code>analistas</code> y hereda todo de una vez; si alguien se va, le quitas el rol. El permiso vive en el rol, no desperdigado por cada cuenta.</p>
+
+<p>En PostgreSQL un usuario y un grupo son la misma cosa —un <code>ROLE</code>—, y un rol puede contener a otros. Eso da <b>jerarquías de roles</b>: <code>ana</code> es miembro de <code>analistas</code>, que a su vez puede heredar de <code>solo_lectura</code>.</p>
+
+<pre data-lang="sql"><code>-- Roles de aplicación y de grupo, no una cuenta por capricho
+CREATE ROLE app_rw LOGIN PASSWORD '...';     -- la aplicación en producción
+CREATE ROLE analistas NOLOGIN;               -- grupo: no inicia sesión por sí mismo
+CREATE ROLE ana LOGIN PASSWORD '...' IN ROLE analistas;   -- ana hereda de analistas
+
+-- El permiso cuelga del rol de grupo, no de cada persona
+GRANT SELECT                     ON facturas TO analistas;
+GRANT SELECT, INSERT, UPDATE     ON facturas TO app_rw;
+
+-- Lo que NO se hace: la app conectándose como el dueño o como postgres</code></pre>
+
+<p>Conviene separar <b>roles de aplicación</b> de <b>roles de persona</b>. La app se conecta siempre con <code>app_rw</code> (un rol de servicio, con contraseña rotada y sin privilegios de esquema); las personas usan su propio rol, que hereda de un grupo. Así la bitácora distingue "lo hizo la app" de "lo hizo ana", y puedes quitarle acceso a una persona sin tocar a la aplicación.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f354t f354d">
+<title id="f354t">Quién se conecta con qué rol</title>
+<desc id="f354d">Cuatro conexiones a la misma base, cada una con su rol y lo que ve. La app con app_rw, limitada por RLS a su tenant; las migraciones con el dueño de la tabla; el analista con un rol de solo lectura y RLS; y pg_dump con BYPASSRLS para copiar todo. Extiende la figura de roles de M05.</desc>
+<defs><marker id="f354a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-db)" x="560" y="110" width="180" height="90" rx="12"/>
+<text class="dg-label" x="650" y="145" text-anchor="middle">facturas</text>
+<text class="dg-small" x="650" y="165" text-anchor="middle">RLS activada</text>
+<text class="dg-tiny dg-mono" x="650" y="181" text-anchor="middle">POLICY por_tenant</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="16" y="44" width="210" height="50" rx="8"/>
+<text class="dg-small" x="121" y="65" text-anchor="middle">App</text>
+<text class="dg-tiny dg-mono" x="121" y="82" text-anchor="middle">SET ROLE app_rw</text>
+<path class="dg-edge" d="M226 69 L558 155" marker-end="url(#f354a)"/>
+<text class="dg-tiny" x="400" y="52" text-anchor="middle">solo su tenant</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="16" y="110" width="210" height="50" rx="8"/>
+<text class="dg-small" x="121" y="131" text-anchor="middle">Migraciones</text>
+<text class="dg-tiny dg-mono" x="121" y="148" text-anchor="middle">dueño de la tabla</text>
+<path class="dg-edge" d="M226 135 L558 155" marker-end="url(#f354a)"/>
+<text class="dg-tiny" x="400" y="118" text-anchor="middle">DDL; RLS no aplica (sin FORCE)</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="16" y="176" width="210" height="50" rx="8"/>
+<text class="dg-small" x="121" y="197" text-anchor="middle">Analista</text>
+<text class="dg-tiny dg-mono" x="121" y="214" text-anchor="middle">rol solo lectura + RLS</text>
+<path class="dg-edge" d="M226 201 L558 155" marker-end="url(#f354a)"/>
+<text class="dg-tiny" x="400" y="184" text-anchor="middle">SELECT de su ámbito</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="16" y="242" width="210" height="50" rx="8"/>
+<text class="dg-small" x="121" y="263" text-anchor="middle">pg_dump</text>
+<text class="dg-tiny dg-mono" x="121" y="280" text-anchor="middle">BYPASSRLS</text>
+<path class="dg-edge" d="M226 267 L558 155" marker-end="url(#f354a)"/>
+<text class="dg-tiny" x="400" y="250" text-anchor="middle">copia TODO (backup)</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 35.2.</b> La misma base, cuatro conexiones. La app con <code>app_rw</code> ve solo su tenant porque la RLS la filtra; las migraciones usan el dueño de la tabla (la RLS no las toca salvo con <code>FORCE</code>); el analista entra con un rol de solo lectura más RLS; y <code>pg_dump</code> usa un rol con <code>BYPASSRLS</code> para copiar todo. Extiende la figura de roles de M05.</figcaption>
+</figure>
+
+<p>Fíjate en quién se salta la RLS. El dueño de la tabla la ignora salvo que la fuerces con <a href="m05-bases-de-datos.html#rls-bypass"><code>FORCE ROW LEVEL SECURITY</code> (M05)</a>; un rol con <code>BYPASSRLS</code> siempre la ignora. Esos dos privilegios son potentes: el backup los necesita para copiar todas las filas, pero la app de producción no debe tenerlos nunca.</p>
+
+<h2 id="abac"><span class="sec-num">35.3</span>ABAC: la política evalúa atributos</h2>
+
+<p>RBAC decide por <b>quién eres</b> (tu rol). <dfn data-term="abac">ABAC</dfn> (control de acceso basado en atributos) decide por <b>atributos</b>: del sujeto (su departamento, su nivel), del recurso (a qué tenant pertenece la fila, qué etiqueta tiene) y del entorno (la hora, la IP de origen). Una <b>política</b> combina esos atributos en una regla: "un usuario de finanzas puede leer facturas de su propia región en horario laboral". RBAC necesitaría un rol por cada combinación; ABAC lo expresa en una regla.</p>
+
+<aside class="callout callout--def">
+  <p class="callout-label">Definición</p>
+  <p class="def-term">ABAC <span class="def-en">Attribute-based access control</span></p>
+  <p class="def-one">El acceso se decide evaluando atributos del sujeto, del recurso y del entorno contra una política, no solo el rol del sujeto.</p>
+  <dl class="def-rows">
+    <div><dt>Intuición</dt><dd>En vez de "¿tienes el rol X?", la pregunta es "¿se cumplen estas condiciones sobre quién, qué y cuándo?".</dd></div>
+    <div><dt>Ejemplo</dt><dd>Una política RLS que compara <code>tenant_id</code> de la fila con el tenant de la sesión: un atributo del recurso contra un atributo del entorno.</dd></div>
+    <div><dt>Por qué importa en producción</dt><dd>Evita la explosión de roles cuando las reglas dependen de datos (región, propiedad, sensibilidad) y no solo de la función de la persona. El marco de referencia es NIST SP 800-162.</dd></div>
+  </dl>
+</aside>
+
+<p>Aquí aparece una conexión que vale la pena ver con calma: <b>una política de RLS es ABAC aplicado dentro de la base</b>. Cuando en M05 escribiste una política que compara el <code>tenant_id</code> de la fila con el tenant de la sesión, estabas evaluando un atributo del recurso (de qué tenant es la fila) contra un atributo del entorno (qué tenant fijó la sesión). La base evalúa esa regla fila por fila, sin que la aplicación tenga que filtrar.</p>
+
+<pre data-lang="sql"><code>-- Una política RLS es una regla ABAC que corre en la base
+CREATE POLICY por_tenant ON facturas
+  USING (tenant_id = current_setting('app.tenant_id')::uuid);
+-- atributo del recurso (tenant_id de la fila)  contra  atributo de la sesión</code></pre>
+
+<p>No es que ABAC reemplace a RBAC: casi siempre se combinan. El rol te deja <i>entrar</i> a la tabla (RBAC: "los analistas pueden hacer <code>SELECT</code>") y la política ABAC decide <i>qué filas</i> ves (RLS: "solo las de tu región"). <span class="badge badge--doc">Documentado</span> NIST define los dos modelos: RBAC en INCITS 359 y ABAC en SP 800-162.</p>
+
+<h2 id="acl"><span class="sec-num">35.4</span>ACL: cada objeto lleva su lista</h2>
+
+<p>El tercer modelo es la <dfn data-term="acl">ACL</dfn> (lista de control de acceso): cada <b>objeto</b> guarda su propia lista de quién puede hacer qué sobre él. Es lo que ves en los permisos de un archivo de Unix (<a href="m34-sysadmin.html#usuarios"><code>rwx</code> por dueño, grupo y otros, de M34</a>) o cuando compartes un documento con tres personas, cada una con su permiso. La decisión no cuelga de un rol global ni de una política: vive pegada al objeto.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f352t f352d">
+<title id="f352t">Tres formas de decidir quién puede qué</title>
+<desc id="f352d">Tres modelos sobre la misma pregunta. RBAC: el permiso cuelga de un rol que tiene el sujeto. ABAC: una política evalúa atributos del sujeto, del recurso y del entorno. ACL: cada objeto lleva su propia lista de quién puede hacer qué.</desc>
+<defs><marker id="f352a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="133" y="34" text-anchor="middle">RBAC — por rol</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="46" y="50" width="174" height="44" rx="8"/>
+<text class="dg-small" x="133" y="77" text-anchor="middle">Sujeto: ana</text>
+<path class="dg-edge" d="M133 94 V118" marker-end="url(#f352a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="46" y="118" width="174" height="44" rx="8"/>
+<text class="dg-small" x="133" y="145" text-anchor="middle">Rol: analista</text>
+<path class="dg-edge" d="M133 162 V186" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="46" y="186" width="174" height="44" rx="8"/>
+<text class="dg-small" x="133" y="213" text-anchor="middle">Permiso: SELECT</text>
+<text class="dg-tiny" x="133" y="274" text-anchor="middle">El permiso cuelga del rol.</text>
+<text class="dg-group" x="385" y="34" text-anchor="middle">ABAC — por atributos</text>
+<rect class="dg-box" x="268" y="50" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="343" y="66" text-anchor="middle">sujeto: depto=finanzas</text>
+<path class="dg-edge" d="M418 62 L444 120" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="268" y="80" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="343" y="96" text-anchor="middle">recurso: tenant=acme</text>
+<path class="dg-edge" d="M418 92 L444 120" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="268" y="110" width="150" height="24" rx="5"/>
+<text class="dg-tiny" x="343" y="126" text-anchor="middle">entorno: hora, IP</text>
+<path class="dg-edge" d="M418 122 L444 120" marker-end="url(#f352a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="444" y="100" width="58" height="44" rx="8"/>
+<text class="dg-tiny" x="473" y="118" text-anchor="middle">política</text>
+<text class="dg-tiny" x="473" y="132" text-anchor="middle">evalúa</text>
+<path class="dg-edge" d="M473 144 V176" marker-end="url(#f352a)"/>
+<rect class="dg-ok" x="418" y="176" width="110" height="30" rx="6"/>
+<text class="dg-tiny" x="473" y="195" text-anchor="middle">permitir / denegar</text>
+<text class="dg-tiny" x="385" y="274" text-anchor="middle">La política evalúa atributos.</text>
+<text class="dg-group" x="637" y="34" text-anchor="middle">ACL — por objeto</text>
+<rect class="dg-box--em dg-box" x="560" y="50" width="154" height="30" rx="6"/>
+<text class="dg-small" x="637" y="69" text-anchor="middle">Objeto: factura 201</text>
+<path class="dg-edge" d="M637 80 V92" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="540" y="92" width="194" height="32" rx="6"/>
+<text class="dg-small dg-mono" x="560" y="112" text-anchor="start">ana</text>
+<text class="dg-tiny" x="714" y="112" text-anchor="end">lee</text>
+<path class="dg-edge" d="M637 120 V132" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="540" y="132" width="194" height="32" rx="6"/>
+<text class="dg-small dg-mono" x="560" y="152" text-anchor="start">app_rw</text>
+<text class="dg-tiny" x="714" y="152" text-anchor="end">lee y escribe</text>
+<path class="dg-edge" d="M637 160 V172" marker-end="url(#f352a)"/>
+<rect class="dg-box" x="540" y="172" width="194" height="32" rx="6"/>
+<text class="dg-small dg-mono" x="560" y="192" text-anchor="start">luis</text>
+<text class="dg-tiny" x="714" y="192" text-anchor="end">nada</text>
+<text class="dg-tiny" x="637" y="274" text-anchor="middle">Cada objeto lleva su lista.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 35.4.</b> La misma pregunta, tres modelos. RBAC: el permiso cuelga de un rol que tiene el sujeto. ABAC: una política evalúa atributos del sujeto, el recurso y el entorno. ACL: cada objeto lleva su lista de quién puede qué.</figcaption>
+</figure>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Modelo</th><th>La decisión cuelga de…</th><th>Dónde brilla</th><th>Dónde cuesta</th></tr></thead>
+    <tbody>
+      <tr><td><b>RBAC</b></td><td>el rol del sujeto</td><td>pocas funciones claras (app, analista, admin)</td><td>explota en roles si las reglas dependen de datos</td></tr>
+      <tr><td><b>ABAC</b></td><td>atributos + política</td><td>reglas que dependen de región, propiedad, hora</td><td>políticas difíciles de auditar si crecen sin control</td></tr>
+      <tr><td><b>ACL</b></td><td>el objeto</td><td>compartir recursos uno por uno (archivos, documentos)</td><td>no escala a millones de filas; se vuelve inmanejable</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>En una base relacional multi-tenant el combo habitual es <b>RBAC + ABAC</b>: roles para entrar, RLS (ABAC) para filtrar filas. Las ACL aparecen cuando el producto comparte objetos uno a uno —"este documento, con estas tres personas"— y ahí se modelan como una tabla de permisos por objeto.</p>
+
+<div data-sim="rbac"></div>
+
+<p class="more-link">La RLS que filtra las filas la practicaste en M05: <a href="m05-bases-de-datos.html#rls-practica">vuelve al simulador de row-level security</a> para ver qué devuelve la base según el rol y el tenant de la sesión.</p>
+
+<h2 id="bitacora"><span class="sec-num">35.5</span>La bitácora dentro de la base</h2>
+
+<p>En <a href="m10-seguridad.html#audit-log">M10</a> guardaste un audit log <b>en la aplicación</b>: cada acción relevante de negocio quedaba registrada por tu código. Eso deja un hueco: lo que toca la base <b>sin pasar por tu aplicación</b> —un analista con <code>psql</code>, una migración, un script— no queda anotado. La bitácora dentro de la base cierra ese hueco, porque la escribe el motor, no la app.</p>
+
+<p>La forma más directa es un <b>trigger de auditoría</b>: una función que se dispara con cada <code>INSERT</code>, <code>UPDATE</code> o <code>DELETE</code> y escribe en una tabla append-only qué cambió, quién lo hizo y cuándo.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 274" role="img" aria-labelledby="f353t f353d">
+<title id="f353t">Un trigger que escribe la bitácora dentro de la base</title>
+<desc id="f353d">La app hace un UPDATE sobre facturas. Un trigger AFTER UPDATE se dispara y escribe en audit_log la fila vieja y la nueva, con quién y cuándo. La tabla de bitácora es append-only: solo INSERT, nunca UPDATE ni DELETE. La app recibe su confirmación como siempre.</desc>
+<defs><marker id="f353-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f353-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f353-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f353-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">App (app_rw)</text>
+<path class="dg-frame" d="M70.0 40 V264"/>
+<rect class="dg-box" x="218.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="280.0" y="29" text-anchor="middle" style="font-size:13.5px">facturas</text>
+<path class="dg-frame" d="M280.0 40 V264"/>
+<rect class="dg-box" x="428.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="490.0" y="29" text-anchor="middle" style="font-size:13.5px">trigger</text>
+<path class="dg-frame" d="M490.0 40 V264"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">audit_log</text>
+<path class="dg-frame" d="M700.0 40 V264"/>
+<path class="dg-edge" d="M73.0 72 L275.0 72" marker-end="url(#f353-a)"/>
+<rect x="37.0" y="55" width="276.0" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="66" text-anchor="middle">UPDATE facturas SET monto=0 WHERE id=201</text>
+<path class="dg-edge" style="stroke:var(--l-queue);stroke-dasharray:6 4" d="M283.0 106 L485.0 106" marker-end="url(#f353-q)"/>
+<rect x="303.1" y="89" width="163.79999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="100" text-anchor="middle">AFTER UPDATE se dispara</text>
+<path class="dg-edge" d="M493.0 140 L695.0 140" marker-end="url(#f353-a)"/>
+<rect x="476.8" y="123" width="236.39999999999998" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="595.0" y="134" text-anchor="middle">INSERT (vieja, nueva, usuario, ts)</text>
+<rect x="439.0" y="160" width="251" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="449.0" y="176">append-only: sin UPDATE ni DELETE</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M277.0 208 L75.0 208" marker-end="url(#f353-r)"/>
+<rect x="142.6" y="191" width="64.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="175.0" y="202" text-anchor="middle">UPDATE 1</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 35.5.</b> Un <code>UPDATE</code> dispara un trigger <code>AFTER UPDATE</code> que escribe en <code>audit_log</code> la fila vieja y la nueva, con el usuario y la hora. La tabla de bitácora es append-only: solo acepta <code>INSERT</code>. La app recibe su confirmación como siempre.</figcaption>
+</figure>
+
+<figure class="schema">
+  <figcaption class="schema-head">
+    <code class="schema-name">audit_log</code>
+    <span class="schema-chip">PostgreSQL</span>
+    <span class="schema-chip">append-only</span>
+    <span class="badge badge--ref">Diseño de referencia</span>
+  </figcaption>
+  <div class="table-wrap">
+    <table class="t t--schema">
+      <thead><tr><th>Campo</th><th>Tipo</th><th>Restricciones</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code><span class="key">PK</span></td><td>bigint</td><td>GENERATED ALWAYS AS IDENTITY</td><td>orden de inserción</td></tr>
+        <tr><td><code>tabla</code></td><td>text</td><td>NOT NULL</td><td>qué tabla cambió</td></tr>
+        <tr><td><code>op</code></td><td>text</td><td>CHECK (INSERT/UPDATE/DELETE)</td><td>qué operación</td></tr>
+        <tr><td><code>fila_id</code></td><td>bigint</td><td></td><td>qué fila</td></tr>
+        <tr><td><code>antes</code></td><td>jsonb</td><td></td><td>la fila antes del cambio</td></tr>
+        <tr><td><code>despues</code></td><td>jsonb</td><td></td><td>la fila después</td></tr>
+        <tr><td><code>usuario</code></td><td>text</td><td>DEFAULT current_user</td><td>qué rol lo hizo</td></tr>
+        <tr><td><code>ts</code></td><td>timestamptz</td><td>DEFAULT now()</td><td>cuándo</td></tr>
+      </tbody>
+    </table>
+  </div>
+</figure>
+
+<pre data-lang="sql"><code>-- La bitácora solo acepta INSERT: nadie reescribe la historia
+REVOKE UPDATE, DELETE ON audit_log FROM PUBLIC;
+
+CREATE FUNCTION auditar() RETURNS trigger AS $$
+BEGIN
+  INSERT INTO audit_log (tabla, op, fila_id, antes, despues)
+  VALUES (TG_TABLE_NAME, TG_OP, NEW.id, to_jsonb(OLD), to_jsonb(NEW));
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER audit_facturas
+  AFTER INSERT OR UPDATE OR DELETE ON facturas
+  FOR EACH ROW EXECUTE FUNCTION auditar();</code></pre>
+
+<p>Un trigger registra el <b>dato</b> que cambió. Cuando lo que importa es la <b>acción</b> —quién corrió qué consulta, incluido un <code>SELECT</code> sobre una tabla sensible— se usa <dfn data-term="pgaudit">pgAudit</dfn>, una extensión que anota las sentencias en el log del servidor con el detalle que un auditor espera. <span class="badge badge--doc">Documentado</span> pgAudit puede registrar por clase de sentencia (lecturas, escrituras, DDL, roles) y, afinado por objeto, solo las tablas que marcas.</p>
+
+<p>Una tercera fuente, cuando quieres la bitácora <b>fuera</b> de la base sin triggers, es <a href="m07-mensajeria.html#outbox">CDC</a> (change data capture): leer el <a href="m05-bases-de-datos.html#wal">WAL</a> por replicación lógica y publicar cada cambio a un consumidor que lo archiva. No frena las escrituras (el trigger sí añade trabajo a cada una) y sirve además para alimentar otros sistemas, como viste en M07.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Fuente</th><th>Qué registra</th><th>Quién la escribe</th><th>Costo</th></tr></thead>
+    <tbody>
+      <tr><td>Audit log de la app (<a href="m10-seguridad.html#audit-log">M10</a>)</td><td>acciones de negocio</td><td>tu código</td><td>nada extra en la base; ciego a lo que no pasa por la app</td></tr>
+      <tr><td>Trigger de auditoría</td><td>cada cambio de fila (antes/después)</td><td>el motor</td><td>trabajo en cada escritura</td></tr>
+      <tr><td>pgAudit</td><td>sentencias, incluidos <code>SELECT</code> sensibles</td><td>el motor, al log</td><td>volumen de log; se afina por objeto</td></tr>
+      <tr><td>CDC (<a href="m07-mensajeria.html#outbox">M07</a>)</td><td>cada cambio, fuera de la base</td><td>un consumidor del WAL</td><td>infra de streaming; latencia de llegada</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="cifrado-datos"><span class="sec-num">35.6</span>Cifrado en la base, y qué no protege</h2>
+
+<p>Cifrar datos en la base suena a bala de plata, pero cada técnica protege contra una amenaza distinta y deja otras intactas. La pregunta clave no es "¿está cifrado?", sino "¿contra quién?". Para responderla hay que mirar por qué capas pasa el dato y dónde se ve en claro.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 304" role="img" aria-labelledby="f355t f355d">
+<title id="f355t">Cifrado en la base: dónde se ve el claro</title>
+<desc id="f355d">Las capas por las que pasa un dato, de la app al disco. En cada una se marca si el dato está en claro o cifrado, y qué técnica lo protege. El cifrado de columna (pgcrypto) y el cifrado en reposo (TDE) no protegen del propio servicio de la app, que necesita el texto en claro para trabajar.</desc>
+<rect class="dg-warnbox" x="16" y="40" width="250" height="42" rx="8"/>
+<text class="dg-small" x="141" y="58" text-anchor="middle">Aplicación</text>
+<text class="dg-tiny" x="141" y="74" text-anchor="middle">ve el texto en CLARO (lo necesita)</text>
+<text class="dg-tiny" x="286" y="65" text-anchor="start">El cifrado en la app (envelope, M10) protege hasta aquí</text>
+<path class="dg-feedback" d="M141 82 V90"/>
+<rect class="dg-ok" x="16" y="90" width="250" height="42" rx="8"/>
+<text class="dg-small" x="141" y="108" text-anchor="middle">Conexión</text>
+<text class="dg-tiny" x="141" y="124" text-anchor="middle">cifrada en tránsito</text>
+<text class="dg-tiny" x="286" y="115" text-anchor="start">TLS</text>
+<path class="dg-feedback" d="M141 132 V140"/>
+<rect class="dg-warnbox" x="16" y="140" width="250" height="42" rx="8"/>
+<text class="dg-small" x="141" y="158" text-anchor="middle">Motor PostgreSQL</text>
+<text class="dg-tiny" x="141" y="174" text-anchor="middle">claro, salvo columnas con pgcrypto</text>
+<text class="dg-tiny" x="286" y="165" text-anchor="start">pgcrypto cifra columnas; el DBA ve el resto</text>
+<path class="dg-feedback" d="M141 182 V190"/>
+<rect class="dg-ok" x="16" y="190" width="250" height="42" rx="8"/>
+<text class="dg-small" x="141" y="208" text-anchor="middle">Archivos en disco</text>
+<text class="dg-tiny" x="141" y="224" text-anchor="middle">cifrado en reposo</text>
+<text class="dg-tiny" x="286" y="215" text-anchor="start">TDE / cifrado del volumen</text>
+<path class="dg-feedback" d="M141 232 V240"/>
+<rect class="dg-ok" x="16" y="240" width="250" height="42" rx="8"/>
+<text class="dg-small" x="141" y="258" text-anchor="middle">Backup o disco robado</text>
+<text class="dg-tiny" x="141" y="274" text-anchor="middle">cifrado protege</text>
+<text class="dg-tiny" x="286" y="265" text-anchor="start">TDE y el cifrado de columna sirven aquí</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 35.6.</b> El dato de la app al disco. El cifrado en reposo (TDE) protege el disco o el backup robado; el cifrado de columna (pgcrypto) protege de quien lee la tabla sin la clave. Ninguno protege del propio servicio de la app, que necesita el texto en claro para trabajar.</figcaption>
+</figure>
+
+<p>El <dfn data-term="tde">cifrado en reposo</dfn> (TDE, transparent data encryption) cifra los archivos de datos en el disco. Protege contra un disco robado, un backup perdido o un ladrón que se lleva el volumen. No protege nada una vez que la base está montada y en marcha: cualquier conexión autorizada ve los datos en claro, porque el motor descifra al leer. <span class="badge badge--doc">Documentado</span> PostgreSQL de base no trae TDE; se obtiene cifrando el volumen (LUKS, cifrado del disco en la nube) o con una variante comercial. El resultado es el mismo: protege el disco, no la sesión.</p>
+
+<p>El <b>cifrado por columna</b> con <code>pgcrypto</code> cifra campos concretos —un email, un número de documento— con una clave que <b>no vive en la base</b>. Protege contra quien lee la tabla sin la clave: un analista con <code>SELECT</code>, un dump filtrado. Pero la app que necesita el dato tiene la clave, así que para ella el cifrado es transparente.</p>
+
+<pre data-lang="sql"><code>-- Cifrado de columna: la clave llega de fuera, no se guarda en la base
+INSERT INTO clientes (nombre, email_cifrado)
+VALUES ('Ana', pgp_sym_encrypt('ana@correo.com', :clave_de_la_app));
+
+SELECT nombre, pgp_sym_decrypt(email_cifrado, :clave_de_la_app) AS email
+FROM clientes WHERE id = 42;   -- solo quien tiene la clave ve el claro</code></pre>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">Trade-off</p>
+  <p>Cifrar una columna te impide indexarla y buscar por ella con un índice normal: la base ve bytes, no el valor. Si necesitas buscar por email, guardas aparte un hash con sal (<a href="m36-criptografia.html#passwords">como las contraseñas de M36</a>) para igualdad exacta, o aceptas el escaneo. Cifrar "por si acaso" toda la tabla suele costar más de lo que protege.</p>
+</aside>
+
+<p>Cuando el dato ni siquiera debe ser legible para la app, se <b>seudonimiza</b>: se reemplaza el identificador real por un seudónimo y la tabla que los une se guarda aparte, con su propio control de acceso. Y para cumplir un "borra mis datos" sin reescribir backups, se usa el <a href="m10-seguridad.html#cifrado">borrado criptográfico de M10</a>: si cada usuario tiene su clave, tirar la clave vuelve ilegible todo lo suyo. El marco legal que empuja esto —datos personales, derecho al olvido— es el <a href="m10-seguridad.html#cifrado">GDPR</a>, que ya nombraste en M10.</p>
+
+<h2 id="credenciales"><span class="sec-num">35.7</span>Credenciales de la base</h2>
+
+<p>Todo lo anterior se cae si la contraseña del rol <code>app_rw</code> está en un archivo del repositorio. Las credenciales de la base son un secreto de producción y se manejan como tal.</p>
+
+<ul>
+  <li><b>No incrustes la contraseña.</b> Nada de <code>jdbc:postgresql://...?password=...</code> en el código ni en un <code>application.yaml</code> versionado. La contraseña llega de una variable de entorno, de un <code>.pgpass</code> con permisos <code>600</code>, o de un gestor de secretos que la inyecta al arrancar.</li>
+  <li><b>Rota sin cortar.</b> Para cambiar la contraseña sin downtime se usan dos credenciales válidas a la vez: creas la nueva, haces que la app la tome en el próximo reinicio o recarga del <a href="m04-cache.html#pool">pool de conexiones</a>, y recién entonces revocas la vieja. Nunca "cambio la contraseña y a correr", que tira todas las conexiones abiertas.</li>
+  <li><b>El rol de la app, mínimo.</b> <code>app_rw</code> puede leer y escribir sus tablas; no es dueño del esquema, no crea tablas, no tiene <code>BYPASSRLS</code>. Las migraciones corren con otro rol, en otro momento.</li>
+  <li><b>Mejor que una contraseña, una identidad.</b> En la nube, en vez de una contraseña larga, la app se autentica con la identidad de su máquina o su rol (IAM): credenciales de corta vida que rotan solas. Eso lo arma el módulo que sigue, <a href="m37-nube.html#iam">M37</a>.</li>
+</ul>
+
+<p>Dónde se guarda ese secreto, cómo se inyecta y cómo se rota de verdad es el tema del <b>secrets manager</b> en <a href="m37-nube.html#kms">M37</a> (arquitecturas seguras en la nube). Aquí basta con la regla: la base confía en un rol con la contraseña correcta, así que esa contraseña vale tanto como los datos que protege.</p>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>Si <code>app_rw</code> fuera dueño de las tablas o tuviera <code>BYPASSRLS</code>, una inyección SQL en un solo endpoint dejaría de ser "lee filas de este tenant" y pasaría a ser "lee y borra todo, de todos los tenants, saltándose la RLS". El rol acotado convierte una falla grave en una contenida. Es el mismo razonamiento del mínimo privilegio con el que abrió el módulo.</p>
+</aside>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m35"></div>
+
+<section class="exercise" aria-labelledby="ej-m35">
+  <p class="exercise-title" id="ej-m35">Ejercicio de diseño: los roles de un SaaS multi-tenant</p>
+  <p>Un SaaS de facturación guarda las facturas de muchos clientes (tenants) en una base PostgreSQL. Tienen que convivir: la <b>aplicación web</b> (lee y escribe facturas, a miles por minuto), el equipo de <b>migraciones</b> (cambia el esquema en cada despliegue), un grupo de <b>analistas</b> (corren consultas de negocio, nunca escriben) y el proceso de <b>backups</b> (copia completa cada noche). Los datos incluyen el email y el documento fiscal de cada cliente. Diseña el acceso: qué rol para cada uno, cómo se aíslan los tenants, qué queda auditado y qué columnas se cifran.</p>
+  <details>
+    <summary>Ver la solución de referencia</summary>
+    <ul>
+      <li><b>Roles (RBAC + ABAC).</b> <code>app_rw</code> para la app: <code>SELECT/INSERT/UPDATE</code> sobre las tablas de negocio, sin ser dueño y sin <code>BYPASSRLS</code>. <code>migraciones</code>, dueño del esquema, corre fuera de hora pico. <code>analistas</code> (grupo) con <code>SELECT</code> y nada más; cada analista hereda de él. <code>backup</code> con <code>BYPASSRLS</code>, usado solo por el proceso nocturno.</li>
+      <li><b>Aislamiento de tenants (RLS = ABAC).</b> RLS en todas las tablas de negocio: <code>USING (tenant_id = current_setting('app.tenant_id')::uuid)</code>. La app fija <code>app.tenant_id</code> por sesión; los analistas también, limitados a los tenants que su trabajo autorice. Con <code>FORCE ROW LEVEL SECURITY</code> para que ni el dueño se la salte por descuido.</li>
+      <li><b>Auditoría.</b> Trigger <code>AFTER INSERT/UPDATE/DELETE</code> sobre las tablas de facturas que escribe en <code>audit_log</code> append-only (con <code>REVOKE UPDATE, DELETE</code>). Y pgAudit afinado para registrar los <code>SELECT</code> de los analistas sobre las columnas sensibles, que un trigger de fila no ve.</li>
+      <li><b>Cifrado.</b> El email y el documento fiscal, cifrados por columna con <code>pgcrypto</code> y una clave que la app toma del gestor de secretos, no de la base. Para buscar por email, un hash con sal aparte. Cifrado del volumen (TDE) para el disco y los backups. La app ve el claro porque lo necesita; el analista con <code>SELECT</code>, no.</li>
+      <li><b>Credenciales.</b> La contraseña de <code>app_rw</code> vive en el secrets manager (<a href="m37-nube.html#kms">M37</a>), se inyecta por entorno y se rota con dos credenciales válidas a la vez para no cortar el pool. En la nube, mejor autenticación por identidad (IAM) que una contraseña.</li>
+    </ul>
+  </details>
+</section>
+
+<div data-checkpoint="m35"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m35.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/widgets/sim-rbac.js"></script>
+</body>
+</html>

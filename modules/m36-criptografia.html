@@ -1,0 +1,1325 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M36. Criptografía desde cero</title>
+<meta name="description" content="Las piezas de la criptografía aplicada y cómo encajan: funciones hash, HMAC, cifrado simétrico con AEAD, criptografía asimétrica, firmas digitales, intercambio de claves, certificados y PKI, almacenamiento de contraseñas con Argon2, aleatoriedad criptográfica y los errores más comunes, siempre con el patrón vulnerable y su arreglo.">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/css/tokens.css">
+<link rel="stylesheet" href="../assets/css/layout.css">
+<link rel="stylesheet" href="../assets/css/components.css">
+</head>
+<body data-root="../" data-module="m36">
+<a class="skip-link" href="#contenido">Saltar al contenido</a>
+
+<header class="topbar">
+  <button class="menu-btn" type="button" aria-expanded="false" aria-controls="ruta" aria-label="Abrir la ruta del curso"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.8"/></svg>Ruta</button>
+  <button class="side-toggle" type="button" aria-controls="ruta" aria-pressed="false" aria-label="Ocultar la barra lateral" title="Ocultar o mostrar la barra lateral"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 2.5v13" stroke="currentColor" stroke-width="1.5"/></svg></button>
+  <a class="brand" href="../index.html">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path class="bm-line" d="M5 20 L13 12 L21 6" fill="none" stroke-width="2.5" stroke-linecap="round"/><circle class="bm-a" cx="5" cy="20" r="3.5"/><circle class="bm-b" cx="13" cy="12" r="3.2" stroke-width="2.4"/><circle class="bm-c" cx="21" cy="6" r="3.2" stroke-width="2.4"/></svg>
+    <span class="brand-label">Diseño de sistemas reales</span>
+  </a>
+  <nav class="topnav" aria-label="Principal">
+    <a href="../index.html">Curso</a>
+    <a href="../proyectos.html">Proyectos</a>
+    <a href="../glosario.html">Glosario</a>
+    <span class="top-progress" data-top-progress></span>
+  </nav>
+</header>
+
+<div class="shell">
+  <aside class="sidebar" id="ruta" aria-label="Ruta del curso">
+    <nav data-route></nav>
+  </aside>
+
+  <main class="main" id="contenido">
+    <article class="content">
+
+      <header class="title-block">
+        <h1>Criptografía desde cero</h1>
+        <p class="lead">Cada vez que una contraseña se guarda, un webhook se firma o una conexión se cifra, hay criptografía debajo. Este módulo arma esas piezas desde abajo —qué resuelve cada una, con qué se construye y cómo se rompe cuando se usa mal— para que elijas la herramienta correcta y la uses como manda su biblioteca, sin inventar nada.</p>
+        <dl class="tb-grid">
+          <div><dt>Plano</dt><dd>M36</dd></div>
+          <div><dt>Parte</dt><dd>IV. Ciberseguridad</dd></div>
+          <div><dt>Duración</dt><dd>140 min</dd></div>
+          <div><dt>Requisitos previos</dt><dd>M01, M10</dd></div>
+          <div><dt>Estado</dt><dd data-status="m36">Sin empezar</dd></div>
+        </dl>
+      </header>
+<section class="objectives" data-toc="skip" aria-labelledby="obj">
+  <h2 class="plain" id="obj">Al terminar podrás</h2>
+  <ul>
+    <li>Separar los cuatro objetivos de la criptografía —confidencialidad, integridad, autenticidad y no repudio— y decir qué herramienta da cada uno.</li>
+    <li>Elegir entre hash, HMAC, cifrado simétrico con AEAD, cifrado asimétrico y firma según lo que necesitas proteger.</li>
+    <li>Explicar por qué un nonce no se repite, por qué una contraseña no se guarda con SHA-256 y por qué una clave no se escribe en el código.</li>
+    <li>Leer un certificado X.509, seguir su cadena de confianza y reconocer las piezas de un handshake de TLS 1.3.</li>
+    <li>Reconocer los errores más comunes de criptografía aplicada y el arreglo de cada uno, y saber cuándo apoyarte en una biblioteca de alto nivel.</li>
+  </ul>
+</section>
+
+<aside class="callout callout--def">
+  <p class="callout-label">Cómo se usa este módulo</p>
+  <p>Todo lo que sigue es criptografía aplicada <b>defensiva</b>: cada tema muestra el patrón que falla y cómo se arregla, con comandos de diagnóstico y configuración, nunca pasos para atacar. La regla de oro atraviesa el módulo: <b>no inventes criptografía</b>. Las primitivas se combinan de formas que tienen pruebas de seguridad, y esas combinaciones ya vienen hechas en bibliotecas revisadas. Aquí entiendes qué hace cada pieza para usarlas bien, no para reimplementarlas.</p>
+</aside>
+
+<h2 id="intro"><span class="sec-num">36.1</span>Qué resuelve la criptografía y qué no</h2>
+
+<p>La criptografía no es un interruptor de «seguro». Es un juego de herramientas, y cada una responde una pregunta distinta. Confundirlas es el origen de la mayoría de los errores: se cifra cuando hacía falta firmar, se usa un hash donde hacía falta un MAC, se protege la confidencialidad y se olvida la integridad.</p>
+
+<p>Son cuatro objetivos. <b>Confidencialidad:</b> que nadie más lea el contenido. <b>Integridad:</b> enterarse si alguien lo cambió. <b>Autenticidad:</b> saber quién lo mandó de verdad. Y <dfn data-term="no-repudio">no repudio</dfn>: que quien lo mandó no pueda negarlo después. Los cuatro aparecieron ya en el curso —en <a href="m01-viaje-request.html#cripto">TLS (M01)</a>, en el <a href="m10-seguridad.html#cifrado">envelope encryption de M10</a>, en los <a href="m02-apis.html#webhooks">webhooks (M02)</a>— y este módulo los arma desde la pieza de abajo.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f361t f361d">
+<title id="f361t">Los cuatro objetivos de la criptografía</title>
+<desc id="f361d">Una fila por objetivo: confidencialidad, integridad, autenticidad y no repudio. Para cada uno, la pregunta que responde, la herramienta que lo da y dónde apareció antes en el curso.</desc>
+<text class="dg-group" x="16" y="24" text-anchor="start">Objetivo y pregunta</text>
+<text class="dg-group" x="282" y="24" text-anchor="start">Herramienta</text>
+<text class="dg-group" x="532" y="24" text-anchor="start">Ya lo usaste en</text>
+<rect class="dg-layer" style="--c: var(--l-service)" x="8" y="40" width="754" height="62" rx="8"/>
+<text class="dg-label" x="22" y="66" text-anchor="start">Confidencialidad</text>
+<text class="dg-tiny" x="22" y="85" text-anchor="start">¿Puede leerlo alguien más?</text>
+<path class="dg-frame" d="M266 52 V90"/>
+<text class="dg-label" x="282" y="66" text-anchor="start">Cifrado</text>
+<text class="dg-tiny" x="282" y="85" text-anchor="start">AES-GCM, ChaCha20-Poly1305</text>
+<path class="dg-frame" d="M516 52 V90"/>
+<text class="dg-tiny" x="532" y="74" text-anchor="start">TLS (M01), envelope y KMS (M10)</text>
+<rect class="dg-layer" style="--c: var(--l-db)" x="8" y="112" width="754" height="62" rx="8"/>
+<text class="dg-label" x="22" y="138" text-anchor="start">Integridad</text>
+<text class="dg-tiny" x="22" y="157" text-anchor="start">¿Lo cambió alguien en el camino?</text>
+<path class="dg-frame" d="M266 124 V162"/>
+<text class="dg-label" x="282" y="138" text-anchor="start">Hash y MAC</text>
+<text class="dg-tiny" x="282" y="157" text-anchor="start">SHA-256, HMAC</text>
+<path class="dg-frame" d="M516 124 V162"/>
+<text class="dg-tiny" x="532" y="146" text-anchor="start">webhooks (M02), URLs firmadas (M09)</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="8" y="184" width="754" height="62" rx="8"/>
+<text class="dg-label" x="22" y="210" text-anchor="start">Autenticidad</text>
+<text class="dg-tiny" x="22" y="229" text-anchor="start">¿Quién lo mandó de verdad?</text>
+<path class="dg-frame" d="M266 196 V234"/>
+<text class="dg-label" x="282" y="210" text-anchor="start">MAC o firma</text>
+<text class="dg-tiny" x="282" y="229" text-anchor="start">HMAC, Ed25519, ECDSA, RSA-PSS</text>
+<path class="dg-frame" d="M516 196 V234"/>
+<text class="dg-tiny" x="532" y="218" text-anchor="start">JWT (M10), certificados (M01)</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="8" y="256" width="754" height="62" rx="8"/>
+<text class="dg-label" x="22" y="282" text-anchor="start">No repudio</text>
+<text class="dg-tiny" x="22" y="301" text-anchor="start">¿Puede negarlo después?</text>
+<path class="dg-frame" d="M266 268 V306"/>
+<text class="dg-label" x="282" y="282" text-anchor="start">Solo la firma</text>
+<text class="dg-tiny" x="282" y="301" text-anchor="start">la clave privada es de uno solo</text>
+<path class="dg-frame" d="M516 268 V306"/>
+<text class="dg-tiny" x="532" y="290" text-anchor="start">WS-Security (M02)</text>
+<text class="dg-small" x="385" y="322" text-anchor="middle">Un MAC da integridad y autenticidad entre quienes comparten la clave; solo la firma da no repudio.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.1.</b> Los cuatro objetivos, la herramienta de cada uno y dónde ya los usaste. Un MAC da integridad y autenticidad a la vez entre quienes comparten la clave; solo una firma da no repudio, porque la clave privada la tiene una sola parte.</figcaption>
+</figure>
+
+<p>Dos principios ordenan todo lo demás. El primero es el <dfn data-term="principio-kerckhoffs">principio de Kerckhoffs</dfn>: un sistema debe ser seguro aunque el atacante conozca cómo funciona; lo único secreto es la clave. Por eso la criptografía seria es pública y auditada, y «lo inventamos nosotros y no lo contamos» (seguridad por oscuridad) no cuenta como defensa.</p>
+
+<p>El segundo es el tamaño de la clave. Una clave simétrica de 128 bits tiene <span class="mono">2<sup>128</sup></span> valores posibles, unos 3.40&#215;10<sup>38</sup>. Aunque alguien reuniera mil millones de máquinas y cada una probara mil millones de claves por segundo —10<sup>18</sup> intentos por segundo en total— tardaría:</p>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">La cuenta de los 128 bits</p>
+  <p class="mono">3.40&#215;10<sup>38</sup> &#247; 10<sup>18</sup> = 3.40&#215;10<sup>20</sup> s &#8776; 1.08&#215;10<sup>13</sup> años</p>
+  <p>Son unas <b>781 veces la edad del universo</b> (1.38&#215;10<sup>10</sup> años). Por eso la fuerza bruta sobre la clave no es la vía: los ataques reales van por la clave mal guardada, el nonce repetido, la contraseña débil o la biblioteca mal usada. 128 bits de clave simétrica se consideran seguros; 256 bits dejan margen incluso frente a una futura computadora cuántica (36.5).</p>
+</aside>
+
+<p>Y lo que la criptografía <b>no</b> resuelve: no decide si debes confiar en alguien (eso lo hace la <a href="m10-seguridad.html#basicos">autorización de M10</a>), no protege una clave que se filtró, no arregla un servidor sin parchar (<a href="m33-hardening-linux.html#modelo">M33</a>) y no esconde <em>que</em> dos partes se hablan, solo <em>qué</em> se dicen. Es una capa; necesita todas las demás.</p>
+
+<h2 id="hash"><span class="sec-num">36.2</span>Funciones hash: la huella digital de los datos</h2>
+
+<p>Una <dfn data-term="funcion-hash">función hash</dfn> criptográfica toma datos de cualquier tamaño y devuelve una cadena fija —256 bits en SHA-256— que funciona como huella. Tres propiedades la hacen útil: es de <b>una vía</b> (de la huella no se vuelve al mensaje), resiste <b>colisiones</b> (es inviable encontrar dos mensajes con la misma huella) y tiene <b>efecto avalancha</b> (cambiar un bit de la entrada cambia cerca de la mitad de los bits de salida).</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f362t f362d">
+<title id="f362t">Una función hash por dentro</title>
+<desc id="f362d">El mensaje se rellena y se corta en bloques de 512 bits. Una función de compresión mezcla cada bloque con el estado que dejó el anterior, empezando por un valor fijo. El último estado es el resumen de 256 bits. Abajo, las tres propiedades que importan: una vía, resistencia a colisiones y efecto avalancha.</desc>
+<defs><marker id="f362a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="24" text-anchor="start">SHA-256 (construcción Merkle-Damgård)</text>
+<rect x="16" y="40" width="738" height="34" rx="6" fill="color-mix(in srgb, var(--l-client) 12%, var(--bg))" stroke="var(--l-client)" stroke-width="1.5"/>
+<text class="dg-tiny dg-mono" x="26" y="62" text-anchor="start">Mensaje de cualquier tamaño:  &quot;transferir 100 USD a la cuenta 42…&quot;</text>
+<rect class="dg-box" x="40" y="92" width="150" height="30" rx="5"/>
+<text class="dg-tiny" x="115" y="112" text-anchor="middle">bloque 1 (512 bits)</text>
+<path class="dg-edge" d="M115 122 V150" marker-end="url(#f362a)"/>
+<rect class="dg-box" x="220" y="92" width="150" height="30" rx="5"/>
+<text class="dg-tiny" x="295" y="112" text-anchor="middle">bloque 2 (512 bits)</text>
+<path class="dg-edge" d="M295 122 V150" marker-end="url(#f362a)"/>
+<rect class="dg-box" x="400" y="92" width="230" height="30" rx="5"/>
+<text class="dg-tiny" x="515" y="112" text-anchor="middle">bloque 3 + relleno + largo</text>
+<path class="dg-edge" d="M475 122 V150" marker-end="url(#f362a)"/>
+<rect class="dg-box" x="16" y="152" width="64" height="40" rx="6"/>
+<text class="dg-tiny" x="48" y="170" text-anchor="middle">valor</text>
+<text class="dg-tiny" x="48" y="184" text-anchor="middle">inicial</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="100" y="152" width="90" height="40" rx="6"/>
+<text class="dg-small" x="145" y="177" text-anchor="middle">compresión</text>
+<path class="dg-edge" d="M80 172 H98" marker-end="url(#f362a)"/>
+<text class="dg-tiny" x="235" y="166" text-anchor="middle">estado 1</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="280" y="152" width="90" height="40" rx="6"/>
+<text class="dg-small" x="325" y="177" text-anchor="middle">compresión</text>
+<path class="dg-edge" d="M190 172 H278" marker-end="url(#f362a)"/>
+<text class="dg-tiny" x="415" y="166" text-anchor="middle">estado 2</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="460" y="152" width="90" height="40" rx="6"/>
+<text class="dg-small" x="505" y="177" text-anchor="middle">compresión</text>
+<path class="dg-edge" d="M370 172 H458" marker-end="url(#f362a)"/>
+<path class="dg-edge" d="M550 172 H600" marker-end="url(#f362a)"/>
+<rect x="602" y="150" width="152" height="44" rx="6" fill="color-mix(in srgb, var(--l-service) 18%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-label" x="678" y="170" text-anchor="middle">resumen</text>
+<text class="dg-tiny" x="678" y="186" text-anchor="middle">256 bits = 32 bytes</text>
+<text class="dg-small" x="385" y="218" text-anchor="middle">Una función hash no lleva clave: para autenticar un mensaje se usa una construcción estándar, HMAC (36.3).</text>
+<rect class="dg-ok" x="16" y="236" width="238" height="100" rx="8"/>
+<text class="dg-label" x="30" y="260" text-anchor="start">Una vía</text>
+<text class="dg-tiny" x="30" y="282" text-anchor="start">Del resumen no se vuelve</text>
+<text class="dg-tiny" x="30" y="298" text-anchor="start">al mensaje: solo se prueba</text>
+<text class="dg-tiny" x="30" y="314" text-anchor="start">mensaje por mensaje.</text>
+<rect class="dg-ok" x="266" y="236" width="238" height="100" rx="8"/>
+<text class="dg-label" x="280" y="260" text-anchor="start">Sin colisiones</text>
+<text class="dg-tiny" x="280" y="282" text-anchor="start">Dos mensajes con el mismo</text>
+<text class="dg-tiny" x="280" y="298" text-anchor="start">resumen: unos 2^128 intentos</text>
+<text class="dg-tiny" x="280" y="314" text-anchor="start">para 256 bits (cumpleaños).</text>
+<rect class="dg-ok" x="516" y="236" width="238" height="100" rx="8"/>
+<text class="dg-label" x="530" y="260" text-anchor="start">Avalancha</text>
+<text class="dg-tiny" x="530" y="282" text-anchor="start">Un bit distinto en la entrada</text>
+<text class="dg-tiny" x="530" y="298" text-anchor="start">cambia cerca de la mitad</text>
+<text class="dg-tiny" x="530" y="314" text-anchor="start">de los bits de salida.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.2.</b> SHA-256 por dentro: el mensaje se corta en bloques y una función de compresión los encadena, arrancando de un valor fijo. El resumen es el último estado interno. Esa forma de encadenar es la razón de la regla de 36.3.</figcaption>
+</figure>
+
+<p>Las familias vigentes son <b>SHA-2</b> (SHA-256, SHA-512; FIPS 180-4) y <b>SHA-3</b> (FIPS 202), con una construcción interna distinta que sirve de reserva si algún día SHA-2 flaquea. La resistencia a colisiones va por la mitad de los bits: con 256 bits de salida, encontrar una colisión cuesta del orden de <span class="mono">2<sup>128</sup></span> intentos por la <dfn data-term="paradoja-cumpleanos">paradoja del cumpleaños</dfn>. Por eso una huella «de 256 bits» da en realidad 128 bits de seguridad frente a colisiones.</p>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p><b>MD5 y SHA-1 están rotos</b> para uso criptográfico: se saben construir colisiones. El ataque <em>SHAttered</em> (2017) produjo dos PDF distintos con el mismo SHA-1, y en 2012 el malware <em>Flame</em> se apoyó en una colisión de MD5 para hacerse pasar por una actualización de Windows firmada. <span class="badge badge--doc">Documentado</span> La lección es defensiva: no uses MD5 ni SHA-1 para firmas, certificados ni integridad; quedan solo como sumas de verificación contra errores de transmisión, no contra un adversario.</p>
+</aside>
+
+<p>Para qué sirve un hash: comprobar que una descarga llegó entera, identificar un contenido por su huella (las <a href="m09-objetos.html#claves-hash">claves por contenido de M09</a>), o encadenar commits como hace git. Para qué <b>no</b> sirve: no cifra (no hay clave, cualquiera recalcula la huella), no autentica por sí solo (para eso está el MAC de 36.3) y no guarda contraseñas (para eso están los KDF de 36.9, por una razón que verás).</p>
+
+<p>Prueba el efecto avalancha: cambia un carácter y mira cómo cambia casi toda la huella.</p>
+
+<div data-calc="hash"></div>
+
+<h2 id="hmac"><span class="sec-num">36.3</span>HMAC: integridad y autenticidad con clave compartida</h2>
+
+<p>Un hash dice si los datos cambiaron, pero cualquiera puede recalcularlo: no prueba <em>quién</em> los mandó. Un <dfn data-term="hmac">MAC</dfn> (Message Authentication Code) añade una clave secreta compartida: solo quien la tiene produce y verifica la etiqueta, así que una etiqueta válida prueba a la vez integridad y autenticidad.</p>
+
+<p>La tentación es pegar la clave al mensaje y hashear: <span class="mono">SHA-256(clave &#8214; mensaje)</span>. Parece razonable y no lo es. Por cómo SHA-2 encadena bloques (figura 36.2), esa construcción casera tiene debilidades conocidas y <b>no</b> se usa. La construcción correcta y con pruebas de seguridad es <b>HMAC</b> (RFC 2104, FIPS 198-1): dos pasadas de hash, una interna y una externa, cada una mezclando la clave.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f363t f363d">
+<title id="f363t">Una construcción casera contra HMAC</title>
+<desc id="f363d">A la izquierda, una construcción casera: SHA-256 de la clave seguida del mensaje. SHA-256 no se diseñó para usarse así y esa combinación tiene una debilidad conocida, así que no sirve para autenticar. A la derecha, HMAC: un hash interno con la clave y el mensaje, y un hash externo con la clave y el resultado interno; es el estándar, con pruebas de seguridad, y se usa tal cual desde la biblioteca.</desc>
+<defs><marker id="f363a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="24" text-anchor="start">Casera: SHA-256(clave ‖ mensaje)</text>
+<text class="dg-group" x="402" y="24" text-anchor="start">HMAC-SHA256(clave, mensaje)</text>
+<path class="dg-frame" d="M386 14 V320"/>
+<rect class="dg-box" x="16" y="40" width="110" height="32" rx="5"/>
+<text class="dg-small" x="71" y="60" text-anchor="middle">clave</text>
+<rect class="dg-box" x="132" y="40" width="220" height="32" rx="5"/>
+<text class="dg-small" x="242" y="60" text-anchor="middle">mensaje</text>
+<path class="dg-edge" d="M184 72 V96" marker-end="url(#f363a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="110" y="98" width="148" height="36" rx="6"/>
+<text class="dg-small" x="184" y="121" text-anchor="middle">SHA-256</text>
+<path class="dg-edge" d="M184 134 V158" marker-end="url(#f363a)"/>
+<rect x="110" y="160" width="148" height="34" rx="6" fill="color-mix(in srgb, var(--l-service) 18%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="184" y="181" text-anchor="middle">resumen publicado</text>
+<rect class="dg-bad" x="16" y="214" width="354" height="96" rx="8"/>
+<text class="dg-tiny" x="28" y="236" text-anchor="start">Parece razonable y no lo es: SHA-256 no se diseñó</text>
+<text class="dg-tiny" x="28" y="254" text-anchor="start">para usarse con una clave pegada adelante, y esta</text>
+<text class="dg-tiny" x="28" y="272" text-anchor="start">combinación tiene una debilidad conocida. Nada de</text>
+<text class="dg-tiny" x="28" y="290" text-anchor="start">MACs caseros: se usa la construcción estándar.</text>
+<rect class="dg-box" x="402" y="40" width="150" height="32" rx="5"/>
+<text class="dg-small" x="477" y="60" text-anchor="middle">clave ⊕ ipad</text>
+<rect class="dg-box" x="560" y="40" width="194" height="32" rx="5"/>
+<text class="dg-small" x="657" y="60" text-anchor="middle">mensaje</text>
+<path class="dg-edge" d="M580 72 V96" marker-end="url(#f363a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="506" y="98" width="148" height="34" rx="6"/>
+<text class="dg-small" x="580" y="120" text-anchor="middle">SHA-256 interno</text>
+<rect class="dg-box" x="402" y="146" width="150" height="32" rx="5"/>
+<text class="dg-small" x="477" y="166" text-anchor="middle">clave ⊕ opad</text>
+<path class="dg-edge" d="M580 132 V146" marker-end="url(#f363a)"/>
+<rect class="dg-box" x="560" y="146" width="194" height="32" rx="5"/>
+<text class="dg-small" x="657" y="166" text-anchor="middle">resumen interno</text>
+<path class="dg-edge" d="M580 178 V200" marker-end="url(#f363a)"/>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="506" y="202" width="148" height="34" rx="6"/>
+<text class="dg-small" x="580" y="224" text-anchor="middle">SHA-256 externo</text>
+<path class="dg-edge" d="M580 236 V254" marker-end="url(#f363a)"/>
+<rect class="dg-ok" x="442" y="256" width="276" height="54" rx="8"/>
+<text class="dg-tiny" x="580" y="278" text-anchor="middle">tag de 32 bytes: el último paso usó la clave,</text>
+<text class="dg-tiny" x="580" y="296" text-anchor="middle">así que no hay estado útil del que seguir</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.3.</b> A la izquierda, la construcción casera que no se usa. A la derecha, HMAC: el resultado publicado ya pasó por un cierre con la clave. La diferencia no es cosmética; es la que tiene demostración de seguridad.</figcaption>
+</figure>
+
+<p>Ya lo usaste sin nombrarlo: HMAC firma los <a href="m02-apis.html#webhooks">webhooks de M02</a> y los <a href="m27-pagos-stripe.html#webhooks">de Stripe (M27)</a>, protege las <a href="m09-objetos.html#signed-urls">URLs firmadas de M09</a> y es la «S» de <a href="m10-seguridad.html#tokens">JWT con HS256 (M10)</a>. Dos detalles de implementación separan el HMAC bien usado del mal usado:</p>
+
+<ul>
+  <li><b>Comparar en tiempo constante.</b> Comparar la etiqueta recibida con la calculada usando <span class="mono">==</span> puede terminar antes en el primer byte distinto, y ese tiempo filtra información. Se usa una comparación de tiempo constante: <span class="mono">hmac.compare_digest</span> en Python, <span class="mono">crypto.timingSafeEqual</span> en Node.</li>
+  <li><b>Incluir el tiempo contra reenvíos.</b> Una etiqueta válida sigue siendo válida siempre; para que un mensaje capturado no se reenvíe mañana, se firma junto con una marca de tiempo y el receptor rechaza lo viejo. Stripe, por ejemplo, documenta una tolerancia de 5 minutos entre la marca firmada y la hora del servidor. <span class="badge badge--doc">Documentado</span></li>
+</ul>
+
+<p>Lo que HMAC <b>no</b> da es no repudio: como la clave es compartida, emisor y receptor pueden producir la misma etiqueta, así que ninguno puede probar ante un tercero que fue el otro. Para eso hace falta una firma (36.6).</p>
+
+<div data-calc="hmac"></div>
+
+<h2 id="simetrico"><span class="sec-num">36.4</span>Cifrado simétrico: una clave para los dos lados</h2>
+
+<p>El <dfn data-term="cifrado-simetrico">cifrado simétrico</dfn> usa la misma clave para cifrar y descifrar. Es rapidísimo —AES corre a varios GB/s porque los procesadores traen instrucciones dedicadas— y es el que cifra el grueso de los datos en todos lados. Los dos algoritmos de referencia son <b>AES</b> (FIPS 197; bloque de 128 bits, claves de 128, 192 o 256 bits) y <b>ChaCha20</b>, que gana en dispositivos sin aceleración de AES.</p>
+
+<p>AES cifra bloques de 16 bytes. Cómo se encadenan esos bloques —el <em>modo</em>— es donde se decide casi todo:</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 270" role="img" aria-labelledby="f364t f364d">
+<title id="f364t">El mismo bloque, el mismo cifrado: ECB</title>
+<desc id="f364d">Tres rejillas de 12 por 9 bloques. La primera es el texto plano: un candado dibujado con dos tipos de bloque. La segunda es el cifrado en modo ECB: cada bloque igual da el mismo cifrado y el candado se sigue viendo. La tercera es el cifrado con un modo con nonce, como GCM: todos los bloques parecen al azar.</desc>
+<defs><marker id="f364ba" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-label" x="28" y="24" text-anchor="start">Texto plano</text>
+<text class="dg-tiny" x="28" y="42" text-anchor="start">bloques de 16 bytes</text>
+<rect x="28" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="54" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="70" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="70" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="70" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="70" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="70" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="86" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="86" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="86" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="102" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="102" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="102" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="118" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="118" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="118" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="118" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="118" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="134" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="134" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="150" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="150" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="166" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="166" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="166" width="15" height="15" fill="color-mix(in srgb, var(--label) 70%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="166" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="166" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="28" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="44" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="60" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="76" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="92" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="108" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="124" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="140" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="156" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="172" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="188" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="204" y="182" width="15" height="15" fill="var(--bg)" stroke="var(--separator)" stroke-width="0.5"/>
+<path class="dg-edge" d="M228 126.0 H270" marker-end="url(#f364ba)"/>
+<text class="dg-label" x="280" y="24" text-anchor="start">Cifrado en ECB</text>
+<text class="dg-tiny" x="280" y="42" text-anchor="start">bloque igual, cifrado igual</text>
+<rect x="280" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="280" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="296" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="312" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="328" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="344" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="360" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="376" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="392" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="408" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="424" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="440" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="456" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<path class="dg-edge" d="M480 126.0 H522" marker-end="url(#f364ba)"/>
+<text class="dg-label" x="532" y="24" text-anchor="start">Cifrado en GCM</text>
+<text class="dg-tiny" x="532" y="42" text-anchor="start">nonce y contador: todo distinto</text>
+<rect x="532" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="54" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="70" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="86" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="102" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="118" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="134" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="150" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="166" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="532" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="548" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="564" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="580" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="596" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="612" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-db) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="628" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-gpu) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="644" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-cache) 35%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="660" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-queue) 60%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="676" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-service) 40%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="692" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect x="708" y="182" width="15" height="15" fill="color-mix(in srgb, var(--l-edge) 45%, var(--bg))" stroke="var(--separator)" stroke-width="0.5"/>
+<rect class="dg-warnbox" x="28" y="212" width="714" height="46" rx="8"/>
+<text class="dg-tiny" x="385" y="232" text-anchor="middle">ECB filtra la forma de los datos: dos contraseñas iguales dan dos cifrados iguales (Adobe, 2013).</text>
+<text class="dg-tiny" x="385" y="249" text-anchor="middle">Con un nonce distinto por mensaje, el mismo texto plano da un cifrado distinto cada vez.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.4.</b> El mismo candado cifrado en ECB y en un modo con nonce. ECB cifra cada bloque por separado, así que bloques iguales dan cifrado igual y la forma de los datos se filtra. Con un nonce distinto por mensaje, el mismo texto da un cifrado distinto cada vez.</figcaption>
+</figure>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>En 2013, una filtración de Adobe expuso más de 150 millones de contraseñas cifradas con 3DES en modo <b>ECB</b> y sin sal. Como ECB cifra cada bloque igual, las contraseñas repetidas daban el mismo cifrado, y las pistas de recuperación, en claro, terminaron de delatarlas. <span class="badge badge--doc">Documentado</span> ECB no se usa nunca para datos reales.</p>
+</aside>
+
+<p>Los modos modernos no solo cifran: también autentican. Se llaman <dfn data-term="aead">AEAD</dfn> (Authenticated Encryption with Associated Data) y combinan confidencialidad con un MAC en una sola operación. Los dos estándar son <b>AES-GCM</b> (SP 800-38D) y <b>ChaCha20-Poly1305</b> (RFC 8439). Reciben clave, <dfn data-term="nonce">nonce</dfn>, texto plano y datos asociados (cabeceras que viajan en claro pero firmadas), y devuelven el texto cifrado más un <em>tag</em> de 16 bytes. Al descifrar, si el tag no coincide no se devuelve ni un byte.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 362" role="img" aria-labelledby="f365t f365d">
+<title id="f365t">Cifrado autenticado: qué entra y qué sale</title>
+<desc id="f365d">Arriba, cifrar: entran la clave, el nonce, el texto plano y los datos asociados; salen el texto cifrado, del mismo largo, y un tag de 16 bytes. Abajo, descifrar: con la clave, el nonce, el cifrado, el tag y los mismos datos asociados, primero se verifica el tag; si no coincide, no se devuelve nada.</desc>
+<defs><marker id="f365a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="24" text-anchor="start">Cifrar</text>
+<rect class="dg-box" x="16" y="36" width="200" height="30" rx="5"/>
+<text class="dg-small" x="26" y="55" text-anchor="start">clave</text>
+<text class="dg-tiny" x="206" y="55" text-anchor="end">32 bytes, secreta</text>
+<path class="dg-edge" d="M216 51 L298 81.0" marker-end="url(#f365a)"/>
+<rect class="dg-warnbox" x="16" y="72" width="200" height="30" rx="5"/>
+<text class="dg-small" x="26" y="91" text-anchor="start">nonce</text>
+<text class="dg-tiny" x="206" y="91" text-anchor="end">12 bytes, nunca repetido</text>
+<path class="dg-edge" d="M216 87 L298 91.0" marker-end="url(#f365a)"/>
+<rect class="dg-box" x="16" y="108" width="200" height="30" rx="5"/>
+<text class="dg-small" x="26" y="127" text-anchor="start">texto plano</text>
+<text class="dg-tiny" x="206" y="127" text-anchor="end">n bytes</text>
+<path class="dg-edge" d="M216 123 L298 101.0" marker-end="url(#f365a)"/>
+<rect class="dg-box" x="16" y="144" width="200" height="30" rx="5"/>
+<text class="dg-small" x="26" y="163" text-anchor="start">datos asociados</text>
+<text class="dg-tiny" x="206" y="163" text-anchor="end">no se cifran, sí se firman</text>
+<path class="dg-edge" d="M216 159 L298 111.0" marker-end="url(#f365a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="300" y="66" width="170" height="60" rx="8"/>
+<text class="dg-label" x="385" y="92" text-anchor="middle">AES-256-GCM</text>
+<text class="dg-tiny" x="385" y="110" text-anchor="middle">o ChaCha20-Poly1305</text>
+<path class="dg-edge" d="M470 86 L548 66" marker-end="url(#f365a)"/>
+<path class="dg-edge" d="M470 106 L548 124" marker-end="url(#f365a)"/>
+<rect x="550" y="46" width="204" height="36" rx="5" fill="color-mix(in srgb, var(--l-service) 16%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small" x="560" y="69" text-anchor="start">texto cifrado</text>
+<text class="dg-tiny" x="744" y="69" text-anchor="end">n bytes</text>
+<rect x="550" y="106" width="204" height="36" rx="5" fill="color-mix(in srgb, var(--l-queue) 16%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small" x="560" y="129" text-anchor="start">tag</text>
+<text class="dg-tiny" x="744" y="129" text-anchor="end">16 bytes</text>
+<path class="dg-frame" d="M16 190 H754"/>
+<text class="dg-group" x="16" y="214" text-anchor="start">Descifrar</text>
+<rect class="dg-box" x="16" y="228" width="200" height="52" rx="5"/>
+<text class="dg-tiny" x="26" y="248" text-anchor="start">clave, nonce, cifrado,</text>
+<text class="dg-tiny" x="26" y="266" text-anchor="start">tag y datos asociados</text>
+<path class="dg-edge" d="M216 254 H298" marker-end="url(#f365a)"/>
+<rect class="dg-layer" style="--c: var(--l-service)" x="300" y="228" width="170" height="52" rx="8"/>
+<text class="dg-small" x="385" y="250" text-anchor="middle">Recalcula el tag</text>
+<text class="dg-tiny" x="385" y="267" text-anchor="middle">y lo compara</text>
+<path class="dg-edge" d="M470 244 L548 228" marker-end="url(#f365a)"/>
+<path class="dg-edge" d="M470 266 L548 290" marker-end="url(#f365a)"/>
+<rect class="dg-ok" x="550" y="206" width="204" height="40" rx="6"/>
+<text class="dg-tiny" x="652" y="224" text-anchor="middle">Coincide: devuelve el</text>
+<text class="dg-tiny" x="652" y="239" text-anchor="middle">texto plano</text>
+<rect class="dg-bad" x="550" y="270" width="204" height="44" rx="6"/>
+<text class="dg-tiny" x="652" y="288" text-anchor="middle">No coincide: InvalidTag,</text>
+<text class="dg-tiny" x="652" y="304" text-anchor="middle">no devuelve ni un byte</text>
+<text class="dg-small" x="385" y="346" text-anchor="middle">Lo que se guarda: nonce ‖ cifrado ‖ tag. Un campo de 1 024 bytes ocupa 12 + 1 024 + 16 = 1 052.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.5.</b> AEAD, entradas y salidas. Lo que se guarda es <span class="mono">nonce &#8214; cifrado &#8214; tag</span>: un campo de 1&#8239;024 bytes ocupa 12&#160;+&#160;1&#8239;024&#160;+&#160;16&#160;=&#160;1&#8239;052 bytes.</figcaption>
+</figure>
+
+<p>El <b>nonce</b> (number used once) es el punto delicado. Con AES-GCM mide 96 bits y la regla es absoluta: <b>nunca se repite con la misma clave</b>. Si se elige al azar, el límite seguro ronda los 2<sup>32</sup> mensajes por clave antes de que el riesgo de repetir deje de ser despreciable (SP 800-38D); si hacen falta más, se usa un contador, o variantes pensadas para ese caso como XChaCha20 (nonce de 192 bits) o AES-GCM-SIV, que resiste la repetición. Repetir el nonce con GCM no es un descuido menor: rompe la confidencialidad de esos dos mensajes y además degrada la autenticación de la clave. La defensa es simple y no negociable: que la biblioteca genere el nonce, o lleva un contador persistente, y rota la clave mucho antes del límite.</p>
+
+<p>Así se usa en la práctica, con la biblioteca haciendo el trabajo fino:</p>
+
+<pre data-lang="python"><code>from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import os
+
+key = AESGCM.generate_key(bit_length=256)   # 32 bytes de os.urandom por debajo
+aes = AESGCM(key)
+
+nonce = os.urandom(12)                        # 96 bits, uno nuevo por mensaje
+aad = b"factura:42;tenant:ACME"               # viaja en claro, pero firmado
+ct = aes.encrypt(nonce, b"saldo=1000", aad)   # ct incluye el tag de 16 bytes
+
+# Para descifrar hacen falta la MISMA clave, el MISMO nonce y los MISMOS aad.
+plano = aes.decrypt(nonce, ct, aad)           # si algo no cuadra: InvalidTag, no datos</code></pre>
+
+<p>El widget muestra por qué el nonce no se repite: con el mismo nonce, el flujo que cifra es idéntico, y eso relaciona los dos cifrados. Es un modelo de juguete, solo para ver el principio.</p>
+
+<div data-sim="nonce"></div>
+
+<h2 id="asimetrico"><span class="sec-num">36.5</span>Criptografía asimétrica: dos claves distintas</h2>
+
+<p>El cifrado simétrico tiene un problema de reparto: ¿cómo le hago llegar la clave al otro sin que nadie la vea? La <dfn data-term="criptografia-asimetrica">criptografía asimétrica</dfn> lo resuelve con un par de claves: una <b>pública</b>, que se reparte sin secreto, y una <b>privada</b>, que no sale nunca de su dueño. Lo que cifra una, solo lo abre la otra.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 330" role="img" aria-labelledby="f366t f366d">
+<title id="f366t">Simétrico, asimétrico e híbrido</title>
+<desc id="f366d">Tres columnas. Simétrico: Ana y Beto usan la misma clave para cifrar y descifrar; es rápido, pero hay que repartir la clave. Asimétrico: Beto publica su clave pública y guarda la privada; Ana cifra con la pública y solo Beto descifra. Híbrido: la parte asimétrica acuerda una clave de sesión y la simétrica cifra los datos.</desc>
+<defs><marker id="f366a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="12" y="12" width="238" height="306" rx="10"/>
+<text class="dg-label" x="131" y="36" text-anchor="middle">Simétrico</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="266" y="12" width="238" height="306" rx="10"/>
+<text class="dg-label" x="385" y="36" text-anchor="middle">Asimétrico</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="520" y="12" width="238" height="306" rx="10"/>
+<text class="dg-label" x="639" y="36" text-anchor="middle">Híbrido (TLS, HPKE)</text>
+<rect class="dg-box" x="26" y="56" width="90" height="32" rx="5"/>
+<text class="dg-small" x="71" y="77" text-anchor="middle">Ana</text>
+<rect class="dg-box" x="146" y="56" width="90" height="32" rx="5"/>
+<text class="dg-small" x="191" y="77" text-anchor="middle">Beto</text>
+<rect x="76" y="102" width="110" height="28" rx="5" fill="color-mix(in srgb, var(--l-edge) 22%, var(--bg))" stroke="var(--l-edge)" stroke-width="1.5"/>
+<text class="dg-tiny" x="131" y="121" text-anchor="middle">misma clave K</text>
+<path class="dg-edge" d="M116 150 H144" marker-end="url(#f366a)"/>
+<text class="dg-tiny" x="131" y="168" text-anchor="middle">cifra y descifra con K</text>
+<text class="dg-tiny" x="34" y="200" text-anchor="start">Rápido: AES va a GB/s con</text>
+<text class="dg-tiny" x="34" y="218" text-anchor="start">instrucciones del procesador.</text>
+<text class="dg-tiny" x="34" y="236" text-anchor="start">Problema: ¿cómo le hago llegar</text>
+<text class="dg-tiny" x="34" y="254" text-anchor="start">K a Beto sin que nadie la vea?</text>
+<rect class="dg-box" x="280" y="56" width="90" height="32" rx="5"/>
+<text class="dg-small" x="325" y="77" text-anchor="middle">Ana</text>
+<rect class="dg-box" x="400" y="56" width="90" height="32" rx="5"/>
+<text class="dg-small" x="445" y="77" text-anchor="middle">Beto</text>
+<rect x="280" y="102" width="104" height="28" rx="5" fill="color-mix(in srgb, var(--l-external) 22%, var(--bg))" stroke="var(--l-external)" stroke-width="1.5"/>
+<text class="dg-tiny" x="332" y="121" text-anchor="middle">pública de Beto</text>
+<rect x="396" y="102" width="96" height="28" rx="5" fill="color-mix(in srgb, var(--l-cache) 22%, var(--bg))" stroke="var(--l-cache)" stroke-width="1.5"/>
+<text class="dg-tiny" x="444" y="121" text-anchor="middle">privada</text>
+<path class="dg-edge" d="M370 150 H398" marker-end="url(#f366a)"/>
+<text class="dg-tiny" x="385" y="168" text-anchor="middle">cifra con la pública</text>
+<text class="dg-tiny" x="385" y="184" text-anchor="middle">descifra con la privada</text>
+<text class="dg-tiny" x="288" y="210" text-anchor="start">La pública se reparte sin</text>
+<text class="dg-tiny" x="288" y="228" text-anchor="start">secreto. Lenta y para pocos</text>
+<text class="dg-tiny" x="288" y="246" text-anchor="start">bytes: no se cifran archivos</text>
+<text class="dg-tiny" x="288" y="264" text-anchor="start">con RSA, se cifra una clave.</text>
+<text class="dg-small" x="542" y="66" text-anchor="start">1. Intercambio de claves</text>
+<text class="dg-tiny" x="542" y="84" text-anchor="start">ECDHE o una KEM: acuerdan</text>
+<text class="dg-tiny" x="542" y="100" text-anchor="start">una clave de sesión K</text>
+<text class="dg-small" x="542" y="134" text-anchor="start">2. Cifrado simétrico</text>
+<text class="dg-tiny" x="542" y="152" text-anchor="start">AES-GCM con K para los</text>
+<text class="dg-tiny" x="542" y="168" text-anchor="start">datos, a velocidad de AES</text>
+<text class="dg-small" x="542" y="202" text-anchor="start">3. Al terminar</text>
+<text class="dg-tiny" x="542" y="220" text-anchor="start">K se borra: la próxima</text>
+<text class="dg-tiny" x="542" y="236" text-anchor="start">conexión usa otra</text>
+<rect class="dg-ok" x="534" y="250" width="210" height="52" rx="6"/>
+<text class="dg-tiny" x="639" y="272" text-anchor="middle">Lo mejor de los dos: sin claves</text>
+<text class="dg-tiny" x="639" y="289" text-anchor="middle">repartidas antes y a toda velocidad</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.6.</b> Simétrico, asimétrico e híbrido. El asimétrico resuelve el reparto de claves pero es lento y para pocos bytes; el híbrido usa asimétrico para acordar una clave y simétrico para cifrar los datos. Es lo que hacen TLS y HPKE.</figcaption>
+</figure>
+
+<p>Hay dos familias. <b>RSA</b> se apoya en lo difícil que es factorizar números grandes; <b>la curva elíptica</b> (EC), en el logaritmo discreto sobre una curva. A igual seguridad, EC usa claves mucho más chicas. Según SP 800-57, RSA-2048 da unos 112 bits de seguridad y RSA-3072 unos 128; una curva como P-256 o X25519 da esos mismos 128 bits con una clave de 32 bytes, frente a los 384 bytes de RSA-3072. Por eso lo nuevo nace en curva elíptica.</p>
+
+<p>El asimétrico es lento y cifra pocos bytes, así que casi nunca se cifran datos con él directamente. Se usa <b>híbrido</b>: la parte asimétrica acuerda o transporta una clave de sesión, y el AES-GCM de 36.4 cifra los datos. Es el patrón de TLS y de HPKE (RFC 9180). Para ver el mecanismo con números chiquitos, un RSA de juguete: con <span class="mono">p=61</span>, <span class="mono">q=53</span> sale <span class="mono">n=3233</span>; con <span class="mono">e=17</span> la clave privada es <span class="mono">d=2753</span>. Cifrar <span class="mono">m=65</span> da <span class="mono">65<sup>17</sup> mod 3233 = 2790</span>, y <span class="mono">2790<sup>2753</sup> mod 3233</span> vuelve a <span class="mono">65</span>. Con números reales, factorizar <span class="mono">n</span> para hallar <span class="mono">d</span> es el muro.</p>
+
+<aside class="callout callout--tradeoff">
+  <p class="callout-label">La amenaza cuántica, sin alarmismo</p>
+  <p>Una computadora cuántica grande rompería RSA y EC con el algoritmo de Shor. No existe aún, pero la amenaza ya cuenta: un atacante puede <b>grabar hoy</b> tráfico cifrado y <b>descifrarlo mañana</b>, cuando esa máquina exista («harvest now, decrypt later»). Por eso el NIST estandarizó en agosto de 2024 los primeros algoritmos post-cuánticos: FIPS 203 (ML-KEM, intercambio de claves), 204 y 205 (firmas). <span class="badge badge--doc">Documentado</span> Chrome ya acuerda claves con un esquema híbrido X25519MLKEM768, que combina la curva clásica con ML-KEM, para que la sesión aguante aunque una de las dos caiga. El cifrado simétrico se ve mucho menos afectado: contra Grover basta duplicar la clave, y de ahí la recomendación de AES-256 para datos de larga vida.</p>
+</aside>
+
+<h2 id="firmas"><span class="sec-num">36.6</span>Firmas digitales: quién lo mandó, sin negarlo después</h2>
+
+<p>Una <dfn data-term="firma-digital">firma digital</dfn> invierte el uso del par de claves: se firma con la <b>privada</b> y se verifica con la <b>pública</b>. Como la privada la tiene una sola parte, una firma válida prueba a cualquiera —no solo al receptor— que el mensaje lo firmó ese dueño y que no cambió. Eso es lo que HMAC no podía dar: <a href="#intro">no repudio</a>.</p>
+
+<p>No se firma el mensaje entero, sino su hash: se calcula SHA-256 del mensaje y se firma esa huella, que es corta y fija. El receptor recalcula el hash y verifica la firma contra él.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 504" role="img" aria-labelledby="f367t f367d">
+<title id="f367t">Firmar con la privada y verificar con la pública</title>
+<desc id="f367d">El emisor calcula el hash del token y lo firma con su clave privada. El receptor recalcula el hash y verifica la firma con la clave pública. Si alguien cambia el token en el camino, el hash cambia y la firma deja de verificar; para firmar el token cambiado necesitaría la clave privada.</desc>
+<defs><marker id="f367-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker><marker id="f367-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--link)"/></marker><marker id="f367-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--fail)"/></marker><marker id="f367-q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="var(--l-queue)"/></marker></defs>
+<rect class="dg-box" x="8.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="70.0" y="29" text-anchor="middle" style="font-size:13.5px">Emisor</text>
+<path class="dg-frame" d="M70.0 40 V446"/>
+<rect class="dg-box" x="323.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="385.0" y="29" text-anchor="middle" style="font-size:13.5px">Red</text>
+<path class="dg-frame" d="M385.0 40 V446"/>
+<rect class="dg-box" x="638.0" y="8" width="124" height="32" rx="4"/>
+<text class="dg-label" x="700.0" y="29" text-anchor="middle" style="font-size:13.5px">Receptor</text>
+<path class="dg-frame" d="M700.0 40 V446"/>
+<path class="dg-edge" d="M70.0 64 h40 v14 h-38" marker-end="url(#f367-a)"/>
+<text class="dg-tiny" x="116.0" y="75">h = SHA-256(token)</text>
+<path class="dg-edge" d="M70.0 98 h40 v14 h-38" marker-end="url(#f367-a)"/>
+<text class="dg-tiny" x="116.0" y="109">firma = Firmar(privada, h)</text>
+<path class="dg-edge" d="M73.0 140 L695.0 140" marker-end="url(#f367-a)"/>
+<rect x="336.1" y="123" width="97.8" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="134" text-anchor="middle">token + firma</text>
+<path class="dg-edge" d="M700.0 166 h40 v14 h-38" marker-end="url(#f367-a)"/>
+<text class="dg-tiny" x="746.0" y="177">h&#x27; = SHA-256(token)</text>
+<path class="dg-edge dg-res" style="stroke-dasharray:5 3" d="M700.0 200 h40 v14 h-38" marker-end="url(#f367-r)"/>
+<text class="dg-tiny" x="746.0" y="211">Verificar(pública, firma, h&#x27;)</text>
+<rect x="397.0" y="228" width="293" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="407.0" y="244">válida: no cambió y la firmó la privada</text>
+<path d="M20 274 H750" stroke="var(--fail)" stroke-width="1.2" stroke-dasharray="6 5"/>
+<rect x="235.0" y="263" width="300" height="22" rx="3" fill="var(--paper-sunk)"/>
+<text class="dg-small" x="385.0" y="278" text-anchor="middle" style="fill:var(--fail)">alguien cambia &quot;role&quot;: &quot;user&quot; por &quot;admin&quot;</text>
+<path class="dg-edge" d="M73.0 310 L695.0 310" marker-end="url(#f367-a)"/>
+<rect x="276.7" y="293" width="216.6" height="15" fill="var(--paper)" opacity="0.85"/>
+<text class="dg-tiny" x="385.0" y="304" text-anchor="middle">token cambiado + firma original</text>
+<path class="dg-edge" style="stroke:var(--fail)" d="M700.0 336 h40 v14 h-38" marker-end="url(#f367-f)"/>
+<text class="dg-tiny" x="746.0" y="347">h&#x27; distinto: la firma no verifica</text>
+<rect x="397.0" y="364" width="293" height="24" rx="3" fill="var(--paper-3)" stroke="var(--rule-strong)"/>
+<text class="dg-tiny" x="407.0" y="380">sin la privada no puede firmar el nuevo</text>
+<rect class="dg-box dg-box--em" x="8.0" y="458" width="124" height="38" rx="4"/>
+<text class="dg-small" x="70.0" y="474" text-anchor="middle" style="font-weight:700">Servidor de identidad</text>
+<text class="dg-tiny" x="70.0" y="489" text-anchor="middle">firma JWT con RS256 o EdDSA</text>
+<rect class="dg-box dg-box--em" x="323.0" y="458" width="124" height="38" rx="4"/>
+<text class="dg-small" x="385.0" y="474" text-anchor="middle" style="font-weight:700">Internet</text>
+<text class="dg-tiny" x="385.0" y="489" text-anchor="middle">cualquiera lee</text>
+<rect class="dg-box dg-box--em" x="638.0" y="458" width="124" height="38" rx="4"/>
+<text class="dg-small" x="700.0" y="474" text-anchor="middle" style="font-weight:700">Tu API</text>
+<text class="dg-tiny" x="700.0" y="489" text-anchor="middle">verifica con la JWKS</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.7.</b> Firmar con la privada, verificar con la pública. Si alguien cambia el mensaje en el camino, el hash cambia y la firma deja de verificar; para firmar el mensaje cambiado necesitaría la clave privada, que nunca salió del emisor.</figcaption>
+</figure>
+
+<p>Los algoritmos vigentes son <b>RSA-PSS</b>, <b>ECDSA</b> y <b>Ed25519</b> (RFC 8032, FIPS 186-5). Ed25519 es el preferido para lo nuevo: clave pública de 32 bytes, firma de 64, rápido y con menos formas de usarlo mal. Una firma RSA-2048, en cambio, ocupa 256 bytes. Esto es exactamente la diferencia entre los JWT firmados con <a href="m10-seguridad.html#tokens">HS256 (HMAC) y con RS256, ES256 o EdDSA (M10)</a>: con firma, el servicio que emite el token guarda la privada y cualquier API lo verifica con la clave pública publicada en un <a href="m10-seguridad.html#jwt-detalle">JWKS</a>, sin compartir ningún secreto.</p>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>ECDSA necesita un número aleatorio secreto y único por firma. Si ese número se repite o es predecible, la clave privada queda expuesta; así se recuperó la clave de firma de una consola de videojuegos en 2010, porque usaba un valor fijo. <span class="badge badge--doc">Documentado</span> La defensa no es «elegirlo con cuidado»: es usar ECDSA determinista (RFC 6979), que deriva ese número del propio mensaje y la clave, o directamente Ed25519, que lo resuelve por diseño. Otra vez: no lo implementes, usa la biblioteca.</p>
+</aside>
+
+<p>El widget firma y verifica con un RSA de juguete para que veas los cuatro casos: original, mensaje cambiado, firma cambiada y clave impostora. <span class="badge badge--ref">Diseño de referencia</span></p>
+
+<div data-sim="sign"></div>
+
+<h2 id="intercambio"><span class="sec-num">36.7</span>Intercambio de claves: acordar un secreto a la vista de todos</h2>
+
+<p>Queda la pregunta del reparto: dos partes que nunca se vieron, ¿cómo acuerdan una clave simétrica por un canal que alguien escucha? El <dfn data-term="intercambio-claves">intercambio de claves Diffie-Hellman</dfn> lo logra. Cada parte elige un secreto, publica una mezcla de ese secreto con parámetros comunes, y combinando lo propio con lo ajeno los dos llegan al mismo valor, que nunca viajó.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 352" role="img" aria-labelledby="f368t f368d">
+<title id="f368t">Diffie-Hellman con números chicos</title>
+<desc id="f368d">Ana a la izquierda, Beto a la derecha y el canal público en el medio. Los dos acuerdan p igual a 23 y g igual a 5. Ana elige el secreto 6 y envía 8; Beto elige el secreto 15 y envía 19. Cada uno eleva lo que recibió a su secreto y los dos llegan a 2, que nunca viajó. Quien escucha ve 23, 5, 8 y 19.</desc>
+<defs><marker id="f368a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-service)" x="12" y="12" width="230" height="328" rx="10"/>
+<text class="dg-label" x="127" y="36" text-anchor="middle">Ana</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="528" y="12" width="230" height="328" rx="10"/>
+<text class="dg-label" x="643" y="36" text-anchor="middle">Beto</text>
+<rect x="262" y="12" width="246" height="328" rx="10" fill="color-mix(in srgb, var(--l-external) 8%, var(--bg))" stroke="var(--l-external)" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text class="dg-label" x="385" y="36" text-anchor="middle">Canal público</text>
+<rect class="dg-box" x="282" y="52" width="206" height="30" rx="5"/>
+<text class="dg-small" x="385" y="72" text-anchor="middle">p = 23,  g = 5  (públicos)</text>
+<rect class="dg-bad" x="28" y="98" width="198" height="30" rx="5"/>
+<text class="dg-small" x="127" y="118" text-anchor="middle">secreto a = 6</text>
+<rect class="dg-bad" x="544" y="98" width="198" height="30" rx="5"/>
+<text class="dg-small" x="643" y="118" text-anchor="middle">secreto b = 15</text>
+<rect class="dg-box" x="28" y="146" width="198" height="44" rx="5"/>
+<text class="dg-small dg-mono" x="127" y="165" text-anchor="middle">A = 5^6 mod 23</text>
+<text class="dg-tiny" x="127" y="182" text-anchor="middle">= 15 625 mod 23 = 8</text>
+<rect class="dg-box" x="544" y="146" width="198" height="44" rx="5"/>
+<text class="dg-small dg-mono" x="643" y="165" text-anchor="middle">B = 5^15 mod 23</text>
+<text class="dg-tiny" x="643" y="182" text-anchor="middle">= 19</text>
+<path class="dg-edge" d="M226 162 L330 162" marker-end="url(#f368a)"/>
+<rect class="dg-box--em dg-box" x="332" y="148" width="106" height="30" rx="5"/>
+<text class="dg-small" x="385" y="168" text-anchor="middle">A = 8</text>
+<path class="dg-edge" d="M544 186 L440 206" marker-end="url(#f368a)"/>
+<rect class="dg-box--em dg-box" x="332" y="194" width="106" height="30" rx="5"/>
+<text class="dg-small" x="385" y="214" text-anchor="middle">B = 19</text>
+<path class="dg-feedback" d="M330 170 C300 200 260 220 230 236"/>
+<path class="dg-feedback" d="M440 170 C470 200 510 220 540 236"/>
+<rect class="dg-ok" x="28" y="240" width="198" height="44" rx="5"/>
+<text class="dg-small dg-mono" x="127" y="259" text-anchor="middle">s = B^a = 19^6 mod 23</text>
+<text class="dg-tiny" x="127" y="276" text-anchor="middle">= 2</text>
+<rect class="dg-ok" x="544" y="240" width="198" height="44" rx="5"/>
+<text class="dg-small dg-mono" x="643" y="259" text-anchor="middle">s = A^b = 8^15 mod 23</text>
+<text class="dg-tiny" x="643" y="276" text-anchor="middle">= 2</text>
+<text class="dg-tiny" x="385" y="252" text-anchor="middle">Quien escucha tiene 23, 5, 8 y 19.</text>
+<text class="dg-tiny" x="385" y="268" text-anchor="middle">Para llegar a 2 necesita 6 o 15:</text>
+<text class="dg-tiny" x="385" y="284" text-anchor="middle">el logaritmo discreto.</text>
+<text class="dg-tiny" x="385" y="318" text-anchor="middle">Con p = 23 se prueba a mano. Con X25519 (32 bytes) no hay</text>
+<text class="dg-tiny" x="385" y="333" text-anchor="middle">computadora que alcance: es el que usa TLS 1.3.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.8.</b> Diffie-Hellman con números chicos. Ana y Beto acuerdan 2 sin que ese 2 viaje nunca. Quien escucha ve 23, 5, 8 y 19; para llegar al secreto tendría que resolver el logaritmo discreto, inviable con números grandes. Es la misma idea de la <a href="m01-viaje-request.html#cripto">mezcla de colores de M01</a>, ahora con la aritmética detrás.</figcaption>
+</figure>
+
+<p>En la práctica se usa sobre curva elíptica (ECDH, con X25519) y con claves <b>efímeras</b>: un par nuevo por conexión, que se borra al terminar. Eso da <dfn data-term="forward-secrecy">forward secrecy</dfn>, la propiedad que cierra el ataque de «grabar hoy, robar la clave mañana»: como cada sesión usó claves que ya no existen, robar la clave del servidor no abre el tráfico grabado. <a href="m01-viaje-request.html#tls-handshake">TLS 1.3</a> hizo ECDHE efímero obligatorio y eliminó el viejo intercambio con la clave RSA fija del servidor (RFC 8446), justo por esto.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f369t f369d">
+<title id="f369t">Forward secrecy: grabar hoy, robar la clave mañana</title>
+<desc id="f369d">Dos líneas de tiempo. Arriba, intercambio con la clave RSA fija del servidor, como en TLS 1.2 sin ECDHE: el día 1 alguien graba el tráfico y el día 400 roba la clave privada; con ella descifra todo lo grabado. Abajo, con ECDHE efímero, como en TLS 1.3: cada conexión usó claves que se borraron, y robar la clave del servidor el día 400 no abre lo grabado.</desc>
+<defs><marker id="f369a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="28" text-anchor="start">Clave RSA fija del servidor (TLS 1.2 sin ECDHE)</text>
+<path class="dg-edge" d="M40 80 H730"/>
+<path class="dg-edge" d="M722 74 L734 80 L722 86"/>
+<path class="dg-edge" d="M80 72 V88"/>
+<text class="dg-tiny" x="80" y="104" text-anchor="middle">día 1</text>
+<path class="dg-edge" d="M560 72 V88"/>
+<text class="dg-tiny" x="560" y="104" text-anchor="middle">día 400</text>
+<rect class="dg-box" x="30" y="40" width="230" height="26" rx="5"/>
+<text class="dg-tiny" x="145" y="58" text-anchor="middle">alguien graba el tráfico cifrado</text>
+<rect class="dg-warnbox" x="452" y="40" width="216" height="26" rx="5"/>
+<text class="dg-tiny" x="560" y="58" text-anchor="middle">roba la clave privada del servidor</text>
+<rect class="dg-bad" x="310" y="116" width="444" height="40" rx="6"/>
+<text class="dg-tiny" x="532" y="133" text-anchor="middle">La sesión se cifró con una clave que viajó cifrada con esa RSA:</text>
+<text class="dg-tiny" x="532" y="148" text-anchor="middle">con la privada abre todo lo grabado, años hacia atrás.</text>
+<text class="dg-group" x="16" y="158" text-anchor="start">ECDHE efímero (siempre en TLS 1.3)</text>
+<path class="dg-edge" d="M40 210 H730"/>
+<path class="dg-edge" d="M722 204 L734 210 L722 216"/>
+<path class="dg-edge" d="M80 202 V218"/>
+<text class="dg-tiny" x="80" y="234" text-anchor="middle">día 1</text>
+<path class="dg-edge" d="M560 202 V218"/>
+<text class="dg-tiny" x="560" y="234" text-anchor="middle">día 400</text>
+<rect class="dg-box" x="30" y="170" width="230" height="26" rx="5"/>
+<text class="dg-tiny" x="145" y="188" text-anchor="middle">alguien graba el tráfico cifrado</text>
+<rect class="dg-warnbox" x="452" y="170" width="216" height="26" rx="5"/>
+<text class="dg-tiny" x="560" y="188" text-anchor="middle">roba la clave privada del servidor</text>
+<rect x="120" y="246" width="240" height="24" rx="5" fill="color-mix(in srgb, var(--l-gpu) 16%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-tiny" x="240" y="262" text-anchor="middle">claves efímeras de la sesión: borradas</text>
+<rect class="dg-ok" x="380" y="246" width="374" height="40" rx="6"/>
+<text class="dg-tiny" x="567" y="263" text-anchor="middle">La clave robada solo firma: permite suplantar desde</text>
+<text class="dg-tiny" x="567" y="278" text-anchor="middle">ahora, pero no abre lo grabado. Se revoca y se rota.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.9.</b> Con la clave RSA fija del servidor, robarla el día 400 abre todo lo grabado el día 1. Con ECDHE efímero, las claves de cada sesión ya se borraron, y la clave robada sirve para suplantar desde ahora pero no para abrir el pasado.</figcaption>
+</figure>
+
+<p>Diffie-Hellman por sí solo no autentica: un intermediario puede hacer su propio intercambio con cada lado y quedar en medio. Por eso se combina con firmas (36.6), que atan la clave pública efímera a una identidad con certificado. Y el secreto acordado no se usa crudo: pasa por una <dfn data-term="kdf">función de derivación de claves</dfn> como HKDF (RFC 5869), que de un secreto saca varias claves independientes —una para cada sentido, por ejemplo—. El widget deja jugar con los números; prueba el preset chico para ver por qué con números grandes no hay fuerza bruta que alcance.</p>
+
+<div data-calc="dh"></div>
+
+<h2 id="certificados"><span class="sec-num">36.8</span>Certificados y PKI: en quién confío y por qué</h2>
+
+<p>Las firmas y el intercambio de claves resuelven el <em>cómo</em>, pero queda el <em>a quién</em>: cuando tu navegador recibe una clave pública que dice ser de un banco, ¿cómo sabe que lo es? La respuesta es un <dfn data-term="certificado-tls">certificado</dfn>: la clave pública del banco envuelta con su identidad y <b>firmada por una autoridad</b> (36.6) en la que tu sistema ya confía. El conjunto de autoridades, reglas y formatos es la <dfn data-term="pki">PKI</dfn> (infraestructura de clave pública).</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 372" role="img" aria-labelledby="f3610t f3610d">
+<title id="f3610t">Un certificado por dentro y la cadena de confianza</title>
+<desc id="f3610d">A la izquierda, los campos de un certificado de servidor: sujeto y nombres alternativos, emisor, validez, clave pública, usos permitidos, si es una CA y la firma del emisor. A la derecha, la cadena: la raíz, guardada en el almacén del sistema, firma a la intermedia, y la intermedia firma al certificado del servidor.</desc>
+<defs><marker id="f3610a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="24" text-anchor="start">Certificado X.509 del servidor (la hoja)</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="16" y="36" width="400" height="324" rx="10"/>
+<rect class="dg-box" x="28" y="52" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="75" text-anchor="start">Sujeto y SAN</text>
+<text class="dg-tiny" x="392" y="75" text-anchor="end">api.ejemplo.com, ejemplo.com</text>
+<rect class="dg-box" x="28" y="95" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="118" text-anchor="start">Emisor</text>
+<text class="dg-tiny" x="392" y="118" text-anchor="end">CA intermedia de Ejemplo</text>
+<rect class="dg-box" x="28" y="138" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="161" text-anchor="start">Validez</text>
+<text class="dg-tiny" x="392" y="161" text-anchor="end">del 1 de octubre de 2026 a 200 días</text>
+<rect class="dg-box" x="28" y="181" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="204" text-anchor="start">Clave pública</text>
+<text class="dg-tiny" x="392" y="204" text-anchor="end">ECDSA P-256 (65 bytes)</text>
+<rect class="dg-box" x="28" y="224" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="247" text-anchor="start">Usos</text>
+<text class="dg-tiny" x="392" y="247" text-anchor="end">firma digital, autenticar servidor</text>
+<rect class="dg-box" x="28" y="267" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="290" text-anchor="start">Restricciones</text>
+<text class="dg-tiny" x="392" y="290" text-anchor="end">CA: falso (no firma a otros)</text>
+<rect class="dg-warnbox" x="28" y="310" width="376" height="36" rx="5"/>
+<text class="dg-small" x="40" y="333" text-anchor="start">Firma del emisor</text>
+<text class="dg-tiny" x="392" y="333" text-anchor="end">ECDSA con SHA-256 sobre todo lo de arriba</text>
+<text class="dg-group" x="592" y="24" text-anchor="middle">La cadena</text>
+<rect class="dg-layer" style="--c: var(--l-external)" x="450" y="40" width="284" height="74" rx="8"/>
+<text class="dg-label" x="592" y="64" text-anchor="middle">Raíz</text>
+<text class="dg-tiny" x="592" y="84" text-anchor="middle">en el almacén del SO o del navegador;</text>
+<text class="dg-tiny" x="592" y="100" text-anchor="middle">autofirmada, vive fuera de línea</text>
+<path class="dg-edge" d="M592 114 V146" marker-end="url(#f3610a)"/>
+<text class="dg-tiny" x="604" y="134" text-anchor="start">firma a</text>
+<rect class="dg-layer" style="--c: var(--l-queue)" x="450" y="148" width="284" height="74" rx="8"/>
+<text class="dg-label" x="592" y="172" text-anchor="middle">Intermedia</text>
+<text class="dg-tiny" x="592" y="192" text-anchor="middle">firmada por la raíz; es la que</text>
+<text class="dg-tiny" x="592" y="208" text-anchor="middle">firma día a día</text>
+<path class="dg-edge" d="M592 222 V254" marker-end="url(#f3610a)"/>
+<text class="dg-tiny" x="604" y="242" text-anchor="start">firma a</text>
+<rect class="dg-layer" style="--c: var(--l-edge)" x="450" y="256" width="284" height="74" rx="8"/>
+<text class="dg-label" x="592" y="280" text-anchor="middle">Hoja</text>
+<text class="dg-tiny" x="592" y="300" text-anchor="middle">firmada por la intermedia;</text>
+<text class="dg-tiny" x="592" y="316" text-anchor="middle">la envía tu servidor</text>
+<path class="dg-feedback" d="M416 270 C432 270 432 302 448 302"/>
+<text class="dg-tiny" x="592" y="352" text-anchor="middle">El navegador sube firma por firma hasta una raíz conocida.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.10.</b> Un certificado X.509 por dentro y la cadena de confianza. La raíz vive en el almacén del sistema y firma a una intermedia; la intermedia firma al certificado del servidor. El navegador sube firma por firma hasta una raíz que ya tiene.</figcaption>
+</figure>
+
+<p>El formato es <b>X.509</b> (RFC 5280). Los campos que importan en el día a día: el <em>sujeto</em> y los nombres alternativos (SAN), que dicen para qué dominios vale —el nombre común ya no se mira—; la validez, cada vez más corta (del orden de 200 días hoy, y bajando); los usos permitidos; y <span class="mono">basicConstraints</span>, que marca si el certificado es una <dfn data-term="ca">autoridad certificadora</dfn> que puede firmar a otros o una hoja que no. Un certificado se revisa con comandos de diagnóstico, sin herramientas raras:</p>
+
+<pre data-lang="shell"><code># Ver los campos de un certificado
+openssl x509 -in cert.pem -noout -text
+
+# Ver qué cadena presenta un servidor
+openssl s_client -connect ejemplo.com:443 -showcerts</code></pre>
+
+<p>Un certificado se puede anular antes de que venza (clave comprometida, dominio que cambió de dueño). Hay dos mecanismos de <b>revocación</b>: las CRL (listas de revocados) y OCSP (preguntar en línea por uno). Los dos tienen costos de privacidad y de latencia, y el ecosistema se mueve hacia certificados tan cortos que revocar pierde peso; Let's Encrypt, por ejemplo, anunció el retiro progresivo de su servicio de OCSP a lo largo de 2025. <span class="badge badge--doc">Documentado</span></p>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>En 2011, atacantes entraron en la autoridad <b>DigiNotar</b> y emitieron certificados válidos para dominios que no eran suyos; con ellos se pudo interceptar tráfico que el navegador daba por seguro. La autoridad perdió toda la confianza y desapareció. <span class="badge badge--doc">Documentado</span> La respuesta del ecosistema fue <b>Certificate Transparency</b> (RFC 6962): toda autoridad publica en registros públicos y auditables cada certificado que emite, así un dueño de dominio detecta uno emitido a sus espaldas. Confiar en una PKI es confiar en la autoridad <em>y</em> en que alguien la vigila.</p>
+</aside>
+
+<h3 id="tls-junto">Todas las piezas juntas: un handshake de TLS 1.3</h3>
+
+<p>TLS 1.3 usa casi todo lo de este módulo de una vez. La lámina lo recorre con cada primitiva marcada: la aleatoriedad de los <em>randoms</em>, el intercambio de claves efímero, la derivación con HKDF, el cifrado AEAD de los registros, el certificado y su cadena, la firma del <span class="mono">CertificateVerify</span>, el hash de la transcripción y el MAC del <span class="mono">Finished</span>, y la forward secrecy al cerrar.</p>
+
+<figure class="figure plate">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 470" role="img" aria-labelledby="l36at l36ad">
+<title id="l36at">Lámina 36.A: todas las piezas en un handshake de TLS 1.3</title>
+<desc id="l36ad">El handshake de TLS 1.3 entre un cliente y un servidor, con nueve marcas numeradas: aleatoriedad, intercambio de claves, derivación con HKDF, cifrado autenticado, certificado y cadena, firma, hash de la transcripción, MAC del Finished y forward secrecy. La clave de abajo explica cada marca.</desc>
+<defs><marker id="l36aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-box--em dg-box" x="16" y="12" width="150" height="40" rx="6"/>
+<text class="dg-label" x="91" y="37" text-anchor="middle">Cliente</text>
+<rect class="dg-box--em dg-box" x="604" y="12" width="150" height="40" rx="6"/>
+<text class="dg-label" x="679" y="37" text-anchor="middle">Servidor</text>
+<path class="dg-frame" d="M91 52 V456"/>
+<path class="dg-frame" d="M679 52 V456"/>
+<path class="dg-edge" d="M94 84 H674" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="76" text-anchor="middle">ClientHello: random de 32 bytes, key_share (X25519MLKEM768, X25519)</text>
+<g class="pl-pin"><circle cx="112" cy="64" r="11"/><text x="112" y="68" text-anchor="middle">1</text></g>
+<g class="pl-pin"><circle cx="658" cy="64" r="11"/><text x="658" y="68" text-anchor="middle">2</text></g>
+<path class="dg-edge" d="M676 124 H96" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="116" text-anchor="middle">ServerHello: random, key_share del servidor</text>
+<rect x="186" y="140" width="398" height="40" rx="6" fill="color-mix(in srgb, var(--l-queue) 14%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-tiny" x="385" y="158" text-anchor="middle">los dos calculan el mismo secreto y derivan claves con HKDF</text>
+<text class="dg-tiny" x="385" y="173" text-anchor="middle">desde aquí todo va cifrado y autenticado</text>
+<g class="pl-pin"><circle cx="574" cy="142" r="11"/><text x="574" y="146" text-anchor="middle">3</text></g>
+<g class="pl-pin"><circle cx="200" cy="194" r="11"/><text x="200" y="198" text-anchor="middle">4</text></g>
+<rect x="196" y="200" width="378" height="120" rx="6" fill="color-mix(in srgb, var(--l-service) 7%, var(--bg))" stroke="var(--l-service)" stroke-width="1.2" stroke-dasharray="5 4"/>
+<path class="dg-edge" d="M676 222 H96" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="214" text-anchor="middle">Certificate: la hoja y la intermedia</text>
+<path class="dg-edge" d="M676 262 H96" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="254" text-anchor="middle">CertificateVerify: firma con su privada</text>
+<path class="dg-edge" d="M676 302 H96" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="294" text-anchor="middle">Finished: HMAC sobre el hash de todo lo anterior</text>
+<g class="pl-pin"><circle cx="560" cy="254" r="11"/><text x="560" y="258" text-anchor="middle">6</text></g>
+<g class="pl-pin"><circle cx="560" cy="214" r="11"/><text x="560" y="218" text-anchor="middle">5</text></g>
+<g class="pl-pin"><circle cx="560" cy="294" r="11"/><text x="560" y="298" text-anchor="middle">7</text></g>
+<g class="pl-pin"><circle cx="210" cy="300" r="11"/><text x="210" y="304" text-anchor="middle">8</text></g>
+<path class="dg-edge" d="M94 350 H674" marker-end="url(#l36aa)"/>
+<text class="dg-tiny dg-mono" x="385" y="342" text-anchor="middle">Finished del cliente</text>
+<path class="dg-edge" d="M94 392 H674" marker-end="url(#l36aa)"/>
+<path class="dg-edge" d="M676 412 H96" marker-end="url(#l36aa)"/>
+<text class="dg-tiny" x="385" y="384" text-anchor="middle">datos de la aplicación con AES-GCM o ChaCha20-Poly1305</text>
+<rect class="dg-ok" x="220" y="428" width="330" height="28" rx="6"/>
+<text class="dg-tiny" x="385" y="446" text-anchor="middle">al cerrar, las claves efímeras se borran</text>
+<g class="pl-pin"><circle cx="560" cy="428" r="11"/><text x="560" y="432" text-anchor="middle">9</text></g>
+</svg>
+
+  </div>
+  <figcaption><b>Lámina 36.A.</b> Un handshake de TLS 1.3 con cada primitiva criptográfica señalada. La clave de abajo dice qué pieza del módulo es cada marca.</figcaption>
+</figure>
+
+<ol class="plate-key">
+  <li><b>Aleatoriedad</b><span>El <span class="mono">random</span> de 32 bytes de cada lado sale de un generador criptográfico. <a href="#aleatoriedad">36.10</a></span></li>
+  <li><b>Oferta de intercambio</b><span>El cliente manda su clave pública efímera (X25519, hoy junto a una post-cuántica). <a href="#intercambio">36.7</a></span></li>
+  <li><b>Clave efímera del servidor</b><span>El servidor responde con la suya; con ambas, cada lado calcula el mismo secreto. <a href="#intercambio">36.7</a></span></li>
+  <li><b>Derivación con HKDF</b><span>Del secreto compartido salen, con HKDF, las claves de cifrado de la sesión. <a href="#intercambio">36.7</a></span></li>
+  <li><b>Certificado y cadena</b><span>El servidor prueba su identidad con su certificado X.509 y la intermedia. <a href="#certificados">36.8</a></span></li>
+  <li><b>Firma de la transcripción</b><span>El <span class="mono">CertificateVerify</span> firma todo lo anterior con la clave privada del servidor. <a href="#firmas">36.6</a></span></li>
+  <li><b>MAC del Finished</b><span>Un HMAC sobre el hash de todo el handshake confirma que nadie lo alteró. <a href="#hmac">36.3</a></span></li>
+  <li><b>Registros AEAD</b><span>Desde la derivación, cada registro va cifrado y autenticado con AES-GCM o ChaCha20-Poly1305. <a href="#simetrico">36.4</a></span></li>
+  <li><b>Forward secrecy</b><span>Al cerrar, las claves efímeras se borran: robar la clave del servidor no abre lo grabado. <a href="#intercambio">36.7</a></span></li>
+</ol>
+
+<h2 id="contrasenas"><span class="sec-num">36.9</span>Contraseñas: por qué un hash rápido es el error</h2>
+
+<p>Guardar contraseñas es donde más se confunde la herramienta. La intuición dice «hashéalas con SHA-256 y listo», y es justo lo que no hay que hacer. El motivo es que SHA-256 es <b>rápido</b> a propósito, y esa velocidad, que es una virtud para la integridad, juega a favor de quien, tras robarse la base, prueba millones y millones de contraseñas candidatas por segundo contra cada hash. Lo que protege una contraseña es, al revés, un hash <b>deliberadamente lento y costoso en memoria</b>.</p>
+
+<p>Dos piezas, en orden. Primero, la <dfn data-term="salt">sal</dfn> (salt): un valor aleatorio distinto por usuario que se guarda junto al hash. Sin sal, dos usuarios con la misma contraseña tienen el mismo hash, y una tabla precalculada sirve para toda la base de una vez.</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 360" role="img" aria-labelledby="f3611t f3611d">
+<title id="f3611t">Guardar una contraseña: sal, Argon2id y el formato</title>
+<desc id="f3611d">Arriba, dos usuarios con la misma contraseña: con SHA-256 sin sal sus hashes son iguales; con una sal aleatoria por usuario son distintos. Abajo, el texto que se guarda con Argon2id, separado en algoritmo, versión, parámetros, sal y resumen.</desc>
+<defs><marker id="f3611a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<text class="dg-group" x="16" y="24" text-anchor="start">La misma contraseña, dos usuarios</text>
+<text class="dg-group" x="276" y="24" text-anchor="start">SHA-256 sin sal</text>
+<text class="dg-group" x="526" y="24" text-anchor="start">Argon2id con sal</text>
+<rect class="dg-box" x="16" y="38" width="240" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="28" y="60" text-anchor="start">ana:  &quot;verano2026&quot;</text>
+<rect class="dg-bad" x="276" y="38" width="230" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="391" y="60" text-anchor="middle">9f2c…e71a  (igual)</text>
+<rect class="dg-ok" x="526" y="38" width="228" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="640" y="60" text-anchor="middle">4b8d…02c3  (distinto)</text>
+<rect class="dg-box" x="16" y="82" width="240" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="28" y="104" text-anchor="start">beto:  &quot;verano2026&quot;</text>
+<rect class="dg-bad" x="276" y="82" width="230" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="391" y="104" text-anchor="middle">9f2c…e71a  (igual)</text>
+<rect class="dg-ok" x="526" y="82" width="228" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="640" y="104" text-anchor="middle">e1a7…9d5f  (distinto)</text>
+<text class="dg-tiny" x="16" y="146" text-anchor="start">Sin sal, una tabla precalculada sirve para todos y las repetidas se ven. Con sal, cada usuario se ataca aparte.</text>
+<path class="dg-frame" d="M16 162 H754"/>
+<text class="dg-group" x="16" y="186" text-anchor="start">Lo que guarda la columna password_hash</text>
+<rect x="16" y="200" width="102" height="32" rx="4" fill="color-mix(in srgb, var(--l-service) 14%, var(--bg))" stroke="var(--l-service)" stroke-width="1.5"/>
+<text class="dg-small dg-mono" x="67" y="221" text-anchor="middle">$argon2id</text>
+<path class="dg-feedback" d="M67.0 232 V248"/>
+<text class="dg-tiny" x="67" y="262" text-anchor="middle">algoritmo</text>
+<rect x="124" y="200" width="60" height="32" rx="4" fill="color-mix(in srgb, var(--l-queue) 14%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small dg-mono" x="154" y="221" text-anchor="middle">$v=19</text>
+<path class="dg-feedback" d="M154.0 232 V248"/>
+<text class="dg-tiny" x="154" y="262" text-anchor="middle">versión</text>
+<rect x="190" y="200" width="184" height="32" rx="4" fill="color-mix(in srgb, var(--l-queue) 14%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small dg-mono" x="282" y="221" text-anchor="middle">$m=19456,t=2,p=1</text>
+<path class="dg-feedback" d="M282.0 232 V248"/>
+<text class="dg-tiny" x="282" y="262" text-anchor="middle">memoria (KiB), pasadas, hilos</text>
+<rect x="380" y="200" width="184" height="32" rx="4" fill="color-mix(in srgb, var(--l-queue) 14%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small dg-mono" x="472" y="221" text-anchor="middle">$c2FsdGFsZWF0b3JpYQ</text>
+<path class="dg-feedback" d="M472.0 232 V248"/>
+<text class="dg-tiny" x="472" y="262" text-anchor="middle">sal: 16 bytes al azar</text>
+<rect x="570" y="200" width="154" height="32" rx="4" fill="color-mix(in srgb, var(--l-queue) 14%, var(--bg))" stroke="var(--l-queue)" stroke-width="1.5"/>
+<text class="dg-small dg-mono" x="647" y="221" text-anchor="middle">$aGFzaC4uLg…</text>
+<path class="dg-feedback" d="M647.0 232 V248"/>
+<text class="dg-tiny" x="647" y="262" text-anchor="middle">resumen</text>
+<rect class="dg-box" x="16" y="282" width="738" height="62" rx="8"/>
+<text class="dg-tiny" x="30" y="304" text-anchor="start">Al iniciar sesión, el servidor lee algoritmo, parámetros y sal del propio texto, recalcula con la contraseña recibida</text>
+<text class="dg-tiny" x="30" y="322" text-anchor="start">y compara en tiempo constante. Por eso se pueden subir los parámetros sin migrar a nadie: el hash viejo sigue</text>
+<text class="dg-tiny" x="30" y="338" text-anchor="start">verificando, y en el próximo login exitoso se recalcula con los nuevos.</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.11.</b> Arriba, la misma contraseña en dos usuarios: con SHA-256 sin sal los hashes son iguales; con sal son distintos. Abajo, lo que guarda la columna con Argon2id, descompuesto: algoritmo, versión, parámetros de costo, sal y resumen. Todo viaja junto, y por eso se pueden subir los parámetros sin migrar a nadie.</figcaption>
+</figure>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>En 2012, una filtración de LinkedIn expuso millones de contraseñas guardadas con SHA-1 <b>sin sal</b>. Al ser un hash rápido y sin sal, una fracción enorme se recuperó en poco tiempo. <span class="badge badge--doc">Documentado</span> Las dos lecciones defensivas: sal por usuario, siempre, y un algoritmo lento, nunca un hash de propósito general.</p>
+</aside>
+
+<p>Segundo, el <dfn data-term="password-hashing">algoritmo de hashing de contraseñas</dfn>, un KDF pensado para ser caro. La recomendación actual de OWASP, en orden de preferencia:</p>
+
+<ul>
+  <li><b>Argon2id</b>, el preferido: por ejemplo <span class="mono">m=19456</span> (19&#160;MiB de memoria), <span class="mono">t=2</span>, <span class="mono">p=1</span>. La memoria es lo que más encarece el ataque con hardware dedicado.</li>
+  <li><b>scrypt</b>, si no hay Argon2 disponible: <span class="mono">N=2<sup>17</sup></span>, <span class="mono">r=8</span>, <span class="mono">p=1</span>.</li>
+  <li><b>bcrypt</b>, solo sistemas antiguos: factor de costo &#8805;&#160;10, y cuidado con su límite de 72 bytes de entrada.</li>
+  <li><b>PBKDF2</b>, cuando lo exige una certificación: con HMAC-SHA-256, del orden de 600&#160;000 iteraciones. Es el que menos resiste al hardware dedicado, por eso va último.</li>
+</ul>
+
+<p>Dos prácticas más. Un <b>pepper</b>: un secreto global, aparte de la base, guardado en un gestor de secretos o un HSM (<a href="m10-seguridad.html#cifrado">M10</a>, <a href="m37-nube.html#kms">M37</a>), que se suma a la contraseña antes de hashear; si se roban solo la base, les falta el pepper. Y el <b>rehash al iniciar sesión</b>: cuando subes los parámetros de costo, el hash viejo sigue verificando, y en el próximo login exitoso lo recalculas con los nuevos, sin migrar a nadie de golpe. Así se usa la biblioteca:</p>
+
+<pre data-lang="python"><code>from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
+
+ph = PasswordHasher()                 # parámetros al día por defecto
+
+# Al registrar: guardar SOLO esta cadena (trae algoritmo, parámetros y sal dentro)
+almacenado = ph.hash(password)        # '$argon2id$v=19$m=19456,t=2,p=1$...'
+
+# Al iniciar sesión
+try:
+    ph.verify(almacenado, password)
+    if ph.check_needs_rehash(almacenado):   # subiste el costo desde entonces
+        almacenado = ph.hash(password)       # recalcular y volver a guardar
+except VerifyMismatchError:
+    pass                                     # contraseña incorrecta</code></pre>
+
+<p>Un matiz: esto vale para <em>contraseñas</em>, que tienen poca entropía porque las eligen personas. Una <a href="m10-seguridad.html#api-keys">API key de M10</a>, que son 256 bits aleatorios, no necesita KDF: con esa entropía, un SHA-256 basta para guardarla, porque adivinarla es tan inviable como la clave de 128 bits de 36.1. La defensa final es acotar los intentos: en línea, el <a href="m08-resiliencia.html#rate-limit">rate limiting de M08</a> frena el goteo; el KDF lento es la defensa para cuando el atacante ya tiene la base y prueba sin límite fuera de línea. El widget deja comparar el costo de cada opción.</p>
+
+<div data-calc="kdfcost"></div>
+
+<h2 id="aleatoriedad"><span class="sec-num">36.10</span>Aleatoriedad: de dónde salen las claves</h2>
+
+<p>Toda clave, nonce, sal o token nace de un número al azar, y ahí hay una trampa fina: no todo generador «al azar» sirve. El generador común de los lenguajes —<span class="mono">random</span> de Python, <span class="mono">Math.random</span> de JavaScript— es un <dfn data-term="csprng">PRNG</dfn> no criptográfico: es predecible por diseño, pensado para que la misma semilla repita la secuencia, ideal para simulaciones y pruebas. Para secretos se usa el generador criptográfico del sistema (CSPRNG), que junta entropía real del hardware y no se puede predecir (SP 800-90A Rev.1).</p>
+
+<figure class="figure">
+  <div class="figure-frame">
+<svg viewBox="0 0 770 300" role="img" aria-labelledby="f3613t f3613d">
+<title id="f3613t">De dónde salen los números al azar</title>
+<desc id="f3613d">A la izquierda, un generador común con semilla, como random de Python: es predecible, sirve para simulaciones y no para secretos. A la derecha, el generador criptográfico del sistema: el kernel junta entropía de varias fuentes y la entrega con getrandom; lo usan secrets y os.urandom.</desc>
+<defs><marker id="f3613a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" class="dg-arrow"/></marker></defs>
+<rect class="dg-layer" style="--c: var(--l-cache)" x="12" y="12" width="360" height="276" rx="10"/>
+<text class="dg-label" x="192" y="36" text-anchor="middle">PRNG común (random, Math.random)</text>
+<rect class="dg-box" x="32" y="56" width="320" height="34" rx="5"/>
+<text class="dg-small" x="192" y="78" text-anchor="middle">semilla: la hora, el PID o un número fijo</text>
+<path class="dg-edge" d="M192 90 V108" marker-end="url(#f3613a)"/>
+<rect class="dg-box" x="32" y="110" width="320" height="34" rx="5"/>
+<text class="dg-small" x="192" y="132" text-anchor="middle">un estado interno fijo (Mersenne Twister)</text>
+<path class="dg-edge" d="M192 144 V162" marker-end="url(#f3613a)"/>
+<rect class="dg-box" x="32" y="164" width="320" height="34" rx="5"/>
+<text class="dg-small" x="192" y="186" text-anchor="middle">salidas con buena estadística</text>
+<rect class="dg-bad" x="32" y="214" width="320" height="60" rx="6"/>
+<text class="dg-tiny" x="192" y="236" text-anchor="middle">Predecible por diseño: está hecho para que la</text>
+<text class="dg-tiny" x="192" y="252" text-anchor="middle">misma semilla repita la secuencia. Sirve para</text>
+<text class="dg-tiny" x="192" y="268" text-anchor="middle">simulaciones y pruebas, nunca para secretos.</text>
+<rect class="dg-layer" style="--c: var(--l-gpu)" x="398" y="12" width="360" height="276" rx="10"/>
+<text class="dg-label" x="578" y="36" text-anchor="middle">CSPRNG del sistema</text>
+<rect class="dg-box" x="414" y="52" width="200" height="24" rx="4"/>
+<text class="dg-tiny" x="514" y="68" text-anchor="middle">interrupciones y tiempos</text>
+<path class="dg-edge" d="M614 64 L642 100" marker-end="url(#f3613a)"/>
+<rect class="dg-box" x="414" y="82" width="200" height="24" rx="4"/>
+<text class="dg-tiny" x="514" y="98" text-anchor="middle">instrucciones del CPU (RDSEED)</text>
+<path class="dg-edge" d="M614 94 L642 100" marker-end="url(#f3613a)"/>
+<rect class="dg-box" x="414" y="112" width="200" height="24" rx="4"/>
+<text class="dg-tiny" x="514" y="128" text-anchor="middle">eventos de disco y red</text>
+<path class="dg-edge" d="M614 124 L642 100" marker-end="url(#f3613a)"/>
+<rect x="644" y="76" width="98" height="50" rx="6" fill="color-mix(in srgb, var(--l-gpu) 18%, var(--bg))" stroke="var(--l-gpu)" stroke-width="1.5"/>
+<text class="dg-small" x="693" y="98" text-anchor="middle">kernel</text>
+<text class="dg-tiny" x="693" y="114" text-anchor="middle">mezcla</text>
+<path class="dg-edge" d="M693 126 V156" marker-end="url(#f3613a)"/>
+<rect class="dg-box" x="414" y="158" width="328" height="34" rx="5"/>
+<text class="dg-small dg-mono" x="578" y="180" text-anchor="middle">getrandom() y /dev/urandom</text>
+<path class="dg-edge" d="M578 192 V212" marker-end="url(#f3613a)"/>
+<rect class="dg-ok" x="414" y="214" width="328" height="60" rx="6"/>
+<text class="dg-tiny" x="578" y="236" text-anchor="middle">Python: secrets.token_bytes(), os.urandom()</text>
+<text class="dg-tiny" x="578" y="252" text-anchor="middle">Java: SecureRandom. Node: crypto.randomBytes()</text>
+<text class="dg-tiny" x="578" y="268" text-anchor="middle">Navegador: crypto.getRandomValues()</text>
+</svg>
+
+  </div>
+  <figcaption><b>Figura 36.12.</b> A la izquierda, el generador común con semilla: predecible por diseño. A la derecha, el del sistema: el kernel mezcla entropía de varias fuentes y la entrega por <span class="mono">getrandom()</span>. Lo envuelven <span class="mono">secrets</span> y <span class="mono">os.urandom</span> en Python, <span class="mono">SecureRandom</span> en Java, <span class="mono">crypto.randomBytes</span> en Node.</figcaption>
+</figure>
+
+<aside class="callout callout--fail">
+  <p class="callout-label">Qué pasa si falla</p>
+  <p>En 2008, un cambio en el paquete de OpenSSL de Debian redujo sin querer la entropía del generador a un puñado de valores posibles (CVE-2008-0166). Durante casi dos años, las claves generadas en esos sistemas fueron pocas y adivinables, y hubo que regenerar y revocar todo. <span class="badge badge--doc">Documentado</span> La aleatoriedad criptográfica no se mejora «mezclando más cosas» a mano: se delega en el CSPRNG del sistema, y punto.</p>
+</aside>
+
+<p>La regla práctica es corta. Para cualquier secreto, usa la función que el lenguaje marca como criptográfica, nunca la de propósito general. En Python, un token de sesión seguro es una línea:</p>
+
+<pre data-lang="python"><code>import secrets
+
+token = secrets.token_urlsafe(32)   # 32 bytes = 256 bits de entropía, 43 caracteres
+# NUNCA: random.random() ni random.choices(...) para un secreto</code></pre>
+
+<h2 id="errores"><span class="sec-num">36.11</span>Los errores más comunes y su arreglo</h2>
+
+<p>Casi ningún fallo de criptografía en producción viene de romper el algoritmo. Vienen de usarlo mal. Esta es la lista corta, en forma de antipatrón y arreglo; varios ya salieron en el módulo.</p>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>El antipatrón</th><th>Por qué falla</th><th>El arreglo</th></tr></thead>
+    <tbody>
+      <tr><td>Repetir el nonce con AES-GCM</td><td>Rompe la confidencialidad de esos mensajes y debilita la autenticación</td><td>Nonce por mensaje de la biblioteca o un contador; rotar la clave (36.4)</td></tr>
+      <tr><td>Cifrar en modo ECB</td><td>Bloques iguales dan cifrado igual: filtra la forma de los datos</td><td>Un modo AEAD: AES-GCM o ChaCha20-Poly1305 (36.4)</td></tr>
+      <tr><td>Cifrar sin autenticar</td><td>El atacante altera el cifrado; abre la puerta a oráculos de padding</td><td>AEAD siempre: cifrado y MAC en una sola operación (36.4)</td></tr>
+      <tr><td>Guardar contraseñas con SHA-256</td><td>Un hash rápido se prueba en masa fuera de línea</td><td>Argon2id con sal; límite de intentos en línea (36.9)</td></tr>
+      <tr><td>Comparar MAC con <span class="mono">==</span></td><td>El tiempo de comparación filtra byte a byte</td><td>Comparación de tiempo constante (36.3)</td></tr>
+      <tr><td>Clave escrita en el código</td><td>Queda en git, en la imagen, en los logs; no se puede rotar</td><td>Gestor de secretos o KMS; rotación (<a href="m10-seguridad.html#cifrado">M10</a>, <a href="m37-nube.html#kms">M37</a>)</td></tr>
+      <tr><td><span class="mono">random</span> para un token o una clave</td><td>Predecible: se reconstruye la secuencia</td><td>El CSPRNG del sistema: <span class="mono">secrets</span>, <span class="mono">os.urandom</span> (36.10)</td></tr>
+      <tr><td>Aceptar <span class="mono">alg</span> del propio JWT</td><td>Confusión de algoritmo: el atacante baja la firma a algo que controla</td><td>Fijar el algoritmo esperado al verificar (<a href="m10-seguridad.html#jwt-detalle">M10</a>)</td></tr>
+      <tr><td><span class="mono">verify=False</span> en el cliente TLS</td><td>Desactiva la validación del certificado: man-in-the-middle</td><td>Dejar la validación activa; para entornos internos, una CA privada (<a href="m37-nube.html#mtls">M37</a>)</td></tr>
+      <tr><td>Criptografía casera o XOR «cifrado»</td><td>Sin revisión ni pruebas; rompe contra Kerckhoffs</td><td>Primitivas estándar desde una biblioteca revisada</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>El hilo común: incluso con primitivas sólidas, hubo fallos célebres por implementación —Heartbleed (2014) fue un error de memoria en OpenSSL, no del cifrado; los ataques a RSA con relleno PKCS#1 v1.5 (ROBOT, 2017) venían de un relleno viejo. <span class="badge badge--doc">Documentado</span> De ahí la conclusión del módulo.</p>
+
+<aside class="callout callout--prod">
+  <p class="callout-label">En producción real</p>
+  <p>No llames a las primitivas a mano. Usa bibliotecas de alto nivel que ya combinan todo bien y dan pocas formas de equivocarse: <b>libsodium</b> (NaCl), <b>Tink</b> de Google, o <span class="mono">cryptography</span> en Python por su capa de recetas. La gestión de claves —generar, guardar, rotar, auditar— va a un <a href="m10-seguridad.html#cifrado">KMS (M10)</a>, no a tu código. Tu trabajo es entender qué pieza hace falta; la biblioteca la arma.</p>
+</aside>
+
+<h3 id="elegir">Qué usar para qué</h3>
+
+<div class="table-wrap">
+  <table class="t">
+    <thead><tr><th>Necesito…</th><th>Herramienta</th><th>Concreto hoy</th></tr></thead>
+    <tbody>
+      <tr><td>Huella de integridad</td><td>Función hash</td><td>SHA-256 (nunca MD5 ni SHA-1)</td></tr>
+      <tr><td>Autenticar con clave compartida</td><td>MAC</td><td>HMAC-SHA-256</td></tr>
+      <tr><td>Cifrar datos</td><td>Simétrico AEAD</td><td>AES-256-GCM o ChaCha20-Poly1305</td></tr>
+      <tr><td>Autenticar con no repudio</td><td>Firma digital</td><td>Ed25519 (o ECDSA, RSA-PSS)</td></tr>
+      <tr><td>Acordar una clave por un canal abierto</td><td>Intercambio de claves</td><td>X25519 efímero (ECDHE)</td></tr>
+      <tr><td>Guardar una contraseña</td><td>KDF de contraseñas</td><td>Argon2id con sal</td></tr>
+      <tr><td>Derivar varias claves de un secreto</td><td>KDF</td><td>HKDF</td></tr>
+      <tr><td>Un secreto aleatorio</td><td>CSPRNG</td><td><span class="mono">secrets</span>, <span class="mono">os.urandom</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 id="comprueba">Comprueba lo aprendido</h2>
+
+<div data-quiz="m36"></div>
+
+<div data-exercise="m36-cripto"></div>
+
+<div data-checkpoint="m36"></div>
+
+    </article>
+
+    <nav class="pager content" data-pager aria-label="Módulo anterior y siguiente"></nav>
+  </main>
+
+  <aside class="toc" data-toc-host aria-label="En esta página"></aside>
+</div>
+
+<script src="../assets/js/core/sd.js"></script>
+<script src="../assets/js/data/course.data.js"></script>
+<script src="../assets/js/data/glossary.data.js"></script>
+<script src="../assets/js/data/quizzes/m36.data.js"></script>
+<script src="../assets/js/data/exercises/m36.data.js"></script>
+<script src="../assets/js/core/progress.js"></script>
+<script src="../assets/js/core/nav.js"></script>
+<script src="../assets/js/core/glossary.js"></script>
+<script src="../assets/js/core/quiz.js"></script>
+<script src="../assets/js/core/exercise.js"></script>
+<script src="../assets/js/widgets/sim-signurl.js"></script>
+<script src="../assets/js/widgets/sim-crypto.js"></script>
+</body>
+</html>

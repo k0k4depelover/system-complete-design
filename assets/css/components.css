@@ -1208,3 +1208,58 @@ details.exercise-sql summary { cursor: pointer; font-weight: 600; font-size: var
 .fw-legend .fw-dot { margin-right: 0; }
 .fw-dot--mem { background: repeating-linear-gradient(135deg, var(--label-3) 0 3px, var(--bg) 3px 5px); }
 .fw-total td { border-top: 1px solid var(--separator-strong); }
+
+/* ---------- M36: criptografía (utilidades de widgets y prosa) ---------- */
+.mono { font-family: var(--f-mono); letter-spacing: 0; }
+.out-value.mono { font-family: var(--f-mono); font-weight: 500; font-size: 0.78rem; white-space: normal; word-break: break-all; text-align: right; letter-spacing: 0; }
+.wv-ok { color: var(--ok); }
+.wv-bad { color: var(--fail); }
+.out-row--stack { grid-template-columns: 1fr; }
+.out-row--stack .out-value { text-align: left; margin-top: 4px; }
+
+/* ---------- M34: triage de servidor (sim-triage.js) ---------- */
+.tr-sintoma { margin: var(--s-3) 0; }
+.tr-readings { display: grid; gap: 4px; margin: var(--s-3) 0; padding: var(--s-3);
+  background: var(--fill); border: 1px solid var(--hairline); border-radius: 10px; }
+.tr-row { display: grid; grid-template-columns: 130px 1fr; gap: var(--s-3); align-items: baseline; }
+.tr-tool { font-family: var(--f-mono); font-size: 0.72rem; color: var(--label-2); text-align: right; }
+.tr-line { font-family: var(--f-mono); font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; }
+.tr-q { margin: var(--s-3) 0 var(--s-2); font-weight: 600; }
+.chip-btn.is-ok { background: var(--ok); color: var(--bg); border-color: var(--ok); }
+.chip-btn.is-bad { background: var(--fail); color: var(--bg); border-color: var(--fail); }
+.chip-btn.is-on { background: var(--label); color: var(--bg); }
+.tr-result { margin-top: var(--s-3); }
+.tr-verdict { font-weight: 600; margin-bottom: var(--s-2); }
+.tr-tell { margin-bottom: var(--s-2); }
+@media (max-width: 520px) {
+  .tr-row { grid-template-columns: 1fr; gap: 0; }
+  .tr-tool { text-align: left; }
+}
+
+/* ---------- M35: evaluador RBAC + ABAC (sim-rbac.js) ---------- */
+.rbac-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rbac-out { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.rbac-query { font-weight: 600; color: var(--label); }
+.rbac-sub { display: grid; grid-template-columns: 148px 64px 1fr; gap: 8px; align-items: start;
+  padding: 8px 10px; background: var(--paper-sunk); border: 1px solid var(--rule); border-radius: 8px; }
+.rbac-tag { font-size: var(--fs-sm); font-weight: 600; color: var(--label-2); }
+.rbac-mark { font-size: var(--fs-sm); font-weight: 700; }
+.rbac-why { font-size: var(--fs-sm); color: var(--label-2); line-height: 1.4; }
+.rbac-final { margin-top: 2px; padding: 10px 12px; border-radius: 8px; font-size: var(--fs-sm); line-height: 1.45;
+  border: 1px solid var(--rule); }
+.rbac-final.is-ok { background: color-mix(in srgb, var(--ok) 12%, var(--bg)); border-color: var(--ok); }
+.rbac-final.is-bad { background: color-mix(in srgb, var(--fail) 12%, var(--bg)); border-color: var(--fail); }
+.rbac-final b { margin-right: 4px; }
+@media (max-width: 520px) {
+  .rbac-sub { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* M38: rutas de ataque (sim-ad) */
+.ad-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.ad-step { display: inline-flex; align-items: center; gap: 4px; }
+.ad-node {
+  background: color-mix(in srgb, var(--fail) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--fail) 28%, var(--border));
+  border-radius: 6px; padding: 2px 8px; font-size: 0.82rem;
+}
+.ad-arrow { color: var(--label-2); }
